@@ -5,6 +5,11 @@
 #include "doctest.h"
 
 #include <filesystem>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace {
 
@@ -343,4 +348,181 @@ TEST_CASE("bundle::validate validates all specs in parallel") {
   REQUIRE(b.specs.size() == 2);
 
   CHECK_NOTHROW(b.validate());
+}
+
+// ==== bundle::ensure_pkg_cfg ====
+//
+// The memo is per declaring scope (one manifest or one spec's DEPENDENCIES), and it
+// yields the single cfg every reference to that bundle shares. A redeclaration that
+// disagrees must be caught here, because the engine's cross-scope check compares two
+// cfgs and this scope only ever produces one.
+
+namespace {
+
+envy::pkg_cfg::bundle_source remote_bundle_src(char const *identity, char const *url) {
+  return { .bundle_identity = identity,
+           .fetch_source = envy::pkg_cfg::remote_source{ .url = url } };
+}
+
+envy::pkg_cfg::bundle_source custom_bundle_src(
+    char const *identity,
+    std::vector<envy::pkg_cfg *> deps = {}) {
+  return { .bundle_identity = identity,
+           .fetch_source =
+               envy::pkg_cfg::custom_fetch_source{ .dependencies = std::move(deps) } };
+}
+
+}  // namespace
+
+TEST_CASE("bundle::ensure_pkg_cfg creates a BUNDLE_ONLY-shaped cfg") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  auto const src{ remote_bundle_src("a.tc@v1", "https://x/tc.tgz") };
+
+  auto *cfg{
+    envy::bundle::ensure_pkg_cfg(src, fs::path("/fake/envy.lua"), nullptr, memo)
+  };
+
+  REQUIRE(cfg != nullptr);
+  // identity == bundle_identity is what marks a cfg as the bundle's own package.
+  CHECK(cfg->identity == "a.tc@v1");
+  REQUIRE(cfg->bundle_identity.has_value());
+  CHECK(*cfg->bundle_identity == "a.tc@v1");
+  CHECK(cfg->parent == nullptr);
+  CHECK(cfg->declaring_file_path == fs::path("/fake/envy.lua"));
+  REQUIRE(std::holds_alternative<envy::pkg_cfg::bundle_source>(cfg->source));
+  CHECK(memo.size() == 1);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg records the declaring spec as parent") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  auto *declarer{ envy::pkg_cfg::pool()->emplace(
+      "a.spec@v1",
+      envy::pkg_cfg::remote_source{ .url = "https://x/s.lua" },
+      "{}",
+      std::nullopt,
+      nullptr,
+      nullptr,
+      std::vector<envy::pkg_cfg *>{},
+      std::nullopt,
+      fs::path("/fake/spec.lua")) };
+
+  auto *cfg{ envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://x/tc.tgz"),
+                                    fs::path("/fake/spec.lua"),
+                                    declarer,
+                                    memo) };
+
+  CHECK(cfg->parent == declarer);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg reuses the cfg for an identical redeclaration") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  auto const src{ remote_bundle_src("a.tc@v1", "https://x/tc.tgz") };
+  fs::path const decl{ "/fake/envy.lua" };
+
+  auto *first{ envy::bundle::ensure_pkg_cfg(src, decl, nullptr, memo) };
+  auto *second{ envy::bundle::ensure_pkg_cfg(src, decl, nullptr, memo) };
+
+  CHECK(first == second);
+  CHECK(memo.size() == 1);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg rejects a conflicting redeclaration") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  fs::path const decl{ "/fake/envy.lua" };
+
+  envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://x/tc.tgz"),
+                         decl,
+                         nullptr,
+                         memo);
+
+  // Two BUNDLES aliases (or two DEPENDENCIES entries) naming one identity.
+  CHECK_THROWS_WITH_AS(
+      envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://y/tc.tgz"),
+                             decl,
+                             nullptr,
+                             memo),
+      doctest::Contains("conflicting sources"),
+      std::runtime_error);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg conflict message names the identity and file") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  fs::path const decl{ "/fake/envy.lua" };
+
+  envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://x/tc.tgz"),
+                         decl,
+                         nullptr,
+                         memo);
+
+  CHECK_THROWS_WITH_AS(
+      envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://y/tc.tgz"),
+                             decl,
+                             nullptr,
+                             memo),
+      doctest::Contains("a.tc@v1"),
+      std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://y/tc.tgz"),
+                             decl,
+                             nullptr,
+                             memo),
+      doctest::Contains("envy.lua"),
+      std::runtime_error);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg rejects a redeclaration with a different kind") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  fs::path const decl{ "/fake/envy.lua" };
+
+  envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://x/tc.tgz"),
+                         decl,
+                         nullptr,
+                         memo);
+
+  CHECK_THROWS_AS(envy::bundle::ensure_pkg_cfg(custom_bundle_src("a.tc@v1"),
+                                         decl,
+                                         nullptr,
+                                         memo),
+                  std::runtime_error);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg keys the memo per bundle identity") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  fs::path const decl{ "/fake/envy.lua" };
+
+  auto *one{ envy::bundle::ensure_pkg_cfg(remote_bundle_src("a.tc@v1", "https://x/a.tgz"),
+                                          decl,
+                                          nullptr,
+                                          memo) };
+  auto *two{ envy::bundle::ensure_pkg_cfg(
+      remote_bundle_src("a.other@v1", "https://x/b.tgz"),
+      decl,
+      nullptr,
+      memo) };
+
+  CHECK(one != two);
+  CHECK(memo.size() == 2);
+}
+
+TEST_CASE("bundle::ensure_pkg_cfg forwards custom fetch dependencies") {
+  std::unordered_map<std::string, envy::pkg_cfg *> memo;
+  auto *dep{ envy::pkg_cfg::pool()->emplace(
+      "a.tool@v1",
+      envy::pkg_cfg::remote_source{ .url = "https://x/t.tgz" },
+      "{}",
+      std::nullopt,
+      nullptr,
+      nullptr,
+      std::vector<envy::pkg_cfg *>{},
+      std::nullopt,
+      fs::path("/fake/envy.lua")) };
+
+  auto *cfg{ envy::bundle::ensure_pkg_cfg(custom_bundle_src("a.tc@v1", { dep }),
+                                    fs::path("/fake/envy.lua"),
+                                    nullptr,
+                                    memo) };
+
+  // The bundle's own dependencies must land before its fetch function runs.
+  REQUIRE(cfg->source_dependencies.size() == 1);
+  CHECK(cfg->source_dependencies[0] == dep);
 }

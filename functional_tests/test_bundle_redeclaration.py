@@ -238,6 +238,147 @@ PACKAGES = {{
         self.assertNotEqual(0, result.returncode)
         self.assertIn("conflicting sources", result.stderr)
 
+    # -- conflicts inside one declaring scope --------------------------------
+    #
+    # Two aliases (or two DEPENDENCIES entries) in one file share a single memoized
+    # bundle cfg, so only bundle::ensure_pkg_cfg can see the disagreement — the
+    # engine's check compares two cfgs and this scope produces one.
+
+    def test_two_manifest_aliases_conflicting_rejected(self):
+        """Two BUNDLES aliases in one manifest naming one identity, two payloads."""
+        manifest = self.test_dir / "envy.lua"
+        manifest.write_text(
+            make_manifest(
+                f"""
+BUNDLES = {{
+    tc_a = {{ identity = "test.tc@v1", source = "{self.url_a}" }},
+    tc_b = {{ identity = "test.tc@v1", source = "{self.url_b}" }},
+}}
+
+PACKAGES = {{
+    {{ spec = "test.tool@v1", bundle = "tc_a", setup = {{ "main" }} }},
+    {{ spec = "test.tool@v1", bundle = "tc_b", setup = {{ "main" }} }},
+}}
+"""
+            ),
+            encoding="utf-8",
+        )
+
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("declared more than once", result.stderr)
+        self.assertIn("test.tc@v1", result.stderr)
+        self.assertIn("envy.lua", result.stderr)
+
+    def test_two_manifest_aliases_agreeing_accepted(self):
+        """Two aliases for the same bundle are fine when they name one payload."""
+        manifest = self.test_dir / "envy.lua"
+        manifest.write_text(
+            make_manifest(
+                f"""
+BUNDLES = {{
+    tc_a = {{ identity = "test.tc@v1", source = "{self.url_a}" }},
+    tc_b = {{ identity = "test.tc@v1", source = "{self.url_a}" }},
+}}
+
+PACKAGES = {{
+    {{ spec = "test.tool@v1", bundle = "tc_b", setup = {{ "main" }} }},
+}}
+"""
+            ),
+            encoding="utf-8",
+        )
+
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn("declared more than once", result.stderr)
+
+    def test_two_dependency_entries_conflicting_rejected(self):
+        """One spec declaring the same bundle identity twice, two payloads."""
+        spec = self.test_dir / "twice.lua"
+        spec.write_text(
+            f"""IDENTITY = "test.twice@v1"
+
+DEPENDENCIES = {{
+  {{ bundle = "test.tc@v1", source = "{self.url_a}" }},
+  {{ bundle = "test.tc@v1", source = "{self.url_b}" }},
+}}
+
+FETCH = function(dir, options) end
+""",
+            encoding="utf-8",
+        )
+
+        result = self.install(
+            f'    {{ spec = "test.twice@v1", source = "{spec.as_posix()}" }},'
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("declared more than once", result.stderr)
+        self.assertIn("twice.lua", result.stderr)
+
+    def test_two_manifest_aliases_custom_fetch_warns(self):
+        """Two fetch closures in one file cannot be compared: warn, keep the first."""
+        manifest = self.test_dir / "envy.lua"
+        manifest.write_text(
+            make_manifest(
+                f"""
+BUNDLES = {{
+    tc_a = {{ identity = "test.tc@v1", source = {CUSTOM_FETCH_SRC} }},
+    tc_b = {{ identity = "test.tc@v1", source = {CUSTOM_FETCH_SRC} }},
+}}
+
+PACKAGES = {{
+    {{ spec = "test.tool@v1", bundle = "tc_b", setup = {{ "main" }} }},
+}}
+"""
+            ),
+            encoding="utf-8",
+        )
+
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertIn("more than one custom fetch function", result.stderr)
+
     # -- agreeing declarations keep working ---------------------------------
 
     def test_identical_declarations_accepted(self):

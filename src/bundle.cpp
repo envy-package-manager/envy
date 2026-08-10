@@ -3,6 +3,7 @@
 #include "manifest.h"
 #include "sol_util.h"
 #include "spec_util.h"
+#include "tui.h"
 #include "uri.h"
 #include "util.h"
 
@@ -338,6 +339,30 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
                                 pkg_cfg const *declared_by,
                                 std::unordered_map<std::string, pkg_cfg *> &memo) {
   if (auto const it{ memo.find(src.bundle_identity) }; it != memo.end()) {
+    // One declaring scope, so this is the only cfg that will ever exist for the
+    // identity — engine::validate_bundle_redeclaration compares cfgs and would never
+    // see the loser. Reject a disagreeing redeclaration here instead; the engine
+    // still catches the cross-scope case (manifest versus spec, spec versus spec).
+    auto const &existing{ std::get<pkg_cfg::bundle_source>(it->second->source) };
+    switch (bundle_source_compare(existing, src)) {
+      case bundle_source_match::SAME: break;
+
+      case bundle_source_match::INCOMPARABLE:
+        // Two fetch closures: undecidable, so keep the first and say so.
+        tui::warn(
+            "bundle '%s' is declared with more than one custom fetch function in %s; "
+            "the first will run",
+            src.bundle_identity.c_str(),
+            decl_path.string().c_str());
+        break;
+
+      case bundle_source_match::DIFFERENT:
+        throw std::runtime_error("bundle '" + src.bundle_identity +
+                                 "' is declared more than once in " +
+                                 decl_path.string() +
+                                 " with conflicting sources; a bundle identity must "
+                                 "name one payload");
+    }
     return it->second;
   }
 
