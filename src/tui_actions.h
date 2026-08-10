@@ -95,6 +95,16 @@ class fetch_all_progress_tracker {
   bool grouped_;
 };
 
+// Download with a progress bar on a scratch section, for command-level and bootstrap
+// fetches that have no package row to draw on. Anything downloaded gets a bar; the
+// section is created and deleted around the transfer. `item_labels` names each
+// transfer and must match `requests` in size — pass the URL when the destination is a
+// temp file whose name would say nothing.
+std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
+                                          std::string const &row_label,
+                                          std::vector<std::string> const &item_labels,
+                                          std::string trace_spec = {});
+
 // Unified shell execution with TUI progress tracking.
 // Creates a run_progress tracker, shows scrubbed command header; the tracker itself
 // controls how much output is displayed (e.g., limiting the visible output to 3 lines).

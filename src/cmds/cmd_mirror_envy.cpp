@@ -206,25 +206,17 @@ void cmd_mirror_envy::execute() {
     return v;
   }() };
 
-  // One progress bar per object, same tracker the fetch phase uses: the downloads run
-  // concurrently, so a single spinner would say nothing about which one is stuck.
-  auto const download_section{ tui::section_create() };
-  tui_actions::fetch_all_progress_tracker download_tracker{ download_section,
-                                                            "mirror-envy",
-                                                            progress_labels(item_relpaths),
-                                                            "fetch" };
-
+  // One progress bar per object: the downloads run concurrently, so a single spinner
+  // would say nothing about which one is stuck.
   std::vector<fetch_request> requests;
   requests.reserve(plan.items.size());
-  for (size_t i{ 0 }; i < plan.items.size(); ++i) {
-    auto const &item{ plan.items[i] };
-    fetch_request req{ fetch_request_from_url(item.source_url, staging / item.relpath) };
-    std::visit([&](auto &r) { r.progress = download_tracker.make_callback(i); }, req);
-    requests.push_back(std::move(req));
+  for (auto const &item : plan.items) {
+    requests.push_back(fetch_request_from_url(item.source_url, staging / item.relpath));
   }
 
-  auto const results{ fetch(requests) };
-  tui::section_delete(download_section);
+  auto const results{ tui_actions::fetch_tracked(std::move(requests),
+                                                 "mirror-envy",
+                                                 progress_labels(item_relpaths)) };
 
   if (results.size() != plan.items.size()) {
     throw std::runtime_error("mirror-envy: fetch returned " +

@@ -7,6 +7,7 @@
 #include "fetch.h"
 #include "platform.h"
 #include "tui.h"
+#include "tui_actions.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -159,8 +160,18 @@ void reexec_if_needed(envy_meta const &meta,
     urls.push_back(std::move(sums_url));
   }
 
-  auto const results{ fetch(requests) };
-  if (results.size() != requests.size()) {
+  // Multi-megabyte archive: draw a bar rather than leaving the terminal silent.
+  std::vector<std::string> labels;
+  labels.reserve(requests.size());
+  for (auto const &req : requests) {
+    labels.push_back(
+        std::visit([](auto const &r) { return r.destination.filename().string(); }, req));
+  }
+
+  auto const results{
+    tui_actions::fetch_tracked(std::move(requests), "envy " + version, labels)
+  };
+  if (results.size() != labels.size()) {
     throw std::runtime_error("reexec: failed to download envy " + version + " from " +
                              url + ": unknown error");
   }

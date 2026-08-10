@@ -270,6 +270,24 @@ void fetch_all_progress_tracker::set_frame(std::size_t slot,
 
 // ==== run_shell_with_progress ====
 
+std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
+                                          std::string const &row_label,
+                                          std::vector<std::string> const &item_labels,
+                                          std::string trace_spec) {
+  if (requests.empty()) { return {}; }
+
+  tui::section_handle const section{ tui::section_create() };
+  fetch_all_progress_tracker tracker{ section, row_label, item_labels, "fetch" };
+  for (std::size_t i{ 0 }; i < requests.size(); ++i) {
+    auto cb{ tracker.make_callback(i) };
+    std::visit([&](auto &r) { r.progress = std::move(cb); }, requests[i]);
+  }
+
+  auto results{ fetch(requests, std::move(trace_spec)) };
+  tui::section_delete(section);
+  return results;
+}
+
 shell_result run_shell_with_progress(std::string_view script,
                                      tui::section_handle section,
                                      std::string const &pkg_identity,

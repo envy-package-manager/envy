@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import threading
+import time
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import (
+    BaseHTTPRequestHandler,
+    SimpleHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
 from pathlib import Path
 import unittest
 
@@ -165,6 +171,66 @@ class FetchCommandFunctionalTest(unittest.TestCase):
                 server.shutdown()
                 server_thread.join(timeout=5)
                 server.server_close()
+
+    def test_fetch_http_draws_a_progress_bar(self) -> None:
+        """Anything downloaded reports a progress bar, commands included.
+
+        Served in throttled chunks so the fallback renderer (TERM=dumb, throttle
+        forced to 0) gets a cycle mid-transfer; a row it draws carries ": NN.N%".
+        """
+        # The bar is drawn by the functional tester, which honors the throttle override.
+        envy = test_config.get_envy_executable()
+        payload = os.urandom(256 * 1024)
+
+        class _SlowHandler(BaseHTTPRequestHandler):
+            def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003
+                return
+
+            def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                chunk = len(payload) // 8
+                for start in range(0, len(payload), chunk):
+                    self.wfile.write(payload[start : start + chunk])
+                    self.wfile.flush()
+                    time.sleep(0.25)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"
+                destination = Path(temp_dir) / "out.bin"
+
+                env = test_config.get_test_env()
+                env["TERM"] = "dumb"
+                env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+                result = test_config.run(
+                    [str(envy), "fetch", url, str(destination)],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+                self.assertEqual(payload, destination.read_bytes())
+
+                rows = [
+                    ln.strip()
+                    for ln in result.stderr.splitlines()
+                    if re.search(r":\s*\d+\.\d%$", ln)
+                ]
+                self.assertTrue(rows, f"no progress row rendered: {result.stderr}")
+                self.assertTrue(
+                    any(url in ln for ln in rows),
+                    f"progress rows do not name the source: {rows}",
+                )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
 
 if __name__ == "__main__":
