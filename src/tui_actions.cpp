@@ -201,9 +201,9 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
           std::min(100.0, std::max(pct, state.last_receive_percent));
     }
     if (state.max_total_deltas > 0) {
-      double const pct{ (state.last_indexed_deltas /
-                         static_cast<double>(state.max_total_deltas)) *
-                        100.0 };
+      double const pct{
+        (state.last_indexed_deltas / static_cast<double>(state.max_total_deltas)) * 100.0
+      };
       state.last_delta_percent = std::min(100.0, std::max(pct, state.last_delta_percent));
     }
 
