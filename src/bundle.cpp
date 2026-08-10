@@ -333,4 +333,32 @@ pkg_cfg::bundle_source bundle::parse_inline(sol::table const &table,
   return decl_to_source(decl);
 }
 
+pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
+                                std::filesystem::path const &decl_path,
+                                pkg_cfg const *declared_by,
+                                std::unordered_map<std::string, pkg_cfg *> &memo) {
+  if (auto const it{ memo.find(src.bundle_identity) }; it != memo.end()) {
+    return it->second;
+  }
+
+  // A custom-fetch bundle's own dependencies must land before its fetch runs, so
+  // they ride along as the bundle package's source dependencies.
+  auto const *custom{ std::get_if<pkg_cfg::custom_fetch_source>(&src.fetch_source) };
+
+  pkg_cfg *cfg{ pkg_cfg::pool()->emplace(
+      src.bundle_identity,  // identity == bundle identity marks it BUNDLE_ONLY
+      pkg_cfg::bundle_source{ src },
+      "{}",
+      std::nullopt,  // needed_by: source dependencies always block spec_fetch
+      declared_by,   // parent: where a custom fetch function is looked up
+      nullptr,       // weak
+      custom ? custom->dependencies : std::vector<pkg_cfg *>{},
+      std::nullopt,  // product
+      decl_path) };
+
+  cfg->bundle_identity = src.bundle_identity;
+  memo.emplace(src.bundle_identity, cfg);
+  return cfg;
+}
+
 }  // namespace envy

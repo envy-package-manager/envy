@@ -5,6 +5,9 @@
 #include "doctest.h"
 
 #include <filesystem>
+#include <optional>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -682,4 +685,156 @@ TEST_CASE("pkg_cfg::parse serializes complex real-world options") {
   sol::table flags = opts["flags"];
   CHECK(flags["debug"].get<bool>() == true);
   CHECK(flags["optimize"].get<bool>() == false);
+}
+
+// ==== source equality and bundle declaration comparison ====
+//
+// pkg_key is identity + options, so two declarations of one bundle identity collapse
+// onto a single package; bundle_source_compare is what lets the engine tell an
+// agreeing redeclaration from a conflicting one.
+
+namespace {
+
+envy::pkg_cfg::bundle_source remote_bundle(char const *identity,
+                                           char const *url,
+                                           char const *sha = "") {
+  return { .bundle_identity = identity,
+           .fetch_source = envy::pkg_cfg::remote_source{ .url = url, .sha256 = sha } };
+}
+
+envy::pkg_cfg::bundle_source git_bundle(char const *identity,
+                                        char const *url,
+                                        char const *ref) {
+  return { .bundle_identity = identity,
+           .fetch_source = envy::pkg_cfg::git_source{ .url = url, .ref = ref } };
+}
+
+envy::pkg_cfg::bundle_source local_bundle(char const *identity, char const *path) {
+  return { .bundle_identity = identity,
+           .fetch_source = envy::pkg_cfg::local_source{ .file_path = path } };
+}
+
+envy::pkg_cfg::bundle_source custom_bundle(char const *identity,
+                                           std::vector<envy::pkg_cfg *> deps = {}) {
+  return { .bundle_identity = identity,
+           .fetch_source =
+               envy::pkg_cfg::custom_fetch_source{ .dependencies = std::move(deps) } };
+}
+
+}  // namespace
+
+TEST_CASE("remote_source equality covers every field") {
+  envy::pkg_cfg::remote_source const base{ .url = "https://x/b.tgz", .sha256 = "aa" };
+
+  CHECK(base == envy::pkg_cfg::remote_source{ .url = "https://x/b.tgz", .sha256 = "aa" });
+  CHECK_FALSE(base ==
+              envy::pkg_cfg::remote_source{ .url = "https://y/b.tgz", .sha256 = "aa" });
+  CHECK_FALSE(base ==
+              envy::pkg_cfg::remote_source{ .url = "https://x/b.tgz", .sha256 = "bb" });
+
+  envy::pkg_cfg::remote_source with_subdir{ base };
+  with_subdir.subdir = "inner";
+  CHECK_FALSE(base == with_subdir);
+  CHECK(with_subdir == with_subdir);
+}
+
+TEST_CASE("git_source equality covers every field") {
+  envy::pkg_cfg::git_source const base{ .url = "git://x/b.git", .ref = "main" };
+
+  CHECK(base == envy::pkg_cfg::git_source{ .url = "git://x/b.git", .ref = "main" });
+  CHECK_FALSE(base == envy::pkg_cfg::git_source{ .url = "git://x/b.git", .ref = "dev" });
+  CHECK_FALSE(base == envy::pkg_cfg::git_source{ .url = "git://y/b.git", .ref = "main" });
+
+  envy::pkg_cfg::git_source with_subdir{ base };
+  with_subdir.subdir = "inner";
+  CHECK_FALSE(base == with_subdir);
+}
+
+TEST_CASE("local_source equality compares the path") {
+  envy::pkg_cfg::local_source const base{ .file_path = "/a/b" };
+
+  CHECK(base == envy::pkg_cfg::local_source{ .file_path = "/a/b" });
+  CHECK_FALSE(base == envy::pkg_cfg::local_source{ .file_path = "/a/c" });
+}
+
+TEST_CASE("bundle_source_compare: identical declarations are SAME") {
+  CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz", "aa"),
+                                    remote_bundle("a.b@v1", "https://x/b.tgz", "aa")) ==
+        envy::bundle_source_match::SAME);
+  CHECK(envy::bundle_source_compare(git_bundle("a.b@v1", "git://x/b.git", "main"),
+                                    git_bundle("a.b@v1", "git://x/b.git", "main")) ==
+        envy::bundle_source_match::SAME);
+  CHECK(envy::bundle_source_compare(local_bundle("a.b@v1", "/a/b"),
+                                    local_bundle("a.b@v1", "/a/b")) ==
+        envy::bundle_source_match::SAME);
+}
+
+TEST_CASE("bundle_source_compare: a differing payload is DIFFERENT") {
+  CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz"),
+                                    remote_bundle("a.b@v1", "https://y/b.tgz")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz", "aa"),
+                                    remote_bundle("a.b@v1", "https://x/b.tgz", "bb")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(git_bundle("a.b@v1", "git://x/b.git", "main"),
+                                    git_bundle("a.b@v1", "git://x/b.git", "v2")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(local_bundle("a.b@v1", "/a/b"),
+                                    local_bundle("a.b@v1", "/a/c")) ==
+        envy::bundle_source_match::DIFFERENT);
+}
+
+TEST_CASE("bundle_source_compare: mismatched source kinds are DIFFERENT") {
+  auto const remote{ remote_bundle("a.b@v1", "https://x/b.tgz") };
+
+  CHECK(envy::bundle_source_compare(remote, git_bundle("a.b@v1", "git://x/b.git", "m")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(remote, local_bundle("a.b@v1", "/a/b")) ==
+        envy::bundle_source_match::DIFFERENT);
+  // A closure versus a URL is decidable, unlike closure versus closure.
+  CHECK(envy::bundle_source_compare(remote, custom_bundle("a.b@v1")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), remote) ==
+        envy::bundle_source_match::DIFFERENT);
+}
+
+TEST_CASE("bundle_source_compare: a differing bundle identity is DIFFERENT") {
+  // Two specs pulling one spec identity out of unrelated bundles.
+  CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz"),
+                                    remote_bundle("a.c@v1", "https://x/b.tgz")) ==
+        envy::bundle_source_match::DIFFERENT);
+  CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), custom_bundle("a.c@v1")) ==
+        envy::bundle_source_match::DIFFERENT);
+}
+
+TEST_CASE("bundle_source_compare: two fetch closures are INCOMPARABLE") {
+  CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), custom_bundle("a.b@v1")) ==
+        envy::bundle_source_match::INCOMPARABLE);
+
+  // Dependency lists are per-parse cfg pointers, so they cannot settle it either way.
+  auto *dep{ envy::pkg_cfg::pool()->emplace("a.dep@v1",
+                                            envy::pkg_cfg::remote_source{ .url = "u" },
+                                            "{}",
+                                            std::nullopt,
+                                            nullptr,
+                                            nullptr,
+                                            std::vector<envy::pkg_cfg *>{},
+                                            std::nullopt,
+                                            fs::path("/fake")) };
+  CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1", { dep }),
+                                    custom_bundle("a.b@v1")) ==
+        envy::bundle_source_match::INCOMPARABLE);
+}
+
+TEST_CASE("bundle_source_compare is symmetric") {
+  auto const remote{ remote_bundle("a.b@v1", "https://x/b.tgz") };
+  auto const git{ git_bundle("a.b@v1", "git://x/b.git", "main") };
+  auto const custom{ custom_bundle("a.b@v1") };
+
+  for (auto const &lhs : { remote, git, custom }) {
+    for (auto const &rhs : { remote, git, custom }) {
+      CHECK(envy::bundle_source_compare(lhs, rhs) ==
+            envy::bundle_source_compare(rhs, lhs));
+    }
+  }
 }

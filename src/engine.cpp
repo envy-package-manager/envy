@@ -91,6 +91,50 @@ bool has_dependency_path(pkg const *from, pkg const *to) {
   return false;
 }
 
+// Two cfgs collapsed onto one pkg_key, and both name a bundle. The key is identity
+// plus options — never the source — so the cfg that happened to win the insert would
+// silently decide which payload gets fetched. Refuse when the declarations provably
+// disagree; warn when they cannot be compared at all.
+void validate_bundle_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) {
+  auto const *a{ std::get_if<pkg_cfg::bundle_source>(&winner->source) };
+  auto const *b{ std::get_if<pkg_cfg::bundle_source>(&other->source) };
+  if (!a || !b) { return; }
+
+  auto const where{ [](pkg_cfg const *cfg) {
+    return cfg->declaring_file_path.empty() ? std::string{ "<unknown>" }
+                                            : cfg->declaring_file_path.string();
+  } };
+
+  switch (bundle_source_compare(*a, *b)) {
+    case bundle_source_match::SAME: return;
+
+    case bundle_source_match::INCOMPARABLE:
+      // Custom fetch closures: both were written to produce this bundle, so run the
+      // winner rather than failing, but say which declaration lost.
+      tui::warn(
+          "bundle '%s' declares a custom fetch function in both %s and %s; the one in "
+          "%s will run",
+          a->bundle_identity.c_str(),
+          where(winner).c_str(),
+          where(other).c_str(),
+          where(winner).c_str());
+      return;
+
+    case bundle_source_match::DIFFERENT:
+      if (a->bundle_identity != b->bundle_identity) {
+        throw std::runtime_error("spec '" + winner->identity +
+                                 "' is requested from two different bundles: '" +
+                                 a->bundle_identity + "' (" + where(winner) + ") and '" +
+                                 b->bundle_identity + "' (" + where(other) +
+                                 "); one declaration must be corrected");
+      }
+      throw std::runtime_error(
+          "bundle '" + a->bundle_identity + "' is declared with conflicting sources in " +
+          where(winner) + " and " + where(other) +
+          "; a bundle identity must name one payload");
+  }
+}
+
 void wire_dependency(pkg *parent, pkg *dep, pkg_phase needed_by) {
   std::lock_guard const deps_lock(parent->deps_mutex);
 
@@ -430,8 +474,13 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
       p->spec_fetch_completed = true;
       on_spec_fetch_complete(p->cfg->identity);
 
-      // BUNDLE_ONLY packages stop after spec_fetch - no lua state to execute
-      if (p->type == pkg_type::BUNDLE_ONLY) { return true; }
+      // BUNDLE_ONLY packages stop after spec_fetch — no lua state to execute — but
+      // they still report through the completion phase, so a bundle gets the same
+      // outcome row, trace event, and off-TTY line as any other package.
+      if (p->type == pkg_type::BUNDLE_ONLY) {
+        run_completion_phase(p, *this);
+        return true;
+      }
     }
     return false;
   };
@@ -473,6 +522,12 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
     result = it->second.get();
 
     if (inserted) { ENVY_TRACE(spec_registered, cfg->identity, .key = key.canonical()); }
+
+    // A second cfg for an existing key: the source is not part of the key, so make
+    // sure the two declarations agree about what to fetch.
+    if (!inserted && result->cfg != cfg) {
+      validate_bundle_redeclaration(result->cfg, cfg);
+    }
 
     if (cfg->setup.has_value() && !cfg->setup->empty()) {
       // Merge explicit SETUP selection across referrers (union). Selection is
@@ -921,14 +976,15 @@ void engine::process_fetch_dependencies(pkg *p) {
   // Process fetch dependencies - added to dependencies map with needed_by=spec_fetch
   // The per-step edge query handles blocking automatically
   for (auto *fetch_dep_cfg : p->cfg->source_dependencies) {
-    // Set parent pointer for custom fetch lookup, but only for spec-declared deps.
-    // Manifest-declared bundles (parent already null, identity == bundle_identity)
-    // should keep null parent - their fetch function is in the manifest, not a spec.
-    bool const is_manifest_bundle{ !fetch_dep_cfg->parent &&
-                                   fetch_dep_cfg->bundle_identity.has_value() &&
-                                   fetch_dep_cfg->identity ==
-                                       *fetch_dep_cfg->bundle_identity };
-    if (!is_manifest_bundle) {
+    // A bundle package's parent is fixed where the bundle is declared: the declaring
+    // spec, whose Lua state holds the custom fetch function, or null for a
+    // manifest-declared bundle, whose fetch function lives in the manifest. Never
+    // re-parent it to a consumer — every spec pulled from the bundle is blocked on it
+    // here, so its Lua state is by definition not loaded yet, and the bundle's own
+    // worker may be reading parent concurrently.
+    bool const is_bundle_pkg{ fetch_dep_cfg->bundle_identity.has_value() &&
+                              fetch_dep_cfg->identity == *fetch_dep_cfg->bundle_identity };
+    if (!is_bundle_pkg) {
       fetch_dep_cfg->parent = p->cfg;  // Set parent pointer for custom fetch lookup
     }
 

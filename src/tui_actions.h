@@ -54,25 +54,10 @@ class extract_progress_tracker {
   std::chrono::steady_clock::time_point start_time_;
 };
 
-// Download progress tracker (single file)
-// Lifetime: matches fetch() blocking call
-class fetch_progress_tracker {
- public:
-  fetch_progress_tracker(tui::section_handle section,
-                         std::string const &pkg_identity,
-                         std::string const &url);
-
-  bool operator()(fetch_progress_t const &prog);
-
- private:
-  tui::section_handle section_;
-  std::string label_;
-  std::string url_;
-  std::chrono::steady_clock::time_point start_time_;
-};
-
-// Multi-file transfer progress tracker with sub-sections. group_text labels the parent
-// row when there is more than one child (e.g. "fetch", "upload").
+// The one transfer progress tracker: every download in the process reports through
+// it, HTTP or git, one file or many. A single label renders as one row labeled with
+// the package identity; several render as a parent row (group_text, e.g. "fetch",
+// "upload") over indented per-file children.
 // Lifetime: matches the blocking call for multiple transfers
 class fetch_all_progress_tracker {
  public:

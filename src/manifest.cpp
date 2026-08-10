@@ -127,7 +127,7 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
 pkg_cfg *parse_package_entry(sol::object const &entry,
                              std::filesystem::path const &manifest_path,
                              bundle_alias_map const &bundles,
-                             bundle_pkg_map const &custom_fetch_bundle_pkgs) {
+                             bundle_pkg_map &bundle_pkgs) {
   // For non-table entries (strings) - use standard parsing (no platforms possible)
   if (!entry.is<sol::table>()) { return pkg_cfg::parse(entry, manifest_path); }
 
@@ -207,12 +207,11 @@ pkg_cfg *parse_package_entry(sol::object const &entry,
 
   std::string const bundle_identity{ bundle_src.bundle_identity };
 
-  // Check if this bundle has custom fetch - if so, add implicit dependency on bundle pkg
-  std::vector<pkg_cfg *> source_deps;
-  if (auto it{ custom_fetch_bundle_pkgs.find(bundle_identity) };
-      it != custom_fetch_bundle_pkgs.end()) {
-    source_deps.push_back(it->second);
-  }
+  // The bundle itself is a package; depend on it so it materializes (and reports
+  // its own row) before this spec's spec_fetch reads a spec out of it.
+  std::vector<pkg_cfg *> source_deps{
+    bundle::ensure_pkg_cfg(bundle_src, manifest_path, nullptr, bundle_pkgs)
+  };
 
   // Create pkg_cfg with bundle source
   pkg_cfg *cfg{ pkg_cfg::pool()->emplace(spec_identity,
@@ -515,29 +514,17 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 
   auto const bundles{ bundle::parse_aliases((*m->lua_)["BUNDLES"], manifest_path) };
 
-  // Create pkg_cfg entries for bundles with custom fetch (they become BUNDLE_ONLY
-  // packages) Map of bundle_identity -> pkg_cfg* for packages to depend on
-  std::unordered_map<std::string, pkg_cfg *> custom_fetch_bundle_pkgs;
+  // Bundles become BUNDLE_ONLY packages (see bundle::ensure_pkg_cfg). Custom-fetch
+  // bundles are also roots: their fetch function lives in this manifest's BUNDLES
+  // table, so they run whether or not a package references them. Every other bundle
+  // is created on first reference below and pulled in as a source dependency.
+  std::unordered_map<std::string, pkg_cfg *> bundle_pkgs;
   for (auto const &[alias, bundle_src] : bundles) {
-    auto const *custom_fetch{ std::get_if<pkg_cfg::custom_fetch_source>(
-        &bundle_src.fetch_source) };
-    if (!custom_fetch) { continue; }
-
-    // Create pkg_cfg for the bundle package
-    pkg_cfg *bundle_cfg{ pkg_cfg::pool()->emplace(
-        bundle_src.bundle_identity,  // identity = bundle identity
-        pkg_cfg::bundle_source{ bundle_src },
-        "{}",
-        std::nullopt,                // needed_by (root package)
-        nullptr,                     // parent
-        nullptr,                     // weak
-        custom_fetch->dependencies,  // source_dependencies
-        std::nullopt,                // product
-        manifest_path) };
-
-    bundle_cfg->bundle_identity = bundle_src.bundle_identity;
-    custom_fetch_bundle_pkgs[bundle_src.bundle_identity] = bundle_cfg;
-    m->packages.push_back(bundle_cfg);
+    if (!std::holds_alternative<pkg_cfg::custom_fetch_source>(bundle_src.fetch_source)) {
+      continue;
+    }
+    m->packages.push_back(
+        bundle::ensure_pkg_cfg(bundle_src, manifest_path, nullptr, bundle_pkgs));
   }
 
   sol::object packages_obj = (*m->lua_)["PACKAGES"];
@@ -551,7 +538,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
     m->packages.push_back(parse_package_entry(packages_table[i],
                                               manifest_path,
                                               bundles,
-                                              custom_fetch_bundle_pkgs));
+                                              bundle_pkgs));
   }
 
   m->package_depots = parse_package_depots((*m->lua_)["PACKAGE_DEPOTS"]);

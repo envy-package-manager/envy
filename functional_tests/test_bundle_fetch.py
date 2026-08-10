@@ -4,14 +4,27 @@ Tests bundle fetching from local directories, identity verification,
 SPECS->IDENTITY validation, and spec-from-bundle resolution.
 """
 
+import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
+import threading
 import unittest
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import test_config
 from .test_config import make_manifest
+from .trace_parser import TraceParser
+
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    """SimpleHTTPRequestHandler without per-request logging."""
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
 
 
 def create_simple_bundle(bundle_dir: Path) -> Path:
@@ -710,6 +723,224 @@ PACKAGES = {{
             bundle_cache.exists(),
             f"Local bundle dependency should not be cached at {bundle_cache}",
         )
+
+
+class TestBundleFetchRemote(unittest.TestCase):
+    """A remote bundle is a package: same section, progress bar, and outcome row."""
+
+    def setUp(self):
+        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-remote-cache-"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-remote-"))
+        self.envy = test_config.get_envy_executable()
+        self.project_root = Path(__file__).parent.parent
+
+        bundle_src = self.test_dir / "src"
+        bundle_src.mkdir()
+        create_simple_bundle(bundle_src)
+
+        self.serve_dir = self.test_dir / "serve"
+        self.serve_dir.mkdir()
+        with tarfile.open(self.serve_dir / "bundle.tar.gz", "w:gz") as tf:
+            for path in sorted(bundle_src.rglob("*")):
+                tf.add(path, arcname=str(path.relative_to(bundle_src)))
+
+        handler = partial(_QuietHandler, directory=str(self.serve_dir))
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.server_thread = threading.Thread(
+            target=self.server.serve_forever, daemon=True
+        )
+        self.server_thread.start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/bundle.tar.gz"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server_thread.join(timeout=5)
+        self.server.server_close()
+        shutil.rmtree(self.cache_root, ignore_errors=True)
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def run_install(self, manifest: Path):
+        return test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+    def write_manifest(self, packages: str) -> Path:
+        manifest_path = self.test_dir / "envy.lua"
+        manifest_path.write_text(
+            make_manifest(
+                f"""
+BUNDLES = {{
+    toolchain = {{
+        identity = "test.simple-bundle@v1",
+        source = "{self.url}",
+    }},
+}}
+
+PACKAGES = {{
+{packages}
+}}
+"""
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def test_remote_bundle_reports_outcome(self):
+        """Fetch reports 'fetched'; the warm cache reports 'cache hit'."""
+        manifest_path = self.write_manifest(
+            '    { spec = "test.spec_a@v1", bundle = "toolchain", setup = { "main" } },'
+        )
+
+        first = self.run_install(manifest_path)
+        self.assertEqual(first.returncode, 0, f"stderr: {first.stderr}")
+        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] fetched \(\d+\.\ds\)")
+
+        second = self.run_install(manifest_path)
+        self.assertEqual(second.returncode, 0, f"stderr: {second.stderr}")
+        self.assertIn("[test.simple-bundle@v1] cache hit", second.stderr)
+
+    def test_shared_remote_bundle_reports_one_row(self):
+        """Two specs from one bundle share one bundle package, so one outcome row."""
+        manifest_path = self.write_manifest(
+            '    { spec = "test.spec_a@v1", bundle = "toolchain", setup = { "main" } },\n'
+            '    { spec = "test.spec_b@v1", bundle = "toolchain", setup = { "main" } },'
+        )
+
+        result = self.run_install(manifest_path)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertNotIn("cache hit", result.stderr)
+
+        # Outcome rows only: a slow run also emits throttled progress lines, which the
+        # non-TTY fallback renderer prints with a doubled "[[identity]]" label.
+        outcome_rows = re.findall(
+            r"^\[test\.simple-bundle@v1\] (?:fetched|cache hit)",
+            result.stderr,
+            re.MULTILINE,
+        )
+        self.assertEqual(1, len(outcome_rows), result.stderr)
+
+    def test_remote_bundle_outcome_is_traced(self):
+        """The bundle emits the same pkg_outcome trace event packages emit."""
+        manifest_path = self.write_manifest(
+            '    { spec = "test.spec_a@v1", bundle = "toolchain", setup = { "main" } },'
+        )
+        trace_path = self.test_dir / "trace.jsonl"
+
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                f"--trace=file:{trace_path}",
+                "install",
+                "--manifest",
+                str(manifest_path),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+        outcomes = {
+            e.spec: e.raw["outcome"]
+            for e in TraceParser(trace_path).filter_by_event("pkg_outcome")
+        }
+        self.assertEqual("bundle_fetched", outcomes.get("test.simple-bundle@v1"), outcomes)
+
+
+@unittest.skipIf(shutil.which("git") is None, "git binary not available")
+class TestBundleFetchGit(unittest.TestCase):
+    """A git bundle takes the same package path as a remote one."""
+
+    def setUp(self):
+        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-git-cache-"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-git-"))
+        self.envy = test_config.get_envy_executable()
+        self.project_root = Path(__file__).parent.parent
+
+        repo = self.test_dir / "work"
+        repo.mkdir()
+        create_simple_bundle(repo)
+        for args in (
+            ("init", "-b", "main"),
+            ("add", "-A"),
+            ("commit", "-m", "bundle"),
+        ):
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=envy-test",
+                    "-c",
+                    "user.email=envy@test.invalid",
+                    *args,
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+        # A .git-suffixed path is classified as the git scheme (see uri_classify).
+        self.repo = self.test_dir / "bundle.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(repo), str(self.repo)],
+            capture_output=True,
+            check=True,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.cache_root, ignore_errors=True)
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_git_bundle_reports_outcome(self):
+        """Clone reports 'fetched'; the warm cache reports 'cache hit'."""
+        manifest_path = self.test_dir / "envy.lua"
+        manifest_path.write_text(
+            make_manifest(
+                f"""
+BUNDLES = {{
+    toolchain = {{
+        identity = "test.simple-bundle@v1",
+        source = "{self.repo.as_posix()}",
+        ref = "main",
+    }},
+}}
+
+PACKAGES = {{
+    {{ spec = "test.spec_a@v1", bundle = "toolchain", setup = {{ "main" }} }},
+}}
+"""
+            ),
+            encoding="utf-8",
+        )
+
+        cmd = [
+            str(self.envy),
+            "--cache-root",
+            str(self.cache_root),
+            "install",
+            "--manifest",
+            str(manifest_path),
+        ]
+
+        first = test_config.run(cmd, cwd=self.project_root, capture_output=True, text=True)
+        self.assertEqual(first.returncode, 0, f"stderr: {first.stderr}")
+        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] fetched \(\d+\.\ds\)")
+
+        second = test_config.run(cmd, cwd=self.project_root, capture_output=True, text=True)
+        self.assertEqual(second.returncode, 0, f"stderr: {second.stderr}")
+        self.assertIn("[test.simple-bundle@v1] cache hit", second.stderr)
 
 
 if __name__ == "__main__":

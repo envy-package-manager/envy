@@ -517,4 +517,55 @@ std::filesystem::path pkg_cfg::compute_project_root(pkg_cfg const *cfg) {
   return std::filesystem::current_path();
 }
 
+bool operator==(pkg_cfg::remote_source const &lhs, pkg_cfg::remote_source const &rhs) {
+  return lhs.url == rhs.url && lhs.sha256 == rhs.sha256 && lhs.subdir == rhs.subdir;
+}
+
+bool operator==(pkg_cfg::local_source const &lhs, pkg_cfg::local_source const &rhs) {
+  return lhs.file_path == rhs.file_path;
+}
+
+bool operator==(pkg_cfg::git_source const &lhs, pkg_cfg::git_source const &rhs) {
+  return lhs.url == rhs.url && lhs.ref == rhs.ref && lhs.subdir == rhs.subdir;
+}
+
+bundle_source_match bundle_source_compare(pkg_cfg::bundle_source const &lhs,
+                                          pkg_cfg::bundle_source const &rhs) {
+  if (lhs.bundle_identity != rhs.bundle_identity) {
+    return bundle_source_match::DIFFERENT;
+  }
+  if (lhs.fetch_source.index() != rhs.fetch_source.index()) {
+    return bundle_source_match::DIFFERENT;
+  }
+
+  using fetch_source_t = decltype(pkg_cfg::bundle_source::fetch_source);
+  static_assert(std::is_same_v<std::variant_alternative_t<0, fetch_source_t>,
+                               pkg_cfg::remote_source>);
+  static_assert(std::is_same_v<std::variant_alternative_t<1, fetch_source_t>,
+                               pkg_cfg::local_source>);
+  static_assert(std::is_same_v<std::variant_alternative_t<2, fetch_source_t>,
+                               pkg_cfg::git_source>);
+  static_assert(std::is_same_v<std::variant_alternative_t<3, fetch_source_t>,
+                               pkg_cfg::custom_fetch_source>);
+  static_assert(std::variant_size_v<fetch_source_t> == 4);
+
+  auto const same{ [](bool equal) {
+    return equal ? bundle_source_match::SAME : bundle_source_match::DIFFERENT;
+  } };
+
+  switch (lhs.fetch_source.index()) {
+    case 0:
+      return same(std::get<pkg_cfg::remote_source>(lhs.fetch_source) ==
+                  std::get<pkg_cfg::remote_source>(rhs.fetch_source));
+    case 1:
+      return same(std::get<pkg_cfg::local_source>(lhs.fetch_source) ==
+                  std::get<pkg_cfg::local_source>(rhs.fetch_source));
+    case 2:
+      return same(std::get<pkg_cfg::git_source>(lhs.fetch_source) ==
+                  std::get<pkg_cfg::git_source>(rhs.fetch_source));
+    // Two fetch closures are opaque: not the same, not provably different.
+    default: return bundle_source_match::INCOMPARABLE;
+  }
+}
+
 }  // namespace envy

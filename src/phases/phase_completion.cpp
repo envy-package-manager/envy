@@ -27,8 +27,12 @@ void run_completion_phase(pkg *p, engine &eng) {
                                        pkg_phase::completion,
                                        std::chrono::steady_clock::now() };
 
-  p->result_hash =
-      p->type == pkg_type::CACHE_MANAGED ? p->canonical_identity_hash : "user-managed";
+  switch (p->type) {
+    case pkg_type::CACHE_MANAGED: p->result_hash = p->canonical_identity_hash; break;
+    case pkg_type::USER_MANAGED: p->result_hash = "user-managed"; break;
+    case pkg_type::BUNDLE_ONLY: p->result_hash = "bundle"; break;
+    case pkg_type::UNKNOWN: break;
+  }
 
   // One outcome per package, computed once and sent to three sinks: the TTY
   // progress section's final text (no new scrollback), a non-TTY INFO line
@@ -39,7 +43,13 @@ void run_completion_phase(pkg *p, engine &eng) {
     if (p->type == pkg_type::USER_MANAGED) {
       return { "setup_complete", "setup complete", false };
     }
+    // Bundles have no build/import path: they are fetched, already cached, or a
+    // local directory consumed where it sits.
+    if (p->type == pkg_type::BUNDLE_ONLY && p->bundle_in_situ) {
+      return { "bundle_local", "local bundle", false };
+    }
     if (p->was_cache_hit) { return { "cache_hit", "cache hit", false }; }
+    if (p->type == pkg_type::BUNDLE_ONLY) { return { "bundle_fetched", "fetched", true }; }
     if (p->imported) { return { "imported", "imported from depot", true }; }
     return { "installed", "installed", true };
   }() };

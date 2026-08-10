@@ -14,6 +14,7 @@
 #include "sol_util.h"
 #include "trace.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include <chrono>
@@ -277,6 +278,29 @@ std::filesystem::path get_cached_spec_path(pkg const *p) {
   return p->cache_ptr->ensure_spec(p->cfg->identity).pkg_path / "spec.lua";
 }
 
+// Every download this phase makes — a spec file, a git spec repo, a bundle payload —
+// goes through here, so it draws with the same tracker the package fetch phase uses
+// and lands on the requesting package's row. Throws on failure; `what` names the
+// source kind in the message.
+void fetch_with_progress(fetch_request req,
+                         pkg const *p,
+                         std::string const &url,
+                         char const *what) {
+  std::string const &identity{ p->cfg->identity };
+  tui_actions::fetch_all_progress_tracker tracker{ p->tui_section,
+                                                   identity,
+                                                   { uri_extract_filename(url) },
+                                                   "fetch" };
+  std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
+
+  auto const results{ fetch({ std::move(req) }, identity) };
+  if (results.empty() || std::holds_alternative<std::string>(results[0])) {
+    throw std::runtime_error(std::string{ "Failed to fetch " } + what + ": " +
+                             (results.empty() ? "no results"
+                                              : std::get<std::string>(results[0])));
+  }
+}
+
 std::filesystem::path fetch_local_source(pkg_cfg const &cfg) {
   auto const *local_src{ std::get_if<pkg_cfg::local_source>(&cfg.source) };
   return local_src->file_path;
@@ -290,13 +314,10 @@ std::filesystem::path fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
     tui::debug("spec: source %s", remote_src->url.c_str());
     std::filesystem::path fetch_dest{ cache_result.lock->install_dir() / "spec.lua" };
 
-    auto req{ fetch_request_from_url(remote_src->url, fetch_dest) };
-    auto const results{ fetch({ req }, cfg.identity) };
-    if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-      throw std::runtime_error(
-          "Failed to fetch spec: " +
-          (results.empty() ? "no results" : std::get<std::string>(results[0])));
-    }
+    fetch_with_progress(fetch_request_from_url(remote_src->url, fetch_dest),
+                        p,
+                        remote_src->url,
+                        "spec");
 
     if (!remote_src->sha256.empty()) {
       sha256_verify(remote_src->sha256, sha256(fetch_dest));
@@ -318,16 +339,13 @@ std::filesystem::path fetch_git_source(pkg_cfg const &cfg, pkg *p) {
 
     std::filesystem::path install_dir{ cache_result.lock->install_dir() };
     auto const info{ uri_classify(git_src->url) };
-    auto const results{ fetch({ fetch_request_git{ .source = git_src->url,
-                                                   .destination = install_dir,
-                                                   .ref = git_src->ref,
-                                                   .scheme = info.scheme } },
-                              cfg.identity) };
-    if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-      throw std::runtime_error(
-          "Failed to fetch git spec: " +
-          (results.empty() ? "no results" : std::get<std::string>(results[0])));
-    }
+    fetch_with_progress(fetch_request_git{ .source = git_src->url,
+                                           .destination = install_dir,
+                                           .ref = git_src->ref,
+                                           .scheme = info.scheme },
+                        p,
+                        git_src->url,
+                        "git spec");
 
     cache_result.lock->mark_install_complete();
     cache_result.lock.reset();
@@ -336,133 +354,19 @@ std::filesystem::path fetch_git_source(pkg_cfg const &cfg, pkg *p) {
   return cache_result.pkg_path / "spec.lua";
 }
 
-std::filesystem::path fetch_bundle_and_resolve_spec(pkg_cfg const &cfg,
-                                                    pkg *p,
-                                                    engine &eng) {
+// The bundle is materialized by its own BUNDLE_ONLY package, which this spec lists
+// as a source dependency — so by the time spec_fetch runs the bundle is registered
+// and all that is left is resolving the spec's path inside it.
+std::filesystem::path resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) {
   auto const *bundle_src{ std::get_if<pkg_cfg::bundle_source>(&cfg.source) };
   std::string const &bundle_id{ bundle_src->bundle_identity };
 
-  // Check if bundle is already registered
-  if (bundle * existing{ eng.find_bundle(bundle_id) }) {
-    std::filesystem::path spec_path{ existing->resolve_spec_path(cfg.identity) };
-    if (spec_path.empty()) {
-      throw std::runtime_error("Spec '" + cfg.identity + "' not found in bundle '" +
-                               bundle_id + "'");
-    }
-    return spec_path;
+  bundle *b{ eng.find_bundle(bundle_id) };
+  if (!b) {
+    throw std::runtime_error("Bundle '" + bundle_id +
+                             "' was not materialized before spec '" + cfg.identity +
+                             "' (missing bundle source dependency)");
   }
-
-  // Local bundles (identity starts with "local.") use source directory in-situ
-  if (bundle_id.starts_with("local.")) {
-    auto const *local_src{ std::get_if<pkg_cfg::local_source>(&bundle_src->fetch_source) };
-    if (local_src && std::filesystem::is_directory(local_src->file_path)) {
-      tui::debug("spec: local bundle %s", bundle_id.c_str());
-
-      bundle parsed{ bundle::from_path(local_src->file_path) };
-      if (parsed.identity != bundle_id) {
-        throw std::runtime_error("Bundle identity mismatch: expected '" + bundle_id +
-                                 "' but manifest declares '" + parsed.identity + "'");
-      }
-      parsed.validate();
-
-      bundle *b{
-        eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path)
-      };
-
-      std::filesystem::path spec_path{ b->resolve_spec_path(cfg.identity) };
-      if (spec_path.empty()) {
-        throw std::runtime_error("Spec '" + cfg.identity + "' not found in bundle '" +
-                                 bundle_id + "'");
-      }
-      return spec_path;
-    }
-  }
-
-  // Non-local bundle: fetch to cache
-  auto cache_result{ p->cache_ptr->ensure_spec(bundle_id) };
-
-  if (cache_result.lock) {
-    tui::debug("spec: bundle %s", bundle_id.c_str());
-    std::filesystem::path const install_dir{ cache_result.lock->install_dir() };
-
-    // Fetch based on underlying source type
-    std::visit(
-        match{
-            [&](pkg_cfg::remote_source const &remote) {  // remote file
-              std::filesystem::path fetch_dest{ cache_result.lock->fetch_dir() /
-                                                uri_extract_filename(remote.url) };
-
-              auto req{ fetch_request_from_url(remote.url, fetch_dest) };
-              auto const results{ fetch({ req }, bundle_id) };
-              if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-                throw std::runtime_error(
-                    "Failed to fetch bundle: " +
-                    (results.empty() ? "no results" : std::get<std::string>(results[0])));
-              }
-
-              if (!remote.sha256.empty()) {
-                sha256_verify(remote.sha256, sha256(fetch_dest));
-              }
-
-              // Extract bundle archive into install_dir
-              extract(fetch_dest, install_dir);
-            },
-
-            [&](pkg_cfg::local_source const
-                    &local) {  // local source (non-local. identity)
-              // Copy directory or extract archive to cache
-              if (std::filesystem::is_directory(local.file_path)) {
-                std::filesystem::copy(
-                    local.file_path,
-                    install_dir,
-                    std::filesystem::copy_options::recursive |
-                        std::filesystem::copy_options::overwrite_existing);
-              } else {
-                extract(local.file_path, install_dir);
-              }
-            },
-
-            [&](pkg_cfg::git_source const &git) {  // git source
-              auto const git_info{ uri_classify(git.url) };
-              auto const results{ fetch({ fetch_request_git{ .source = git.url,
-                                                             .destination = install_dir,
-                                                             .ref = git.ref,
-                                                             .scheme = git_info.scheme } },
-                                        bundle_id) };
-              if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-                throw std::runtime_error(
-                    "Failed to fetch git bundle: " +
-                    (results.empty() ? "no results" : std::get<std::string>(results[0])));
-              }
-            },
-            [&](pkg_cfg::custom_fetch_source const &) {
-              // Custom fetch bundles are handled via BUNDLE_ONLY packages
-              // They should be registered before this point via dependencies
-              throw std::runtime_error(
-                  "Bundle with custom fetch should be registered before spec "
-                  "resolution: " +
-                  bundle_id);
-            },
-        },
-        bundle_src->fetch_source);
-
-    cache_result.lock->mark_install_complete();
-    cache_result.lock.reset();
-  }
-
-  // Parse bundle manifest and validate
-  bundle parsed{ bundle::from_path(cache_result.pkg_path) };
-
-  if (parsed.identity != bundle_id) {
-    throw std::runtime_error("Bundle identity mismatch: expected '" + bundle_id +
-                             "' but manifest declares '" + parsed.identity + "'");
-  }
-
-  parsed.validate();
-
-  bundle *b{
-    eng.register_bundle(bundle_id, std::move(parsed.specs), cache_result.pkg_path)
-  };
 
   std::filesystem::path spec_path{ b->resolve_spec_path(cfg.identity) };
   if (spec_path.empty()) {
@@ -700,6 +604,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
 }
 
 using bundle_alias_map = std::unordered_map<std::string, pkg_cfg::bundle_source>;
+using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 
 // Parse a pure bundle dependency: {bundle = "identity", source = "...", ref = "..."}
 // Returns bundle_source if this is a pure bundle dep, nullopt otherwise
@@ -799,7 +704,9 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
 pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
                                     std::filesystem::path const &spec_path,
                                     bundle_alias_map const &aliases,
-                                    bundle_alias_map const &declared_bundles) {
+                                    bundle_alias_map const &declared_bundles,
+                                    pkg_cfg const *declaring_spec,
+                                    bundle_pkg_map &bundle_pkgs) {
   // Get spec identity (required for spec-from-bundle)
   std::string const spec_identity{ [&] {
     auto opt{ sol_util_get_optional<std::string>(table, "spec", "Dependency") };
@@ -859,15 +766,19 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
 
   std::string const bundle_identity{ bundle_src.bundle_identity };
 
-  pkg_cfg *cfg{ pkg_cfg::pool()->emplace(spec_identity,
-                                         pkg_cfg::bundle_source{ bundle_src },
-                                         std::move(serialized_options),
-                                         needed_by,
-                                         nullptr,
-                                         nullptr,
-                                         std::vector<pkg_cfg *>{},
-                                         std::move(product),
-                                         spec_path) };
+  // The bundle is its own package; depending on it blocks this spec's spec_fetch
+  // until the bundle is materialized and registered.
+  pkg_cfg *cfg{ pkg_cfg::pool()->emplace(
+      spec_identity,
+      pkg_cfg::bundle_source{ bundle_src },
+      std::move(serialized_options),
+      needed_by,
+      nullptr,
+      nullptr,
+      std::vector<pkg_cfg *>{
+          bundle::ensure_pkg_cfg(bundle_src, spec_path, declaring_spec, bundle_pkgs) },
+      std::move(product),
+      spec_path) };
 
   cfg->bundle_identity = bundle_identity;
   return cfg;
@@ -883,6 +794,10 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
 
   // Track declared bundle dependencies (pure bundle deps) for identity-based resolution
   bundle_alias_map declared_bundles;
+
+  // Bundle identity → its BUNDLE_ONLY package cfg, so several specs pulled from one
+  // bundle share a single bundle package (and therefore a single row).
+  bundle_pkg_map bundle_pkgs;
 
   sol::object deps_obj{ lua["DEPENDENCIES"] };
   if (!deps_obj.valid() || deps_obj.get_type() != sol::type::table) { return parsed_deps; }
@@ -955,20 +870,12 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
         needed_by = pkg_phase_parse_needed_by(*needed_by_str, "Bundle dependency");
       }
 
-      // Create a pkg_cfg for the bundle dependency
-      // Use bundle_identity as the pkg identity so it can be looked up and keyed properly
-      pkg_cfg *bundle_cfg{ pkg_cfg::pool()->emplace(
-          bundle_id,  // Use bundle identity as pkg identity
-          std::move(*pure_bundle),
-          "{}",
-          needed_by,
-          nullptr,
-          nullptr,
-          std::vector<pkg_cfg *>{},
-          std::nullopt,
-          spec_path) };
-
-      bundle_cfg->bundle_identity = bundle_id;
+      // Same bundle package a spec-from-bundle entry would depend on, so declaring
+      // both forms of the bundle in one spec still yields one package and one row.
+      pkg_cfg *bundle_cfg{
+        bundle::ensure_pkg_cfg(*pure_bundle, spec_path, &cfg, bundle_pkgs)
+      };
+      bundle_cfg->needed_by = needed_by;
       parsed_deps.push_back(bundle_cfg);
       continue;
     }
@@ -986,9 +893,12 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
     // Check for spec-from-bundle: {spec = "id", bundle = "ref"}
     sol::object bundle_obj{ table["bundle"] };
     if (bundle_obj.valid() && bundle_obj.get_type() != sol::type::lua_nil) {
-      pkg_cfg *dep_cfg{
-        parse_spec_from_bundle_dep(table, spec_path, aliases, declared_bundles)
-      };
+      pkg_cfg *dep_cfg{ parse_spec_from_bundle_dep(table,
+                                                   spec_path,
+                                                   aliases,
+                                                   declared_bundles,
+                                                   &cfg,
+                                                   bundle_pkgs) };
 
       if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
         throw std::runtime_error("non-local spec '" + cfg.identity +
@@ -1202,19 +1112,25 @@ void wire_dependency_graph(pkg *p, engine &eng) {
 
 }  // namespace
 
-// Fetch a bundle without resolving a spec (pure bundle dependency)
-void fetch_bundle_only(pkg_cfg const &cfg, pkg *p, engine &eng) {
+// Materialize a bundle into the engine's registry: the whole job of a BUNDLE_ONLY
+// package's spec_fetch. Specs pulled from the bundle depend on this package, so it
+// always runs first. Sets the outcome flags the completion phase renders.
+void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
   auto const *bundle_src{ std::get_if<pkg_cfg::bundle_source>(&cfg.source) };
   std::string const &bundle_id{ bundle_src->bundle_identity };
 
-  // Check if bundle is already registered
-  if (eng.find_bundle(bundle_id)) { return; }
+  // Another cfg for the same bundle identity already materialized it (a manifest
+  // and a spec can each declare the same bundle); nothing left to do.
+  if (eng.find_bundle(bundle_id)) {
+    p->was_cache_hit = true;
+    return;
+  }
 
   // Local bundles (identity starts with "local.") use source directory in-situ
   if (bundle_id.starts_with("local.")) {
     auto const *local_src{ std::get_if<pkg_cfg::local_source>(&bundle_src->fetch_source) };
     if (local_src && std::filesystem::is_directory(local_src->file_path)) {
-      tui::debug("spec: local bundle %s (dependency)", bundle_id.c_str());
+      tui::debug("spec: local bundle %s", bundle_id.c_str());
 
       bundle parsed{ bundle::from_path(local_src->file_path) };
       if (parsed.identity != bundle_id) {
@@ -1223,15 +1139,18 @@ void fetch_bundle_only(pkg_cfg const &cfg, pkg *p, engine &eng) {
       }
       parsed.validate();
       eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path);
+      p->bundle_in_situ = true;
       return;
     }
   }
 
-  // Non-local bundle: fetch to cache
+  // Non-local bundle: fetch to cache. The completion phase turns these flags into
+  // this package's outcome row, exactly as it does for any other package.
   auto cache_result{ p->cache_ptr->ensure_spec(bundle_id) };
+  p->was_cache_hit = cache_result.lock == nullptr;
 
   if (cache_result.lock) {
-    tui::debug("spec: bundle %s (dependency)", bundle_id.c_str());
+    tui::debug("spec: bundle %s", bundle_id.c_str());
     std::filesystem::path const install_dir{ cache_result.lock->install_dir() };
 
     // Fetch based on underlying source type
@@ -1241,13 +1160,10 @@ void fetch_bundle_only(pkg_cfg const &cfg, pkg *p, engine &eng) {
               std::filesystem::path fetch_dest{ cache_result.lock->fetch_dir() /
                                                 uri_extract_filename(remote.url) };
 
-              auto req{ fetch_request_from_url(remote.url, fetch_dest) };
-              auto const results{ fetch({ req }, bundle_id) };
-              if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-                throw std::runtime_error(
-                    "Failed to fetch bundle: " +
-                    (results.empty() ? "no results" : std::get<std::string>(results[0])));
-              }
+              fetch_with_progress(fetch_request_from_url(remote.url, fetch_dest),
+                                   p,
+                                   remote.url,
+                                   "bundle");
 
               if (!remote.sha256.empty()) {
                 sha256_verify(remote.sha256, sha256(fetch_dest));
@@ -1268,16 +1184,13 @@ void fetch_bundle_only(pkg_cfg const &cfg, pkg *p, engine &eng) {
             },
             [&](pkg_cfg::git_source const &git) {
               auto const git_info{ uri_classify(git.url) };
-              auto const results{ fetch({ fetch_request_git{ .source = git.url,
-                                                             .destination = install_dir,
-                                                             .ref = git.ref,
-                                                             .scheme = git_info.scheme } },
-                                        bundle_id) };
-              if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-                throw std::runtime_error(
-                    "Failed to fetch git bundle: " +
-                    (results.empty() ? "no results" : std::get<std::string>(results[0])));
-              }
+              fetch_with_progress(fetch_request_git{ .source = git.url,
+                                                      .destination = install_dir,
+                                                      .ref = git.ref,
+                                                      .scheme = git_info.scheme },
+                                   p,
+                                   git.url,
+                                   "git bundle");
             },
             [&](pkg_cfg::custom_fetch_source const &) {
               // Custom fetch bundle - execute fetch function
@@ -1396,7 +1309,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     phase_trace_scope const phase_scope{ cfg.identity,
                                          pkg_phase::spec_fetch,
                                          std::chrono::steady_clock::now() };
-    fetch_bundle_only(cfg, p, eng);
+    materialize_bundle(cfg, p, eng);
     p->type = pkg_type::BUNDLE_ONLY;
     return;  // No spec to load - bundle is now available for envy.loadenv_spec()
   }
@@ -1416,7 +1329,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     } else if (cfg.has_fetch_function()) {
       return fetch_custom_function(cfg, p, eng);
     } else if (std::holds_alternative<pkg_cfg::bundle_source>(cfg.source)) {
-      return fetch_bundle_and_resolve_spec(cfg, p, eng);
+      return resolve_spec_from_bundle(cfg, eng);
     } else {
       throw std::runtime_error("Unsupported source type: " + cfg.identity);
     }

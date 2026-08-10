@@ -216,6 +216,55 @@ PACKAGES = {{
                 f"stderr: {result.stderr}",
             )
 
+    def test_spec_declared_custom_fetch_bundle_supplies_spec(self):
+        """A spec declares a custom-fetch bundle, then pulls a spec out of it.
+
+        The fetch function lives in the declaring spec's Lua state, so the bundle
+        package's parent must stay that spec. Consumers of the bundle are blocked on
+        it and have no Lua state loaded, so re-parenting to one is fatal.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_spec = """
+IDENTITY = "test.root@v1"
+
+DEPENDENCIES = {
+  { bundle = "test.tc@v1", source = { fetch = function(tmp_dir)
+      local b = io.open(tmp_dir .. "/envy-bundle.lua", "w")
+      b:write('BUNDLE = "test.tc@v1"\\n')
+      b:write('SPECS = { ["test.tool@v1"] = "tool.lua" }\\n')
+      b:close()
+      local t = io.open(tmp_dir .. "/tool.lua", "w")
+      t:write('IDENTITY = "test.tool@v1"\\n')
+      t:write('DEPENDENCIES = {}\\n')
+      t:write('FETCH = function(d, o) end\\n')
+      t:close()
+      envy.commit_fetch({"envy-bundle.lua", "tool.lua"})
+    end } },
+  { spec = "test.tool@v1", bundle = "test.tc@v1" },
+}
+
+FETCH = function(dir, options) end
+"""
+            spec_path = os.path.join(tmpdir, "root.lua")
+            with open(spec_path, "w") as f:
+                f.write(root_spec)
+
+            manifest = """-- @envy bin "envy-bin"
+PACKAGES = {
+    { spec = "test.root@v1", source = "root.lua" },
+}
+"""
+            manifest_path = os.path.join(tmpdir, "envy.lua")
+            with open(manifest_path, "w") as f:
+                f.write(manifest)
+
+            result = self.run_envy(["install", "--manifest", manifest_path], tmpdir)
+
+            self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+            self.assertNotIn("Lua state unavailable", result.stderr)
+            # The bundle reported its own outcome row, like any other package.
+            self.assertRegex(result.stderr, r"\[test\.tc@v1\] fetched \(\d+\.\ds\)")
+
 
 if __name__ == "__main__":
     unittest.main()
