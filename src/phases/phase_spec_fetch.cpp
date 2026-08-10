@@ -295,9 +295,9 @@ void fetch_with_progress(fetch_request req,
 
   auto const results{ fetch({ std::move(req) }, identity) };
   if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-    throw std::runtime_error(std::string{ "Failed to fetch " } + what + ": " +
-                             (results.empty() ? "no results"
-                                              : std::get<std::string>(results[0])));
+    throw std::runtime_error(
+        std::string{ "Failed to fetch " } + what + ": " +
+        (results.empty() ? "no results" : std::get<std::string>(results[0])));
   }
 }
 
@@ -1161,9 +1161,9 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
                                                 uri_extract_filename(remote.url) };
 
               fetch_with_progress(fetch_request_from_url(remote.url, fetch_dest),
-                                   p,
-                                   remote.url,
-                                   "bundle");
+                                  p,
+                                  remote.url,
+                                  "bundle");
 
               if (!remote.sha256.empty()) {
                 sha256_verify(remote.sha256, sha256(fetch_dest));
@@ -1185,12 +1185,12 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
             [&](pkg_cfg::git_source const &git) {
               auto const git_info{ uri_classify(git.url) };
               fetch_with_progress(fetch_request_git{ .source = git.url,
-                                                      .destination = install_dir,
-                                                      .ref = git.ref,
-                                                      .scheme = git_info.scheme },
-                                   p,
-                                   git.url,
-                                   "git bundle");
+                                                     .destination = install_dir,
+                                                     .ref = git.ref,
+                                                     .scheme = git_info.scheme },
+                                  p,
+                                  git.url,
+                                  "git bundle");
             },
             [&](pkg_cfg::custom_fetch_source const &) {
               // Custom fetch bundle - execute fetch function

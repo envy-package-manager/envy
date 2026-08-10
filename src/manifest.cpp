@@ -535,10 +535,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   sol::table packages_table = packages_obj.as<sol::table>();
 
   for (size_t i{ 1 }; i <= packages_table.size(); ++i) {
-    m->packages.push_back(parse_package_entry(packages_table[i],
-                                              manifest_path,
-                                              bundles,
-                                              bundle_pkgs));
+    m->packages.push_back(
+        parse_package_entry(packages_table[i], manifest_path, bundles, bundle_pkgs));
   }
 
   m->package_depots = parse_package_depots((*m->lua_)["PACKAGE_DEPOTS"]);

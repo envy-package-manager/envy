@@ -543,8 +543,8 @@ bundle_source_match bundle_source_compare(pkg_cfg::bundle_source const &lhs,
                                pkg_cfg::remote_source>);
   static_assert(std::is_same_v<std::variant_alternative_t<1, fetch_source_t>,
                                pkg_cfg::local_source>);
-  static_assert(std::is_same_v<std::variant_alternative_t<2, fetch_source_t>,
-                               pkg_cfg::git_source>);
+  static_assert(
+      std::is_same_v<std::variant_alternative_t<2, fetch_source_t>, pkg_cfg::git_source>);
   static_assert(std::is_same_v<std::variant_alternative_t<3, fetch_source_t>,
                                pkg_cfg::custom_fetch_source>);
   static_assert(std::variant_size_v<fetch_source_t> == 4);

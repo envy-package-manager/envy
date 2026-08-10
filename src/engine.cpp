@@ -122,16 +122,15 @@ void validate_bundle_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) 
 
     case bundle_source_match::DIFFERENT:
       if (a->bundle_identity != b->bundle_identity) {
-        throw std::runtime_error("spec '" + winner->identity +
-                                 "' is requested from two different bundles: '" +
-                                 a->bundle_identity + "' (" + where(winner) + ") and '" +
-                                 b->bundle_identity + "' (" + where(other) +
-                                 "); one declaration must be corrected");
+        throw std::runtime_error(
+            "spec '" + winner->identity + "' is requested from two different bundles: '" +
+            a->bundle_identity + "' (" + where(winner) + ") and '" + b->bundle_identity +
+            "' (" + where(other) + "); one declaration must be corrected");
       }
-      throw std::runtime_error(
-          "bundle '" + a->bundle_identity + "' is declared with conflicting sources in " +
-          where(winner) + " and " + where(other) +
-          "; a bundle identity must name one payload");
+      throw std::runtime_error("bundle '" + a->bundle_identity +
+                               "' is declared with conflicting sources in " +
+                               where(winner) + " and " + where(other) +
+                               "; a bundle identity must name one payload");
   }
 }
 
