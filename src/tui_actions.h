@@ -69,10 +69,16 @@ class fetch_all_progress_tracker {
   fetch_progress_cb_t make_callback(std::size_t slot);
 
  private:
+  // A clone reports two phases through one callback: objects arriving, then deltas
+  // resolving. Each percent is monotonic within its own phase — a shared clamp would
+  // pin delta resolution at the receive phase's 100%.
   struct git_state {
-    double last_percent{ 0.0 };
+    double last_receive_percent{ 0.0 };
+    double last_delta_percent{ 0.0 };
     std::uint32_t max_total_objects{ 0 };
     std::uint32_t last_received_objects{ 0 };
+    std::uint32_t max_total_deltas{ 0 };
+    std::uint32_t last_indexed_deltas{ 0 };
     std::uint64_t last_bytes{ 0 };
   };
 
