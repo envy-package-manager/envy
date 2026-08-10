@@ -358,8 +358,7 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
 
       case bundle_source_match::DIFFERENT:
         throw std::runtime_error("bundle '" + src.bundle_identity +
-                                 "' is declared more than once in " +
-                                 decl_path.string() +
+                                 "' is declared more than once in " + decl_path.string() +
                                  " with conflicting sources; a bundle identity must "
                                  "name one payload");
     }
