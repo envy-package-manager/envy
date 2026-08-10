@@ -78,10 +78,14 @@ void run_import_phase(pkg *p, engine &eng) {
       std::vector<fetch_request> requests;
       requests.push_back(fetch_request_from_url(location->url, archive_path));
 
-      tui_actions::fetch_progress_tracker tracker{ p->tui_section,
-                                                   p->cfg->identity,
-                                                   location->url };
-      std::visit([&](auto &r) { r.progress = tracker; }, requests[0]);
+      // Label with the source URL, not the destination: every depot archive lands on
+      // the same fixed temp name, so a filename would label every package's row
+      // identically.
+      tui_actions::fetch_all_progress_tracker tracker{ p->tui_section,
+                                                       p->cfg->identity,
+                                                       { location->url },
+                                                       "fetch" };
+      std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, requests[0]);
 
       auto const results{ fetch(requests, p->cfg->identity) };
       if (results.empty() || !std::holds_alternative<fetch_result>(results[0])) {

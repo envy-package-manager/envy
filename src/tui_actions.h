@@ -54,25 +54,10 @@ class extract_progress_tracker {
   std::chrono::steady_clock::time_point start_time_;
 };
 
-// Download progress tracker (single file)
-// Lifetime: matches fetch() blocking call
-class fetch_progress_tracker {
- public:
-  fetch_progress_tracker(tui::section_handle section,
-                         std::string const &pkg_identity,
-                         std::string const &url);
-
-  bool operator()(fetch_progress_t const &prog);
-
- private:
-  tui::section_handle section_;
-  std::string label_;
-  std::string url_;
-  std::chrono::steady_clock::time_point start_time_;
-};
-
-// Multi-file transfer progress tracker with sub-sections. group_text labels the parent
-// row when there is more than one child (e.g. "fetch", "upload").
+// The one transfer progress tracker: every download in the process reports through
+// it, HTTP or git, one file or many. A single label renders as one row labeled with
+// the package identity; several render as a parent row (group_text, e.g. "fetch",
+// "upload") over indented per-file children.
 // Lifetime: matches the blocking call for multiple transfers
 class fetch_all_progress_tracker {
  public:
@@ -84,10 +69,16 @@ class fetch_all_progress_tracker {
   fetch_progress_cb_t make_callback(std::size_t slot);
 
  private:
+  // A clone reports two phases through one callback: objects arriving, then deltas
+  // resolving. Each percent is monotonic within its own phase — a shared clamp would
+  // pin delta resolution at the receive phase's 100%.
   struct git_state {
-    double last_percent{ 0.0 };
+    double last_receive_percent{ 0.0 };
+    double last_delta_percent{ 0.0 };
     std::uint32_t max_total_objects{ 0 };
     std::uint32_t last_received_objects{ 0 };
+    std::uint32_t max_total_deltas{ 0 };
+    std::uint32_t last_indexed_deltas{ 0 };
     std::uint64_t last_bytes{ 0 };
   };
 
@@ -103,6 +94,16 @@ class fetch_all_progress_tracker {
   std::vector<git_state> git_states_;
   bool grouped_;
 };
+
+// Download with a progress bar on a scratch section, for command-level and bootstrap
+// fetches that have no package row to draw on. Anything downloaded gets a bar; the
+// section is created and deleted around the transfer. `item_labels` names each
+// transfer and must match `requests` in size — pass the URL when the destination is a
+// temp file whose name would say nothing.
+std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
+                                          std::string const &row_label,
+                                          std::vector<std::string> const &item_labels,
+                                          std::string trace_spec = {});
 
 // Unified shell execution with TUI progress tracking.
 // Creates a run_progress tracker, shows scrubbed command header; the tracker itself

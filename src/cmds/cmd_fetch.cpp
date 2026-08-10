@@ -3,6 +3,7 @@
 #include "fetch.h"
 #include "phases/phase_fetch.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "uri.h"
 
 #include "CLI11.hpp"
@@ -52,7 +53,10 @@ void cmd_fetch::execute() {
                                  "fetch",
                                  cfg_.manifest_root) };
 
-  auto const results{ fetch({ req }) };
+  // The whole job of this command is a download, so it draws a bar like any other.
+  auto const results{
+    tui_actions::fetch_tracked({ std::move(req) }, "fetch", { cfg_.source })
+  };
   if (results.empty()) { throw std::runtime_error("fetch: no result returned"); }
 
   if (std::holds_alternative<std::string>(results[0])) {

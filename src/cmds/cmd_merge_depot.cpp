@@ -3,6 +3,7 @@
 #include "fetch.h"
 #include "platform.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "uri.h"
 
 #include "CLI11.hpp"
@@ -193,8 +194,10 @@ void cmd_merge_depot::execute() {
       scoped_path_cleanup tmp_guard{ platform::create_unique_temp_file(
           "envy-merge-depot") };
 
-      auto req{ fetch_request_from_url(*cfg_.existing_path, tmp_guard.path()) };
-      auto results{ fetch({ req }) };
+      auto results{ tui_actions::fetch_tracked(
+          { fetch_request_from_url(*cfg_.existing_path, tmp_guard.path()) },
+          "merge-depot",
+          { *cfg_.existing_path }) };
       if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
         throw std::runtime_error("merge-depot: failed to fetch --existing: " + *err);
       }
@@ -278,8 +281,10 @@ void cmd_merge_depot::execute() {
         scoped_path_cleanup tmp_guard{ platform::create_unique_temp_file(
             "envy-merge-depot-retain") };
 
-        auto req{ fetch_request_from_url(source_path, tmp_guard.path()) };
-        auto results{ fetch({ req }) };
+        auto results{ tui_actions::fetch_tracked(
+            { fetch_request_from_url(source_path, tmp_guard.path()) },
+            "merge-depot",
+            { source_path }) };
         if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
           throw std::runtime_error(std::string("merge-depot: failed to fetch ") +
                                    flag_name + ": " + *err);

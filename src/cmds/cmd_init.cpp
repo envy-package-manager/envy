@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "sha256.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include "CLI11.hpp"
@@ -79,7 +80,10 @@ std::string fetch_sums_pin(std::optional<std::string> const &mirror) {
   tui::info("Fetching %s for %s",
             std::string{ kEnvyReleaseSumsFile }.c_str(),
             url.c_str());
-  auto const results{ fetch({ fetch_request_from_url(url, dest) }) };
+  std::vector<std::string> const labels{ std::string{ kEnvyReleaseSumsFile } };
+  auto const results{
+    tui_actions::fetch_tracked({ fetch_request_from_url(url, dest) }, "init", labels)
+  };
   if (results.empty()) {
     throw std::runtime_error("init: --pin-sums: failed to download " + url +
                              ": unknown error");

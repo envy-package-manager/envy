@@ -76,7 +76,8 @@ struct pkg {
   // true when the artifact came from a depot rather than a fresh build.
   std::chrono::steady_clock::time_point build_start{};
   bool imported{ false };
-  bool was_cache_hit{ false };  // set by check when the payload was already cached
+  bool was_cache_hit{ false };   // set by check when the payload was already cached
+  bool bundle_in_situ{ false };  // BUNDLE_ONLY: local bundle used from its source dir
 
   // Ancestor identities for dependency-cycle detection. Set before this
   // package's worker starts; immutable after.

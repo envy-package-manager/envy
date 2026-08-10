@@ -97,74 +97,6 @@ bool extract_progress_tracker::operator()(extract_progress const &prog) {
   return true;
 }
 
-// ==== fetch_progress_tracker ====
-
-fetch_progress_tracker::fetch_progress_tracker(tui::section_handle section,
-                                               std::string const &pkg_identity,
-                                               std::string const &url)
-    : section_{ section },
-      label_{ "[" + pkg_identity + "]" },
-      url_{ url },
-      start_time_{ std::chrono::steady_clock::now() } {
-  // Show initial spinner
-  tui::section_set_content(
-      section_,
-      tui::section_frame{ .label = label_,
-                          .content = tui::spinner_data{ .text = "fetching " + url_,
-                                                        .start_time = start_time_ } });
-}
-
-bool fetch_progress_tracker::operator()(fetch_progress_t const &prog) {
-  if (!section_) { return true; }
-
-  std::visit(
-      envy::match{
-          [&](fetch_transfer_progress const &p) {
-            double percent{ 0.0 };
-            if (p.total && *p.total > 0) {
-              percent = (p.transferred / static_cast<double>(*p.total)) * 100.0;
-            }
-            if (percent > 100.0) { percent = 100.0; }
-
-            std::ostringstream status;
-            status << util_format_bytes(p.transferred);
-            if (p.total) { status << "/" << util_format_bytes(*p.total); }
-            status << " " << url_;
-
-            tui::section_set_content(section_,
-                                     tui::section_frame{ .label = label_,
-                                                         .content = tui::progress_data{
-                                                             .percent = percent,
-                                                             .status = status.str() } });
-          },
-          [&](fetch_git_progress const &p) {
-            double percent{ 0.0 };
-            if (p.total_objects > 0) {
-              percent =
-                  (p.received_objects / static_cast<double>(p.total_objects)) * 100.0;
-            }
-            if (percent > 100.0) { percent = 100.0; }
-
-            std::ostringstream status;
-            status << p.received_objects;
-            if (p.total_objects > 0) { status << "/" << p.total_objects; }
-            status << " objects";
-            if (p.received_bytes > 0) {
-              status << " " << util_format_bytes(p.received_bytes);
-            }
-            status << " " << url_;
-
-            tui::section_set_content(section_,
-                                     tui::section_frame{ .label = label_,
-                                                         .content = tui::progress_data{
-                                                             .percent = percent,
-                                                             .status = status.str() } });
-          } },
-      prog);
-
-  return true;
-}
-
 // ==== fetch_all_progress_tracker ====
 
 fetch_all_progress_tracker::fetch_all_progress_tracker(
@@ -244,8 +176,11 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
 
   std::uint32_t snapshot_total{ 0 };
   std::uint32_t snapshot_received{ 0 };
+  std::uint32_t snapshot_total_deltas{ 0 };
+  std::uint32_t snapshot_deltas{ 0 };
   std::uint64_t snapshot_bytes{ 0 };
-  double snapshot_percent{ 0.0 };
+  double receive_percent{ 0.0 };
+  double delta_percent{ 0.0 };
   std::string child_label;
 
   {
@@ -255,18 +190,30 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
     state.last_received_objects =
         std::max(state.last_received_objects, prog.received_objects);
     state.last_bytes = std::max(state.last_bytes, prog.received_bytes);
+    state.max_total_deltas = std::max(state.max_total_deltas, prog.total_deltas);
+    state.last_indexed_deltas = std::max(state.last_indexed_deltas, prog.indexed_deltas);
 
     if (state.max_total_objects > 0) {
-      double const pct =
-          (state.last_received_objects / static_cast<double>(state.max_total_objects)) *
-          100.0;
-      state.last_percent = std::min(100.0, std::max(pct, state.last_percent));
+      double const pct{ (state.last_received_objects /
+                         static_cast<double>(state.max_total_objects)) *
+                        100.0 };
+      state.last_receive_percent =
+          std::min(100.0, std::max(pct, state.last_receive_percent));
+    }
+    if (state.max_total_deltas > 0) {
+      double const pct{
+        (state.last_indexed_deltas / static_cast<double>(state.max_total_deltas)) * 100.0
+      };
+      state.last_delta_percent = std::min(100.0, std::max(pct, state.last_delta_percent));
     }
 
     snapshot_total = state.max_total_objects;
     snapshot_received = state.last_received_objects;
+    snapshot_total_deltas = state.max_total_deltas;
+    snapshot_deltas = state.last_indexed_deltas;
     snapshot_bytes = state.last_bytes;
-    snapshot_percent = state.last_percent;
+    receive_percent = state.last_receive_percent;
+    delta_percent = state.last_delta_percent;
     child_label = children_[slot].label;
   }
 
@@ -280,20 +227,28 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
     return;
   }
 
+  // The callback keeps firing after the last object lands, while the pack is indexed
+  // and its deltas resolved. Follow whichever phase is live so the row keeps a moving
+  // bar for the whole clone instead of collapsing to a bare object count.
+  bool const receiving{ snapshot_received < snapshot_total };
+  bool const resolving{ !receiving && snapshot_total_deltas > 0 };
+
+  double percent{ 100.0 };
   std::ostringstream oss;
-  oss << snapshot_received << "/" << snapshot_total << " objects";
-  if (snapshot_bytes > 0) { oss << " " << util_format_bytes(snapshot_bytes); }
+  if (resolving) {
+    percent = delta_percent;
+    oss << snapshot_deltas << "/" << snapshot_total_deltas << " deltas";
+  } else {
+    percent = receiving ? receive_percent : 100.0;
+    oss << snapshot_received << "/" << snapshot_total << " objects";
+    if (snapshot_bytes > 0) { oss << " " << util_format_bytes(snapshot_bytes); }
+  }
   if (!grouped_) { oss << " " << child_label; }
 
-  tui::section_frame child_frame{
-    .label = child_label,
-    .content = tui::progress_data{ .percent = snapshot_percent, .status = oss.str() }
-  };
-  if (snapshot_received >= snapshot_total) {
-    child_frame.content = tui::static_text_data{ .text = oss.str() };
-  }
-
-  set_frame(slot, std::move(child_frame));
+  set_frame(slot,
+            tui::section_frame{ .label = child_label,
+                                .content = tui::progress_data{ .percent = percent,
+                                                               .status = oss.str() } });
 }
 
 void fetch_all_progress_tracker::set_frame(std::size_t slot,
@@ -314,6 +269,24 @@ void fetch_all_progress_tracker::set_frame(std::size_t slot,
 }
 
 // ==== run_shell_with_progress ====
+
+std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
+                                          std::string const &row_label,
+                                          std::vector<std::string> const &item_labels,
+                                          std::string trace_spec) {
+  if (requests.empty()) { return {}; }
+
+  tui::section_handle const section{ tui::section_create() };
+  fetch_all_progress_tracker tracker{ section, row_label, item_labels, "fetch" };
+  for (std::size_t i{ 0 }; i < requests.size(); ++i) {
+    auto cb{ tracker.make_callback(i) };
+    std::visit([&](auto &r) { r.progress = std::move(cb); }, requests[i]);
+  }
+
+  auto results{ fetch(requests, std::move(trace_spec)) };
+  tui::section_delete(section);
+  return results;
+}
 
 shell_result run_shell_with_progress(std::string_view script,
                                      tui::section_handle section,

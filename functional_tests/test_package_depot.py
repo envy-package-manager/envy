@@ -12,9 +12,14 @@ import socket
 import tarfile
 import tempfile
 import threading
+import time
 import unittest
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import (
+    BaseHTTPRequestHandler,
+    SimpleHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
 from pathlib import Path
 
 from . import test_config
@@ -1337,6 +1342,85 @@ class TestImportManifest(unittest.TestCase):
 
             pkg_dir = self.cache_root / "packages" / "local.depot_a@v1"
             self.assertTrue(pkg_dir.exists(), "Package should be in target cache")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_depot_download_row_names_the_url(self):
+        """The depot progress row must identify the archive being downloaded.
+
+        Every depot archive is written to the same fixed temp filename, so labeling
+        the row with the destination made every package's row read
+        "depot-archive.tar.zst". The row is labeled with the source URL instead.
+
+        Served in throttled chunks so the fallback renderer (throttle forced to 0)
+        gets at least one cycle mid-transfer; without that the transfer can finish
+        before any row is drawn.
+        """
+        archives = self._install_and_export()
+        self.assertEqual(len(archives), 1)
+
+        archive_bytes = archives[0].read_bytes()
+        archive_name = archives[0].name
+
+        class _SlowHandler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                return
+
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(archive_bytes)))
+                self.end_headers()
+                chunk = max(1, len(archive_bytes) // 8)
+                for start in range(0, len(archive_bytes), chunk):
+                    self.wfile.write(archive_bytes[start : start + chunk])
+                    self.wfile.flush()
+                    time.sleep(0.25)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        try:
+            url = f"http://127.0.0.1:{port}/{archive_name}"
+            depot_txt = self.test_dir / "depot.txt"
+            depot_txt.write_text(
+                f"{hashlib.sha256(archive_bytes).hexdigest()}  {url}\n", encoding="utf-8"
+            )
+
+            m = self._make_manifest()
+            env = test_config.get_test_env()
+            env["TERM"] = "dumb"
+            env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+            r = test_config.run(
+                [
+                    str(self.envy),
+                    "--cache-root",
+                    str(self.cache_root),
+                    "import",
+                    str(depot_txt),
+                    "--manifest",
+                    str(m),
+                ],
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
+
+            progress_rows = [
+                ln
+                for ln in r.stderr.splitlines()
+                if "local.depot_a@v1" in ln and "MB" not in ln and "B" in ln
+            ]
+            self.assertTrue(progress_rows, f"no progress row rendered: {r.stderr}")
+            self.assertNotIn("depot-archive.tar.zst", r.stderr)
+            self.assertTrue(
+                any(url in ln for ln in progress_rows),
+                f"progress rows do not name the URL: {progress_rows}",
+            )
         finally:
             srv.shutdown()
             srv.server_close()

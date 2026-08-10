@@ -39,8 +39,9 @@ ENVY_TRACE_EVENT(target_extended,
                  ENVY_TRACE_FIELD_PHASE(new_target))
 
 // Terminal per-package result. outcome: cache_hit | imported | installed |
-// setup_complete. The human-facing outcome text is the log/section line; this
-// carries the machine-stable kind plus wall-clock duration.
+// setup_complete | bundle_fetched | bundle_local. The human-facing outcome text is
+// the log/section line; this carries the machine-stable kind plus wall-clock
+// duration.
 ENVY_TRACE_EVENT(pkg_outcome,
                  ENVY_TRACE_FIELD_STR(outcome)
                  ENVY_TRACE_FIELD_I64(duration_ms))

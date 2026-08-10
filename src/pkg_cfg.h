@@ -178,6 +178,13 @@ class pkg_cfg_pool {
 bool operator==(pkg_cfg::remote_source const &lhs, pkg_cfg::remote_source const &rhs);
 bool operator==(pkg_cfg::local_source const &lhs, pkg_cfg::local_source const &rhs);
 bool operator==(pkg_cfg::git_source const &lhs, pkg_cfg::git_source const &rhs);
-bool operator==(pkg_cfg::bundle_source const &lhs, pkg_cfg::bundle_source const &rhs);
+
+// How two declarations of one bundle relate. A custom fetch source carries a Lua
+// closure (and per-parse cfg pointers), so two of them can be neither proven the
+// same nor proven different — hence the third answer.
+enum class bundle_source_match { SAME, DIFFERENT, INCOMPARABLE };
+
+bundle_source_match bundle_source_compare(pkg_cfg::bundle_source const &lhs,
+                                          pkg_cfg::bundle_source const &rhs);
 
 }  // namespace envy

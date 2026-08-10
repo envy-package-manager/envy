@@ -208,8 +208,6 @@ void lua_envy_fetch_install(sol::table &envy_table) {
 
     std::vector<std::string> sources, basenames;
     std::vector<fetch_request> requests;
-    std::vector<std::unique_ptr<tui_actions::fetch_progress_tracker>> trackers;
-    trackers.reserve(items.size());
 
     // Track used basenames for deduplication
     std::unordered_set<std::string> used_basenames;
@@ -257,27 +255,27 @@ void lua_envy_fetch_install(sol::table &envy_table) {
       sources.push_back(item.source);
 
       std::filesystem::path const file_dest{ dest_dir / final_basename };
-      fetch_request req{ url_to_fetch_request(item.source,
+      requests.push_back(url_to_fetch_request(item.source,
                                               file_dest,
                                               item.ref,
                                               item.post_data,
-                                              "envy.fetch") };
-
-      // Set up progress tracking if in phase context
-      if (items.size() == 1 && p && p->tui_section) {
-        trackers.push_back(
-            std::make_unique<tui_actions::fetch_progress_tracker>(p->tui_section,
-                                                                  p->cfg->identity,
-                                                                  item.source));
-        std::visit([&](auto &rq) { rq.progress = std::ref(*trackers.back()); }, req);
-      }
-
-      requests.push_back(std::move(req));
+                                              "envy.fetch"));
     }
 
     tui::debug("envy.fetch: downloading %zu file(s) to %s",
                sources.size(),
                dest_dir.string().c_str());
+
+    // Every download in the process reports through this one tracker, whatever the
+    // count or scheme (see tui_actions::fetch_all_progress_tracker).
+    std::optional<tui_actions::fetch_all_progress_tracker> tracker;
+    if (p && p->tui_section) {
+      tracker.emplace(p->tui_section, p->cfg->identity, basenames, "fetch");
+      for (size_t i{ 0 }; i < requests.size(); ++i) {
+        auto cb{ tracker->make_callback(i) };
+        std::visit([&](auto &rq) { rq.progress = std::move(cb); }, requests[i]);
+      }
+    }
 
     auto const results{ fetch(requests, p->cfg->identity) };
 
