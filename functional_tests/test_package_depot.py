@@ -23,6 +23,7 @@ from http.server import (
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest, parse_export_line
 from .trace_parser import TraceParser
 
@@ -85,15 +86,13 @@ end
 '''
 
 
-class TestExportDepotPrefix(unittest.TestCase):
+class TestExportDepotPrefix(EnvyTestCase):
     """Tests for 'envy export --depot-prefix' flag."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-depot-pfx-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-depot-pfx-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-depot-pfx-out-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
 
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = _create_test_archive(self.archive_path)
@@ -189,15 +188,15 @@ class TestExportDepotPrefix(unittest.TestCase):
             self.assertTrue(parts[1].endswith(".tar.zst"))
 
 
-class TestPackageDepot(unittest.TestCase):
+class TestPackageDepot(EnvyTestCase):
     """Tests for depot-based sync: depot manifests, archive lookup, fallback."""
 
     def setUp(self):
-        self.source_cache = Path(tempfile.mkdtemp(prefix="envy-depot-src-"))
-        self.target_cache = Path(tempfile.mkdtemp(prefix="envy-depot-tgt-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-depot-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-depot-out-"))
-        self.serve_dir = Path(tempfile.mkdtemp(prefix="envy-depot-http-"))
+        self.source_cache = self.make_temp_dir("source_cache")
+        self.target_cache = self.make_temp_dir("target_cache")
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
+        self.serve_dir = self.make_temp_dir("serve_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 
@@ -680,16 +679,16 @@ class TestPackageDepot(unittest.TestCase):
         self.assertTrue(parts[1].endswith(".tar.zst"))
 
 
-class TestIgnoreDepot(unittest.TestCase):
+class TestIgnoreDepot(EnvyTestCase):
     """Tests for --ignore-depot flag and ENVY_IGNORE_DEPOT env var."""
 
     def setUp(self):
-        self.source_cache = Path(tempfile.mkdtemp(prefix="envy-ign-src-"))
-        self.target_cache = Path(tempfile.mkdtemp(prefix="envy-ign-tgt-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-ign-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-ign-out-"))
-        self.serve_dir = Path(tempfile.mkdtemp(prefix="envy-ign-http-"))
-        self.marker_dir = Path(tempfile.mkdtemp(prefix="envy-ign-markers-"))
+        self.source_cache = self.make_temp_dir("source_cache")
+        self.target_cache = self.make_temp_dir("target_cache")
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
+        self.serve_dir = self.make_temp_dir("serve_dir")
+        self.marker_dir = self.make_temp_dir("marker_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 
@@ -1073,22 +1072,19 @@ end
             )
 
             # Now with flag on a fresh cache
-            fresh_cache = Path(tempfile.mkdtemp(prefix="envy-ign-fresh-"))
-            try:
-                r = self._run(
-                    "install",
-                    "--ignore-depot",
-                    "--manifest",
-                    str(m),
-                    cache_root=fresh_cache,
-                )
-                self.assertEqual(r.returncode, 0, f"install failed: {r.stderr}")
-                self.assertTrue(
-                    self.markers["local.depot_a@v1"].exists(),
-                    "With flag: BUILD marker should exist",
-                )
-            finally:
-                shutil.rmtree(fresh_cache, ignore_errors=True)
+            fresh_cache = self.make_temp_dir("fresh_cache")
+            r = self._run(
+                "install",
+                "--ignore-depot",
+                "--manifest",
+                str(m),
+                cache_root=fresh_cache,
+            )
+            self.assertEqual(r.returncode, 0, f"install failed: {r.stderr}")
+            self.assertTrue(
+                self.markers["local.depot_a@v1"].exists(),
+                "With flag: BUILD marker should exist",
+            )
         finally:
             srv.shutdown()
             srv.server_close()
@@ -1111,32 +1107,29 @@ end
             )
 
             # Now with env var on a fresh cache
-            fresh_cache = Path(tempfile.mkdtemp(prefix="envy-ign-fresh-"))
-            try:
-                r = self._run(
-                    "install",
-                    "--manifest",
-                    str(m),
-                    cache_root=fresh_cache,
-                    env_extra={"ENVY_IGNORE_DEPOT": "1"},
-                )
-                self.assertEqual(r.returncode, 0, f"install failed: {r.stderr}")
-                self.assertTrue(
-                    self.markers["local.depot_a@v1"].exists(),
-                    "With env var: BUILD marker should exist",
-                )
-            finally:
-                shutil.rmtree(fresh_cache, ignore_errors=True)
+            fresh_cache = self.make_temp_dir("fresh_cache")
+            r = self._run(
+                "install",
+                "--manifest",
+                str(m),
+                cache_root=fresh_cache,
+                env_extra={"ENVY_IGNORE_DEPOT": "1"},
+            )
+            self.assertEqual(r.returncode, 0, f"install failed: {r.stderr}")
+            self.assertTrue(
+                self.markers["local.depot_a@v1"].exists(),
+                "With env var: BUILD marker should exist",
+            )
         finally:
             srv.shutdown()
             srv.server_close()
 
 
-class TestHashCommand(unittest.TestCase):
+class TestHashCommand(EnvyTestCase):
     """Tests for 'envy hash' multi-file and --prefix support."""
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-hash-"))
+        self.test_dir = self.make_temp_dir("test_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 
@@ -1221,17 +1214,15 @@ class TestHashCommand(unittest.TestCase):
         self.assertEqual(len(lines), 2)
 
 
-class TestImportManifest(unittest.TestCase):
+class TestImportManifest(EnvyTestCase):
     """Tests for 'envy import <manifest.txt>' and 'envy import --dir --checksums'."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-import-m-"))
-        self.source_cache = Path(tempfile.mkdtemp(prefix="envy-import-src-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-import-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-import-out-"))
-        self.serve_dir = Path(tempfile.mkdtemp(prefix="envy-import-http-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.source_cache = self.make_temp_dir("source_cache")
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
+        self.serve_dir = self.make_temp_dir("serve_dir")
 
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = _create_test_archive(self.archive_path)
@@ -1431,58 +1422,50 @@ class TestImportManifest(unittest.TestCase):
         self.assertEqual(len(archives), 1)
 
         # Copy archive to a serve dir
-        import_dir = Path(tempfile.mkdtemp(prefix="envy-import-dir-"))
-        try:
-            shutil.copy2(archives[0], import_dir / archives[0].name)
+        import_dir = self.make_temp_dir("import_dir")
+        shutil.copy2(archives[0], import_dir / archives[0].name)
 
-            h = hashlib.sha256(archives[0].read_bytes()).hexdigest()
-            checksums = self.test_dir / "checksums.txt"
-            checksums.write_text(f"{h}  {archives[0].name}\n", encoding="utf-8")
+        h = hashlib.sha256(archives[0].read_bytes()).hexdigest()
+        checksums = self.test_dir / "checksums.txt"
+        checksums.write_text(f"{h}  {archives[0].name}\n", encoding="utf-8")
 
-            packages = f'{{ spec = "local.depot_a@v1", source = "{self.spec_lua["local.depot_a@v1"]}" }}'
-            m = self.test_dir / "import.lua"
-            m.write_text(
-                make_manifest(f"\nPACKAGES = {{\n    {packages}\n}}\n"),
-                encoding="utf-8",
-            )
+        packages = f'{{ spec = "local.depot_a@v1", source = "{self.spec_lua["local.depot_a@v1"]}" }}'
+        m = self.test_dir / "import.lua"
+        m.write_text(
+            make_manifest(f"\nPACKAGES = {{\n    {packages}\n}}\n"),
+            encoding="utf-8",
+        )
 
-            r = self._run(
-                "import",
-                "--dir",
-                str(import_dir),
-                "--checksums",
-                str(checksums),
-                "--manifest",
-                str(m),
-            )
-            self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
-        finally:
-            shutil.rmtree(import_dir, ignore_errors=True)
-
+        r = self._run(
+            "import",
+            "--dir",
+            str(import_dir),
+            "--checksums",
+            str(checksums),
+            "--manifest",
+            str(m),
+        )
+        self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
     def test_import_dir_without_checksums(self):
         """Import --dir without --checksums works (no SHA256 required)."""
         archives = self._install_and_export()
         self.assertEqual(len(archives), 1)
 
-        import_dir = Path(tempfile.mkdtemp(prefix="envy-import-dir-"))
-        try:
-            shutil.copy2(archives[0], import_dir / archives[0].name)
+        import_dir = self.make_temp_dir("import_dir")
+        shutil.copy2(archives[0], import_dir / archives[0].name)
 
-            m = self._make_manifest()
-            r = self._run(
-                "import",
-                "--dir",
-                str(import_dir),
-                "--manifest",
-                str(m),
-            )
-            self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
+        m = self._make_manifest()
+        r = self._run(
+            "import",
+            "--dir",
+            str(import_dir),
+            "--manifest",
+            str(m),
+        )
+        self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
 
-            pkg_dir = self.cache_root / "packages" / "local.depot_a@v1"
-            self.assertTrue(pkg_dir.exists(), "Package should be in target cache")
-        finally:
-            shutil.rmtree(import_dir, ignore_errors=True)
-
+        pkg_dir = self.cache_root / "packages" / "local.depot_a@v1"
+        self.assertTrue(pkg_dir.exists(), "Package should be in target cache")
     def test_import_manifest_txt_plain_url_rejected(self):
         """Import .txt manifest with plain URLs (no SHA256) falls back to source."""
         archives = self._install_and_export()
@@ -1502,35 +1485,30 @@ class TestImportManifest(unittest.TestCase):
         archives = self._install_and_export()
         self.assertEqual(len(archives), 1)
 
-        import_dir = Path(tempfile.mkdtemp(prefix="envy-import-dir-"))
-        try:
-            shutil.copy2(archives[0], import_dir / archives[0].name)
+        import_dir = self.make_temp_dir("import_dir")
+        shutil.copy2(archives[0], import_dir / archives[0].name)
 
-            wrong_hash = "0" * 64
-            checksums = self.test_dir / "checksums.txt"
-            checksums.write_text(
-                f"{wrong_hash}  {archives[0].name}\n", encoding="utf-8"
-            )
+        wrong_hash = "0" * 64
+        checksums = self.test_dir / "checksums.txt"
+        checksums.write_text(
+            f"{wrong_hash}  {archives[0].name}\n", encoding="utf-8"
+        )
 
-            m = self._make_manifest()
-            r = self._run(
-                "import",
-                "--dir",
-                str(import_dir),
-                "--checksums",
-                str(checksums),
-                "--manifest",
-                str(m),
-            )
-            # Should succeed — falls back to source build after SHA256 mismatch
-            self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
+        m = self._make_manifest()
+        r = self._run(
+            "import",
+            "--dir",
+            str(import_dir),
+            "--checksums",
+            str(checksums),
+            "--manifest",
+            str(m),
+        )
+        # Should succeed — falls back to source build after SHA256 mismatch
+        self.assertEqual(r.returncode, 0, f"import failed: {r.stderr}")
 
-            pkg_dir = self.cache_root / "packages" / "local.depot_a@v1"
-            self.assertTrue(pkg_dir.exists(), "Should fall back to source build")
-        finally:
-            shutil.rmtree(import_dir, ignore_errors=True)
-
-
+        pkg_dir = self.cache_root / "packages" / "local.depot_a@v1"
+        self.assertTrue(pkg_dir.exists(), "Should fall back to source build")
 def _make_tracking_handler(request_log, directory):
     """Create a handler class with its own isolated request log."""
 
@@ -1548,16 +1526,14 @@ def _make_tracking_handler(request_log, directory):
     return _Handler
 
 
-class TestUserManagedSkipsDepot(unittest.TestCase):
+class TestUserManagedSkipsDepot(EnvyTestCase):
     """User-managed-only manifests must not fetch the package-depot manifest."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-um-depot-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-um-depot-specs-"))
-        self.serve_dir = Path(tempfile.mkdtemp(prefix="envy-um-depot-http-"))
-        self.marker_dir = Path(tempfile.mkdtemp(prefix="envy-um-depot-markers-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.serve_dir = self.make_temp_dir("serve_dir")
+        self.marker_dir = self.make_temp_dir("marker_dir")
         self.requests = []
 
     def tearDown(self):
@@ -1695,17 +1671,17 @@ SETUP = {{
             srv.server_close()
 
 
-class TestDepotFetchFunction(unittest.TestCase):
+class TestDepotFetchFunction(EnvyTestCase):
     """PACKAGE_DEPOTS FETCH-function entries: text/path/entries returns, DEPENDS
     on a manifest tool package, failure fatality, --ignore-depot laziness."""
 
     def setUp(self):
-        self.source_cache = Path(tempfile.mkdtemp(prefix="envy-dfn-src-"))
-        self.target_cache = Path(tempfile.mkdtemp(prefix="envy-dfn-tgt-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-dfn-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-dfn-out-"))
-        self.serve_dir = Path(tempfile.mkdtemp(prefix="envy-dfn-http-"))
-        self.marker_dir = Path(tempfile.mkdtemp(prefix="envy-dfn-markers-"))
+        self.source_cache = self.make_temp_dir("source_cache")
+        self.target_cache = self.make_temp_dir("target_cache")
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
+        self.serve_dir = self.make_temp_dir("serve_dir")
+        self.marker_dir = self.make_temp_dir("marker_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 

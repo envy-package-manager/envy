@@ -24,6 +24,7 @@ import zipfile
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 _OS_NAME = (
     "windows"
@@ -348,7 +349,7 @@ class RedirectChainServer:
             self.server.server_close()
 
 
-class BootstrapIntegrationTest(unittest.TestCase):
+class BootstrapIntegrationTest(EnvyTestCase):
     """Integration tests for the bootstrap scripts."""
 
     # These cases spawn a bootstrap that downloads and re-execs a real envy; the 5s default
@@ -375,7 +376,7 @@ class BootstrapIntegrationTest(unittest.TestCase):
                 f"Unix bootstrap script not found at {self._bootstrap_unix}",
             )
 
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-bootstrap-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._server = EnvyServer(self._envy_binary)
         self._port = self._server.start()
         # Every stamped script points LATEST_URL here instead of at github.com, so a test

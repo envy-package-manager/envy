@@ -17,6 +17,7 @@ from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 # Inline test files for fetch caching tests
@@ -27,24 +28,18 @@ TEST_FILES = {
 }
 
 
-class TestEngineFetchCaching(unittest.TestCase):
+class TestEngineFetchCaching(EnvyTestCase):
     """Tests for per-file package caching and recovery."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-engine-test-"))
-        self.test_files_dir = Path(tempfile.mkdtemp(prefix="envy-fetch-cache-files-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_files_dir = self.make_temp_dir("test_files_dir")
         # Enable trace for all tests if ENVY_TEST_TRACE is set
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Write inline test files to temp directory
         for name, content in TEST_FILES.items():
             (self.test_files_dir / name).write_text(content, encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_files_dir, ignore_errors=True)
 
     def lua_path(self, filename: str) -> str:
         """Get Lua-safe path to test file."""
@@ -88,7 +83,7 @@ class TestEngineFetchCaching(unittest.TestCase):
         )
         return test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={cache_root}",
                 f"--trace=file:{trace_file}" if trace_file else "--trace",
                 "--verbose",
@@ -144,7 +139,7 @@ class TestEngineFetchCaching(unittest.TestCase):
     def test_declarative_fetch_partial_failure_then_complete(self):
         """Partial failure caches successful files; completion reuses them."""
         # Use shared cache root so second run sees first run's cached files
-        shared_cache = Path(tempfile.mkdtemp(prefix="envy-shared-cache-"))
+        shared_cache = self.make_temp_dir("shared_cache")
 
         try:
             spec, missing_file = self.partial_fetch_spec(shared_cache)
@@ -211,7 +206,7 @@ class TestEngineFetchCaching(unittest.TestCase):
 
     def test_declarative_fetch_corrupted_cache(self):
         """Corrupted files in fetch/ are detected and re-downloaded."""
-        shared_cache = Path(tempfile.mkdtemp(prefix="envy-corrupted-cache-"))
+        shared_cache = self.make_temp_dir("shared_cache")
 
         try:
             spec, missing_file = self.partial_fetch_spec(shared_cache)
@@ -251,7 +246,7 @@ class TestEngineFetchCaching(unittest.TestCase):
 
     def test_declarative_fetch_complete_but_unmarked(self):
         """All files present with correct SHA256, but no completion marker."""
-        shared_cache = Path(tempfile.mkdtemp(prefix="envy-complete-unmarked-"))
+        shared_cache = self.make_temp_dir("shared_cache")
 
         try:
             spec, missing_file = self.partial_fetch_spec(shared_cache)

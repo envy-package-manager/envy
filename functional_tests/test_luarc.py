@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
 def _get_envy_version() -> str:
@@ -35,11 +36,11 @@ def _find_envy_entries(library: list[str]) -> list[str]:
     return [e for e in library if _SEMVER_RE.search(e)]
 
 
-class TestLuarcTypesPathUpdate(unittest.TestCase):
+class TestLuarcTypesPathUpdate(EnvyTestCase):
     """Test that sync/deploy maintain .luarc.json envy types paths."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-luarc-update-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "project" / "tools"
         self._cache_dir = self._temp_dir / "cache"

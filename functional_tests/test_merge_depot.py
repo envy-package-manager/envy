@@ -9,6 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Canonical 64-char hex hashes for test use
 HASH_A = "a" * 64
@@ -29,11 +30,11 @@ def make_manifest_line(sha256, path):
     return f"{sha256}  {path}\n"
 
 
-class TestMergeDepot(unittest.TestCase):
+class TestMergeDepot(EnvyTestCase):
     """Tests for 'envy merge-depot' command."""
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-merge-depot-test-"))
+        self.test_dir = self.make_temp_dir("test_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 

@@ -7,31 +7,26 @@ Tests that:
 """
 
 import json
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
-class TestBundleDependencyOrder(unittest.TestCase):
+class TestBundleDependencyOrder(EnvyTestCase):
     """Tests for bundle dependency ordering using trace output."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-order-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-order-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-test-bundle-"))
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
         self.trace_file = Path(tempfile.mktemp(suffix=".jsonl", prefix="envy-trace-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
 
     def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
         if self.trace_file.exists():
             self.trace_file.unlink()
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # Test archive contents
@@ -39,15 +40,13 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestPackageCommand(unittest.TestCase):
+class TestPackageCommand(EnvyTestCase):
     """Tests for 'envy package' command."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-package-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-package-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-package-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
@@ -239,11 +238,6 @@ SETUP = {
         for name, content in specs.items():
             (self.specs_dir / name).write_text(content, encoding="utf-8")
 
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
-
     @staticmethod
     def lua_path(path: Path) -> str:
         """Convert path to Lua-safe string (forward slashes work on all platforms)."""
@@ -359,39 +353,32 @@ PACKAGES = {{
     def test_package_explicit_manifest_path(self):
         """Use explicit --manifest flag to specify manifest location."""
         # Create manifest in non-standard location
-        other_dir = Path(tempfile.mkdtemp(prefix="envy-other-"))
-        try:
-            manifest = other_dir / "custom.lua"
-            manifest.write_text(
-                make_manifest(
-                    f"""
+        other_dir = self.make_temp_dir("other_dir")
+        manifest = other_dir / "custom.lua"
+        manifest.write_text(
+            make_manifest(
+                f"""
 PACKAGES = {{
     {{ spec = "local.build_dependency@v1", source = "{self.lua_path(self.specs_dir)}/build_dependency.lua" }}
 }}
 """
-                ),
-                encoding="utf-8",
-            )
+            ),
+            encoding="utf-8",
+        )
 
-            result = self.run_package("local.build_dependency@v1", manifest=manifest)
+        result = self.run_package("local.build_dependency@v1", manifest=manifest)
 
-            self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-            self.assertTrue(result.stdout.strip())
-        finally:
-            shutil.rmtree(other_dir, ignore_errors=True)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertTrue(result.stdout.strip())
 
     def test_package_no_manifest_found(self):
         """Error when no manifest can be found."""
         # Use directory with no manifest
-        empty_dir = Path(tempfile.mkdtemp(prefix="envy-empty-"))
-        try:
-            result = self.run_package("local.simple@v1", manifest=None, cwd=empty_dir)
+        empty_dir = self.make_temp_dir("empty_dir")
+        result = self.run_package("local.simple@v1", manifest=None, cwd=empty_dir)
 
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("not found", result.stderr.lower())
-        finally:
-            shutil.rmtree(empty_dir, ignore_errors=True)
-
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not found", result.stderr.lower())
     def test_package_selective_installation(self):
         """Only requested package and dependencies installed, not entire manifest."""
         manifest = self.create_manifest(

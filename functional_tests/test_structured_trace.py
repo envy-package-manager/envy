@@ -7,14 +7,13 @@ Tests the trace infrastructure works correctly with different output modes:
 """
 
 import json
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 SIMPLE_SPEC = """IDENTITY = "local.simple@v1"
@@ -33,13 +32,12 @@ SETUP = {
 """
 
 
-class TestStructuredTrace(unittest.TestCase):
+class TestStructuredTrace(EnvyTestCase):
     """Smoke tests for structured logging infrastructure."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-trace-smoke-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-trace-specs-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         # Write spec to temp directory
         self.spec_path = self.test_dir / "simple.lua"
@@ -47,10 +45,6 @@ class TestStructuredTrace(unittest.TestCase):
         self.manifest = test_config.write_spec_manifest(
             self.test_dir, [("local.simple@v1", self.spec_path)]
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_trace_stderr_human_readable(self):
         """Verify --trace=stderr produces human-readable output."""

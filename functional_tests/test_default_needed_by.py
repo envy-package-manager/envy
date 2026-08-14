@@ -2,14 +2,13 @@
 
 import hashlib
 import io
-import shutil
 import subprocess
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import PkgPhase, TraceParser
 
 # Test archive contents
@@ -33,13 +32,12 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestDefaultNeededBy(unittest.TestCase):
+class TestDefaultNeededBy(EnvyTestCase):
     """Tests verifying default needed_by phase is asset_build."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-needed-by-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-needed-by-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
@@ -127,10 +125,6 @@ end
         for name, content in specs.items():
             (self.specs_dir / name).write_text(content, encoding="utf-8")
 
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
-
     def test_default_needed_by_is_build_not_check(self):
         """Verify default needed_by is asset_build (phase 4), not asset_check."""
         trace_file = self.cache_root / "trace.jsonl"
@@ -141,7 +135,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -182,7 +176,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -215,7 +209,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",

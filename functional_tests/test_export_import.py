@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest, parse_export_line
 
 TEST_ARCHIVE_FILES = {
@@ -44,15 +45,13 @@ def snapshot_tree(root: Path) -> dict[str, bytes]:
     return tree
 
 
-class TestExportImport(unittest.TestCase):
+class TestExportImport(EnvyTestCase):
     """Tests for 'envy export' and 'envy import' commands."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-export-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-export-manifest-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-export-output-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
 
         # Create test archive
         self.archive_path = self.test_dir / "test.tar.gz"
@@ -102,11 +101,6 @@ end
 
         for name, content in specs.items():
             (self.test_dir / name).write_text(content, encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.output_dir, ignore_errors=True)
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -276,30 +270,26 @@ PACKAGES = {{
         _, archive_path = parse_export_line(export.stdout)
 
         # Delete cache and reimport
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    str(archive_path),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                str(archive_path),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
 
-            pkg_path = Path(result.stdout.strip())
-            self.assertTrue(
-                pkg_path.exists(),
-                f"Imported package path should exist: {pkg_path}",
-            )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        pkg_path = Path(result.stdout.strip())
+        self.assertTrue(
+            pkg_path.exists(),
+            f"Imported package path should exist: {pkg_path}",
+        )
     def test_import_roundtrip_exportable(self):
         """Export EXPORTABLE package, wipe, import: every file restored byte-identical."""
         manifest = self.create_manifest(
@@ -342,39 +332,35 @@ PACKAGES = {{
         _, archive_path = parse_export_line(export.stdout)
 
         # Import into fresh cache
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-roundtrip-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    str(archive_path),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                str(archive_path),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
 
-            imported_pkg_path = Path(result.stdout.strip())
-            after = snapshot_tree(imported_pkg_path)
+        imported_pkg_path = Path(result.stdout.strip())
+        after = snapshot_tree(imported_pkg_path)
 
+        self.assertEqual(
+            sorted(before.keys()),
+            sorted(after.keys()),
+            f"File set mismatch.\n  before: {sorted(before.keys())}\n  after:  {sorted(after.keys())}",
+        )
+        for rel_path in before:
             self.assertEqual(
-                sorted(before.keys()),
-                sorted(after.keys()),
-                f"File set mismatch.\n  before: {sorted(before.keys())}\n  after:  {sorted(after.keys())}",
+                before[rel_path],
+                after[rel_path],
+                f"Content mismatch for {rel_path}",
             )
-            for rel_path in before:
-                self.assertEqual(
-                    before[rel_path],
-                    after[rel_path],
-                    f"Content mismatch for {rel_path}",
-                )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
     def test_import_roundtrip_fetch_only(self):
         """Export fetch-only package, wipe, import: fetch/ tree restored byte-identical."""
         manifest = self.create_manifest(
@@ -420,44 +406,40 @@ PACKAGES = {{
         _, archive_path = parse_export_line(export.stdout)
 
         # Import into fresh cache
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-roundtrip-fetch-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    str(archive_path),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
-            self.assertIn("fetch-only import", result.stdout)
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                str(archive_path),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
+        self.assertIn("fetch-only import", result.stdout)
 
-            # The printed path is the entry dir; snapshot its fetch/ subdir
-            imported_entry_path = Path(
-                result.stdout.strip().split("fetch-only import: ")[1]
-            )
-            imported_fetch_path = imported_entry_path / "fetch"
-            after = snapshot_tree(imported_fetch_path)
+        # The printed path is the entry dir; snapshot its fetch/ subdir
+        imported_entry_path = Path(
+            result.stdout.strip().split("fetch-only import: ")[1]
+        )
+        imported_fetch_path = imported_entry_path / "fetch"
+        after = snapshot_tree(imported_fetch_path)
 
+        self.assertEqual(
+            sorted(before.keys()),
+            sorted(after.keys()),
+            f"File set mismatch.\n  before: {sorted(before.keys())}\n  after:  {sorted(after.keys())}",
+        )
+        for rel_path in before:
             self.assertEqual(
-                sorted(before.keys()),
-                sorted(after.keys()),
-                f"File set mismatch.\n  before: {sorted(before.keys())}\n  after:  {sorted(after.keys())}",
+                before[rel_path],
+                after[rel_path],
+                f"Content mismatch for {rel_path}",
             )
-            for rel_path in before:
-                self.assertEqual(
-                    before[rel_path],
-                    after[rel_path],
-                    f"Content mismatch for {rel_path}",
-                )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
     def test_import_already_cached(self):
         """Importing a package that's already cached returns immediately."""
         manifest = self.create_manifest(
@@ -534,25 +516,21 @@ PACKAGES = {{
         _, archive_path = parse_export_line(export.stdout)
 
         # Import into fresh cache
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-fetch-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    str(archive_path),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
-            self.assertIn("fetch-only import", result.stdout)
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                str(archive_path),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
+        self.assertIn("fetch-only import", result.stdout)
     def test_import_dir(self):
         """Export 2 packages to dir, wipe cache, import --dir, verify both imported."""
         manifest = self.create_manifest(
@@ -581,16 +559,35 @@ PACKAGES = {{
         self.assertEqual(len(archives), 2, f"Expected 2 archives, got: {archives}")
 
         # Wipe cache and import from directory
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-dir-test-"))
-        try:
-            result = test_config.run(
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0, f"import --dir failed: {result.stderr}"
+        )
+
+        # Verify both packages exist in the new cache via `envy package`
+        for identity in ["local.exportable_pkg@v1", "local.default_pkg@v1"]:
+            pkg_result = test_config.run(
                 [
                     str(self.envy),
                     "--cache-root",
                     str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
+                    "package",
+                    identity,
                     "--manifest",
                     str(manifest),
                 ],
@@ -599,38 +596,15 @@ PACKAGES = {{
                 text=True,
             )
             self.assertEqual(
-                result.returncode, 0, f"import --dir failed: {result.stderr}"
+                pkg_result.returncode,
+                0,
+                f"package {identity} failed after import: {pkg_result.stderr}",
             )
-
-            # Verify both packages exist in the new cache via `envy package`
-            for identity in ["local.exportable_pkg@v1", "local.default_pkg@v1"]:
-                pkg_result = test_config.run(
-                    [
-                        str(self.envy),
-                        "--cache-root",
-                        str(import_cache),
-                        "package",
-                        identity,
-                        "--manifest",
-                        str(manifest),
-                    ],
-                    cwd=self.project_root,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(
-                    pkg_result.returncode,
-                    0,
-                    f"package {identity} failed after import: {pkg_result.stderr}",
-                )
-                pkg_path = Path(pkg_result.stdout.strip())
-                self.assertTrue(
-                    pkg_path.exists(),
-                    f"Imported package path should exist: {pkg_path}",
-                )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+            pkg_path = Path(pkg_result.stdout.strip())
+            self.assertTrue(
+                pkg_path.exists(),
+                f"Imported package path should exist: {pkg_path}",
+            )
     def test_import_dir_with_dependency(self):
         """Export package A (exportable), import --dir; engine builds from source."""
         manifest = self.create_manifest(
@@ -660,50 +634,46 @@ PACKAGES = {{
         self.assertEqual(len(archives), 1, f"Expected 1 archive, got: {archives}")
 
         # Import from directory into fresh cache
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-dep-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                result.returncode, 0, f"import --dir failed: {result.stderr}"
-            )
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0, f"import --dir failed: {result.stderr}"
+        )
 
-            # The imported package should be usable
-            pkg_result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "package",
-                    "local.exportable_pkg@v1",
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                pkg_result.returncode,
-                0,
-                f"package lookup failed after import: {pkg_result.stderr}",
-            )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        # The imported package should be usable
+        pkg_result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "package",
+                "local.exportable_pkg@v1",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            pkg_result.returncode,
+            0,
+            f"package lookup failed after import: {pkg_result.stderr}",
+        )
     def test_import_dir_same_identity_different_options(self):
         """Same spec with different options produces distinct archives; both import correctly."""
         archive_lua_path = self.archive_path.as_posix()
@@ -768,50 +738,46 @@ PACKAGES = {{
         )
 
         # Import both into fresh cache
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-variant-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                result.returncode, 0, f"import --dir failed: {result.stderr}"
-            )
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0, f"import --dir failed: {result.stderr}"
+        )
 
-            # Verify both variants installed by running install against the same manifest.
-            # If both are cached from import, this succeeds immediately.
-            install_result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "install",
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                install_result.returncode,
-                0,
-                f"install after import failed: {install_result.stderr}",
-            )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        # Verify both variants installed by running install against the same manifest.
+        # If both are cached from import, this succeeds immediately.
+        install_result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            install_result.returncode,
+            0,
+            f"install after import failed: {install_result.stderr}",
+        )
     def test_import_dir_stale_hash_skipped(self):
         """Archive with valid identity but wrong hash is not imported."""
         manifest = self.create_manifest(
@@ -846,31 +812,27 @@ PACKAGES = {{
         )
         original.rename(wrong_hash)
 
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-stale-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            # Import succeeds — stale archive simply doesn't match any package's
-            # depot query, so the package builds normally from source.
-            self.assertEqual(
-                result.returncode, 0, f"import --dir failed: {result.stderr}"
-            )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        # Import succeeds — stale archive simply doesn't match any package's
+        # depot query, so the package builds normally from source.
+        self.assertEqual(
+            result.returncode, 0, f"import --dir failed: {result.stderr}"
+        )
     def test_import_dir_skips_unmatched(self):
         """Unrecognized .tar.zst in dir skipped with warning."""
         manifest = self.create_manifest(
@@ -898,32 +860,28 @@ PACKAGES = {{
         bogus = self.output_dir / "bogus-file.tar.zst"
         bogus.write_bytes(b"not a real archive")
 
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-import-skip-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                result.returncode, 0, f"import --dir failed: {result.stderr}"
-            )
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0, f"import --dir failed: {result.stderr}"
+        )
 
-            # The bogus file should have been skipped (warning in stderr)
-            self.assertIn("skipping", result.stderr.lower())
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
-
+        # The bogus file should have been skipped (warning in stderr)
+        self.assertIn("skipping", result.stderr.lower())
     def test_export_sha256_correctness(self):
         """Exported SHA256 in stdout matches actual archive file hash."""
         manifest = self.create_manifest(
@@ -1010,57 +968,54 @@ PACKAGES = {{
         checksums_path.write_text(f"{sha_hex}  {archive_path.name}\n", encoding="utf-8")
 
         # Import into fresh cache using --dir + --checksums
-        import_cache = Path(tempfile.mkdtemp(prefix="envy-export-checksums-test-"))
-        try:
-            result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "import",
-                    "--dir",
-                    str(self.output_dir),
-                    "--checksums",
-                    str(checksums_path),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                f"import --dir --checksums failed: {result.stderr}",
-            )
+        import_cache = self.make_temp_dir("import_cache")
+        result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "import",
+                "--dir",
+                str(self.output_dir),
+                "--checksums",
+                str(checksums_path),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"import --dir --checksums failed: {result.stderr}",
+        )
 
-            pkg_result = test_config.run(
-                [
-                    str(self.envy),
-                    "--cache-root",
-                    str(import_cache),
-                    "package",
-                    "local.exportable_pkg@v1",
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                pkg_result.returncode,
-                0,
-                f"package lookup failed after import: {pkg_result.stderr}",
-            )
-            pkg_path = Path(pkg_result.stdout.strip())
-            self.assertTrue(
-                pkg_path.exists(),
-                f"Imported package path should exist: {pkg_path}",
-            )
-        finally:
-            shutil.rmtree(import_cache, ignore_errors=True)
+        pkg_result = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(import_cache),
+                "package",
+                "local.exportable_pkg@v1",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            pkg_result.returncode,
+            0,
+            f"package lookup failed after import: {pkg_result.stderr}",
+        )
+        pkg_path = Path(pkg_result.stdout.strip())
+        self.assertTrue(
+            pkg_path.exists(),
+            f"Imported package path should exist: {pkg_path}",
+        )
 
 
 if __name__ == "__main__":

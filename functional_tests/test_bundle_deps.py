@@ -7,30 +7,22 @@ Tests spec DEPENDENCIES with bundle references, including:
 - Error cases
 """
 
-import shutil
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
-class TestSpecBundleDependencies(unittest.TestCase):
+class TestSpecBundleDependencies(EnvyTestCase):
     """Tests for spec files with bundle dependencies."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-deps-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-deps-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-test-bundle-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -300,18 +292,12 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
 
-class TestBundleDependencyErrors(unittest.TestCase):
+class TestBundleDependencyErrors(EnvyTestCase):
     """Tests for bundle dependency error cases."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-deps-err-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-deps-manifest-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:

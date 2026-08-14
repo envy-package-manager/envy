@@ -7,14 +7,13 @@ stage functions (ctx.extract, ctx.extract_all).
 import hashlib
 import io
 import os
-import shutil
 import subprocess
 import tarfile
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Test archive contents - standard nested directory structure
 TEST_ARCHIVE_FILES = {
@@ -40,22 +39,17 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestStagePhase(unittest.TestCase):
+class TestStagePhase(EnvyTestCase):
     """Tests for stage phase (archive extraction and preparation)."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-stage-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-stage-files-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Create test archive and get its hash
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return path."""
@@ -87,7 +81,7 @@ class TestStagePhase(unittest.TestCase):
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

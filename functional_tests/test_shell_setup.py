@@ -8,13 +8,14 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
-class TestShellCommand(unittest.TestCase):
+class TestShellCommand(EnvyTestCase):
     """Test the envy shell command."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-shell-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
@@ -99,11 +100,11 @@ class TestShellCommand(unittest.TestCase):
         self.assertNotIn("${env:HOME}", result.stderr)
 
 
-class TestShellHookDeployment(unittest.TestCase):
+class TestShellHookDeployment(EnvyTestCase):
     """Test that shell hook files are created during self-deploy."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-hook-deploy-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"

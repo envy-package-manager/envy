@@ -1,12 +1,11 @@
 """Functional test to validate ctx.package/ctx.product trace emission and ordering."""
 
-import shutil
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 # =============================================================================
@@ -45,11 +44,10 @@ end
 """
 
 
-class TestCtxAccessTrace(unittest.TestCase):
+class TestCtxAccessTrace(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-ctx-trace-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-ctx-trace-specs-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         # Write shared provider specs
         (self.test_dir / "dep_val_lib.lua").write_text(
@@ -58,10 +56,6 @@ class TestCtxAccessTrace(unittest.TestCase):
         (self.test_dir / "product_provider.lua").write_text(
             SPEC_PRODUCT_PROVIDER, encoding="utf-8"
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_ctx_access_trace_emitted(self):
         """ctx.package/ctx.product emit trace events with allow/deny status."""

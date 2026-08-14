@@ -12,15 +12,14 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
-class TestBundleCustomFetch(unittest.TestCase):
+class TestBundleCustomFetch(EnvyTestCase):
     """Tests for bundles with custom fetch functions."""
 
     def setUp(self):
-        self.cache_root = Path(
-            tempfile.mkdtemp(prefix="envy-bundle-custom-fetch-test-")
-        )
+        self.cache_root = self.make_temp_dir("cache_root")
 
     def tearDown(self):
         shutil.rmtree(self.cache_root, ignore_errors=True)

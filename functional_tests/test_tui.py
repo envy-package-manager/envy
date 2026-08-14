@@ -5,13 +5,12 @@ and interactive mode terminal control.
 """
 
 import os
-import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # User-managed spec that runs shell commands during install
@@ -97,14 +96,12 @@ SETUP = {
 """
 
 
-class TestTUIRendering(unittest.TestCase):
+class TestTUIRendering(EnvyTestCase):
     """Tests for TUI progress rendering modes."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-tui-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-tui-manifest-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         self.specs_dir = self.test_dir / "specs"
         self.specs_dir.mkdir()
@@ -115,10 +112,6 @@ class TestTUIRendering(unittest.TestCase):
         (self.specs_dir / "simple.lua").write_text(SPEC_SIMPLE)
         (self.specs_dir / "fast.lua").write_text(SPEC_FAST)
         (self.specs_dir / "slow.lua").write_text(SPEC_SLOW)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -211,7 +204,6 @@ PACKAGES = {{
         self.assertNotIn(
             "\x1b[", result.stderr, "Expected no ANSI codes when stderr is piped"
         )
-
 
     def test_completed_sections_not_repeated_in_dumb_mode(self):
         """Completed sections don't repeat in fallback output."""

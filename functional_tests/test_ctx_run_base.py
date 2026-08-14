@@ -7,14 +7,13 @@ and spec writing utilities for ctx.run test files.
 import hashlib
 import io
 import os
-import shutil
 import subprocess
 import tarfile
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Test archive contents - matches original test.tar.gz structure
 TEST_ARCHIVE_FILES = {
@@ -37,23 +36,18 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class CtxRunTestBase(unittest.TestCase):
+class CtxRunTestBase(EnvyTestCase):
     """Base class for envy.run() tests."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-ctx-run-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-ctx-run-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
         self.archive_lua_path = self.archive_path.as_posix()
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> None:
         """Write spec to temp dir with placeholder substitution."""
@@ -83,7 +77,7 @@ class CtxRunTestBase(unittest.TestCase):
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

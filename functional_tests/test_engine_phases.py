@@ -5,28 +5,21 @@ with proper trace logging and dependency handling.
 """
 
 import os
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import PkgPhase, TraceParser
 
 
-class TestEnginePhases(unittest.TestCase):
+class TestEnginePhases(EnvyTestCase):
     """Tests for phase execution lifecycle."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-engine-phases-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-engine-specs-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
     def write_spec(self, name: str, content: str) -> Path:
         """Write spec to temp directory."""
@@ -71,7 +64,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -112,7 +105,7 @@ end
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -176,7 +169,7 @@ end
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",

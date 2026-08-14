@@ -12,14 +12,13 @@ cache-managed INSTALL, including:
 """
 
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 
 def um_spec(identity: str, check_body: str, install_body: str = "") -> str:
@@ -40,20 +39,14 @@ SETUP = {{
 """
 
 
-class TestCheckInstallRuntime(unittest.TestCase):
+class TestCheckInstallRuntime(EnvyTestCase):
     """Tests for SETUP pair check/install runtime behavior."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-check-install-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-check-install-work-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-check-install-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def run_spec(
         self,
@@ -73,7 +66,7 @@ class TestCheckInstallRuntime(unittest.TestCase):
         spec_path = self.specs_dir / f"{spec_name}.lua"
         spec_path.write_text(spec_content, encoding="utf-8")
 
-        cmd = [str(self.envy_test), f"--cache-root={self.cache_root}"]
+        cmd = [str(self.envy), f"--cache-root={self.cache_root}"]
         cmd.extend(self.trace_flag)
         if verbose:
             cmd.append("--verbose")

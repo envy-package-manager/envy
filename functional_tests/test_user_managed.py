@@ -1,13 +1,12 @@
 """Functional tests for user-managed packages (SETUP pairs)."""
 
 import os
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # =============================================================================
 # Shared specs (used by multiple tests)
@@ -70,18 +69,17 @@ SETUP = {
 """
 
 
-class TestUserManagedPackages(unittest.TestCase):
+class TestUserManagedPackages(EnvyTestCase):
     """Test user-managed package behavior with SETUP pairs."""
 
     # Some cases fetch over the real network; relax the watchdog for latency.
     envy_watchdog_timeout = 60
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-user-managed-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-user-managed-work-"))
-        self.marker_dir = Path(tempfile.mkdtemp(prefix="envy-user-managed-markers-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-user-managed-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.marker_dir = self.make_temp_dir("marker_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create marker paths in temp directory
         self.marker_simple = self.marker_dir / "marker-simple"
@@ -92,12 +90,6 @@ class TestUserManagedPackages(unittest.TestCase):
         (self.specs_dir / "ctx_forbidden.lua").write_text(
             SPEC_CTX_FORBIDDEN, encoding="utf-8"
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.marker_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> Path:
         """Write spec to temp dir, return path."""
@@ -118,7 +110,7 @@ class TestUserManagedPackages(unittest.TestCase):
         setup=None selects no SETUP pairs; a list of pair names selects those.
         Either way the spec runs via a generated manifest and `install`.
         """
-        cmd = [str(self.envy_test), f"--cache-root={self.cache_root}"]
+        cmd = [str(self.envy), f"--cache-root={self.cache_root}"]
         if trace:
             # Observe per-package decision narrative (DEBUG); --trace is separate.
             cmd.append("--verbose")

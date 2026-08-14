@@ -6,26 +6,19 @@ Tests loading Lua files into sandboxed environments at various scopes:
 - Phase functions
 """
 
-import shutil
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
-class TestLoadenvBasic(unittest.TestCase):
+class TestLoadenvBasic(EnvyTestCase):
     """Tests for basic envy.loadenv() functionality."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-loadenv-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-loadenv-manifest-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -325,18 +318,12 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
 
-class TestLoadenvErrors(unittest.TestCase):
+class TestLoadenvErrors(EnvyTestCase):
     """Tests for envy.loadenv() error cases."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-loadenv-err-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-loadenv-manifest-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:

@@ -15,13 +15,13 @@ import re
 import shutil
 import socket
 import subprocess
-import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 _GIT = shutil.which("git")
@@ -43,12 +43,10 @@ SETUP = {
 
 
 @unittest.skipIf(_GIT is None, "git binary not available")
-class TestGitFetchProgress(unittest.TestCase):
+class TestGitFetchProgress(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-gitprog-cache-"))
-        self.work = Path(tempfile.mkdtemp(prefix="envy-gitprog-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.work = self.make_temp_dir("work")
 
         repo = self.work / "src"
         repo.mkdir()
@@ -97,8 +95,6 @@ class TestGitFetchProgress(unittest.TestCase):
     def tearDown(self):
         self.daemon.terminate()
         self.daemon.wait(timeout=10)
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.work, ignore_errors=True)
 
     def _git(self, cwd: Path, *args: str):
         subprocess.run(

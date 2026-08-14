@@ -1,25 +1,19 @@
 """Functional tests for weak dependency resolution."""
 
-import shutil
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 
-class TestEngineWeakDependencies(unittest.TestCase):
+class TestEngineWeakDependencies(EnvyTestCase):
     """Weak dependency resolution scenarios."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-weak-ft-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-weak-specs-"))
-        self.envy_test = test_config.get_envy_executable()
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
     def write_spec(self, name: str, content: str) -> None:
         """Write a spec file to the temp specs directory."""
@@ -33,7 +27,7 @@ class TestEngineWeakDependencies(unittest.TestCase):
         self.trace_file = self.cache_root / "trace.jsonl"
         return test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{self.trace_file}",
                 "install",

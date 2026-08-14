@@ -9,14 +9,13 @@ to the process output (via tui::error) — not silently swallowed by the
 import hashlib
 import io
 import os
-import shutil
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Minimal archive so FETCH/STAGE have something to work with
 TEST_ARCHIVE_FILES = {
@@ -75,21 +74,16 @@ def _lua_fail_script(stdout_markers, stderr_markers, shell_clause=""):
     return script, shell_clause
 
 
-class TestErrorOutput(unittest.TestCase):
+class TestErrorOutput(EnvyTestCase):
     """Verify full stdout/stderr from failed commands appears in process output."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-errout-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-errout-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         spec_content = content.format(
@@ -107,7 +101,7 @@ class TestErrorOutput(unittest.TestCase):
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
 def parse_report(stdout: str) -> tuple[str, dict[str, list[tuple[str, str]]], str]:
@@ -32,7 +33,7 @@ def parse_report(stdout: str) -> tuple[str, dict[str, list[tuple[str, str]]], st
     return root, sections, total
 
 
-class TestCacheUsage(unittest.TestCase):
+class TestCacheUsage(EnvyTestCase):
     """'envy cache' reports the cache location and per-entry sizes."""
 
     # Every invocation self-deploys the (sanitizer-instrumented) binary into the
@@ -40,11 +41,7 @@ class TestCacheUsage(unittest.TestCase):
     envy_watchdog_timeout = 60
 
     def setUp(self):
-        self.envy = test_config.get_envy_executable()
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-cache-usage-"))
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
+        super().setUp()
 
     def run_cache(self):
         result = test_config.run(
@@ -108,7 +105,7 @@ class TestCacheUsage(unittest.TestCase):
         Reporting the platform default while every other command uses the project's tree
         would send a reader to an empty directory.
         """
-        project = Path(tempfile.mkdtemp(prefix="envy-cache-usage-project-"))
+        project = self.make_temp_dir("project")
         self.addCleanup(shutil.rmtree, project, ignore_errors=True)
         directive = "cache-win" if sys.platform == "win32" else "cache-posix"
         (project / "envy.lua").write_bytes(
@@ -152,7 +149,7 @@ class TestCacheUsage(unittest.TestCase):
         change the answer would turn any broken envy.lua in an ancestor directory into a
         failed report.
         """
-        project = Path(tempfile.mkdtemp(prefix="envy-cache-usage-broken-"))
+        project = self.make_temp_dir("project")
         self.addCleanup(shutil.rmtree, project, ignore_errors=True)
         # A sums pin with no '@envy version' to pin it to: parse_envy_meta rejects it.
         (project / "envy.lua").write_bytes(

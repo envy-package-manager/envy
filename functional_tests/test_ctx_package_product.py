@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # Test archive contents
@@ -66,17 +67,11 @@ end
 """
 
 
-class TestCtxPackageProduct(unittest.TestCase):
+class TestCtxPackageProduct(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(
-            tempfile.mkdtemp(prefix="envy-ctx-package-product-cache-")
-        )
-        self.test_dir = Path(
-            tempfile.mkdtemp(prefix="envy-ctx-package-product-manifest-")
-        )
-        self.specs_dir = Path(
-            tempfile.mkdtemp(prefix="envy-ctx-package-product-specs-")
-        )
+        self.cache_root = self.make_temp_dir("cache_root")
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
 

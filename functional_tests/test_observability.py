@@ -12,13 +12,12 @@ Complements test_trace_schema.py (registry contract) and test_trace_parser.py
   - undecorated warnings/errors are compiler-style tagged
 """
 
-import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 
@@ -26,11 +25,10 @@ def lua_path(p: Path) -> str:
     return p.as_posix()
 
 
-class TestObservability(unittest.TestCase):
+class TestObservability(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-obs-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-obs-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         self.payload = self.test_dir / "payload.txt"
         self.payload.write_text("hello\n", encoding="utf-8")
@@ -42,10 +40,6 @@ class TestObservability(unittest.TestCase):
             encoding="utf-8",
         )
         self.manifest = self._manifest("obs", "local.obs@v1", self.spec)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def _manifest(self, name: str, identity: str, spec: Path) -> Path:
         """One manifest per subdir; write_spec_manifest always names it envy.lua."""
@@ -215,13 +209,12 @@ class TestObservability(unittest.TestCase):
         self.assertIn(tool[0].raw["via"], ("identity", "registry", "fallback"))
 
 
-class TestDeployObservability(unittest.TestCase):
+class TestDeployObservability(EnvyTestCase):
     """deploy_script events require a full `sync` (deploy is command-level)."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-obs-deploy-cache-"))
-        self.project = Path(tempfile.mkdtemp(prefix="envy-obs-deploy-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.project = self.make_temp_dir("project")
 
         spec = self.project / "tool.lua"
         spec.write_text(
@@ -241,10 +234,6 @@ class TestDeployObservability(unittest.TestCase):
             f'source = "{lua_path(spec)}" }} }}\n',
             encoding="utf-8",
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.project, ignore_errors=True)
 
     @unittest.skipIf(sys.platform == "win32", "shell INSTALL uses POSIX mkdir/echo")
     def test_deploy_script_event(self):

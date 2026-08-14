@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Must stay byte-identical to kEnvyReleaseTargets in src/envy_release.h.
 RELEASE_ASSETS = [
@@ -211,7 +212,7 @@ class S3Stub:
             self._thread.join(timeout=5)
 
 
-class MirrorEnvyFunctionalTest(unittest.TestCase):
+class MirrorEnvyFunctionalTest(EnvyTestCase):
     # Downloads six archives and (in the S3 cases) uploads seven objects.
     envy_watchdog_timeout = 60
 
@@ -220,7 +221,7 @@ class MirrorEnvyFunctionalTest(unittest.TestCase):
         cls._envy = test_config.get_envy_production_executable()
 
     def setUp(self) -> None:
-        self._temp = Path(tempfile.mkdtemp(prefix="envy-mirror-envy-test-"))
+        self._temp = self.make_temp_dir("_temp")
         self._source = self._temp / "upstream"
         (self._source / "v1.2.3").mkdir(parents=True)
         for asset in RELEASE_ASSETS:
@@ -583,7 +584,7 @@ class MirrorEnvyFunctionalTest(unittest.TestCase):
         self.assertIn(f'-- @envy sha256sums "{expected}"', result.stderr)
 
 
-class InitMirrorSurvivesSyncTest(unittest.TestCase):
+class InitMirrorSurvivesSyncTest(EnvyTestCase):
     """`envy init --mirror` must record the mirror in the manifest.
 
     Before this, the mirror was stamped only into the bootstrap script, and the first
@@ -598,7 +599,7 @@ class InitMirrorSurvivesSyncTest(unittest.TestCase):
         cls._envy = test_config.get_envy_production_executable()
 
     def setUp(self) -> None:
-        self._temp = Path(tempfile.mkdtemp(prefix="envy-init-mirror-test-"))
+        self._temp = self.make_temp_dir("_temp")
 
     def tearDown(self) -> None:
         if self._temp.exists():

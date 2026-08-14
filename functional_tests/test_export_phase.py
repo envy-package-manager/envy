@@ -8,13 +8,12 @@ Tests use structured trace events, not timing, to assert phase ordering.
 import hashlib
 import io
 import os
-import shutil
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest, parse_export_line
 from .trace_parser import PkgPhase, TraceParser
 
@@ -32,23 +31,16 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestExportPhase(unittest.TestCase):
+class TestExportPhase(EnvyTestCase):
     """Tests for export as a pipeline phase."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-export-phase-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-export-phase-specs-"))
-        self.output_dir = Path(tempfile.mkdtemp(prefix="envy-export-phase-out-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.output_dir = self.make_temp_dir("output_dir")
 
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.output_dir, ignore_errors=True)
 
     def lua_path(self, path: Path) -> str:
         return path.as_posix()

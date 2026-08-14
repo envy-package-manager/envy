@@ -2,14 +2,13 @@
 
 import hashlib
 import io
-import shutil
 import subprocess
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 from .trace_parser import TraceParser
 
@@ -34,22 +33,16 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestProductParallelism(unittest.TestCase):
+class TestProductParallelism(EnvyTestCase):
     """Test that product command extends all dependencies for parallel execution."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-product-parallel-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-product-manifest-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def lua_path(self, path: Path) -> str:
         return path.as_posix()

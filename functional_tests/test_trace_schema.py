@@ -8,13 +8,12 @@ agree on per-event-type counts.
 """
 
 import json
-import shutil
-import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import EVENT_REGISTRY, SCHEMA_VERSION, TraceParser
 
 SIMPLE_SPEC = """IDENTITY = "local.simple@v1"
@@ -33,21 +32,16 @@ SETUP = {
 """
 
 
-class TestTraceSchema(unittest.TestCase):
+class TestTraceSchema(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-trace-schema-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-trace-schema-specs-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         self.spec_path = self.test_dir / "simple.lua"
         self.spec_path.write_text(SIMPLE_SPEC, encoding="utf-8")
         self.manifest = test_config.write_spec_manifest(
             self.test_dir, [("local.simple@v1", self.spec_path)]
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def _run_install(self, *trace_args: str):
         result = test_config.run(

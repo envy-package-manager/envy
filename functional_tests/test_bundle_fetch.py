@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import tarfile
-import tempfile
 import threading
 import unittest
 from functools import partial
@@ -16,6 +15,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 from .trace_parser import TraceParser
 
@@ -79,25 +79,18 @@ SETUP = {
     return bundle_dir
 
 
-class TestBundleFetchLocal(unittest.TestCase):
+class TestBundleFetchLocal(EnvyTestCase):
     """Tests for fetching bundles from local directories."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-src-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
         # Create simple bundle for tests that need it
         self.simple_bundle = self.bundle_dir / "simple-bundle"
         self.simple_bundle.mkdir(parents=True)
         create_simple_bundle(self.simple_bundle)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -208,20 +201,13 @@ PACKAGES = {{
         self.assertTrue(pkg_path.exists(), f"Expected {pkg_path} to exist")
 
 
-class TestBundleIdentityVerification(unittest.TestCase):
+class TestBundleIdentityVerification(EnvyTestCase):
     """Tests for bundle identity verification."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-identity-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-test-bundle-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -394,25 +380,18 @@ PACKAGES = {{
         self.assertIn("test.missing@v1", result.stderr)
 
 
-class TestBundleAliasResolution(unittest.TestCase):
+class TestBundleAliasResolution(EnvyTestCase):
     """Tests for BUNDLES alias resolution."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-alias-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-src-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
         # Create simple bundle for tests that need it
         self.simple_bundle = self.bundle_dir / "simple-bundle"
         self.simple_bundle.mkdir(parents=True)
         create_simple_bundle(self.simple_bundle)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -483,20 +462,13 @@ PACKAGES = {{
         self.assertIn("bundle", result.stderr.lower())
 
 
-class TestLocalBundleInSitu(unittest.TestCase):
+class TestLocalBundleInSitu(EnvyTestCase):
     """Tests for local bundle in-situ behavior (no cache copy)."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-local-bundle-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-local-bundle-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-local-bundle-src-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -725,14 +697,12 @@ PACKAGES = {{
         )
 
 
-class TestBundleFetchRemote(unittest.TestCase):
+class TestBundleFetchRemote(EnvyTestCase):
     """A remote bundle is a package: same section, progress bar, and outcome row."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-remote-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-remote-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         bundle_src = self.test_dir / "src"
         bundle_src.mkdir()
@@ -756,8 +726,6 @@ class TestBundleFetchRemote(unittest.TestCase):
         self.server.shutdown()
         self.server_thread.join(timeout=5)
         self.server.server_close()
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def run_install(self, manifest: Path):
         return test_config.run(
@@ -860,14 +828,12 @@ PACKAGES = {{
 
 
 @unittest.skipIf(shutil.which("git") is None, "git binary not available")
-class TestBundleFetchGit(unittest.TestCase):
+class TestBundleFetchGit(EnvyTestCase):
     """A git bundle takes the same package path as a remote one."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-git-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-git-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         repo = self.test_dir / "work"
         repo.mkdir()
@@ -898,10 +864,6 @@ class TestBundleFetchGit(unittest.TestCase):
             capture_output=True,
             check=True,
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_git_bundle_reports_outcome(self):
         """Clone reports 'fetched'; the warm cache reports 'cache hit'."""
