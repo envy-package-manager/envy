@@ -135,8 +135,7 @@ cmd_cache_ensure_spec::cmd_cache_ensure_spec(
 void cmd_cache_ensure_spec::execute() {
   cache c{ cli_cache_root_ };
   run_ensure(cfg_, [&] {
-    return c.ensure_spec(cfg_.identity,
-                         cfg_.source.empty() ? cfg_.identity : cfg_.source);
+    return c.ensure_spec(cfg_.identity, cfg_.source.empty() ? cfg_.identity : cfg_.source);
   });
 }
 

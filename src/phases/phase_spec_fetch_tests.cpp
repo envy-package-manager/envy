@@ -1453,7 +1453,8 @@ struct bundle_entry_fixture {
   std::string identity;
 
   explicit bundle_entry_fixture(std::string const &label)
-      : root{ std::filesystem::temp_directory_path() / ("envy_test_bundle_entry_" + label) },
+      : root{ std::filesystem::temp_directory_path() /
+              ("envy_test_bundle_entry_" + label) },
         cache_root{ root / "cache" },
         bundle_dir{ root / "src" },
         identity{ "test.bundle-" + label + "@v1" } {
@@ -1545,9 +1546,10 @@ TEST_CASE("unparseable bundle manifest leaves the cache entry unfinalized") {
 
 TEST_CASE("bundle identity mismatch leaves the cache entry unfinalized") {
   bundle_entry_fixture f{ "identity" };
-  f.write_source("BUNDLE = \"test.someone-else@v9\"\n"
-                 "SPECS = { [\"test.a@v1\"] = \"specs/a.lua\" }\n",
-                 bundle_entry_fixture::valid_spec());
+  f.write_source(
+      "BUNDLE = \"test.someone-else@v9\"\n"
+      "SPECS = { [\"test.a@v1\"] = \"specs/a.lua\" }\n",
+      bundle_entry_fixture::valid_spec());
 
   auto const msg{ f.materialize() };
   REQUIRE(!msg.empty());

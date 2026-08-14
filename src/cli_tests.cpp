@@ -2367,9 +2367,8 @@ TEST_CASE("cli_parse: cmd_merge_depot") {
 
 TEST_CASE("cli_parse: cache-test ensure-package") {
   SUBCASE("all four positionals required") {
-    std::vector<std::string> args{ "envy",   "cache-test", "ensure-package",
-                                   "gcc",    "darwin",     "arm64",
-                                   "deadbeef" };
+    std::vector<std::string> args{ "envy",   "cache-test", "ensure-package", "gcc",
+                                   "darwin", "arm64",      "deadbeef" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -2398,8 +2397,7 @@ TEST_CASE("cli_parse: cache-test ensure-spec") {
   SUBCASE("identity only leaves the source key empty") {
     // Empty means "key on the identity", resolved at execute time so the default
     // lives in one place rather than being baked into every caller.
-    std::vector<std::string> args{ "envy", "cache-test", "ensure-spec",
-                                   "envy.cmake@v1" };
+    std::vector<std::string> args{ "envy", "cache-test", "ensure-spec", "envy.cmake@v1" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -2412,12 +2410,9 @@ TEST_CASE("cli_parse: cache-test ensure-spec") {
   }
 
   SUBCASE("--source carries the cache key input") {
-    std::vector<std::string> args{ "envy",
-                                   "cache-test",
-                                   "ensure-spec",
-                                   "envy.cmake@v1",
-                                   "--source",
-                                   "https://example.com/spec.lua" };
+    std::vector<std::string> args{ "envy",        "cache-test",
+                                   "ensure-spec", "envy.cmake@v1",
+                                   "--source",    "https://example.com/spec.lua" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -2471,9 +2466,8 @@ TEST_CASE("cli_parse: cache-test choreography options") {
   }
 
   SUBCASE("defaults when no choreography is requested") {
-    std::vector<std::string> args{ "envy", "cache-test", "ensure-package",
-                                   "gcc",  "darwin",     "arm64",
-                                   "deadbeef" };
+    std::vector<std::string> args{ "envy",   "cache-test", "ensure-package", "gcc",
+                                   "darwin", "arm64",      "deadbeef" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
