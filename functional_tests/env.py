@@ -37,6 +37,11 @@ from . import test_config
 from .trace_parser import TraceEvent, TraceParser
 
 
+# Generous: this only has to be longer than an orderly shutdown ever takes, since
+# exceeding it is reported as a failure rather than waited out.
+SERVER_SHUTDOWN_TIMEOUT_S = 10.0
+
+
 class QuietHTTPHandler(SimpleHTTPRequestHandler):
     """SimpleHTTPRequestHandler without per-request logging."""
 
@@ -169,9 +174,23 @@ class EnvyTestCase(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(thread.join)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
+
+        def stop():
+            # One cleanup rather than three, so the order is stated instead of
+            # implied by LIFO: stop the accept loop, drop the listening socket,
+            # then wait for the thread -- with a bound. A wedged server thread has
+            # to fail this one test, never hang the suite; it is a daemon, so an
+            # unjoined one dies with the process.
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=SERVER_SHUTDOWN_TIMEOUT_S)
+            if thread.is_alive():
+                raise AssertionError(
+                    f"stub HTTP server for {directory} did not stop within "
+                    f"{SERVER_SHUTDOWN_TIMEOUT_S}s"
+                )
+
+        self.addCleanup(stop)
         return f"http://127.0.0.1:{server.server_address[1]}"
 
     # -- git fixtures -------------------------------------------------------
