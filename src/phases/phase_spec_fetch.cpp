@@ -274,8 +274,28 @@ int load_spec_script(sol::state &lua,
   return meta.schema;
 }
 
-std::filesystem::path get_cached_spec_path(pkg const *p) {
-  return p->cache_ptr->ensure_spec(p->cfg->identity).pkg_path / "spec.lua";
+// Canonical description of where a spec's or bundle's bytes come from. This is the
+// only input to its cache entry key besides identity, so every field a fetch
+// actually reads belongs here: change the URL, the git ref, or the path and you get
+// a different entry rather than yesterday's content under today's declaration.
+//
+// A custom fetch function is the exception -- a Lua closure has no fingerprint, so
+// its entries key on the file that declares it. Editing the function body in place
+// still reuses the entry; move it, or bump the identity, to force a refetch.
+std::string source_key(pkg_cfg::remote_source const &r) {
+  return "remote\n" + r.url + "\n" + r.sha256;
+}
+
+std::string source_key(pkg_cfg::git_source const &g) {
+  return "git\n" + g.url + "\n" + g.ref;
+}
+
+std::string source_key(pkg_cfg::local_source const &l) {
+  return "local\n" + l.file_path.generic_string();
+}
+
+std::string custom_fetch_source_key(pkg_cfg const &cfg) {
+  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity;
 }
 
 // Every download this phase makes — a spec file, a git spec repo, a bundle payload —
@@ -301,14 +321,24 @@ void fetch_with_progress(fetch_request req,
   }
 }
 
-std::filesystem::path fetch_local_source(pkg_cfg const &cfg) {
+// A fetched spec together with the cache entry lock that still guards it, if the
+// fetch was a cache miss. The lock is deliberately *not* released here: an entry
+// carrying `envy-complete` is trusted forever after, so it may only be finalized
+// once the fetched bytes are proven to be a loadable spec of the expected
+// identity. run_spec_fetch_phase owns that decision; see the comment there.
+struct spec_fetch_result {
+  std::filesystem::path spec_path;
+  cache::scoped_entry_lock::ptr_t lock;
+};
+
+spec_fetch_result fetch_local_source(pkg_cfg const &cfg) {
   auto const *local_src{ std::get_if<pkg_cfg::local_source>(&cfg.source) };
-  return local_src->file_path;
+  return { local_src->file_path, nullptr };  // in-situ: never enters the cache
 }
 
-std::filesystem::path fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
+spec_fetch_result fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
   auto const *remote_src{ std::get_if<pkg_cfg::remote_source>(&cfg.source) };
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity) };
+  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity, source_key(*remote_src)) };
 
   if (cache_result.lock) {
     tui::debug("spec: source %s", remote_src->url.c_str());
@@ -322,17 +352,14 @@ std::filesystem::path fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
     if (!remote_src->sha256.empty()) {
       sha256_verify(remote_src->sha256, sha256(fetch_dest));
     }
-
-    cache_result.lock->mark_install_complete();
-    cache_result.lock.reset();
   }
 
-  return cache_result.pkg_path / "spec.lua";
+  return { cache_result.pkg_path / "spec.lua", std::move(cache_result.lock) };
 }
 
-std::filesystem::path fetch_git_source(pkg_cfg const &cfg, pkg *p) {
+spec_fetch_result fetch_git_source(pkg_cfg const &cfg, pkg *p) {
   auto const *git_src{ std::get_if<pkg_cfg::git_source>(&cfg.source) };
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity) };
+  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity, source_key(*git_src)) };
 
   if (cache_result.lock) {
     tui::debug("spec: from git %s @ %s", git_src->url.c_str(), git_src->ref.c_str());
@@ -346,18 +373,15 @@ std::filesystem::path fetch_git_source(pkg_cfg const &cfg, pkg *p) {
                         p,
                         git_src->url,
                         "git spec");
-
-    cache_result.lock->mark_install_complete();
-    cache_result.lock.reset();
   }
 
-  return cache_result.pkg_path / "spec.lua";
+  return { cache_result.pkg_path / "spec.lua", std::move(cache_result.lock) };
 }
 
 // The bundle is materialized by its own BUNDLE_ONLY package, which this spec lists
 // as a source dependency — so by the time spec_fetch runs the bundle is registered
 // and all that is left is resolving the spec's path inside it.
-std::filesystem::path resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) {
+spec_fetch_result resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) {
   auto const *bundle_src{ std::get_if<pkg_cfg::bundle_source>(&cfg.source) };
   std::string const &bundle_id{ bundle_src->bundle_identity };
 
@@ -374,10 +398,10 @@ std::filesystem::path resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) 
                              bundle_id + "'");
   }
 
-  return spec_path;
+  return { std::move(spec_path), nullptr };  // the bundle owns the cache entry
 }
 
-std::filesystem::path fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng) {
+spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng) {
   if (!cfg.parent) {
     throw std::runtime_error("Custom fetch function spec has no parent: " + cfg.identity);
   }
@@ -388,7 +412,8 @@ std::filesystem::path fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &
                              cfg.identity);
   }
 
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity) };
+  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity,
+                                               custom_fetch_source_key(cfg)) };
 
   if (cache_result.lock) {
     tui::debug("spec: custom fetch function");
@@ -447,20 +472,16 @@ std::filesystem::path fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &
 
     std::filesystem::rename(spec_src, spec_dst);
 
-    cache_result.lock->mark_install_complete();
-    cache_result.lock.reset();
-
-    // Spec is now at pkg_path / "spec.lua" after lock cleanup
-    return cache_result.pkg_path / "spec.lua";
+    return { spec_dst, std::move(cache_result.lock) };
   }
 
   // Cache was already complete - spec.lua should exist in pkg_path
-  std::filesystem::path const spec_path{ cache_result.pkg_path / "spec.lua" };
+  std::filesystem::path spec_path{ cache_result.pkg_path / "spec.lua" };
   if (!std::filesystem::exists(spec_path)) {
     throw std::runtime_error("Custom fetch did not create spec.lua for: " + cfg.identity);
   }
 
-  return spec_path;
+  return { std::move(spec_path), nullptr };
 }
 
 std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg const &cfg,
@@ -1146,7 +1167,18 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
   // Non-local bundle: fetch to cache. The completion phase turns these flags into
   // this package's outcome row, exactly as it does for any other package.
-  auto cache_result{ p->cache_ptr->ensure_spec(bundle_id) };
+  std::string const bundle_source_key{ std::visit(
+      match{
+          [](pkg_cfg::remote_source const &r) { return source_key(r); },
+          [](pkg_cfg::git_source const &g) { return source_key(g); },
+          [](pkg_cfg::local_source const &l) { return source_key(l); },
+          [&](pkg_cfg::custom_fetch_source const &) {
+            return custom_fetch_source_key(cfg);
+          },
+      },
+      bundle_src->fetch_source) };
+
+  auto cache_result{ p->cache_ptr->ensure_spec(bundle_id, bundle_source_key) };
   p->was_cache_hit = cache_result.lock == nullptr;
 
   if (cache_result.lock) {
@@ -1276,12 +1308,13 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
             },
         },
         bundle_src->fetch_source);
-
-    cache_result.lock->mark_install_complete();
-    cache_result.lock.reset();
   }
 
-  // Parse and validate bundle manifest
+  // Parse and validate the bundle manifest while the entry is still unfinalized:
+  // `envy-complete` is never revalidated, so marking first would make a malformed
+  // bundle a permanent cache entry that fails identically on every later run.
+  // Throwing here drops the lock uncompleted, its destructor scrubs the entry, and
+  // the next run refetches.
   bundle parsed{ bundle::from_path(cache_result.pkg_path) };
 
   if (parsed.identity != bundle_id) {
@@ -1290,6 +1323,11 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
   }
 
   parsed.validate();
+
+  if (cache_result.lock) {
+    cache_result.lock->mark_install_complete();
+    cache_result.lock.reset();
+  }
 
   // Register the bundle for envy.loadenv_spec() access
   eng.register_bundle(bundle_id, std::move(parsed.specs), cache_result.pkg_path);
@@ -1318,8 +1356,13 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
                                        pkg_phase::spec_fetch,
                                        std::chrono::steady_clock::now() };
 
-  // Fetch spec based on source type
-  std::filesystem::path const spec_path{ [&] {
+  // Fetch spec based on source type. A cache-miss fetch hands back its entry lock
+  // still held: the entry is finalized below, only once the fetched bytes have
+  // proven to be a loadable spec declaring the expected identity. Finalizing at
+  // fetch time instead would bake a broken download (404 body, truncated file,
+  // wrong spec) into a cache entry that is never revalidated and so fails the same
+  // way forever.
+  spec_fetch_result fetched{ [&] {
     if (auto const *local_src{ std::get_if<pkg_cfg::local_source>(&cfg.source) }) {
       return fetch_local_source(cfg);
     } else if (std::holds_alternative<pkg_cfg::remote_source>(cfg.source)) {
@@ -1334,6 +1377,8 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
       throw std::runtime_error("Unsupported source type: " + cfg.identity);
     }
   }() };
+
+  std::filesystem::path const &spec_path{ fetched.spec_path };
 
   if (!std::filesystem::exists(spec_path)) {
     throw std::runtime_error("Spec source not found: " + spec_path.string() +
@@ -1370,6 +1415,13 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   if (declared_identity != cfg.identity) {
     throw std::runtime_error("Identity mismatch: expected '" + cfg.identity +
                              "' but spec declares '" + declared_identity + "'");
+  }
+
+  // The fetched file is a spec for this identity: the entry is now worth keeping.
+  // Everything past this point is spec semantics, which a refetch cannot repair.
+  if (fetched.lock) {
+    fetched.lock->mark_install_complete();
+    fetched.lock.reset();
   }
 
   // Determine package type (user-managed or cache-managed), parse SETUP pairs,

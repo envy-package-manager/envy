@@ -5,11 +5,11 @@ import io
 import shutil
 import subprocess
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # Test archive contents
@@ -32,15 +32,13 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestWeakDepHash(unittest.TestCase):
+class TestWeakDepHash(EnvyTestCase):
     """Tests verifying resolved weak deps contribute to cache hash."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-weak-hash-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-weak-hash-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-weak-hash-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
@@ -185,11 +183,6 @@ INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
 end
 """,
         )
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> Path:
         """Write spec to temp directory with placeholders substituted."""

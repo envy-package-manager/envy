@@ -50,6 +50,7 @@ class cmd_cache_ensure_spec : public cmd {
  public:
   struct cfg : cmd_cfg<cmd_cache_ensure_spec>, cache_test_cfg {
     std::string identity;
+    std::string source;  // empty = key on the identity (one entry per identity)
   };
 
   static void register_cli(CLI::App &parent, std::function<void(cfg)> on_selected);

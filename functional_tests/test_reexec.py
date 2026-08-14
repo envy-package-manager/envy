@@ -25,6 +25,7 @@ import zipfile
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 _OS_NAME = (
     "windows"
@@ -67,11 +68,11 @@ def _create_empty_archive(archive_path: Path) -> None:
             tar.addfile(info, io.BytesIO(data))
 
 
-class _ReexecTestBase(unittest.TestCase):
+class _ReexecTestBase(EnvyTestCase):
     """Shared setup for reexec tests."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-reexec-test-")).resolve()
+        self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
         self._envy = test_config.get_envy_executable()
 
         self._project = self._temp_dir / "project"

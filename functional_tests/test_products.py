@@ -2,13 +2,12 @@
 
 import hashlib
 import io
-import shutil
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # Test archive contents
@@ -86,15 +85,13 @@ end
 """
 
 
-class TestProducts(unittest.TestCase):
+class TestProducts(EnvyTestCase):
     """End-to-end tests for product providers and consumers."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-products-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-products-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-products-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
@@ -114,11 +111,6 @@ class TestProducts(unittest.TestCase):
         path = self.specs_dir / name
         path.write_text(spec_content, encoding="utf-8")
         return path
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def lua_path(self, name: str) -> str:
         return (self.specs_dir / name).as_posix()

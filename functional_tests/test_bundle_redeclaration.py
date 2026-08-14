@@ -8,10 +8,8 @@ cannot be compared — warn instead of failing.
 """
 
 import hashlib
-import shutil
 import subprocess
 import tarfile
-import tempfile
 import threading
 import unittest
 from functools import partial
@@ -19,6 +17,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
@@ -74,12 +73,10 @@ CUSTOM_FETCH_SRC = """{ fetch = function(tmp_dir)
     end }"""
 
 
-class TestBundleRedeclaration(unittest.TestCase):
+class TestBundleRedeclaration(EnvyTestCase):
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bundle-redecl-cache-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bundle-redecl-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
 
         # Two byte-identical bundle archives at different URLs, plus a git repo, so
         # "conflicting" means a different source rather than different content.
@@ -108,8 +105,6 @@ class TestBundleRedeclaration(unittest.TestCase):
         self.server.shutdown()
         self.thread.join(timeout=5)
         self.server.server_close()
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     # -- helpers -------------------------------------------------------------
 

@@ -4,12 +4,11 @@ Tests FETCH = function(ctx) ... end syntax with envy.fetch() and envy.commit_fet
 """
 
 import os
-import shutil
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Inline test file contents
 TEST_FILES = {
@@ -19,23 +18,17 @@ TEST_FILES = {
 }
 
 
-class TestEngineProgrammaticFetch(unittest.TestCase):
+class TestEngineProgrammaticFetch(EnvyTestCase):
     """Tests for programmatic fetch phase (fetch functions)."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-prog-fetch-test-"))
-        self.test_files_dir = Path(tempfile.mkdtemp(prefix="envy-prog-files-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_files_dir = self.make_temp_dir("test_files_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Write test files to temp directory
         for name, content in TEST_FILES.items():
             (self.test_files_dir / name).write_text(content, encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_files_dir, ignore_errors=True)
 
     def lua_path(self, filename: str) -> str:
         """Get Lua-safe path for a test file."""
@@ -58,7 +51,7 @@ class TestEngineProgrammaticFetch(unittest.TestCase):
         )
         return test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *(flags or self.trace_flag),
                 "install",

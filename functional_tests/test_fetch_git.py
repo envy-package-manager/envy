@@ -5,13 +5,13 @@ error handling, and basic integration scenarios.
 """
 
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 
 def _is_macos_ci_sanitizer_build() -> bool:
@@ -25,7 +25,7 @@ def _is_macos_ci_sanitizer_build() -> bool:
     return bool(os.environ.get("TSAN_OPTIONS") or os.environ.get("ASAN_OPTIONS"))
 
 
-class TestFetchGit(unittest.TestCase):
+class TestFetchGit(EnvyTestCase):
     """Tests for git repository fetching via fetch command."""
 
     # Real clones from github.com/googlesource.com; network latency exceeds the
@@ -33,17 +33,9 @@ class TestFetchGit(unittest.TestCase):
     envy_watchdog_timeout = 60
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-git-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-git-specs-"))
-        root = Path(__file__).resolve().parent.parent
-        self.envy = test_config.get_envy_executable()
-        self.envy_test = test_config.get_envy_executable()
-        self.project_root = root
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     # ========================================================================
     # Basic Success Cases
@@ -291,7 +283,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -342,7 +334,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -392,7 +384,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

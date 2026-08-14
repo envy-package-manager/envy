@@ -6,29 +6,23 @@ verifying spec SHA256, and checking basic structure requirements.
 
 import hashlib
 import os
-import shutil
 import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 
-class TestEngineSpecLoading(unittest.TestCase):
+class TestEngineSpecLoading(EnvyTestCase):
     """Tests for spec loading and validation phase."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-engine-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-engine-specs-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
         # Enable trace for all tests if ENVY_TEST_TRACE is set
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> Path:
         """Write a spec file to the temp specs directory."""
@@ -75,7 +69,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -108,7 +102,7 @@ DEPENDENCIES = {}
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -194,7 +188,7 @@ SETUP = {{
 
             result = test_config.run(
                 [
-                    str(self.envy_test),
+                    str(self.envy),
                     f"--cache-root={self.cache_root}",
                     f"--trace=file:{trace_file}",
                     "install",
@@ -274,7 +268,7 @@ SETUP = {{
 
             result = test_config.run(
                 [
-                    str(self.envy_test),
+                    str(self.envy),
                     f"--cache-root={self.cache_root}",
                     *self.trace_flag,
                     "install",
@@ -330,7 +324,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
@@ -373,7 +367,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -426,7 +420,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -484,7 +478,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -534,7 +528,7 @@ SETUP = {
 
             result = test_config.run(
                 [
-                    str(self.envy_test),
+                    str(self.envy),
                     f"--cache-root={self.cache_root}",
                     *self.trace_flag,
                     "install",
@@ -582,7 +576,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -617,7 +611,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -656,7 +650,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -693,7 +687,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -731,7 +725,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -768,7 +762,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -804,7 +798,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -841,7 +835,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -877,7 +871,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -914,7 +908,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -950,7 +944,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -986,7 +980,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1021,7 +1015,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1059,7 +1053,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1095,7 +1089,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1134,7 +1128,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1170,7 +1164,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1207,7 +1201,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1243,7 +1237,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1281,7 +1275,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1316,7 +1310,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1351,7 +1345,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1387,7 +1381,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1423,7 +1417,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1459,7 +1453,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1498,7 +1492,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1535,7 +1529,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1573,7 +1567,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -1609,7 +1603,7 @@ SETUP = {
 
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

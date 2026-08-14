@@ -146,16 +146,38 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg entry layout") {
 }
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_spec entry layout") {
-  auto result = cache->ensure_spec("envy.cmake@v1");
+  auto result = cache->ensure_spec("envy.cmake@v1", "https://example.com/spec.lua");
   REQUIRE(result.lock != nullptr);
 
-  CHECK(result.entry_path == temp_root / "specs" / "envy.cmake@v1");
+  CHECK(result.entry_path.parent_path() == temp_root / "specs" / "envy.cmake@v1");
+  CHECK(result.entry_path.filename().string().starts_with("blake3-"));
   CHECK(result.pkg_path == result.entry_path / "pkg");
   result.lock->mark_install_complete();
   result.lock.reset();
 
   CHECK(std::filesystem::is_directory(result.entry_path));
   CHECK(std::filesystem::exists(result.entry_path / "envy-complete"));
+}
+
+TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_spec keys entries on the source") {
+  // Same identity, two sources: two entries, so a redeclared source is never
+  // served yesterday's content. Nothing revalidates a complete entry.
+  auto a = cache->ensure_spec("envy.cmake@v1", "https://a.example.com/spec.lua");
+  REQUIRE(a.lock != nullptr);
+  a.lock->mark_install_complete();
+  a.lock.reset();
+
+  auto b = cache->ensure_spec("envy.cmake@v1", "https://b.example.com/spec.lua");
+  CHECK(b.entry_path != a.entry_path);
+  CHECK(b.lock != nullptr);  // cold: a's completion does not answer for b
+  b.lock->mark_install_complete();
+  b.lock.reset();
+
+  // Re-asking with either source hits its own entry.
+  CHECK(cache->ensure_spec("envy.cmake@v1", "https://a.example.com/spec.lua").lock ==
+        nullptr);
+  CHECK(cache->ensure_spec("envy.cmake@v1", "https://b.example.com/spec.lua").lock ==
+        nullptr);
 }
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg creates locks directory on demand") {

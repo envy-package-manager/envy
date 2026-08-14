@@ -6,28 +6,22 @@ fail_all_contexts / condition-variable paths that only trigger when many package
 threads are in flight simultaneously.
 """
 
-import shutil
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 MID_COUNT = 20
 FAILING_MID = 7
 
 
-class TestEngineFailurePropagation(unittest.TestCase):
+class TestEngineFailurePropagation(EnvyTestCase):
     """Mid-graph failure in a wide diamond graph: all dependents fail, no hang."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-failprop-cache-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-failprop-specs-"))
-        self.envy_test = test_config.get_envy_executable()
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
     def write_spec(self, name: str, content: str) -> Path:
         path = self.specs_dir / name
@@ -110,7 +104,7 @@ SETUP = {{
             with self.subTest(iteration=iteration):
                 result = test_config.run(
                     [
-                        str(self.envy_test),
+                        str(self.envy),
                         f"--cache-root={self.cache_root}",
                         "install",
                         "--manifest",

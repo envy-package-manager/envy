@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 # Platform-specific cache directive
@@ -38,11 +39,11 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestCacheDirective(unittest.TestCase):
+class TestCacheDirective(EnvyTestCase):
     """Tests for '-- @envy cache-posix/cache-win' manifest directive."""
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-cache-directive-"))
+        self.test_dir = self.make_temp_dir("test_dir")
         self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).parent.parent
         # pid distinguishes between test runs, unique_suffix distinguishes parallel threads

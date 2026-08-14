@@ -18,16 +18,15 @@ Covers:
 import hashlib
 import io
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 from typing import List, Optional
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 TEST_ARCHIVE_FILES = {
@@ -346,26 +345,19 @@ SETUP = {{
 """
 
 
-class TestSetupPairs(unittest.TestCase):
+class TestSetupPairs(EnvyTestCase):
     """Manifest-driven SETUP pair behavior."""
 
     # Concurrency test runs two envy processes with a sleeping install.
     envy_watchdog_timeout = 60
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-setup-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-setup-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-setup-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return Lua path."""

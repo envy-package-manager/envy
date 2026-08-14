@@ -33,6 +33,7 @@ import tempfile
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from pathlib import Path
 
 
@@ -121,12 +122,12 @@ def _get_bash_find_manifest_script() -> str:
 
 
 @unittest.skipIf(sys.platform == "win32", "Bash tests skipped on Windows")
-class TestBashLauncherRootDiscovery(unittest.TestCase):
+class TestBashLauncherRootDiscovery(EnvyTestCase):
     """Test bash launcher's root-aware manifest discovery."""
 
     def setUp(self) -> None:
         # Use resolve() to get canonical path (handles /var -> /private/var on macOS)
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-launcher-root-")).resolve()
+        self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
         self._grandparent = self._temp_dir / "grandparent"
         self._parent = self._grandparent / "parent"
         self._child = self._parent / "child"
@@ -307,11 +308,11 @@ class TestBashLauncherRootDiscovery(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only tests")
-class TestBatchLauncherRootDiscovery(unittest.TestCase):
+class TestBatchLauncherRootDiscovery(EnvyTestCase):
     """Test batch launcher's root-aware manifest discovery (Windows only)."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-launcher-root-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._grandparent = self._temp_dir / "grandparent"
         self._parent = self._grandparent / "parent"
         self._child = self._parent / "child"

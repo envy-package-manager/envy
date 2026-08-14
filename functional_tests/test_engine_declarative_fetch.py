@@ -5,12 +5,11 @@ FETCH = [{...}, ...], and basic error handling (collision, bad SHA256).
 """
 
 import os
-import shutil
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Inline test files for declarative fetch tests
 TEST_FILES = {
@@ -20,27 +19,21 @@ TEST_FILES = {
 }
 
 
-class TestEngineDeclarativeFetch(unittest.TestCase):
+class TestEngineDeclarativeFetch(EnvyTestCase):
     """Tests for declarative fetch phase (package fetching)."""
 
     # Some cases clone real github repos; relax the watchdog for network latency.
     envy_watchdog_timeout = 60
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-decl-fetch-cache-"))
-        self.test_files_dir = Path(tempfile.mkdtemp(prefix="envy-decl-fetch-files-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_files_dir = self.make_temp_dir("test_files_dir")
         # Enable trace for all tests if ENVY_TEST_TRACE is set
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Write inline test files to temp directory
         for name, content in TEST_FILES.items():
             (self.test_files_dir / name).write_text(content, encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_files_dir, ignore_errors=True)
 
     def lua_path(self, filename: str) -> str:
         """Get Lua-safe path to test file."""
@@ -63,7 +56,7 @@ class TestEngineDeclarativeFetch(unittest.TestCase):
         )
         return test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *(flags or self.trace_flag),
                 "install",

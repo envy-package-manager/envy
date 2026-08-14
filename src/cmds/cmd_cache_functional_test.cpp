@@ -109,6 +109,7 @@ void cmd_cache_ensure_spec::register_cli(CLI::App &parent,
   auto *sub{ parent.add_subcommand("ensure-spec", "Test spec cache entry") };
   auto cfg_ptr{ std::make_shared<cfg>() };
   sub->add_option("identity", cfg_ptr->identity, "Spec identity")->required();
+  sub->add_option("--source", cfg_ptr->source, "Source key (default: the identity)");
   add_cache_test_options(*sub, *cfg_ptr);
   sub->callback(
       [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
@@ -133,7 +134,9 @@ cmd_cache_ensure_spec::cmd_cache_ensure_spec(
 
 void cmd_cache_ensure_spec::execute() {
   cache c{ cli_cache_root_ };
-  run_ensure(cfg_, [&] { return c.ensure_spec(cfg_.identity); });
+  run_ensure(cfg_, [&] {
+    return c.ensure_spec(cfg_.identity, cfg_.source.empty() ? cfg_.identity : cfg_.source);
+  });
 }
 
 }  // namespace envy

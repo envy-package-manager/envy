@@ -7,30 +7,22 @@ Tests loading Lua code from declared dependencies:
 - Standard require() within bundles
 """
 
-import shutil
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
-class TestLoadenvSpec(unittest.TestCase):
+class TestLoadenvSpec(EnvyTestCase):
     """Tests for envy.loadenv_spec() functionality."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-loadenv-spec-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-loadenv-spec-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-test-bundle-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -314,20 +306,13 @@ PACKAGES = {{
         )
 
 
-class TestRequireInBundle(unittest.TestCase):
+class TestRequireInBundle(EnvyTestCase):
     """Tests for standard require() within bundles."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-require-bundle-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-require-bundle-manifest-"))
-        self.bundle_dir = Path(tempfile.mkdtemp(prefix="envy-test-bundle-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.bundle_dir, ignore_errors=True)
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.bundle_dir = self.make_temp_dir("bundle_dir")
 
     @staticmethod
     def lua_path(path: Path) -> str:

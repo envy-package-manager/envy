@@ -6,14 +6,13 @@ cycle detection, memoization, and local/remote security constraints.
 
 import hashlib
 import io
-import shutil
 import subprocess
 import tarfile
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 # Test archive contents
@@ -37,22 +36,16 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
-class TestEngineDependencyResolution(unittest.TestCase):
+class TestEngineDependencyResolution(EnvyTestCase):
     """Tests for dependency graph construction and validation."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-dep-cache-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-dep-specs-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> Path:
         """Write a spec file with placeholder substitution."""
@@ -86,7 +79,7 @@ class TestEngineDependencyResolution(unittest.TestCase):
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",

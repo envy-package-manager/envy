@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 # --- where a manifest's header ends -------------------------------------------------------
 #
@@ -55,11 +56,11 @@ def _write_project(parent_dir: Path, name: str, content: str) -> Path:
 
 
 @unittest.skipIf(sys.platform == "win32", "bash hook tests require Unix")
-class TestBashHook(unittest.TestCase):
+class TestBashHook(EnvyTestCase):
     """Test bash shell hook behavior by sourcing and invoking _envy_hook."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-bash-hook-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._envy = test_config.get_envy_production_executable()
 
@@ -537,11 +538,11 @@ class TestBashHook(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("zsh"), "zsh not installed")
 @unittest.skipIf(sys.platform == "win32", "zsh hook tests require Unix")
-class TestZshHook(unittest.TestCase):
+class TestZshHook(EnvyTestCase):
     """Test zsh shell hook behavior."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-zsh-hook-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._envy = test_config.get_envy_production_executable()
 
@@ -909,11 +910,11 @@ class TestZshHook(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("fish"), "fish not installed")
 @unittest.skipIf(sys.platform == "win32", "fish hook tests require Unix")
-class TestFishHook(unittest.TestCase):
+class TestFishHook(EnvyTestCase):
     """Test fish shell hook behavior."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-fish-hook-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._envy = test_config.get_envy_production_executable()
 
@@ -1147,7 +1148,7 @@ class TestFishHook(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
-class TestPowerShellHook(unittest.TestCase):
+class TestPowerShellHook(EnvyTestCase):
     """Test PowerShell shell hook behavior."""
 
     @classmethod
@@ -1162,7 +1163,7 @@ class TestPowerShellHook(unittest.TestCase):
     def setUp(self) -> None:
         # .resolve() converts Windows 8.3 short names (RUNNER~1) to long names
         # (runneradmin) so Python paths match PowerShell's Resolve-Path output.
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-pwsh-hook-test-")).resolve()
+        self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
         self._cache_dir = self._temp_dir / "cache"
         self._envy = test_config.get_envy_production_executable()
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 from .trace_parser import TraceParser
 
@@ -186,24 +187,17 @@ end
 """
 
 
-class TestSyncCommand(unittest.TestCase):
+class TestSyncCommand(EnvyTestCase):
     """Tests for 'envy sync' command."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-sync-test-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-sync-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-sync-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return Lua path."""
@@ -434,34 +428,31 @@ PACKAGES = {{
 
     def test_install_respects_cache_root(self):
         """Install respects --cache-root flag."""
-        custom_cache = Path(tempfile.mkdtemp(prefix="envy-sync-custom-cache-"))
-        try:
-            simple_path = self.write_spec("simple", SPEC_SIMPLE)
+        custom_cache = self.make_temp_dir("custom_cache")
+        simple_path = self.write_spec("simple", SPEC_SIMPLE)
 
-            manifest = self.create_manifest(f"""
+        manifest = self.create_manifest(f"""
 PACKAGES = {{
     {{ spec = "local.simple@v1", source = "{simple_path}", setup = {{ "main" }} }},
 }}
 """)
 
-            cmd = [
-                str(self.envy),
-                "--cache-root",
-                str(custom_cache),
-                "install",
-                "--manifest",
-                str(manifest),
-            ]
-            result = test_config.run(
-                cmd, cwd=self.project_root, capture_output=True, text=True
-            )
+        cmd = [
+            str(self.envy),
+            "--cache-root",
+            str(custom_cache),
+            "install",
+            "--manifest",
+            str(manifest),
+        ]
+        result = test_config.run(
+            cmd, cwd=self.project_root, capture_output=True, text=True
+        )
 
-            self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-            simple_cache = custom_cache / "packages" / "local.simple@v1"
-            self.assertTrue(simple_cache.exists())
-        finally:
-            shutil.rmtree(custom_cache, ignore_errors=True)
+        simple_cache = custom_cache / "packages" / "local.simple@v1"
+        self.assertTrue(simple_cache.exists())
 
     def test_sync_empty_manifest(self):
         """Sync with empty manifest succeeds silently."""
@@ -487,24 +478,17 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
 
-class TestSyncProductScripts(unittest.TestCase):
+class TestSyncProductScripts(EnvyTestCase):
     """Tests for product script deployment via 'envy sync'."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-sync-deploy-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-sync-deploy-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-sync-deploy-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return Lua path."""
@@ -1421,23 +1405,16 @@ PACKAGES = {{
         self.assertIn("library", result.stderr)
 
 
-class TestSyncPlatformConstraints(unittest.TestCase):
+class TestSyncPlatformConstraints(EnvyTestCase):
     """Tests for declarative platforms constraints on packages."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-platform-constraint-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-platform-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-platform-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         spec_content = content.format(
@@ -1871,24 +1848,17 @@ PACKAGES = {{
         )
 
 
-class TestSyncDeployDirective(unittest.TestCase):
+class TestSyncDeployDirective(EnvyTestCase):
     """Tests for @envy deploy directive behavior in 'envy sync'."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-deploy-directive-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-deploy-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-deploy-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return Lua path."""
@@ -2039,24 +2009,17 @@ PACKAGES = {{
         self.assertIn("@envy deploy", result.stderr)
 
 
-class TestSyncBootstrap(unittest.TestCase):
+class TestSyncBootstrap(EnvyTestCase):
     """Tests for bootstrap script update via 'envy sync'."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-bootstrap-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-bootstrap-manifest-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-bootstrap-specs-"))
-        self.envy = test_config.get_envy_executable()
-        self.project_root = Path(__file__).parent.parent
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return Lua path."""

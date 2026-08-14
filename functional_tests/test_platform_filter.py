@@ -8,15 +8,14 @@ error, and that deploy (resolve_graph only) still sees all packages.
 import hashlib
 import io
 import platform as py_platform
-import shutil
 import sys
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 from typing import List, Optional
 
 from . import test_config
+from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
@@ -124,24 +123,18 @@ end
 """
 
 
-class PlatformFilterBase(unittest.TestCase):
+class PlatformFilterBase(EnvyTestCase):
     """Shared setUp/tearDown and helpers for platform filter tests."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-platfilter-"))
-        self.test_dir = Path(tempfile.mkdtemp(prefix="envy-platfilter-mf-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-platfilter-sp-"))
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.make_temp_dir("specs_dir")
+        # Some cases here are specifically about the shipped binary's behavior.
         self.envy_main = test_config.get_envy_production_executable()
-        self.project_root = Path(__file__).parent.parent
 
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> str:
         spec_content = content.format(

@@ -9,13 +9,14 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
-class _RunTestBase(unittest.TestCase):
+class _RunTestBase(EnvyTestCase):
     """Shared setUp/tearDown and helpers for envy run tests."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-run-test-")).resolve()
+        self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
         self._envy = test_config.get_envy_executable()
 
         self._project = self._temp_dir / "project"

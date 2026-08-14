@@ -5,12 +5,11 @@ and envy.commit_fetch() moves files to fetch_dir with SHA256 verification.
 """
 
 import os
-import shutil
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 
 # Simple test file content for fetch tests
 SIMPLE_LUA_CONTENT = """-- Simple test script for lua_util tests
@@ -18,23 +17,17 @@ expected_value = 42
 """
 
 
-class TestEngineTwoStepFetch(unittest.TestCase):
+class TestEngineTwoStepFetch(EnvyTestCase):
     """Tests for two-step fetch pattern (ungated fetch → gated commit)."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-two-step-fetch-"))
-        self.test_files_dir = Path(tempfile.mkdtemp(prefix="envy-two-step-files-"))
-        self.envy_test = test_config.get_envy_executable()
-        self.envy = test_config.get_envy_executable()
+        super().setUp()
+        self.test_files_dir = self.make_temp_dir("test_files_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
         # Write test file to temp directory
         self.simple_lua = self.test_files_dir / "simple.lua"
         self.simple_lua.write_text(SIMPLE_LUA_CONTENT, encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.test_files_dir, ignore_errors=True)
 
     @staticmethod
     def lua_path(path: Path) -> str:
@@ -83,7 +76,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",
@@ -148,7 +141,7 @@ end
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 *self.trace_flag,
                 "install",

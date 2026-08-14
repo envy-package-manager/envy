@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
+from .env import EnvyTestCase
 
 
 def _get_envy_version() -> str:
@@ -27,11 +28,11 @@ def _get_envy_version() -> str:
     raise RuntimeError("Could not parse envy version from: " + result.stderr)
 
 
-class TestEnvyInit(unittest.TestCase):
+class TestEnvyInit(EnvyTestCase):
     """Test the envy init command."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-init-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "project" / "tools"
         self._cache_dir = self._temp_dir / "cache"
@@ -402,11 +403,11 @@ class TestEnvyInit(unittest.TestCase):
         self.assertIn("envy-managed", windows_content)
 
 
-class TestSelfDeployment(unittest.TestCase):
+class TestSelfDeployment(EnvyTestCase):
     """Test envy self-deployment on startup."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-self-deploy-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
@@ -541,11 +542,11 @@ class TestSelfDeployment(unittest.TestCase):
         self.assertIn("envy version", result2.stderr)
 
 
-class TestLatestFileGuarding(unittest.TestCase):
+class TestLatestFileGuarding(EnvyTestCase):
     """Test that the 'latest' pointer only advances forward."""
 
     def setUp(self) -> None:
-        self._temp_dir = Path(tempfile.mkdtemp(prefix="envy-latest-test-"))
+        self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"

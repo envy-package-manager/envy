@@ -9,14 +9,13 @@ with B's pipeline, blocking only when A needs to build.
 import hashlib
 import io
 import os
-import shutil
 import subprocess
 import tarfile
-import tempfile
 from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import PkgPhase, TraceParser
 
 # Test archive contents
@@ -79,13 +78,12 @@ SETUP = {{
 """
 
 
-class TestNeededBy(unittest.TestCase):
+class TestNeededBy(EnvyTestCase):
     """Tests for needed_by phase coupling."""
 
     def setUp(self):
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-needed-by-test-"))
-        self.specs_dir = Path(tempfile.mkdtemp(prefix="envy-needed-by-specs-"))
-        self.envy_test = test_config.get_envy_executable()
+        super().setUp()
+        self.specs_dir = self.make_temp_dir("specs_dir")
 
         # Create test archive and get its hash
         self.archive_path = self.specs_dir / "test.tar.gz"
@@ -94,10 +92,6 @@ class TestNeededBy(unittest.TestCase):
         # Write shared specs
         self.write_spec("dep_val_lib.lua", DEP_VAL_LIB_SPEC)
         self.write_spec("simple.lua", SIMPLE_SPEC)
-
-    def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
-        shutil.rmtree(self.specs_dir, ignore_errors=True)
 
     def write_spec(self, name: str, content: str) -> None:
         """Write spec file with placeholder substitution."""
@@ -122,7 +116,7 @@ class TestNeededBy(unittest.TestCase):
         )
         result = test_config.run(
             [
-                str(self.envy_test),
+                str(self.envy),
                 f"--cache-root={self.cache_root}",
                 f"--trace=file:{trace_file}",
                 "install",
