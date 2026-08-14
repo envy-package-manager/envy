@@ -12,16 +12,14 @@
 │   └── {version}/
 │       ├── envy                  # Binary (or envy.exe on Windows)
 │       └── envy.lua              # lua_ls type definitions
-├── specs/                      # Lua sources (declarative and custom fetch)
-│   ├── envy.cmake@v1.lua         # Single-file declarative recipe
-│   ├── arm.gcc@v2.lua
-│   └── corporate.toolchain@v3/   # Multi-file (custom fetch or archive)
-│       ├── envy-complete
-│       ├── recipe.lua            # Entry point (required)
-│       ├── helpers.lua
-│       ├── fetch/                # Durable fetch cache (persists across failures)
-│       │   └── envy-complete     # Marker: all fetches verified
-│       └── work/                 # Ephemeral workspace (wiped each attempt)
+├── specs/                        # Lua sources and bundles (one entry per source)
+│   └── corporate.toolchain@v3/
+│       └── blake3-{source_hash}/ # Keyed on the source, not identity alone
+│           ├── envy-complete     # Written only once the spec loads (see below)
+│           ├── pkg/              # spec.lua, or an unpacked bundle
+│           ├── fetch/            # Durable fetch cache (persists across failures)
+│           │   └── envy-complete # Marker: all fetches verified
+│           └── work/             # Ephemeral workspace (wiped each attempt)
 ├── assets/                       # Asset entries (one per identity/options/platform)
 │   └── {namespace}.{name}@{version}/
 │       └── {platform}-{arch}-sha256-{hash}/
@@ -50,7 +48,7 @@ The `envy/` directory stores envy binaries and their lua_ls type definitions. Bo
 This uses the same locking strategy as recipe/asset installation (see Locking & Workspace Lifecycle below). Multiple concurrent envy instances (parallel CI, multiple terminals) safely coordinate without corruption or duplicate work. Each version is self-contained; deleting `envy/1.2.3/` removes that version completely.
 
 ## Keys
-- **Recipe**: `{namespace}.{name}@{version}.lua` for single-file declarative sources, `{namespace}.{name}@{version}/` for multi-file (custom fetch, archives, git repos). Custom fetch specs always use directory layout with `recipe.lua` entry point.
+- **Spec/bundle**: `{identity}/blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical source — URL + sha256, git URL + ref, or local path. Identity alone would not do: a complete entry is never revalidated, so repointing a spec at a new source must land on a new entry rather than serve the old bytes. A custom fetch function has no fingerprint; its entries key on the declaring file, so editing the function body in place reuses the entry.
 - **Asset**: `{identity}.{platform}-{arch}-sha256-{hash}` where `hash` is the leading 16 hex chars of the archive SHA256; deterministic before download so locks can be acquired early.
 
 ## Locking & Workspace Lifecycle
@@ -117,15 +115,19 @@ The `scoped_entry_lock` destructor handles three distinct completion modes:
 
 ### Spec Fetch
 
-1. **Declarative single-file (first fetch):** miss → lock → download URL to temp → verify SHA256 → move to `specs/{identity}.lua` → touch `envy-complete` (in parent dir logic) → release.
+The entry is finalized last, never at fetch time: `envy-complete` is trusted forever after, so it is written only once the fetched bytes have proven to be a loadable spec declaring the expected identity (a bundle: a parseable manifest whose identity matches and whose specs validate). A throw before that drops the lock uncompleted, the destructor scrubs the entry, and the next run refetches. Marking first would bake a 404 body or a malformed bundle into an entry that fails identically forever.
 
-2. **Declarative git (first fetch):** miss → lock → clone repo to temp → checkout `ref` → extract tree to `specs/{identity}/` → record git ref in `envy-git-ref` → touch `specs/{identity}/envy-complete` → release.
+1. **Declarative URL (first fetch):** miss → lock → download to `pkg/spec.lua` → verify SHA256 if pinned → load spec, check IDENTITY → touch `envy-complete` → release.
 
-3. **Custom fetch (first fetch):** miss → lock → create `specs/{identity}/fetch/` → create temp workspace → call fetch function (ctx.tmp_dir, ctx.fetch, ctx.commit_fetch) → verify each import via SHA256 → copy verified files to `specs/{identity}/` → touch `specs/{identity}/fetch/envy-complete` → touch `specs/{identity}/envy-complete` → release.
+2. **Declarative git (first fetch):** miss → lock → clone into `pkg/` at `ref` → load `pkg/spec.lua`, check IDENTITY → touch `envy-complete` → release.
 
-4. **Concurrent spec fetch:** waiter blocks on lock; when creator finishes, waiter rechecks `envy-complete` and returns path without refetching.
+3. **Custom fetch (first fetch):** miss → lock → call fetch function (ctx.tmp_dir, ctx.fetch, ctx.commit_fetch) → move `fetch/spec.lua` to `pkg/` → load it, check IDENTITY → touch `envy-complete` → release.
 
-5. **Spec collision:** mismatched SHA256 triggers hard failure with instruction to bump spec version.
+4. **Bundle (first fetch):** miss → lock → download/clone/copy into `pkg/` → parse `pkg/envy-bundle.lua`, check BUNDLE identity, validate every declared spec → touch `envy-complete` → release.
+
+5. **Concurrent spec fetch:** waiter blocks on lock; when creator finishes, waiter rechecks `envy-complete` and returns path without refetching.
+
+6. **Source changed:** a new URL, ref, or path hashes to a different entry — a miss, not a stale hit. The old entry stays valid for anyone still declaring the old source.
 
 ### Asset Install
 

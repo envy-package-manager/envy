@@ -2360,3 +2360,132 @@ TEST_CASE("cli_parse: cmd_merge_depot") {
     CHECK(*cfg->retain_prefix == "s3://bucket/");
   }
 }
+
+// The cache-test drivers only exist in binaries built with ENVY_FUNCTIONAL_TESTER;
+// the unit test target defines it so this parsing is covered like any other command.
+#ifdef ENVY_FUNCTIONAL_TESTER
+
+TEST_CASE("cli_parse: cache-test ensure-package") {
+  SUBCASE("all four positionals required") {
+    std::vector<std::string> args{ "envy",   "cache-test", "ensure-package",
+                                   "gcc",    "darwin",     "arm64",
+                                   "deadbeef" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_cache_ensure_package::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->identity == "gcc");
+    CHECK(cfg->platform == "darwin");
+    CHECK(cfg->arch == "arm64");
+    CHECK(cfg->hash_prefix == "deadbeef");
+  }
+
+  SUBCASE("missing positionals are rejected") {
+    std::vector<std::string> args{ "envy", "cache-test", "ensure-package", "gcc" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK(parsed.cli_output.find("Error") != std::string::npos);
+  }
+}
+
+TEST_CASE("cli_parse: cache-test ensure-spec") {
+  SUBCASE("identity only leaves the source key empty") {
+    // Empty means "key on the identity", resolved at execute time so the default
+    // lives in one place rather than being baked into every caller.
+    std::vector<std::string> args{ "envy", "cache-test", "ensure-spec",
+                                   "envy.cmake@v1" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_cache_ensure_spec::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->identity == "envy.cmake@v1");
+    CHECK(cfg->source.empty());
+  }
+
+  SUBCASE("--source carries the cache key input") {
+    std::vector<std::string> args{ "envy",
+                                   "cache-test",
+                                   "ensure-spec",
+                                   "envy.cmake@v1",
+                                   "--source",
+                                   "https://example.com/spec.lua" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_cache_ensure_spec::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->source == "https://example.com/spec.lua");
+  }
+
+  SUBCASE("missing identity is rejected") {
+    std::vector<std::string> args{ "envy", "cache-test", "ensure-spec" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK(parsed.cli_output.find("Error") != std::string::npos);
+  }
+}
+
+TEST_CASE("cli_parse: cache-test choreography options") {
+  SUBCASE("barrier, crash, and failure options land on the cfg") {
+    std::vector<std::string> args{ "envy",
+                                   "cache-test",
+                                   "ensure-spec",
+                                   "envy.cmake@v1",
+                                   "--test-id=abc123",
+                                   "--barrier-dir=/tmp/barriers",
+                                   "--barrier-signal=took-lock",
+                                   "--barrier-wait=go",
+                                   "--barrier-signal-after=done",
+                                   "--barrier-wait-after=released",
+                                   "--crash-after=250",
+                                   "--fail-before-complete" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_cache_ensure_spec::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->test_id == "abc123");
+    CHECK(cfg->barrier_dir == std::filesystem::path{ "/tmp/barriers" });
+    CHECK(cfg->barrier_signal == "took-lock");
+    CHECK(cfg->barrier_wait == "go");
+    CHECK(cfg->barrier_signal_after == "done");
+    CHECK(cfg->barrier_wait_after == "released");
+    CHECK(cfg->crash_after_ms == 250);
+    CHECK(cfg->fail_before_complete);
+  }
+
+  SUBCASE("defaults when no choreography is requested") {
+    std::vector<std::string> args{ "envy", "cache-test", "ensure-package",
+                                   "gcc",  "darwin",     "arm64",
+                                   "deadbeef" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_cache_ensure_package::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->test_id.empty());
+    CHECK(cfg->barrier_dir.empty());
+    CHECK(cfg->crash_after_ms == -1);
+    CHECK_FALSE(cfg->fail_before_complete);
+  }
+}
+
+#endif  // ENVY_FUNCTIONAL_TESTER

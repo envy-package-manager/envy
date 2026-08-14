@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 namespace envy {
 
@@ -1414,6 +1415,172 @@ TEST_CASE("USER_MANAGED with non-boolean non-function type throws") {
 
   CHECK_THROWS_WITH(run_spec_fetch_phase(p, eng),
                     doctest::Contains("must be a boolean or function"));
+}
+
+// ============================================================================
+// Cache-entry finalization
+//
+// A cache entry carrying `envy-complete` is trusted forever after -- nothing
+// revalidates its contents. So a fetch that cannot produce a usable artifact must
+// never finalize its entry, or one bad fetch becomes a permanent failure that no
+// amount of repairing the source can clear. These cover the bundle path; the spec
+// paths (remote/git/custom fetch) share the single finalize point in
+// run_spec_fetch_phase and are covered by functional_tests/test_cache_poisoning.py.
+// ============================================================================
+
+namespace {
+
+pkg_cfg *make_bundle_cfg(std::string const &identity,
+                         std::filesystem::path const &bundle_dir) {
+  pkg_cfg *cfg{ pkg_cfg::pool()->emplace(
+      identity,
+      pkg_cfg::bundle_source{ identity, pkg_cfg::local_source{ bundle_dir } },
+      std::string{ "{}" },
+      std::nullopt,
+      nullptr,
+      nullptr,
+      std::vector<pkg_cfg *>{},
+      std::nullopt,
+      bundle_dir) };
+  cfg->bundle_identity = identity;  // identity == bundle identity => BUNDLE_ONLY
+  return cfg;
+}
+
+struct bundle_entry_fixture {
+  std::filesystem::path root;
+  std::filesystem::path cache_root;
+  std::filesystem::path bundle_dir;
+  std::string identity;
+
+  explicit bundle_entry_fixture(std::string const &label)
+      : root{ std::filesystem::temp_directory_path() / ("envy_test_bundle_entry_" + label) },
+        cache_root{ root / "cache" },
+        bundle_dir{ root / "src" },
+        identity{ "test.bundle-" + label + "@v1" } {
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(bundle_dir / "specs");
+  }
+
+  ~bundle_entry_fixture() { std::filesystem::remove_all(root); }
+
+  // Rewrites the bundle source in place. An empty spec_body writes no spec file,
+  // which is what SPECS-points-at-nothing validation failure needs.
+  void write_source(std::string const &manifest, std::string const &spec_body) {
+    std::filesystem::remove(bundle_dir / "specs" / "a.lua");
+    std::ofstream{ bundle_dir / "envy-bundle.lua" } << manifest;
+    if (!spec_body.empty()) {
+      std::ofstream{ bundle_dir / "specs" / "a.lua" } << spec_body;
+    }
+  }
+
+  std::string valid_manifest() const {
+    return "BUNDLE = \"" + identity +
+           "\"\nSPECS = { [\"test.a@v1\"] = \"specs/a.lua\" }\n";
+  }
+
+  static std::string valid_spec() {
+    return "IDENTITY = \"test.a@v1\"\n"
+           "USER_MANAGED = true\n"
+           "SETUP = { main = { CHECK = 'exit 0', INSTALL = 'echo x' } }\n";
+  }
+
+  // Entries live at specs/<identity>/<source-key>/; a fixture declares exactly one
+  // source, so at most one such directory exists.
+  std::optional<std::filesystem::path> entry_dir() const {
+    std::filesystem::path const parent{ cache_root / "specs" / identity };
+    if (std::filesystem::is_directory(parent)) {
+      for (auto const &e : std::filesystem::directory_iterator{ parent }) {
+        if (e.is_directory()) { return e.path(); }
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool entry_complete() const {
+    auto const dir{ entry_dir() };
+    return dir && cache::is_entry_complete(*dir);
+  }
+
+  bool entry_has(std::string const &relative) const {
+    auto const dir{ entry_dir() };
+    return dir && std::filesystem::exists(*dir / relative);
+  }
+
+  // One materialization attempt against the on-disk cache, in its own engine and
+  // cache objects -- the stand-in for a fresh envy process. Returns the error
+  // message, or an empty string on success.
+  std::string materialize() {
+    cache c{ cache_root };
+    engine eng{ c };
+    pkg *p{ eng.ensure_pkg(make_bundle_cfg(identity, bundle_dir)) };
+    try {
+      run_spec_fetch_phase(p, eng);
+    } catch (std::exception const &e) { return e.what(); }
+    return {};
+  }
+};
+
+}  // namespace
+
+TEST_CASE("valid bundle finalizes its cache entry") {
+  bundle_entry_fixture f{ "ok" };
+  f.write_source(f.valid_manifest(), bundle_entry_fixture::valid_spec());
+
+  CHECK(f.materialize().empty());
+  CHECK(f.entry_complete());
+  CHECK(f.entry_has("pkg/envy-bundle.lua"));
+}
+
+TEST_CASE("unparseable bundle manifest leaves the cache entry unfinalized") {
+  bundle_entry_fixture f{ "parse" };
+  f.write_source("BUNDLE = \"" + f.identity + "\"\nthis is not lua(((\n",
+                 bundle_entry_fixture::valid_spec());
+
+  auto const msg{ f.materialize() };
+  REQUIRE(!msg.empty());
+  CHECK(msg.find("Failed to parse bundle manifest") != std::string::npos);
+  CHECK_FALSE(f.entry_complete());
+  CHECK_FALSE(f.entry_has("pkg"));
+}
+
+TEST_CASE("bundle identity mismatch leaves the cache entry unfinalized") {
+  bundle_entry_fixture f{ "identity" };
+  f.write_source("BUNDLE = \"test.someone-else@v9\"\n"
+                 "SPECS = { [\"test.a@v1\"] = \"specs/a.lua\" }\n",
+                 bundle_entry_fixture::valid_spec());
+
+  auto const msg{ f.materialize() };
+  REQUIRE(!msg.empty());
+  CHECK(msg.find("Bundle identity mismatch") != std::string::npos);
+  CHECK_FALSE(f.entry_complete());
+}
+
+TEST_CASE("bundle whose spec file is missing leaves the cache entry unfinalized") {
+  bundle_entry_fixture f{ "validate" };
+  f.write_source(f.valid_manifest(), "");  // SPECS points at a file that is not there
+
+  auto const msg{ f.materialize() };
+  REQUIRE(!msg.empty());
+  CHECK(msg.find("file not found") != std::string::npos);
+  CHECK_FALSE(f.entry_complete());
+}
+
+TEST_CASE("repairing a bad bundle source clears the failure on the next run") {
+  bundle_entry_fixture f{ "repair" };
+  f.write_source("BUNDLE = \"" + f.identity + "\"\nbroken((\n",
+                 bundle_entry_fixture::valid_spec());
+
+  REQUIRE(!f.materialize().empty());
+  REQUIRE_FALSE(f.entry_complete());
+
+  // Same failure on a second run: the entry is still cold, not a cached error.
+  REQUIRE(!f.materialize().empty());
+  REQUIRE_FALSE(f.entry_complete());
+
+  f.write_source(f.valid_manifest(), bundle_entry_fixture::valid_spec());
+
+  CHECK(f.materialize().empty());
+  CHECK(f.entry_complete());
 }
 
 TEST_CASE("USER_MANAGED=true with FETCH throws (cache-managed phase forbidden)") {

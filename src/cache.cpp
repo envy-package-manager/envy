@@ -1,5 +1,6 @@
 #include "cache.h"
 
+#include "blake3_util.h"
 #include "platform.h"
 #include "trace.h"
 #include "tui.h"
@@ -326,17 +327,20 @@ cache::ensure_result cache::ensure_pkg(std::string_view identity,
   return ensure_entry(*m, entry_dir, m->locks_dir() / lock_name, identity, k);
 }
 
-cache::ensure_result cache::ensure_spec(std::string_view identity) {
+cache::ensure_result cache::ensure_spec(std::string_view identity,
+                                        std::string_view source_key) {
   if (!util_is_safe_path_component(identity)) {
     throw std::runtime_error("cache: invalid spec identity: '" + std::string{ identity } +
                              "'");
   }
+  auto const digest{ blake3_hash(source_key.data(), source_key.size()) };
   std::string const id{ identity };
+  std::string const source_slug{ "blake3-" + util_bytes_to_hex(digest.data(), 8) };
   return ensure_entry(*m,
-                      m->specs_dir() / id,
-                      m->locks_dir() / ("spec." + id + ".lock"),
+                      m->specs_dir() / id / source_slug,
+                      m->locks_dir() / ("spec." + id + "." + source_slug + ".lock"),
                       identity,
-                      id);
+                      id + "-" + source_slug);
 }
 
 cache::envy_ensure_result cache::ensure_envy(std::string_view version) {

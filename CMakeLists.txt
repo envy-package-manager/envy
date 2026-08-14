@@ -532,9 +532,11 @@ set(ENVY_UNIT_TEST_SOURCES
     src/version_tests.cpp
 )
 
+# The test-only cache drivers build here too: their CLI surface is only registered
+# under ENVY_FUNCTIONAL_TESTER, so cli_tests.cpp cannot reach it otherwise.
 add_executable(envy_unit_tests)
-target_sources(envy_unit_tests PRIVATE ${ENVY_BASE_SOURCES} ${ENVY_UNIT_TEST_SOURCES})
-target_compile_definitions(envy_unit_tests PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\" ENVY_UNIT_TEST)
+target_sources(envy_unit_tests PRIVATE ${ENVY_BASE_SOURCES} ${ENVY_FUNCTIONAL_TEST_SOURCES} ${ENVY_UNIT_TEST_SOURCES})
+target_compile_definitions(envy_unit_tests PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\" ENVY_UNIT_TEST ENVY_FUNCTIONAL_TESTER=1)
 target_link_libraries(envy_unit_tests PRIVATE doctest::doctest)
 configure_envy_executable(envy_unit_tests)
 apply_sanitizers(envy_unit_tests)

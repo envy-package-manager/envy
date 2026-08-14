@@ -80,7 +80,12 @@ class cache : unmovable {
                         std::string_view arch,
                         std::string_view hash_prefix) const;
 
-  ensure_result ensure_spec(std::string_view identity);
+  // `source_key` canonically describes where the spec's bytes come from -- URL and
+  // sha256, git URL and ref, local path. It is part of the entry key, so a spec
+  // redeclared against a different source lands in a different entry instead of
+  // silently reusing the old one: a complete entry is never revalidated, and
+  // identity alone does not pin content.
+  ensure_result ensure_spec(std::string_view identity, std::string_view source_key);
 
   struct envy_ensure_result {
     path envy_dir;                            // $CACHE/envy/$VERSION/

@@ -18,6 +18,7 @@ from pathlib import Path
 import unittest
 
 from . import test_config
+from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
 
@@ -88,24 +89,17 @@ class CacheProc:
         return Path(acquired.raw["lock_path"]) if acquired else None
 
 
-class CacheTestBase(unittest.TestCase):
+class CacheTestBase(EnvyTestCase):
     """Spawns cache-test subprocesses with per-test barrier and trace dirs."""
 
     def setUp(self):
         super().setUp()
-        self.cache_root = Path(tempfile.mkdtemp(prefix="envy-cache-test-"))
-        self.envy_test = test_config.get_envy_executable()
         self.test_id = str(uuid.uuid4())
-        self.barrier_dir = Path(
-            tempfile.mkdtemp(prefix=f"envy-barrier-{self.test_id}-")
-        )
+        self.barrier_dir = self.make_temp_dir("barrier_dir")
         # Each test gets its own trace directory, each process gets unique file
-        self.trace_dir = Path(
-            tempfile.mkdtemp(prefix=f"envy-test-trace-{self.test_id}-")
-        ).resolve()
+        self.trace_dir = self.make_temp_dir("trace_dir").resolve()
 
     def tearDown(self):
-        shutil.rmtree(self.cache_root, ignore_errors=True)
         shutil.rmtree(self.barrier_dir, ignore_errors=True)
         shutil.rmtree(self.trace_dir, ignore_errors=True)
         super().tearDown()
@@ -124,7 +118,7 @@ class CacheTestBase(unittest.TestCase):
         """Spawn one cache-test process; returns a CacheProc."""
         trace_file = self.trace_dir / f"proc-{uuid.uuid4()}.jsonl"
         cmd = [
-            str(self.envy_test),
+            str(self.envy),
             f"--cache-root={cache_root or self.cache_root}",
             f"--trace=file:{trace_file}",
             "cache-test",
@@ -461,11 +455,22 @@ class TestLockFileLifecycle(CacheTestBase):
         )
 
     def test_lock_file_naming_spec(self):
-        """Verify spec lock path matches spec.{identity}.lock."""
+        """Spec locks carry the source key, so one identity can hold several."""
         proc = self.run_cache_cmd("ensure-spec", "envy.cmake@v1")
         proc.communicate()
 
-        self.assertEqual(proc.lock_file.name, "spec.envy.cmake@v1.lock")
+        name = proc.lock_file.name
+        self.assertTrue(name.startswith("spec.envy.cmake@v1.blake3-"), name)
+        self.assertTrue(name.endswith(".lock"), name)
+
+    def test_lock_file_naming_spec_differs_by_source(self):
+        """Two sources for one identity take different locks, so neither blocks the other."""
+        first = self.run_cache_cmd("ensure-spec", "envy.cmake@v1", "--source", "url-a")
+        first.communicate()
+        second = self.run_cache_cmd("ensure-spec", "envy.cmake@v1", "--source", "url-b")
+        second.communicate()
+
+        self.assertNotEqual(first.lock_file.name, second.lock_file.name)
 
 
 class TestEdgeCases(CacheTestBase):
@@ -542,23 +547,18 @@ class TestEdgeCases(CacheTestBase):
 
     def test_ensure_with_custom_cache_root(self):
         """Pass custom root to cache constructor, verify all paths relative to custom root."""
-        custom_root = Path(tempfile.mkdtemp(prefix="custom-cache-"))
-        try:
-            proc = self.run_cache_cmd(
-                "ensure-package",
-                "gcc",
-                "darwin",
-                "arm64",
-                "custom1",
-                cache_root=custom_root,
-            )
-            proc.communicate()
+        custom_root = self.make_temp_dir("custom_root")
+        proc = self.run_cache_cmd(
+            "ensure-package",
+            "gcc",
+            "darwin",
+            "arm64",
+            "custom1",
+            cache_root=custom_root,
+        )
+        proc.communicate()
 
-            self.assertTrue(proc.entry_path.is_relative_to(custom_root))
-        finally:
-            shutil.rmtree(custom_root, ignore_errors=True)
-
-
+        self.assertTrue(proc.entry_path.is_relative_to(custom_root))
 class TestSubprocessConcurrency(CacheTestBase):
     """Integration tests with real subprocess spawning."""
 
