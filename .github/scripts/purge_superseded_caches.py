@@ -21,11 +21,22 @@ import os
 import subprocess
 import sys
 
+# Every call here is one REST round trip, so anything slower than this is a stall rather
+# than a slow answer. Without a bound a wedged call would hold the runner until the job's
+# own timeout, which is the opposite of opportunistic.
+GH_TIMEOUT_SECONDS = 60
+
 
 def gh(*args: str) -> subprocess.CompletedProcess:
     """Run gh with the given arguments, capturing output and never raising."""
     try:
-        return subprocess.run(["gh", *args], capture_output=True, text=True)
+        return subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args, 1, "", f"timed out after {GH_TIMEOUT_SECONDS}s"
+        )
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
@@ -52,7 +63,10 @@ def cache_keys(repo: str, ref: str) -> list[str]:
 def purge(repo: str, keys: list[str], prefix: str, keep: str) -> None:
     """Delete every cache under prefix except keep, the one this job just stored."""
     if not keep:
-        print(f"no replacement stored under {prefix}; leaving existing caches alone")
+        print(f"no replacement stored under {prefix or '<unset prefix>'}; nothing to do")
+        return
+    if not prefix:
+        print(f"stored {keep} but its prefix is unset; refusing to guess what to purge")
         return
     for key in keys:
         if not key.startswith(prefix) or key == keep:
@@ -64,14 +78,21 @@ def purge(repo: str, keys: list[str], prefix: str, keep: str) -> None:
 
 
 def main() -> int:
-    repo, ref = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_REF"]
+    # getenv, not indexing: a missing variable must not raise, since a traceback here
+    # would fail an otherwise green job over cache bookkeeping. An absent name reads as
+    # "nothing to purge", and purge() reports the ones that are absent but shouldn't be.
+    repo, ref = os.getenv("GITHUB_REPOSITORY", ""), os.getenv("GITHUB_REF", "")
     targets = [
-        (os.environ["SCCACHE_PREFIX"], os.environ["SCCACHE_KEEP"]),
-        (os.environ["DEPS_PREFIX"], os.environ["DEPS_KEEP"]),
+        (os.getenv("SCCACHE_PREFIX", ""), os.getenv("SCCACHE_KEEP", "")),
+        (os.getenv("DEPS_PREFIX", ""), os.getenv("DEPS_KEEP", "")),
     ]
 
     if not any(keep for _, keep in targets):
         print("this job stored no caches; leaving existing caches alone")
+        return 0
+
+    if not repo or not ref:
+        print("GITHUB_REPOSITORY or GITHUB_REF is unset; skipping purge")
         return 0
 
     keys = cache_keys(repo, ref)

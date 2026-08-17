@@ -151,6 +151,7 @@ jobs:
           fi
 
       - name: Build
+        id: build
         run: |
           BUILD_ARGS="${{ matrix.build_args }}"
           if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
@@ -189,10 +190,16 @@ jobs:
           path: .sccache
           key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
 
+      # Gated on the build rather than on always(), because out/cache is only useful when
+      # complete: a build that dies mid-fetch leaves dependencies unextracted, and storing
+      # that under the current manifest hash would pin a partial tree until the manifests
+      # change. Failing tests are fine to save through -- by then out/cache is populated.
+      # .sccache needs no such gate; it starts from the restored generation, so whatever a
+      # job saves is a superset of what it read even when the build goes red.
       - name: Save third-party downloads
         id: deps-save
         uses: actions/cache/save@v5
-        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true'
+        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         with:
           path: out/cache
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
@@ -278,6 +285,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Build
+        id: build
         shell: powershell
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -319,10 +327,16 @@ jobs:
           path: .sccache
           key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
 
+      # Gated on the build rather than on always(), because out/cache is only useful when
+      # complete: a build that dies mid-fetch leaves dependencies unextracted, and storing
+      # that under the current manifest hash would pin a partial tree until the manifests
+      # change. Failing tests are fine to save through -- by then out/cache is populated.
+      # .sccache needs no such gate; it starts from the restored generation, so whatever a
+      # job saves is a superset of what it read even when the build goes red.
       - name: Save third-party downloads
         id: deps-save
         uses: actions/cache/save@v5
-        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true'
+        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         with:
           path: out/cache
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
