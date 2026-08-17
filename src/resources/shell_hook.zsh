@@ -84,19 +84,25 @@ _envy_set_prompt() {
   _ENVY_PROMPT_ACTIVE=1
   # p10k renders via prompt_envy() segment — skip PROMPT manipulation
   (( ${+functions[p10k]} )) && return
-  PROMPT="${_ENVY_PROMPT_PREFIX}${PROMPT}"
+  if [[ "$PROMPT" != *"${_ENVY_PROMPT_PREFIX}"* ]]; then
+    PROMPT="${_ENVY_PROMPT_PREFIX}${PROMPT}"
+  fi
 }
 
+# Every icon goes, wherever it sits: another decorator may have prepended its own escapes
+# ahead of one, and a shell carrying a stack of them from an older hook still leaves clean.
 _envy_unset_prompt() {
   emulate -L zsh
   if [ "${_ENVY_PROMPT_ACTIVE:-}" != "1" ]; then return; fi
   if ! (( ${+functions[p10k]} )); then
-    PROMPT="${PROMPT#"${_ENVY_PROMPT_PREFIX}"}"
+    PROMPT="${PROMPT//"${_ENVY_PROMPT_PREFIX}"/}"
   fi
   unset _ENVY_PROMPT_ACTIVE
 }
 
-# Runs before each prompt: re-applies raccoon if a theme overwrote PROMPT
+# Runs before each prompt: re-applies raccoon if a theme overwrote PROMPT. Presence, not
+# position -- iTerm2/VS Code precmds re-prepend a prompt mark ahead of the icon whenever
+# PROMPT changes, and an anchored test reads that as "icon gone" once per Enter, forever.
 _envy_precmd() {
   emulate -L zsh
   if [ "${ENVY_SHELL_NO_ICON:-}" = "1" ] || [ "${_ENVY_UTF8:-}" != "1" ]; then
@@ -106,7 +112,7 @@ _envy_precmd() {
   if [ "${_ENVY_PROMPT_ACTIVE:-}" != "1" ]; then return; fi
   # p10k renders via prompt_envy() segment — no PROMPT fixup needed
   (( ${+functions[p10k]} )) && return
-  if [[ "$PROMPT" != "${_ENVY_PROMPT_PREFIX}"* ]]; then
+  if [[ "$PROMPT" != *"${_ENVY_PROMPT_PREFIX}"* ]]; then
     PROMPT="${_ENVY_PROMPT_PREFIX}${PROMPT}"
     # Another precmd overwrote PROMPT — ensure we run last next time
     if [[ "${precmd_functions[-1]}" != "_envy_precmd" ]]; then

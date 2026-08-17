@@ -784,6 +784,57 @@ class TestZshHook(EnvyTestCase):
         self.assertIn("\U0001f99d", result.stdout)
         self.assertIn("THEME>", result.stdout)
 
+    # Stand-in for iTerm2/VS Code shell integration: re-prepend a prompt mark whenever PROMPT
+    # differs from the copy it decorated last. Racing the hook's own precmd is the point.
+    _REDECORATOR = (
+        "_fake_mark_precmd() {\n"
+        '  [[ "$_fake_mark_ps1" == "$PROMPT" ]] && return\n'
+        '  PROMPT="%{MARK%}$PROMPT"\n'
+        '  _fake_mark_ps1="$PROMPT"\n'
+        "}\n"
+        "precmd_functions+=(_fake_mark_precmd)\n"
+    )
+
+    # Re-expands per cycle on purpose: _envy_precmd reorders itself to the end of the array.
+    _PRECMD_CYCLES = 'repeat 5 { for f in $precmd_functions; do "$f"; done }\n'
+
+    def test_raccoon_not_multiplied_by_a_prompt_redecorator(self) -> None:
+        """Exactly one raccoon, however often another precmd re-marks PROMPT."""
+        project = self._make_envy_project("zsh-raccoon-redecorate")
+        result = self._run_zsh_hook_test(
+            self._REDECORATOR + f'PROMPT="$ "\n'
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\n' + self._PRECMD_CYCLES + 'echo "$PROMPT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(1, result.stdout.count("\U0001f99d"))
+
+    def test_leaving_clears_a_stack_of_raccoons(self) -> None:
+        """A PROMPT already carrying icons from an older hook leaves clean, not one short."""
+        project = self._make_envy_project("zsh-raccoon-stacked")
+        result = self._run_zsh_hook_test(
+            f'PROMPT="%{{\U0001f99d%2G%}} %{{\U0001f99d%2G%}} $ "\n'
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\ncd /tmp\n'
+            f'echo "$PROMPT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn("\U0001f99d", result.stdout)
+        self.assertIn("$", result.stdout)
+
+    def test_raccoon_removed_on_leave_when_a_mark_sits_ahead_of_it(self) -> None:
+        """Leaving strips the icon even when another decorator's mark precedes it."""
+        project = self._make_envy_project("zsh-raccoon-redecorate-rm")
+        result = self._run_zsh_hook_test(
+            self._REDECORATOR + f'PROMPT="$ "\n'
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\n' + self._PRECMD_CYCLES + "cd /tmp\n"
+            + self._PRECMD_CYCLES + 'echo "$PROMPT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn("\U0001f99d", result.stdout)
+        self.assertIn("$", result.stdout)
+
     # --- p10k integration ---
 
     def test_p10k_segment_registered(self) -> None:
