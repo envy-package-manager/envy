@@ -809,6 +809,19 @@ class TestZshHook(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertEqual(1, result.stdout.count("\U0001f99d"))
 
+    def test_leaving_clears_a_stack_of_raccoons(self) -> None:
+        """A PROMPT already carrying icons from an older hook leaves clean, not one short."""
+        project = self._make_envy_project("zsh-raccoon-stacked")
+        result = self._run_zsh_hook_test(
+            f'PROMPT="%{{\U0001f99d%2G%}} %{{\U0001f99d%2G%}} $ "\n'
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\ncd /tmp\n'
+            f'echo "$PROMPT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn("\U0001f99d", result.stdout)
+        self.assertIn("$", result.stdout)
+
     def test_raccoon_removed_on_leave_when_a_mark_sits_ahead_of_it(self) -> None:
         """Leaving strips the icon even when another decorator's mark precedes it."""
         project = self._make_envy_project("zsh-raccoon-redecorate-rm")

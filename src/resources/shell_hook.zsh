@@ -89,13 +89,13 @@ _envy_set_prompt() {
   fi
 }
 
-# Icon removed from wherever it sits: another decorator may have prepended its own escapes
-# ahead of it, and an anchored ${PROMPT#...} would leave a raccoon behind on project exit.
+# Every icon goes, wherever it sits: another decorator may have prepended its own escapes
+# ahead of one, and a shell carrying a stack of them from an older hook still leaves clean.
 _envy_unset_prompt() {
   emulate -L zsh
   if [ "${_ENVY_PROMPT_ACTIVE:-}" != "1" ]; then return; fi
   if ! (( ${+functions[p10k]} )); then
-    PROMPT="${PROMPT/"${_ENVY_PROMPT_PREFIX}"/}"
+    PROMPT="${PROMPT//"${_ENVY_PROMPT_PREFIX}"/}"
   fi
   unset _ENVY_PROMPT_ACTIVE
 }
