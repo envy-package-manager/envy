@@ -6,6 +6,22 @@ on:
 env:
   SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
+# GitHub caps a repository at 10 GB of Actions cache and evicts LRU past that. Three
+# conventions below keep this matrix inside the cap; violating any one of them starves
+# every job of its compiler cache and drops hit rates to zero.
+#
+# `cache_group` names the set of compilations a job performs, so jobs that compile the
+# same translation units share one sccache namespace instead of hoarding private copies.
+# Within a group exactly one job sets `cache_writer` — it must be the one whose compile
+# set is a superset of its groupmates' (the shard that builds envy_functional_tester,
+# since that target recompiles ENVY_COMMON_SOURCES with ENVY_FUNCTIONAL_TESTER=1).
+# Readers restore via the shared prefix.
+#
+# `deps_writer` marks the single job per runner.os/runner.arch allowed to save out/cache;
+# the others would race for the same key and lose with "Unable to reserve cache".
+#
+# Saves are confined to refs/heads/main. Tag refs get their own cache scope, so releases
+# would otherwise mint a duplicate copy of every cache they touch.
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -17,54 +33,88 @@ jobs:
             os: ubuntu-latest
             shard: main
             build_args: --no-functional-tester
+            cache_group: linux-x64-none
+            cache_writer: true
+            deps_writer: true
           - name: linux-arm64-main
             os: ubuntu-24.04-arm
             shard: main
             build_args: --no-functional-tester
+            cache_group: linux-arm64-none
+            deps_writer: true
           - name: macos-arm64-main
             os: macos-latest
             shard: main
             build_args: --no-functional-tester
+            cache_group: macos-arm64-none
+            deps_writer: true
           - name: macos-arm64-func
             os: macos-latest
             shard: func-main
+            cache_group: macos-arm64-none
+            cache_writer: true
           - name: macos-x64-main
             os: macos-15-intel
             shard: main
             build_args: --no-functional-tester
+            cache_group: macos-x64-none
+            deps_writer: true
           - name: macos-x64-func
             os: macos-15-intel
             shard: func-main
+            cache_group: macos-x64-none
+            cache_writer: true
           - name: linux-x64-asan
             os: ubuntu-latest
             shard: func-asan
             build_args: --sanitizer=asan
+            cache_group: linux-x64-asan
+            cache_writer: true
           - name: linux-x64-ubsan
             os: ubuntu-latest
             shard: func-ubsan
             build_args: --sanitizer=ubsan
+            cache_group: linux-x64-ubsan
+            cache_writer: true
           - name: linux-x64-tsan
             os: ubuntu-latest
             shard: func-tsan
             build_args: --sanitizer=tsan
+            cache_group: linux-x64-tsan
+            cache_writer: true
           - name: linux-arm64-asan
             os: ubuntu-24.04-arm
             shard: func-asan
             build_args: --sanitizer=asan
+            cache_group: linux-arm64-asan
+            cache_writer: true
           - name: linux-arm64-ubsan
             os: ubuntu-24.04-arm
             shard: func-ubsan
             build_args: --sanitizer=ubsan
+            cache_group: linux-arm64-ubsan
+            cache_writer: true
           - name: linux-arm64-tsan
             os: ubuntu-24.04-arm
             shard: func-tsan
             build_args: --sanitizer=tsan
+            cache_group: linux-arm64-tsan
+            cache_writer: true
+          # Unsanitized build that also produces envy_functional_tester, so it is the
+          # superset writer for linux-arm64-none rather than linux-arm64-main.
           - name: linux-arm64-valgrind
             os: ubuntu-24.04-arm
             shard: func-valgrind
             test_jobs: 1
             test_timeout: 300
+            cache_group: linux-arm64-none
+            cache_writer: true
     runs-on: ${{ matrix.os }}
+    env:
+      # sccache defaults to a 10 GiB local cache and never prunes below it, so a namespace
+      # grows without bound across restore/add/save cycles. Cap it near each group's live
+      # working set instead.
+      SCCACHE_CACHE_SIZE: 500M
     steps:
       - uses: actions/checkout@v5
 
@@ -72,19 +122,21 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Cache third-party downloads
-        uses: actions/cache@v5
+      - name: Restore third-party downloads
+        id: deps-cache
+        uses: actions/cache/restore@v5
         with:
           path: out/cache
           key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
 
       - name: Restore sccache cache
+        id: sccache-cache
         uses: actions/cache/restore@v5
         with:
           path: .sccache
-          key: sccache-${{ matrix.name }}-${{ github.sha }}
-          restore-keys: sccache-${{ matrix.name }}-
+          key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
+          restore-keys: sccache-${{ matrix.cache_group }}-
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -130,11 +182,30 @@ jobs:
           ENVY_TEST_WRAPPER: ${{ matrix.shard == 'func-valgrind' && format('valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions={0}/valgrind.supp', github.workspace) || '' }}
 
       - name: Save sccache cache
+        id: sccache-save
         uses: actions/cache/save@v5
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && matrix.cache_writer && github.ref == 'refs/heads/main'
         with:
           path: .sccache
-          key: sccache-${{ matrix.name }}-${{ github.sha }}
+          key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
+
+      - name: Save third-party downloads
+        id: deps-save
+        uses: actions/cache/save@v5
+        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true'
+        with:
+          path: out/cache
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Purge superseded caches
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCCACHE_PREFIX: sccache-${{ matrix.cache_group }}-
+          SCCACHE_KEEP: ${{ steps.sccache-save.outcome == 'success' && steps.sccache-cache.outputs.cache-primary-key || '' }}
+          DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
+          DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
+        run: python3 .github/scripts/purge_superseded_caches.py
 
       - name: Upload envy artifact
         uses: actions/upload-artifact@v6
@@ -154,20 +225,32 @@ jobs:
             arch: amd64
             shard: main
             build_args: --no-functional-tester
+            cache_group: windows-x64-none
+            deps_writer: true
           - name: windows-x64-func
             os: windows-latest
             arch: amd64
             shard: func-main
+            cache_group: windows-x64-none
+            cache_writer: true
           - name: windows-arm64-main
             os: windows-11-arm
             arch: arm64
             shard: main
             build_args: --no-functional-tester
+            cache_group: windows-arm64-none
+            deps_writer: true
           - name: windows-arm64-func
             os: windows-11-arm
             arch: arm64
             shard: func-main
+            cache_group: windows-arm64-none
+            cache_writer: true
     runs-on: ${{ matrix.os }}
+    env:
+      # MSVC object files are far larger than the Unix toolchains', so these groups need a
+      # higher ceiling than the 500M used above to keep their live working set resident.
+      SCCACHE_CACHE_SIZE: 800M
     steps:
       - uses: actions/checkout@v5
 
@@ -175,19 +258,21 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Cache third-party downloads
-        uses: actions/cache@v5
+      - name: Restore third-party downloads
+        id: deps-cache
+        uses: actions/cache/restore@v5
         with:
           path: out/cache
           key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
 
       - name: Restore sccache cache
+        id: sccache-cache
         uses: actions/cache/restore@v5
         with:
           path: .sccache
-          key: sccache-${{ matrix.name }}-${{ github.sha }}
-          restore-keys: sccache-${{ matrix.name }}-
+          key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
+          restore-keys: sccache-${{ matrix.cache_group }}-
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -227,11 +312,30 @@ jobs:
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
 
       - name: Save sccache cache
+        id: sccache-save
         uses: actions/cache/save@v5
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && matrix.cache_writer && github.ref == 'refs/heads/main'
         with:
           path: .sccache
-          key: sccache-${{ matrix.name }}-${{ github.sha }}
+          key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
+
+      - name: Save third-party downloads
+        id: deps-save
+        uses: actions/cache/save@v5
+        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true'
+        with:
+          path: out/cache
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Purge superseded caches
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCCACHE_PREFIX: sccache-${{ matrix.cache_group }}-
+          SCCACHE_KEEP: ${{ steps.sccache-save.outcome == 'success' && steps.sccache-cache.outputs.cache-primary-key || '' }}
+          DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
+          DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
+        run: py -3.13 .github/scripts/purge_superseded_caches.py
 
       - name: Upload envy artifact
         uses: actions/upload-artifact@v6
