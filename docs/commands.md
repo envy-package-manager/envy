@@ -19,6 +19,13 @@ Logging is per-package narrative. Default (INFO) prints one outcome line per pac
 **`envy version`** — Print envy version and third-party component versions.
 **`envy licenses`** — Emit envy’s license followed by every bundled third-party license; canonical source for compliance exports.
 
+**`envy use <version> [--manifest=...] [--subproject] [--mirror=...] [--pin-sums|--no-pin-sums] [--force]`** — Retarget the manifest's `@envy version` and refresh its `@envy sha256sums` in one step; upgrades and downgrades alike. Splices values into the existing header lines, so comments, indentation and CRLF survive. Reads the header directly instead of loading the manifest—no re-exec, no Lua—so it repairs the state nothing else can: a manifest already naming a version whose pin is stale, which cannot download its own binary. Pinning follows the manifest (pinned stays pinned, unpinned stays unpinned) unless `--pin-sums`/`--no-pin-sums` says otherwise. SHA256SUMS is fetched from the manifest's `@envy mirror` (or `ENVY_MIRROR`, or `--mirror`) even when there is no pin to write—that fetch is what turns a typo'd or unmirrored version into an error here rather than a failed bootstrap elsewhere; `--force` skips it, and is refused when a pin is in play. Network before file: a failed run leaves the manifest byte-for-byte unchanged. A manifest with no `@envy version` is an error, not a conversion—that project floats to `latest` deliberately.
+
+```bash
+envy use 0.1.6                          # root manifest
+cd subproject && envy use 0.1.6 --subproject
+```
+
 ### Package Management
 
 **`envy package <identity> [--manifest=...]`** — Query and install package, print package path. Loads manifest (auto-discovered or via `--manifest`), finds matching spec, installs only that package plus transitive dependencies if not cached, prints absolute path to package directory to stdout. Other manifest packages are not processed. Errors if identity ambiguous (multiple option variants) or programmatic package (no cached artifacts). Exits 0 with path on success, exits 1 with "not found" on failure.
@@ -39,10 +46,8 @@ Logging is per-package narrative. Default (INFO) prints one outcome line per pac
 
 **`envy compress <path> [output]`** — Create archive from file or directory. Format auto-detected from output extension (.tar.gz, .tgz, .tar.xz, .tar.bz2, .tar.zst, .tar, .zip). Defaults to `<basename>.tar.gz` if output not specified.
 
-**`envy hash <path...> [--algorithm=...]`** — Compute and print cryptographic hashes for files and directories. Defaults to SHA256 and BLAKE3; supports sha256, blake3, sha1, md5. Recursively hashes all files in directories. Outputs in format `HASH  filename`.
+**`envy hash <path...> [--prefix=<url>]`** — Print the SHA256 of each path as `HASH  filename`, `sha256sum`-style. A directory contributes its `*.tar.zst` entries, non-recursively—the shape `envy export` writes. `--prefix` prepends a URL prefix to each name, so the output drops straight into a depot manifest.
 
 **`envy git-resolve <url> <ref>`** — Resolve a git ref (tag/branch/sha) in a remote repo to a full commit sha via libgit2's ref advertisement (no clone, no `git` binary); prints the sha to stdout. Prefer fully-qualified refs (`refs/tags/…`, `refs/heads/…`); a bare trailing segment (`v1.5.23`) resolves when unambiguous. Annotated tags peel to their commit; a full 40/64-hex sha is echoed back (lowercased, no network). Turns a mutable tag/branch into an immutable sha to pin in a manifest — resolving once at authoring time, not on every script run.
-
-**`envy hash-verify <file> <expected-hash> [--algorithm=...]`** — Verify file matches expected hash. Algorithm flag required (sha256, blake3, sha1, md5). Exits 0 if match, non-zero otherwise. Useful in scripts/CI.
 
 **`envy lua [script]`** — Execute Lua script with envy's embedded runtime. If no script provided, opens interactive REPL. Exposes envy verbs (`fetch`, `extract`, `hash`) to Lua environment.

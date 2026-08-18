@@ -17,6 +17,7 @@
 #include "cmds/cmd_run.h"
 #include "cmds/cmd_shell.h"
 #include "cmds/cmd_sync.h"
+#include "cmds/cmd_use.h"
 #include "cmds/cmd_version.h"
 #include "envy_release.h"
 
@@ -404,6 +405,91 @@ TEST_CASE("cli_parse: cmd_hash") {
     REQUIRE(cfg != nullptr);
     REQUIRE(cfg->paths.size() == 1);
     CHECK(cfg->paths[0] == temp_dir);
+  }
+}
+
+TEST_CASE("cli_parse: cmd_use") {
+  auto const parse{ [](std::vector<std::string> args) {
+    auto argv{ make_argv(args) };
+    return envy::cli_parse(static_cast<int>(args.size()), argv.data());
+  } };
+
+  SUBCASE("version only") {
+    auto const parsed{ parse({ "envy", "use", "0.1.6" }) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_use::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->version == "0.1.6");
+    CHECK_FALSE(cfg->manifest_path.has_value());
+    CHECK_FALSE(cfg->mirror.has_value());
+    CHECK_FALSE(cfg->subproject);
+    CHECK_FALSE(cfg->pin_sums);
+    CHECK_FALSE(cfg->no_pin_sums);
+    CHECK_FALSE(cfg->force);
+  }
+
+  SUBCASE("missing version rejected") {
+    auto const parsed{ parse({ "envy", "use" }) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("all options") {
+    auto const parsed{ parse({ "envy",
+                               "use",
+                               "1.2.3",
+                               "--manifest",
+                               "/proj/envy.lua",
+                               "--mirror",
+                               "s3://bucket/envy",
+                               "--pin-sums" }) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_use::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->version == "1.2.3");
+    REQUIRE(cfg->manifest_path.has_value());
+    CHECK(*cfg->manifest_path == std::filesystem::path{ "/proj/envy.lua" });
+    REQUIRE(cfg->mirror.has_value());
+    CHECK(*cfg->mirror == "s3://bucket/envy");
+    CHECK(cfg->pin_sums);
+  }
+
+  SUBCASE("--subproject") {
+    auto const parsed{ parse({ "envy", "use", "0.1.6", "--subproject" }) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_use::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->subproject);
+  }
+
+  SUBCASE("--no-pin-sums and --force") {
+    auto const parsed{ parse({ "envy", "use", "0.1.6", "--no-pin-sums", "--force" }) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_use::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->no_pin_sums);
+    CHECK(cfg->force);
+  }
+
+  SUBCASE("--subproject excludes --manifest") {
+    auto const parsed{
+      parse({ "envy", "use", "0.1.6", "--subproject", "--manifest", "/proj/envy.lua" })
+    };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("--pin-sums excludes --no-pin-sums") {
+    auto const parsed{ parse({ "envy", "use", "0.1.6", "--pin-sums", "--no-pin-sums" }) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
   }
 }
 

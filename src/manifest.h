@@ -38,6 +38,20 @@ struct envy_meta {
 // to pin it to.
 envy_meta parse_envy_meta(std::string_view content);
 
+// Where one '@envy' directive sits in the manifest bytes: [value_begin, value_end) spans the
+// bytes between its quotes, [line_begin, line_end) the whole line without its terminator.
+struct envy_directive_span {
+  size_t line_begin{};
+  size_t line_end{};
+  size_t value_begin{};
+  size_t value_end{};
+};
+
+// Locate a header directive by key, sharing parse_envy_meta's grammar and header-end rule.
+// Returns the last match, as parse_envy_meta's assignment does; nullopt if absent.
+std::optional<envy_directive_span> find_envy_directive(std::string_view content,
+                                                       std::string_view key);
+
 struct manifest : unmovable {
   // PACKAGE_DEPOTS entry: plain URI, or FETCH function with optional package
   // DEPENDS (identities resolved against this manifest's PACKAGES).

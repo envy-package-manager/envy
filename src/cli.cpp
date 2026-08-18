@@ -61,6 +61,7 @@ cli_args cli_parse(int argc, char **argv) {
                            cmd_init,
                            cmd_install,
                            cmd_sync,
+                           cmd_use,
                            cmd_deploy,
                            cmd_export,
                            cmd_import,
