@@ -23,8 +23,11 @@
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -48,6 +51,37 @@ TEST_CASE("cli_parse: no arguments") {
 
   // With no arguments, help text returned and no command configuration.
   CHECK_FALSE(parsed.cmd_cfg.has_value());
+}
+
+TEST_CASE("cli_parse: help lists subcommands in sorted order") {
+  // CLI11 prints subcommands in registration order, so only the register_cmds list keeps
+  // `envy --help` alphabetical. This notices a new command appended out of order.
+  std::vector<std::string> args{ "envy", "--help" };
+  auto argv{ make_argv(args) };
+
+  auto const parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+  REQUIRE_FALSE(parsed.cli_output.empty());
+
+  auto const names{ [&parsed] {
+    std::vector<std::string> found;
+    std::istringstream in{ parsed.cli_output };
+    bool subcommands{ false };
+    for (std::string line; std::getline(in, line);) {
+      if (line.starts_with("SUBCOMMANDS:")) {
+        subcommands = true;
+      } else if (subcommands && line.starts_with("  ") && line[2] != ' ') {
+        // A row starts with exactly two spaces; a wrapped description is indented to the
+        // description column, and OPTIONS rows are above the header.
+        found.push_back(line.substr(2, line.find(' ', 2) - 2));
+      }
+    }
+    return found;
+  }() };
+
+  REQUIRE(names.size() >= 20);
+  CHECK(std::ranges::is_sorted(names));
+  CHECK(names.front() == "cache");
+  CHECK(names.back() == "version");
 }
 
 TEST_CASE("cli_parse: cmd_version") {
