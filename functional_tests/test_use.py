@@ -59,6 +59,28 @@ class UseTests(EnvyTestCase):
         self.assertIn("0.1.5", run.stderr)
         self.assertIn("0.1.6", run.stderr)
 
+    def test_points_at_sync_after_a_version_change(self):
+        # Both the bootstrap scripts and .luarc.json are stamped from the running binary's
+        # version, so only the newly pinned envy can restamp them.
+        path = self.manifest('-- @envy version "0.1.5"\n')
+
+        run = self.use(path, "--mirror", self.mirror_url)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertIn("envy sync", run.stderr)
+
+    def test_stays_quiet_about_sync_when_only_the_pin_moved(self):
+        # Same version, stale pin: the scripts and .luarc.json are already correct.
+        path = self.manifest(
+            f'-- @envy version "0.1.6"\n-- @envy sha256sums "{_STALE_PIN}"\n'
+        )
+
+        run = self.use(path, "--mirror", self.mirror_url)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertIn(_FRESH_PIN, path.read_text(encoding="utf-8"))
+        self.assertNotIn("envy sync", run.stderr)
+
     def test_repins_an_already_pinned_manifest(self):
         path = self.manifest(
             f'-- @envy version "0.1.5"\n-- @envy sha256sums "{_STALE_PIN}"\n'

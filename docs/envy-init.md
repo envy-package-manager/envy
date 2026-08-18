@@ -336,6 +336,8 @@ git commit -m "chore: move envy to 1.4.0"
 
 `envy use` reads the manifest header rather than loading the manifest, so it never re-execs. That is what lets it repair a manifest already naming a version whose pin is stale: the pinned binary cannot be downloaded, so no other command can run at all.
 
+**Step 2 is not optional, and the order is load-bearing.** The bootstrap scripts and `.luarc.json` are stamped from the *running* binary's version (`@@ENVY_VERSION@@` in the scripts, `ENVY_VERSION_STR` in the luarc types path), never from `@envy version`. So `envy use` — still the old binary, by design — cannot restamp them without writing the version it is replacing. `sync` and `deploy` re-exec into the newly pinned envy first, and that binary rewrites both: `bootstrap_write_script` per platform, then `update_luarc_types_path`. `envy use` prints a reminder whenever it moves the version.
+
 ---
 
 ### Workflow 4: Pinning to Specific Version

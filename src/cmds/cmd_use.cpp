@@ -226,7 +226,8 @@ void cmd_use::execute() {
 
   // Loud by design. The edit is a durable change to a checked-in file, not a shell-session
   // switch, and the verb invites that misreading.
-  if (*meta.version != cfg_.version) {
+  bool const version_changed{ *meta.version != cfg_.version };
+  if (version_changed) {
     tui::info("%s: @envy version \"%s\" -> \"%s\"",
               name.c_str(),
               meta.version->c_str(),
@@ -237,6 +238,13 @@ void cmd_use::execute() {
               name.c_str(),
               quoted_or_none(meta.sha256sums).c_str(),
               quoted_or_none(sums_hex).c_str());
+  }
+
+  // The bootstrap scripts and .luarc.json are stamped from the *running* binary's version,
+  // so only the newly pinned envy can restamp them -- one re-exec away, on the next sync.
+  if (version_changed) {
+    tui::info("run 'envy sync' to restamp the bootstrap scripts and .luarc.json for %s",
+              cfg_.version.c_str());
   }
 }
 
