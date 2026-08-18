@@ -221,7 +221,7 @@ A mirror moves the trust boundary to whoever ran `envy mirror-envy`: it copies r
 
 ### Attestation (`@envy sha256sums`)
 
-Optional. Manifest pins the hash of the release's `SHA256SUMS`; that file names the archive's hash; the archive is what executes. Pin from `envy init --pin-sums`, or copy what `mirror-envy` prints.
+Optional. Manifest pins the hash of the release's `SHA256SUMS`; that file names the archive's hash; the archive is what executes. Pin from `envy init --pin-sums`, refresh with `envy use <version>`, or copy what `mirror-envy` prints.
 
 ```
 -- @envy version "1.2.3"
@@ -301,14 +301,20 @@ cd my-project
 
 ---
 
-### Workflow 3: Upgrading envy Version
+### Workflow 3: Changing envy Version
 
-Alice wants to upgrade from 1.2.3 to 1.4.0:
+Alice moves from 1.2.3 to 1.4.0:
 
 ```bash
-# 1. Edit manifest
-# Change: -- @envy version "1.2.3"
-# To:     -- @envy version "1.4.0"
+# 1. Retarget the manifest. Rewrites @envy version and, if the project is attested,
+#    refreshes @envy sha256sums from 1.4.0's release -- the pin a hand-edit leaves stale,
+#    which then fails closed on every machine.
+./tools/envy use 1.4.0
+# envy.lua: @envy version "1.2.3" -> "1.4.0"
+# envy.lua: @envy sha256sums "9f86d081..." -> "a3bf4f1b..."
+
+# One call per manifest carrying the directives; a subproject pins its own version.
+(cd subproject && ../tools/envy use 1.4.0 --subproject)
 
 # 2. Run any envy command
 ./tools/envy sync
@@ -316,17 +322,21 @@ Alice wants to upgrade from 1.2.3 to 1.4.0:
 # What happens:
 #   - Bootstrap reads @envy version "1.4.0"
 #   - Checks cache for 1.4.0 → not found
-#   - Downloads envy 1.4.0
+#   - Downloads envy 1.4.0, attests it against the refreshed pin
 #   - Caches at ~/Library/Caches/envy/envy/1.4.0/envy
 #   - Old 1.2.3 remains in cache (no deletion)
 #   - Executes: envy sync
 
 # 3. Commit the change
 git add envy.lua
-git commit -m "chore: upgrade envy to 1.4.0"
+git commit -m "chore: move envy to 1.4.0"
 ```
 
-**Result:** Version upgrade is a one-line manifest change. Old version remains cached (safe rollback).
+**Result:** Version change is one command per manifest, pin included. Direction-neutral—`envy use 1.2.3` walks it back. Old version remains cached (safe rollback).
+
+`envy use` reads the manifest header rather than loading the manifest, so it never re-execs. That is what lets it repair a manifest already naming a version whose pin is stale: the pinned binary cannot be downloaded, so no other command can run at all.
+
+**Step 2 is not optional, and the order is load-bearing.** The bootstrap scripts and `.luarc.json` are stamped from the *running* binary's version (`@@ENVY_VERSION@@` in the scripts, `ENVY_VERSION_STR` in the luarc types path), never from `@envy version`. So `envy use` — still the old binary, by design — cannot restamp them without writing the version it is replacing. `sync` and `deploy` re-exec into the newly pinned envy first, and that binary rewrites both: `bootstrap_write_script` per platform, then `update_luarc_types_path`. `envy use` prints a reminder whenever it moves the version.
 
 ---
 

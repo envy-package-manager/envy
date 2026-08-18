@@ -265,6 +265,7 @@ set(ENVY_BASE_SOURCES
     src/cmds/cmd_run.cpp
     src/cmds/cmd_sync.cpp
     src/cmds/cmd_shell.cpp
+    src/cmds/cmd_use.cpp
     src/cmds/cmd_version.cpp
     src/deploy.cpp
     src/engine.cpp
@@ -494,6 +495,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/cmds/cmd_extract_tests.cpp
     src/cmds/cmd_merge_depot_tests.cpp
     src/cmds/cmd_mirror_envy_tests.cpp
+    src/cmds/cmd_use_tests.cpp
     src/deploy_tests.cpp
     src/luarc_tests.cpp
     src/cmds/cmd_lua_tests.cpp

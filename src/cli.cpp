@@ -57,30 +57,9 @@ cli_args cli_parse(int argc, char **argv) {
     (Ts::register_cli(parent, [&](auto c) { cmd_cfg = c; }), ...);
   } };
 
-  register_cmds.operator()<cmd_version,
-                           cmd_init,
-                           cmd_install,
-                           cmd_sync,
-                           cmd_deploy,
-                           cmd_export,
-                           cmd_import,
-                           cmd_package,
-                           cmd_product,
-                           cmd_shell,
-                           cmd_run,
-                           cmd_extract,
-                           cmd_fetch,
-                           cmd_git_resolve,
-                           cmd_hash,
-                           cmd_lua,
-                           cmd_merge_depot,
-                           cmd_mirror_envy,
-                           cmd_cache
-#ifdef ENVY_FUNCTIONAL_TESTER
-                           ,
-                           cmd_trace_schema
-#endif
-                           >(app);
+  // CLI11 lists subcommands in registration order, so this list is sorted by subcommand
+  // name; split around 'cache-test' to keep it in place. cli_tests enforces the order.
+  register_cmds.operator()<cmd_cache>(app);
 
 #ifdef ENVY_FUNCTIONAL_TESTER
   // Test-only cache drivers get their own parent so the production "cache"
@@ -88,6 +67,29 @@ cli_args cli_parse(int argc, char **argv) {
   register_cmds.operator()<cmd_cache_ensure_package, cmd_cache_ensure_spec>(
       *app.add_subcommand("cache-test", "Drive cache primitives directly (test only)"));
 #endif
+
+  register_cmds.operator()<cmd_deploy,
+                           cmd_export,
+                           cmd_extract,
+                           cmd_fetch,
+                           cmd_git_resolve,
+                           cmd_hash,
+                           cmd_import,
+                           cmd_init,
+                           cmd_install,
+                           cmd_lua,
+                           cmd_merge_depot,
+                           cmd_mirror_envy,
+                           cmd_package,
+                           cmd_product,
+                           cmd_run,
+                           cmd_shell,
+                           cmd_sync,
+#ifdef ENVY_FUNCTIONAL_TESTER
+                           cmd_trace_schema,
+#endif
+                           cmd_use,
+                           cmd_version>(app);
 
   cli_args args{};
 

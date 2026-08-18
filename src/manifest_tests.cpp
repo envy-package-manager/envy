@@ -262,6 +262,65 @@ PACKAGES = {}
   CHECK(*meta.bin == "tools");
 }
 
+// find_envy_directive shares the walk above, so these cases pin only what the span adds:
+// which line a rewriter lands on, and where the value's bytes sit within it.
+
+TEST_CASE("find_envy_directive spans the value inside the quotes") {
+  std::string_view const content{ "-- @envy version \"1.2.3\"\nPACKAGES = {}\n" };
+
+  auto const span{ envy::find_envy_directive(content, "version") };
+
+  REQUIRE(span.has_value());
+  CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "1.2.3");
+  CHECK(content.substr(span->line_begin, span->line_end - span->line_begin) ==
+        "-- @envy version \"1.2.3\"");
+}
+
+TEST_CASE("find_envy_directive returns the last of a repeated directive") {
+  // The lower line is the one every reader sees.
+  std::string_view const content{ "-- @envy bin \"old\"\n-- @envy bin \"new\"\nX = 1\n" };
+
+  auto const span{ envy::find_envy_directive(content, "bin") };
+
+  REQUIRE(span.has_value());
+  CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "new");
+}
+
+TEST_CASE("find_envy_directive keeps a CRLF's carriage return out of the value span") {
+  std::string_view const content{ "-- @envy version \"5.4.3\"\r\nPACKAGES = {}\r\n" };
+
+  auto const span{ envy::find_envy_directive(content, "version") };
+
+  REQUIRE(span.has_value());
+  CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "5.4.3");
+  // The line span does hold the '\r': it ends at the '\n', which is what lets a whole-line
+  // delete take both bytes and an insert land after them.
+  CHECK(content[span->line_end - 1] == '\r');
+  CHECK(content[span->line_end] == '\n');
+}
+
+TEST_CASE("find_envy_directive ignores directives below the first code line") {
+  auto const span{ envy::find_envy_directive("PACKAGES = {}\n-- @envy bin \"tools\"\n",
+                                             "bin") };
+
+  CHECK_FALSE(span.has_value());
+}
+
+TEST_CASE("find_envy_directive spans a header that runs to end of file") {
+  std::string_view const content{ "-- @envy version \"6.5.4\"" };
+
+  auto const span{ envy::find_envy_directive(content, "version") };
+
+  REQUIRE(span.has_value());
+  CHECK(span->line_end == content.size());
+  CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "6.5.4");
+}
+
+TEST_CASE("find_envy_directive returns nullopt for an absent key") {
+  CHECK_FALSE(
+      envy::find_envy_directive("-- @envy version \"1.0\"\n", "sha256sums").has_value());
+}
+
 // load tests -------------------------------------------------
 
 TEST_CASE("manifest::load parses simple string package") {
