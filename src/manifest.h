@@ -39,11 +39,10 @@ struct envy_meta {
 envy_meta parse_envy_meta(std::string_view content);
 
 // Where one '@envy' directive sits in the manifest bytes: [value_begin, value_end) spans
-// the bytes between its quotes, [line_begin, line_end) the whole line without its
-// terminator.
+// the bytes between its quotes, [line_begin, line_end) the line itself.
 struct envy_directive_span {
   size_t line_begin{};
-  size_t line_end{};
+  size_t line_end{};  // index of the '\n' (or EOF): a CRLF line's '\r' is inside the span
   size_t value_begin{};
   size_t value_end{};
 };

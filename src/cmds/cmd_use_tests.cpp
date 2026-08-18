@@ -131,9 +131,8 @@ TEST_CASE("use_rewrite_header inserts with CRLF endings in a CRLF manifest") {
 }
 
 TEST_CASE("use_rewrite_header inserts a pin below a header that runs to end of file") {
-  auto const out{ // no terminator to insert after, so the new line brings its own break
-                  rewrite("-- @envy version \"0.1.5\"", "0.1.6", std::string{ kPin })
-  };
+  // No terminator to insert after, so the new line brings its own leading break.
+  auto const out{ rewrite("-- @envy version \"0.1.5\"", "0.1.6", std::string{ kPin }) };
 
   CHECK(out ==
         "-- @envy version \"0.1.6\"\n-- @envy sha256sums \"" + std::string{ kPin } + "\"");

@@ -277,9 +277,8 @@ TEST_CASE("find_envy_directive spans the value inside the quotes") {
 }
 
 TEST_CASE("find_envy_directive returns the last of a repeated directive") {
-  std::string_view const content{ // the lower line is the one every reader sees
-                                  "-- @envy bin \"old\"\n-- @envy bin \"new\"\nX = 1\n"
-  };
+  // The lower line is the one every reader sees.
+  std::string_view const content{ "-- @envy bin \"old\"\n-- @envy bin \"new\"\nX = 1\n" };
 
   auto const span{ envy::find_envy_directive(content, "bin") };
 
@@ -287,13 +286,15 @@ TEST_CASE("find_envy_directive returns the last of a repeated directive") {
   CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "new");
 }
 
-TEST_CASE("find_envy_directive keeps a CRLF line's terminator out of the spans") {
+TEST_CASE("find_envy_directive keeps a CRLF's carriage return out of the value span") {
   std::string_view const content{ "-- @envy version \"5.4.3\"\r\nPACKAGES = {}\r\n" };
 
   auto const span{ envy::find_envy_directive(content, "version") };
 
   REQUIRE(span.has_value());
   CHECK(content.substr(span->value_begin, span->value_end - span->value_begin) == "5.4.3");
+  // The line span does hold the '\r': it ends at the '\n', which is what lets a whole-line
+  // delete take both bytes and an insert land after them.
   CHECK(content[span->line_end - 1] == '\r');
   CHECK(content[span->line_end] == '\n');
 }
