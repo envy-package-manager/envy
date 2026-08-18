@@ -31,21 +31,24 @@ struct splice {
   std::string text;
 };
 
-// A new pin goes on its own line directly below the version it attests: the header scan stops
-// at the first line of code, so a directive placed anywhere lower is read by nothing.
+// A new pin goes on its own line directly below the version it attests: the header scan
+// stops at the first line of code, so a directive placed anywhere lower is read by
+// nothing.
 splice insert_sums_line(std::string_view content,
                         envy_directive_span const &ver,
                         std::string_view hex) {
   auto const indent{ content.substr(
-      ver.line_begin, content.find_first_not_of(" \t", ver.line_begin) - ver.line_begin) };
+      ver.line_begin,
+      content.find_first_not_of(" \t", ver.line_begin) - ver.line_begin) };
   auto const line{ std::string{ indent } + "-- @envy sha256sums \"" + std::string{ hex } +
                    "\"" };
   auto const eol{ (ver.line_end > ver.line_begin && content[ver.line_end - 1] == '\r')
                       ? std::string_view{ "\r\n" }
                       : std::string_view{ "\n" } };
 
-  // A header running to EOF has no terminator to insert after, so the new line brings its own
-  // leading break -- appending one would leave the pin on the version directive's line.
+  // A header running to EOF has no terminator to insert after, so the new line brings its
+  // own leading break -- appending one would leave the pin on the version directive's
+  // line.
   return ver.line_end >= content.size()
              ? splice{ content.size(), content.size(), std::string{ eol } + line }
              : splice{ ver.line_end + 1, ver.line_end + 1, line + std::string{ eol } };
@@ -57,8 +60,8 @@ std::string quoted_or_none(std::optional<std::string> const &value) {
   return value ? "\"" + *value + "\"" : "(none)";
 }
 
-// The release's SHA256SUMS, hashed -- the value '@envy sha256sums' carries. Must describe the
-// published file byte-for-byte, so fetching it doubles as proof the release exists.
+// The release's SHA256SUMS, hashed -- the value '@envy sha256sums' carries. Must describe
+// the published file byte-for-byte, so fetching it doubles as proof the release exists.
 std::string fetch_sums_hex(std::string const &mirror, std::string const &version) {
   auto const url{ envy_release_sums_url(mirror, version) };
   auto const tmp{ platform::create_unique_temp_dir("envy-use-sums") };
@@ -99,16 +102,18 @@ void cmd_use::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) 
   sub->add_option("--mirror",
                   cfg_ptr->mirror,
                   "Fetch SHA256SUMS from this mirror instead of the manifest's");
-  auto *pin_opt{ sub->add_flag("--pin-sums",
-                               cfg_ptr->pin_sums,
-                               "Add an @envy sha256sums pin even if the manifest has none") };
+  auto *pin_opt{ sub->add_flag(
+      "--pin-sums",
+      cfg_ptr->pin_sums,
+      "Add an @envy sha256sums pin even if the manifest has none") };
   sub->add_flag("--no-pin-sums",
                 cfg_ptr->no_pin_sums,
                 "Drop the @envy sha256sums pin, leaving downloads unattested")
       ->excludes(pin_opt);
-  sub->add_flag("--force",
-                cfg_ptr->force,
-                "Skip the SHA256SUMS fetch that proves the release exists (unpinned only)");
+  sub->add_flag(
+      "--force",
+      cfg_ptr->force,
+      "Skip the SHA256SUMS fetch that proves the release exists (unpinned only)");
   sub->callback(
       [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
 }
@@ -118,7 +123,8 @@ std::string use_rewrite_header(std::string_view content,
                                std::optional<std::string> const &sums_hex) {
   auto const ver{ find_envy_directive(content, "version") };
   if (!ver) {
-    throw std::runtime_error("manifest header has no '@envy version' directive to retarget");
+    throw std::runtime_error(
+        "manifest header has no '@envy version' directive to retarget");
   }
 
   auto edits{ [&, sums{ find_envy_directive(content, "sha256sums") }] {
@@ -139,8 +145,8 @@ std::string use_rewrite_header(std::string_view content,
     return v;
   }() };
 
-  // Highest offset first, so an edit that shifts the bytes after it -- inserting or deleting a
-  // whole line -- cannot invalidate an offset still waiting to be spliced.
+  // Highest offset first, so an edit that shifts the bytes after it -- inserting or
+  // deleting a whole line -- cannot invalidate an offset still waiting to be spliced.
   std::sort(edits.begin(), edits.end(), [](splice const &a, splice const &b) {
     return a.begin > b.begin;
   });
@@ -160,8 +166,9 @@ void cmd_use::execute() {
   }
   if (cfg_.mirror) { envy_release_validate_mirror(*cfg_.mirror, "use"); }
 
-  // Deliberately not cmd_startup_load: re-execing into the version the manifest names is the
-  // one state this repairs, and reading the header leaves broken Lua below it no obstacle.
+  // Deliberately not cmd_startup_load: re-execing into the version the manifest names is
+  // the one state this repairs, and reading the header leaves broken Lua below it no
+  // obstacle.
   auto const path{ manifest::find_manifest_path(cfg_.manifest_path, cfg_.subproject) };
   auto const bytes{ util_load_file(path) };
   std::string_view const content{ reinterpret_cast<char const *>(bytes.data()),
@@ -186,7 +193,8 @@ void cmd_use::execute() {
   if (pin && cfg_.force) {
     throw std::runtime_error(
         "use: --force cannot be combined with a sums pin: the pin's value comes only from "
-        "the release's SHA256SUMS. Drop --force, or pass --no-pin-sums to stop attesting.");
+        "the release's SHA256SUMS. Drop --force, or pass --no-pin-sums to stop "
+        "attesting.");
   }
 
   auto const mirror{ [this, &meta]() -> std::string {
@@ -196,8 +204,9 @@ void cmd_use::execute() {
     return std::string{ kEnvyReleaseDownloadUrl };
   }() };
 
-  // Network before file, so a failed fetch leaves the manifest as it was. Worth doing with no
-  // pin to write: it turns an unpublished version into an error here, not a failed bootstrap.
+  // Network before file, so a failed fetch leaves the manifest as it was. Worth doing with
+  // no pin to write: it turns an unpublished version into an error here, not a failed
+  // bootstrap.
   auto const sums_hex{ [this, &mirror, pin]() -> std::optional<std::string> {
     if (cfg_.force) { return std::nullopt; }
     auto hex{ fetch_sums_hex(mirror, cfg_.version) };

@@ -38,8 +38,9 @@ struct envy_meta {
 // to pin it to.
 envy_meta parse_envy_meta(std::string_view content);
 
-// Where one '@envy' directive sits in the manifest bytes: [value_begin, value_end) spans the
-// bytes between its quotes, [line_begin, line_end) the whole line without its terminator.
+// Where one '@envy' directive sits in the manifest bytes: [value_begin, value_end) spans
+// the bytes between its quotes, [line_begin, line_end) the whole line without its
+// terminator.
 struct envy_directive_span {
   size_t line_begin{};
   size_t line_end{};

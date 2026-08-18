@@ -277,8 +277,8 @@ TEST_CASE("find_envy_directive spans the value inside the quotes") {
 }
 
 TEST_CASE("find_envy_directive returns the last of a repeated directive") {
-  std::string_view const content{  // the lower line is the one every reader sees
-    "-- @envy bin \"old\"\n-- @envy bin \"new\"\nX = 1\n"
+  std::string_view const content{ // the lower line is the one every reader sees
+                                  "-- @envy bin \"old\"\n-- @envy bin \"new\"\nX = 1\n"
   };
 
   auto const span{ envy::find_envy_directive(content, "bin") };

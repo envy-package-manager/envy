@@ -109,8 +109,8 @@ std::optional<directive_line> parse_directive_line(std::string_view line) {
   return directive_line{ key, std::move(*value), value_begin, pos - 1 };
 }
 
-// The one walk over a manifest's '@envy' header. Reading and rewriting both go through it, so
-// a rewriter cannot edit a line the parser does not read.
+// The one walk over a manifest's '@envy' header. Reading and rewriting both go through it,
+// so a rewriter cannot edit a line the parser does not read.
 template <typename fn>
 void scan_envy_header(std::string_view content, fn const &on_directive) {
   for (size_t line_start{ 0 }; line_start < content.size();) {
@@ -357,44 +357,45 @@ std::optional<std::string> const &envy_meta::cache_for_platform() const {
 envy_meta parse_envy_meta(std::string_view content) {
   envy_meta result;
 
-  scan_envy_header(content,
-                   [&result](std::string_view key,
-                             std::string const &value,
-                             envy_directive_span const &) {
-                     if (key == "version") {
-                       result.version = value;
-                     } else if (key == "cache-posix") {
-                       result.cache_posix = value;
-                     } else if (key == "cache-win") {
-                       result.cache_win = value;
-                     } else if (key == "mirror") {
-                       result.mirror = value;
-                     } else if (key == "sha256sums") {
-                       if (!envy_release_sha256_hex_is_valid(value)) {
-                         throw std::runtime_error(
-                             "'@envy sha256sums' must be exactly 64 hex digits (the sha256 "
-                             "of the release's SHA256SUMS file), got: '" +
-                             value + "'");
-                       }
-                       result.sha256sums = value;
-                     } else if (key == "bin" || key == "bin-dir") {
-                       result.bin = value;
-                     } else if (key == "schema") {
-                       try {
-                         if (int const v{ std::stoi(value) }; v >= 1) { result.schema = v; }
-                       } catch (...) {}
-                     } else if (key == "deploy") {
-                       result.deploy = parse_bool_value(value);
-                     } else if (key == "root") {
-                       result.root = parse_bool_value(value);
-                     } else if (key == "package-depot") {
-                       throw std::runtime_error(
-                           "'@envy package-depot' directive removed; declare a "
-                           "PACKAGE_DEPOTS global in the manifest instead, e.g.: "
-                           "PACKAGE_DEPOTS = { \"" +
-                           value + "\" }");
-                     }
-                   });
+  scan_envy_header(
+      content,
+      [&result](std::string_view key,
+                std::string const &value,
+                envy_directive_span const &) {
+        if (key == "version") {
+          result.version = value;
+        } else if (key == "cache-posix") {
+          result.cache_posix = value;
+        } else if (key == "cache-win") {
+          result.cache_win = value;
+        } else if (key == "mirror") {
+          result.mirror = value;
+        } else if (key == "sha256sums") {
+          if (!envy_release_sha256_hex_is_valid(value)) {
+            throw std::runtime_error(
+                "'@envy sha256sums' must be exactly 64 hex digits (the sha256 "
+                "of the release's SHA256SUMS file), got: '" +
+                value + "'");
+          }
+          result.sha256sums = value;
+        } else if (key == "bin" || key == "bin-dir") {
+          result.bin = value;
+        } else if (key == "schema") {
+          try {
+            if (int const v{ std::stoi(value) }; v >= 1) { result.schema = v; }
+          } catch (...) {}
+        } else if (key == "deploy") {
+          result.deploy = parse_bool_value(value);
+        } else if (key == "root") {
+          result.root = parse_bool_value(value);
+        } else if (key == "package-depot") {
+          throw std::runtime_error(
+              "'@envy package-depot' directive removed; declare a "
+              "PACKAGE_DEPOTS global in the manifest instead, e.g.: "
+              "PACKAGE_DEPOTS = { \"" +
+              value + "\" }");
+        }
+      });
 
   // A sums pin names one release's checksum file, so it is meaningless without the version
   // that selects that release: with the version resolved dynamically (cache `latest`, the
@@ -419,13 +420,14 @@ envy_meta parse_envy_meta(std::string_view content) {
 
 std::optional<envy_directive_span> find_envy_directive(std::string_view content,
                                                        std::string_view key) {
-  std::optional<envy_directive_span> found;  // last match wins, as the assignments above do
-  scan_envy_header(content,
-                   [&found, key](std::string_view k,
-                                 std::string const &,
-                                 envy_directive_span const &span) {
-                     if (k == key) { found = span; }
-                   });
+  std::optional<envy_directive_span>
+      found;  // last match wins, as the assignments above do
+  scan_envy_header(
+      content,
+      [&found,
+       key](std::string_view k, std::string const &, envy_directive_span const &span) {
+        if (k == key) { found = span; }
+      });
   return found;
 }
 

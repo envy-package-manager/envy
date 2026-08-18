@@ -12,8 +12,9 @@ namespace CLI { class App; }
 
 namespace envy {
 
-// Retarget '@envy version'; `sums_hex` replaces or inserts the '@envy sha256sums' pin, nullopt
-// drops it. Splices in place, preserving formatting. Throws with no '@envy version' to edit.
+// Retarget '@envy version'; `sums_hex` replaces or inserts the '@envy sha256sums' pin,
+// nullopt drops it. Splices in place, preserving formatting. Throws with no '@envy
+// version' to edit.
 std::string use_rewrite_header(std::string_view content,
                                std::string_view version,
                                std::optional<std::string> const &sums_hex);

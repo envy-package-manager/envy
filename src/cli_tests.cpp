@@ -477,9 +477,8 @@ TEST_CASE("cli_parse: cmd_use") {
   }
 
   SUBCASE("--subproject excludes --manifest") {
-    auto const parsed{
-      parse({ "envy", "use", "0.1.6", "--subproject", "--manifest", "/proj/envy.lua" })
-    };
+    auto const parsed{ parse(
+        { "envy", "use", "0.1.6", "--subproject", "--manifest", "/proj/envy.lua" }) };
 
     CHECK_FALSE(parsed.cmd_cfg.has_value());
     CHECK_FALSE(parsed.cli_output.empty());
