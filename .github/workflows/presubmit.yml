@@ -55,13 +55,18 @@ jobs:
           git push
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
+  # !cancelled() rather than always(): both tolerate format-code being skipped, but a
+  # cancelling run re-evaluates job ifs and always() evaluates true, so this job - the
+  # whole ci matrix - survives the cancel and pins the concurrency group.
   ci:
     needs: format-code
     if: >-
-      always() &&
+      !cancelled() &&
       (needs.format-code.result == 'skipped' || needs.format-code.result == 'success')
     uses: ./.github/workflows/ci.yml
 
+  # Stays on always() so a cancelled run reports this required check red rather than
+  # skipped, which branch protection would count as satisfied.
   all-checks-pass:
     needs: [format-code, ci]
     runs-on: ubuntu-latest
