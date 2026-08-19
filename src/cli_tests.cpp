@@ -219,19 +219,13 @@ TEST_CASE("cli_parse: cmd_extract") {
   }
 
   SUBCASE("repeated --only accumulates and leaves the destination positional") {
-    auto temp_archive{ std::filesystem::temp_directory_path() /
-                       "cli_test_only.tar.gz" };
+    auto temp_archive{ std::filesystem::temp_directory_path() / "cli_test_only.tar.gz" };
     auto temp_dest{ std::filesystem::temp_directory_path() / "cli_test_only_dest" };
     std::ofstream{ temp_archive } << "fake archive\n";
 
-    std::vector<std::string> args{ "envy",
-                                   "extract",
-                                   temp_archive.string(),
-                                   "--only",
-                                   "bin/clang-format",
-                                   "--only",
-                                   "lib/clang",
-                                   temp_dest.string() };
+    std::vector<std::string> args{ "envy",      "extract",          temp_archive.string(),
+                                   "--only",    "bin/clang-format", "--only",
+                                   "lib/clang", temp_dest.string() };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };

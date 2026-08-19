@@ -63,9 +63,9 @@ void cmd_extract::execute() {
             cfg_.archive_path.filename().string().c_str(),
             destination.string().c_str());
 
-  auto const file_count{ extract(cfg_.archive_path,
-                                 destination,
-                                 { .selectors = cfg_.only }) };
+  auto const file_count{
+    extract(cfg_.archive_path, destination, { .selectors = cfg_.only })
+  };
   tui::info("Extracted %llu files", static_cast<unsigned long long>(file_count));
 }
 

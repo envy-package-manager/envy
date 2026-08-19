@@ -276,8 +276,7 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
     // decompression filter actually matched, this is corrupt or misnamed input.
     if (is_raw_stream && bare_name &&
         archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-      throw std::runtime_error(std::string(context) +
-                               ": not a valid compressed stream: " +
+      throw std::runtime_error(std::string(context) + ": not a valid compressed stream: " +
                                archive_path.string());
     }
 
@@ -307,7 +306,7 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
 }
 
 void throw_on_unmatched_selectors(std::vector<std::string> const &unmatched,
-                                 std::string_view context) {
+                                  std::string_view context) {
   if (unmatched.empty()) { return; }
   std::string msg{ std::string(context) +
                    ": 'only' entries matched no archive contents:" };
@@ -490,8 +489,8 @@ std::vector<std::string> extract_normalize_selectors(
                                raw + "\"");
     }
     if (auto const problem{ selector_problem(canonical) }; problem) {
-      throw std::runtime_error(std::string(context) + ": 'only' entry \"" + raw +
-                               "\" " + std::string(*problem));
+      throw std::runtime_error(std::string(context) + ": 'only' entry \"" + raw + "\" " +
+                               std::string(*problem));
     }
     normalized.push_back(std::move(canonical));
   }
@@ -724,9 +723,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     }
 
     // Kept past the pathname rewrite below so hardlink diagnostics can name the entry.
-    std::string const canonical_entry{
-      selectors.empty() ? std::string{} : extract_canonical_match_path(entry_path)
-    };
+    std::string const canonical_entry{ selectors.empty()
+                                           ? std::string{}
+                                           : extract_canonical_match_path(entry_path) };
     if (!selectors.empty() &&
         !extract_selectors_match(selectors, canonical_entry, selector_matched)) {
       continue;  // Not selected: leave it compressed, never touch the disk.
@@ -823,7 +822,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
 
   if (options.require_all_selectors) {
     throw_on_unmatched_selectors(extract_unmatched_selectors(selectors, selector_matched),
-                                "extract " + archive_path.filename().string());
+                                 "extract " + archive_path.filename().string());
   }
 
   // A selector list legitimately yields zero files (directories only, or nothing this
@@ -879,7 +878,7 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
 extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
                                       extract_options const &options) {
   auto const selectors{ extract_normalize_selectors(options.selectors,
-                                                  "compute_archive_totals") };
+                                                    "compute_archive_totals") };
   std::vector<bool> selector_matched(selectors.size(), false);
   extract_totals totals{};
   accumulate_archive_totals(archive_path,
@@ -895,7 +894,7 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
 extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                                       extract_options const &options) {
   auto const selectors{ extract_normalize_selectors(options.selectors,
-                                                  "compute_extract_totals") };
+                                                    "compute_extract_totals") };
   std::vector<bool> selector_matched(selectors.size(), false);
   extract_totals totals{};
   if (!std::filesystem::exists(fetch_dir)) { return totals; }

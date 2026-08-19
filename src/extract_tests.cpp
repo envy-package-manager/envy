@@ -605,8 +605,8 @@ TEST_CASE("extract_glob_match: '**' spans components") {
 
 TEST_CASE("extract_glob_match: pathological patterns terminate without matching") {
   // One saved star per level keeps this linear; a recursive matcher would blow up here.
-  CHECK_FALSE(envy::extract_glob_match("a*a*a*a*a*a*b",
-                                       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  CHECK_FALSE(
+      envy::extract_glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
   CHECK(envy::extract_glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"));
   CHECK_FALSE(envy::extract_glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/j"));
   CHECK(envy::extract_glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/x"));
@@ -695,7 +695,8 @@ TEST_CASE("extract_selectors_match matches files exactly and directories by subt
 
   CHECK(envy::extract_selectors_match(selectors, "bin/clang-format", matched));
   CHECK(envy::extract_selectors_match(selectors, "lib/clang", matched));
-  CHECK(envy::extract_selectors_match(selectors, "lib/clang/19/include/stdatomic.h",
+  CHECK(envy::extract_selectors_match(selectors,
+                                      "lib/clang/19/include/stdatomic.h",
                                       matched));
 
   // Prefix-of-a-name is not a subtree; neither is a parent of a selected entry.
@@ -884,12 +885,12 @@ TEST_CASE("extract_all_archives with glob only spans archive and loose files") {
   { std::ofstream{ fetch_dir / "notes.md", std::ios::binary } << "notes"; }
   { std::ofstream{ fetch_dir / "skipped.bin", std::ios::binary } << "unwanted"; }
 
-  envy::extract_all_archives(fetch_dir,
-                             dest,
-                             { .strip_components = 1,
-                               .selectors = { "**/file4.txt", "*.md" } },
-                             "test.pkg@v1",
-                             envy::tui::kInvalidSection);
+  envy::extract_all_archives(
+      fetch_dir,
+      dest,
+      { .strip_components = 1, .selectors = { "**/file4.txt", "*.md" } },
+      "test.pkg@v1",
+      envy::tui::kInvalidSection);
 
   auto const files{ collect_files_recursive(dest) };
   REQUIRE(files.size() == 2);
@@ -956,9 +957,9 @@ TEST_CASE("compute_archive_totals with only counts only selected entries") {
   auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
 
   envy::extract_totals const all{ envy::compute_archive_totals(archive) };
-  envy::extract_totals const subtree{ envy::compute_archive_totals(
-      archive,
-      { .selectors = { "root/subdir1" } }) };
+  envy::extract_totals const subtree{
+    envy::compute_archive_totals(archive, { .selectors = { "root/subdir1" } })
+  };
 
   CHECK(all.files == 5);
   CHECK(subtree.files == 2);
@@ -987,9 +988,9 @@ TEST_CASE("compute_extract_totals only spans archives and loose files") {
   CHECK(totals.files == 2);
   CHECK(totals.unmatched_selectors.empty());
 
-  envy::extract_totals const missing{ envy::compute_extract_totals(
-      fetch_dir,
-      { .selectors = { "plain.txt", "nope" } }) };
+  envy::extract_totals const missing{
+    envy::compute_extract_totals(fetch_dir, { .selectors = { "plain.txt", "nope" } })
+  };
   REQUIRE(missing.unmatched_selectors.size() == 1);
   CHECK(missing.unmatched_selectors[0] == "nope");
 
@@ -1004,12 +1005,12 @@ TEST_CASE("extract_all_archives with only copies loose files and archive subsets
   { std::ofstream{ fetch_dir / "plain.txt", std::ios::binary } << "hello world"; }
   { std::ofstream{ fetch_dir / "skipped.txt", std::ios::binary } << "unwanted"; }
 
-  envy::extract_all_archives(fetch_dir,
-                             dest,
-                             { .strip_components = 1, .selectors = { "subdir2",
-                                                                   "plain.txt" } },
-                             "test.pkg@v1",
-                             envy::tui::kInvalidSection);
+  envy::extract_all_archives(
+      fetch_dir,
+      dest,
+      { .strip_components = 1, .selectors = { "subdir2", "plain.txt" } },
+      "test.pkg@v1",
+      envy::tui::kInvalidSection);
 
   auto const files{ collect_files_recursive(dest) };
   REQUIRE(files.size() == 2);

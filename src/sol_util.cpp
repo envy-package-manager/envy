@@ -47,8 +47,8 @@ end
 void sol_util_throw_wrong_type(std::string_view context,
                                std::string_view key,
                                std::string_view expected) {
-  throw std::runtime_error(std::string(context) + ": " + std::string(key) +
-                           " must be a " + std::string(expected));
+  throw std::runtime_error(std::string(context) + ": " + std::string(key) + " must be a " +
+                           std::string(expected));
 }
 
 void sol_util_throw_missing(std::string_view context, std::string_view key) {
