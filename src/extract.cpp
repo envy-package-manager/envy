@@ -750,12 +750,24 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
                                  hardlink_str);
       }
       std::filesystem::path const hardlink_path{ destination / hardlink_str };
-      // Hard links need their target on disk; a selector list that takes the link but
-      // not its target would otherwise fail deep inside libarchive.
-      if (!selectors.empty() && !std::filesystem::exists(hardlink_path)) {
-        throw std::runtime_error("extract: \"" + canonical_entry +
-                                 "\" is a hard link to \"" + hardlink_str +
-                                 "\", which 'only' does not select; name it too");
+      // A hard link needs its target on disk. Blame the selectors only when they really
+      // do exclude the target; a selected-but-absent target is an archive ordering
+      // problem, and conflating the two would report the wrong cause. Checking
+      // selectors here must not flag them as matched - the target entry does that.
+      if (!selectors.empty()) {
+        std::string const target{ extract_canonical_match_path(hardlink_str) };
+        if (std::ranges::none_of(selectors, [&](std::string const &selector) {
+              return extract_glob_match(selector, target);
+            })) {
+          throw std::runtime_error("extract: \"" + canonical_entry +
+                                   "\" is a hard link to \"" + target +
+                                   "\", which 'only' does not select; name it too");
+        }
+        if (!std::filesystem::exists(hardlink_path)) {
+          throw std::runtime_error("extract: hard link target \"" + target + "\" for \"" +
+                                   canonical_entry +
+                                   "\" is selected but appears later in the archive");
+        }
       }
       std::string const hardlink_full{ hardlink_path.string() };
       archive_entry_copy_hardlink(entry, hardlink_full.c_str());
