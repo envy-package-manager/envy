@@ -345,6 +345,34 @@ TEST_CASE("sol_util_dump_table shows non-string non-table value types") {
   CHECK(result.find("number") != std::string::npos);
 }
 
+TEST_CASE("sol_util_get_string_list reads arrays and rejects bad entries") {
+  auto lua = envy::sol_util_make_lua_state();
+  lua->script("t = {names = {'a', 'b/c'}, empty = {}, wrong = 'str'}");
+  sol::table t = (*lua)["t"];
+
+  auto const names{ envy::sol_util_get_string_list(t, "names", "test") };
+  REQUIRE(names.size() == 2);
+  CHECK(names[0] == "a");
+  CHECK(names[1] == "b/c");
+
+  CHECK(envy::sol_util_get_string_list(t, "missing", "test").empty());
+  CHECK(envy::sol_util_get_string_list(t, "empty", "test").empty());
+
+  CHECK_THROWS_WITH_AS(envy::sol_util_get_string_list(t, "wrong", "test"),
+                       "test: wrong must be a table",
+                       std::runtime_error);
+
+  lua->script("t.names = {'a', 42}");
+  CHECK_THROWS_WITH_AS(envy::sol_util_get_string_list(t, "names", "ctx"),
+                       "ctx: names[2] must be a non-empty string",
+                       std::runtime_error);
+
+  lua->script("t.names = {''}");
+  CHECK_THROWS_WITH_AS(envy::sol_util_get_string_list(t, "names", "ctx"),
+                       "ctx: names[1] must be a non-empty string",
+                       std::runtime_error);
+}
+
 TEST_CASE("type_name_for_error returns correct names") {
   CHECK(envy::detail::type_name_for_error<bool>() == "boolean");
   CHECK(envy::detail::type_name_for_error<std::string>() == "string");

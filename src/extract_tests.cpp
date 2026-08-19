@@ -488,3 +488,556 @@ TEST_CASE("extract_is_safe_archive_path rejects escape vectors") {
   CHECK_FALSE(envy::extract_is_safe_archive_path("c:/evil"));
 #endif
 }
+
+TEST_CASE("extract_canonical_match_path normalizes separators and decoration") {
+  CHECK(envy::extract_canonical_match_path("bin/clang") == "bin/clang");
+  CHECK(envy::extract_canonical_match_path("bin\\clang") == "bin/clang");
+  CHECK(envy::extract_canonical_match_path("./bin/clang") == "bin/clang");
+  CHECK(envy::extract_canonical_match_path("././bin") == "bin");
+  CHECK(envy::extract_canonical_match_path("bin/") == "bin");
+  CHECK(envy::extract_canonical_match_path("bin///") == "bin");
+  CHECK(envy::extract_canonical_match_path(".\\bin\\") == "bin");
+  CHECK(envy::extract_canonical_match_path("").empty());
+  CHECK(envy::extract_canonical_match_path("./").empty());
+
+  // Repeated separators collapse, so a canonical path never has an empty component.
+  CHECK(envy::extract_canonical_match_path("a//b") == "a/b");
+  CHECK(envy::extract_canonical_match_path("a///b////c") == "a/b/c");
+  CHECK(envy::extract_canonical_match_path("a\\\\b") == "a/b");
+  CHECK(envy::extract_canonical_match_path("a/\\b") == "a/b");
+  CHECK(envy::extract_canonical_match_path(".//a//") == "a");
+}
+
+TEST_CASE("extract_glob_match: literal entries keep exact-or-subtree semantics") {
+  CHECK(envy::extract_glob_match("bin/clang-format", "bin/clang-format"));
+  CHECK(envy::extract_glob_match("bin", "bin"));
+  CHECK(envy::extract_glob_match("bin", "bin/clang"));
+  CHECK(envy::extract_glob_match("lib/clang", "lib/clang/19/include/stdatomic.h"));
+
+  CHECK_FALSE(envy::extract_glob_match("bin/clang-format", "bin/clang-format-diff"));
+  CHECK_FALSE(envy::extract_glob_match("bin/clang-format", "bin"));
+  CHECK_FALSE(envy::extract_glob_match("bin", "binary"));
+  CHECK_FALSE(envy::extract_glob_match("lib/clang", "lib/clangd"));
+  CHECK_FALSE(envy::extract_glob_match("lib/clang", "usr/lib/clang"));
+  CHECK_FALSE(envy::extract_glob_match("a/b/c", "a/b"));
+}
+
+TEST_CASE("extract_glob_match: '*' matches within one component only") {
+  CHECK(envy::extract_glob_match("bin/clang-*", "bin/clang-format"));
+  CHECK(envy::extract_glob_match("bin/clang-*", "bin/clang-tidy"));
+  CHECK(envy::extract_glob_match("bin/*", "bin/clangd"));
+  CHECK(envy::extract_glob_match("*", "bin"));
+  CHECK(envy::extract_glob_match("*/clangd", "bin/clangd"));
+  CHECK(envy::extract_glob_match("*.h", "stdatomic.h"));
+  CHECK(envy::extract_glob_match("lib*", "libclang.so"));
+  CHECK(envy::extract_glob_match("cl*d", "clangd"));
+  CHECK(envy::extract_glob_match("*clang*", "libclang.so"));
+  CHECK(envy::extract_glob_match("clang*", "clang"));  // '*' matches an empty run
+  CHECK(envy::extract_glob_match("**", "a/b/c"));
+  CHECK_FALSE(envy::extract_glob_match("*", ""));  // the archive root is unselectable
+
+  CHECK_FALSE(envy::extract_glob_match("bin/clang-*", "bin/clang"));
+  CHECK_FALSE(envy::extract_glob_match("bin/*.h", "bin/sub/x.h"));  // no '/' crossing
+  CHECK_FALSE(envy::extract_glob_match("a*c", "ab/c"));
+  CHECK_FALSE(envy::extract_glob_match("*.h", "x.hpp"));
+  CHECK_FALSE(envy::extract_glob_match("*.h", "h"));
+  CHECK_FALSE(envy::extract_glob_match("bin/*", "bin"));  // '*' needs a component
+}
+
+TEST_CASE("extract_glob_match: '?' matches exactly one character") {
+  CHECK(envy::extract_glob_match("file?.txt", "file1.txt"));
+  CHECK(envy::extract_glob_match("subdir?", "subdir2"));
+  CHECK(envy::extract_glob_match("??", "ab"));
+  CHECK(envy::extract_glob_match("a?c/d", "abc/d"));
+
+  CHECK_FALSE(envy::extract_glob_match("file?.txt", "file.txt"));
+  CHECK_FALSE(envy::extract_glob_match("file?.txt", "file12.txt"));
+  CHECK_FALSE(envy::extract_glob_match("a?c", "a/c"));  // '?' never matches '/'
+  CHECK_FALSE(envy::extract_glob_match("??", "a"));
+}
+
+TEST_CASE("extract_glob_match: '[...]' character classes") {
+  CHECK(envy::extract_glob_match("file[123].txt", "file2.txt"));
+  CHECK(envy::extract_glob_match("file[0-9].txt", "file7.txt"));
+  CHECK(envy::extract_glob_match("[a-z]*", "clangd"));
+  CHECK(envy::extract_glob_match("[a-cx-z]", "y"));
+  CHECK(envy::extract_glob_match("[!0-9]*", "clangd"));
+  CHECK(envy::extract_glob_match("[^0-9]*", "clangd"));
+  CHECK(envy::extract_glob_match("[a-]", "-"));
+  CHECK(envy::extract_glob_match("[-a]", "-"));
+  CHECK(envy::extract_glob_match("[]]", "]"));
+  CHECK(envy::extract_glob_match("[*]", "*"));  // metacharacters go literal in a class
+  CHECK(envy::extract_glob_match("[?]", "?"));
+  CHECK(envy::extract_glob_match("v[0-9].[0-9]", "v1.2"));
+  CHECK(envy::extract_glob_match("*[0-9]", "file1"));  // class after a backtracking '*'
+
+  CHECK_FALSE(envy::extract_glob_match("file[123].txt", "file4.txt"));
+  CHECK_FALSE(envy::extract_glob_match("file[0-9].txt", "filex.txt"));
+  CHECK_FALSE(envy::extract_glob_match("[!0-9]*", "1clangd"));
+  CHECK_FALSE(envy::extract_glob_match("[^0-9]*", "1clangd"));
+  CHECK_FALSE(envy::extract_glob_match("[*]", "x"));
+  CHECK_FALSE(envy::extract_glob_match("a[/]b", "a/b"));  // classes never span components
+  CHECK_FALSE(envy::extract_glob_match("[a-c]", "d"));
+}
+
+TEST_CASE("extract_glob_match: '**' spans components") {
+  CHECK(envy::extract_glob_match("**/file4.txt", "file4.txt"));
+  CHECK(envy::extract_glob_match("**/file4.txt", "root/file4.txt"));
+  CHECK(envy::extract_glob_match("**/file4.txt", "root/a/b/c/file4.txt"));
+  CHECK(envy::extract_glob_match("root/**", "root"));
+  CHECK(envy::extract_glob_match("root/**", "root/a/b"));
+  CHECK(envy::extract_glob_match("a/**/b", "a/b"));
+  CHECK(envy::extract_glob_match("a/**/b", "a/x/b"));
+  CHECK(envy::extract_glob_match("a/**/b", "a/x/y/b"));
+  CHECK(envy::extract_glob_match("**", "anything/at/all"));
+  CHECK(envy::extract_glob_match("lib/**/include/*.h", "lib/clang/20/include/atomic.h"));
+  CHECK(envy::extract_glob_match("**/x/**/y", "x/y"));
+  CHECK(envy::extract_glob_match("**/x/**/y", "a/b/x/c/d/y"));
+  CHECK(envy::extract_glob_match("**/b/**/c", "b/x/b/y/c"));
+  CHECK(envy::extract_glob_match("**/*.h", "a/b/c.h"));
+
+  CHECK_FALSE(envy::extract_glob_match("a/**/b", "a/x/y/c"));
+  CHECK_FALSE(envy::extract_glob_match("a/**", "ab/c"));
+  CHECK_FALSE(envy::extract_glob_match("**/file4.txt", "root/file4.txt.bak"));
+  CHECK_FALSE(envy::extract_glob_match("**/x/**/y", "x/z"));
+  CHECK_FALSE(envy::extract_glob_match("lib/**/include/*.h", "lib/clang/include/x.hpp"));
+}
+
+TEST_CASE("extract_glob_match: pathological patterns terminate without matching") {
+  // One saved star per level keeps this linear; a recursive matcher would blow up here.
+  CHECK_FALSE(
+      envy::extract_glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  CHECK(envy::extract_glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"));
+  CHECK_FALSE(envy::extract_glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/j"));
+  CHECK(envy::extract_glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/x"));
+  CHECK_FALSE(envy::extract_glob_match("*?*?*?*?*z", "aaaaaaaaaaaaaaaaaaaa"));
+}
+
+TEST_CASE("extract_glob_match: matching is case sensitive on every platform") {
+  CHECK_FALSE(envy::extract_glob_match("bin/Clang", "bin/clang"));
+  CHECK_FALSE(envy::extract_glob_match("*.H", "x.h"));
+  CHECK_FALSE(envy::extract_glob_match("[a-z]", "A"));
+  CHECK(envy::extract_glob_match("[A-Za-z]", "A"));
+}
+
+TEST_CASE("extract_normalize_selectors canonicalizes and rejects unusable entries") {
+  auto const ok{ envy::extract_normalize_selectors({ "./bin/", "lib\\clang" }, "ctx") };
+  REQUIRE(ok.size() == 2);
+  CHECK(ok[0] == "bin");
+  CHECK(ok[1] == "lib/clang");
+
+  for (auto const &bad : { "", ".", "/abs", "../escape", "bin/../../escape" }) {
+    try {
+      envy::extract_normalize_selectors({ bad }, "ctx");
+      FAIL("Expected rejection of 'only' entry: " << bad);
+    } catch (std::runtime_error const &e) {
+      CHECK(std::string{ e.what() }.find("ctx: 'only' entry") != std::string::npos);
+    }
+  }
+}
+
+TEST_CASE("extract_normalize_selectors accepts well-formed glob patterns") {
+  auto const ok{ envy::extract_normalize_selectors(
+      { "bin/clang-*", "lib/**/include/*.h", "[a-z]?[!0-9]", "**", "a/**/b", "[]]" },
+      "ctx") };
+  REQUIRE(ok.size() == 6);
+  CHECK(ok[0] == "bin/clang-*");
+  CHECK(ok[1] == "lib/**/include/*.h");
+  CHECK(ok[2] == "[a-z]?[!0-9]");
+  CHECK(ok[3] == "**");
+  CHECK(ok[4] == "a/**/b");
+  CHECK(ok[5] == "[]]");
+}
+
+TEST_CASE("extract_normalize_selectors rejects malformed glob patterns") {
+  auto const expect_reject{ [](char const *bad, char const *needle) {
+    try {
+      envy::extract_normalize_selectors({ bad }, "ctx");
+      FAIL("Expected rejection of glob pattern: " << bad);
+    } catch (std::runtime_error const &e) {
+      std::string const msg{ e.what() };
+      CHECK(msg.find("ctx: 'only' entry") != std::string::npos);
+      CHECK(msg.find(bad) != std::string::npos);
+      CHECK(msg.find(needle) != std::string::npos);
+    }
+  } };
+
+  for (auto const *bad : { "[", "[abc", "bin/[a-z", "[!abc", "[]", "a[b/c]d" }) {
+    expect_reject(bad, "unterminated '['");
+  }
+  for (auto const *bad : { "a**", "**b", "a**b", "bin/x**/y", "**/a**" }) {
+    expect_reject(bad, "'**' a path component of its own");
+  }
+}
+
+TEST_CASE("extract_selectors_match flags every matching pattern") {
+  std::vector<std::string> const selectors{ "bin/*", "**/*.h", "share" };
+  std::vector<bool> matched;
+
+  CHECK(envy::extract_selectors_match(selectors, "bin/clang", matched));
+  CHECK(envy::extract_selectors_match(selectors, "lib/clang/20/x.h", matched));
+  CHECK_FALSE(envy::extract_selectors_match(selectors, "docs/readme.md", matched));
+
+  auto const unmatched{ envy::extract_unmatched_selectors(selectors, matched) };
+  REQUIRE(unmatched.size() == 1);
+  CHECK(unmatched[0] == "share");
+
+  // One entry satisfying two patterns marks both.
+  std::vector<std::string> const overlap{ "bin/*", "bin/clang" };
+  std::vector<bool> overlap_matched;
+  CHECK(envy::extract_selectors_match(overlap, "bin/clang", overlap_matched));
+  CHECK(envy::extract_unmatched_selectors(overlap, overlap_matched).empty());
+}
+
+TEST_CASE("extract_selectors_match matches files exactly and directories by subtree") {
+  std::vector<std::string> const selectors{ "bin/clang-format", "lib/clang" };
+  std::vector<bool> matched;
+
+  CHECK(envy::extract_selectors_match(selectors, "bin/clang-format", matched));
+  CHECK(envy::extract_selectors_match(selectors, "lib/clang", matched));
+  CHECK(envy::extract_selectors_match(selectors,
+                                      "lib/clang/19/include/stdatomic.h",
+                                      matched));
+
+  // Prefix-of-a-name is not a subtree; neither is a parent of a selected entry.
+  CHECK_FALSE(envy::extract_selectors_match(selectors, "bin/clang-format-diff", matched));
+  CHECK_FALSE(envy::extract_selectors_match(selectors, "bin", matched));
+  CHECK_FALSE(envy::extract_selectors_match(selectors, "lib/clangd", matched));
+  CHECK_FALSE(envy::extract_selectors_match(selectors, "share/man", matched));
+
+  CHECK(envy::extract_unmatched_selectors(selectors, matched).empty());
+}
+
+TEST_CASE("extract_selectors_match flags every matching entry, not just the first") {
+  // Overlapping entries must all count as matched, else a redundant-but-valid selector
+  // list would look unsatisfied.
+  std::vector<std::string> const selectors{ "bin", "bin/clang", "share" };
+  std::vector<bool> matched;
+
+  CHECK(envy::extract_selectors_match(selectors, "bin/clang", matched));
+
+  auto const unmatched{ envy::extract_unmatched_selectors(selectors, matched) };
+  REQUIRE(unmatched.size() == 1);
+  CHECK(unmatched[0] == "share");
+}
+
+TEST_CASE("extract with only takes one named file") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "root/subdir1/nested/file4.txt" } };
+  CHECK(envy::extract(archive, dest, opts) == 1);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 1);
+  CHECK(files[0] == "root/subdir1/nested/file4.txt");
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract with only takes a whole directory subtree") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "root/subdir1" } };
+  CHECK(envy::extract(archive, dest, opts) == 2);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 2);
+  CHECK(files[0] == "root/subdir1/file3.txt");
+  CHECK(files[1] == "root/subdir1/nested/file4.txt");
+  CHECK_FALSE(std::filesystem::exists(dest / "root" / "subdir2"));
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract only entries are matched after strip_components") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .strip_components = 1,
+                                    .selectors = { "subdir2", "file1.txt" } };
+  CHECK(envy::extract(archive, dest, opts) == 2);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 2);
+  CHECK(files[0] == "file1.txt");
+  CHECK(files[1] == "subdir2/file5.txt");
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract only entry with trailing slash and ./ prefix still matches") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "./root/subdir2/" } };
+  CHECK(envy::extract(archive, dest, opts) == 1);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 1);
+  CHECK(files[0] == "root/subdir2/file5.txt");
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract with glob only selects matching entries") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+  std::vector<std::string> only;
+  std::vector<std::string> expected;
+  int strip{ 0 };
+
+  SUBCASE("'*' selects one component") {
+    only = { "root/*.txt" };
+    expected = { "root/file1.txt", "root/file2.txt" };
+  }
+
+  SUBCASE("'*' as an interior component") {
+    only = { "root/*/file3.txt" };
+    expected = { "root/subdir1/file3.txt" };
+  }
+
+  SUBCASE("'**' reaches any depth") {
+    only = { "root/**/file4.txt" };
+    expected = { "root/subdir1/nested/file4.txt" };
+  }
+
+  SUBCASE("'?' selects sibling directories, each with its subtree") {
+    only = { "root/subdir?" };
+    expected = { "root/subdir1/file3.txt",
+                 "root/subdir1/nested/file4.txt",
+                 "root/subdir2/file5.txt" };
+  }
+
+  SUBCASE("character class selects named files") {
+    only = { "root/file[12].txt" };
+    expected = { "root/file1.txt", "root/file2.txt" };
+  }
+
+  SUBCASE("'**' with a trailing pattern takes everything") {
+    only = { "**/*.txt" };
+    expected = { "root/file1.txt",
+                 "root/file2.txt",
+                 "root/subdir1/file3.txt",
+                 "root/subdir1/nested/file4.txt",
+                 "root/subdir2/file5.txt" };
+  }
+
+  SUBCASE("patterns match post-strip paths") {
+    strip = 1;
+    only = { "subdir1/**" };
+    expected = { "subdir1/file3.txt", "subdir1/nested/file4.txt" };
+  }
+
+  SUBCASE("two patterns union") {
+    only = { "root/file1.txt", "root/sub*2/*" };
+    expected = { "root/file1.txt", "root/subdir2/file5.txt" };
+  }
+
+  envy::extract_options const opts{ .strip_components = strip, .selectors = only };
+  CHECK(envy::extract(archive, dest, opts) == expected.size());
+  CHECK(collect_files_recursive(dest) == expected);
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract throws when a glob only entry matches nothing") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "root/*.txt", "root/**/*.md" } };
+
+  try {
+    envy::extract(archive, dest, opts);
+    FAIL("Expected exception for unmatched glob pattern");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("\"root/**/*.md\"") != std::string::npos);
+    CHECK(msg.find("\"root/*.txt\"") == std::string::npos);
+  }
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract rejects a malformed glob before touching the archive") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  for (auto const *bad : { "root/[abc", "root/a**b" }) {
+    try {
+      envy::extract(archive, dest, { .selectors = { bad } });
+      FAIL("Expected exception for malformed glob: " << bad);
+    } catch (std::runtime_error const &e) {
+      CHECK(std::string{ e.what() }.find("extract: 'only' entry") != std::string::npos);
+    }
+  }
+
+  CHECK(collect_files_recursive(dest).empty());
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract_all_archives with glob only spans archive and loose files") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+  { std::ofstream{ fetch_dir / "notes.md", std::ios::binary } << "notes"; }
+  { std::ofstream{ fetch_dir / "skipped.bin", std::ios::binary } << "unwanted"; }
+
+  envy::extract_all_archives(
+      fetch_dir,
+      dest,
+      { .strip_components = 1, .selectors = { "**/file4.txt", "*.md" } },
+      "test.pkg@v1",
+      envy::tui::kInvalidSection);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 2);
+  CHECK(files[0] == "notes.md");
+  CHECK(files[1] == "subdir1/nested/file4.txt");
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("compute_archive_totals with a glob counts only matching entries") {
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  CHECK(envy::compute_archive_totals(archive, { .selectors = { "root/*.txt" } }).files ==
+        2);
+  CHECK(envy::compute_archive_totals(archive, { .selectors = { "**/*.txt" } }).files == 5);
+  CHECK(envy::compute_archive_totals(archive, { .selectors = { "root/subdir?" } }).files ==
+        3);
+
+  auto const missing{ envy::compute_archive_totals(archive,
+                                                   { .selectors = { "root/*.md" } }) };
+  CHECK(missing.files == 0);
+  REQUIRE(missing.unmatched_selectors.size() == 1);
+  CHECK(missing.unmatched_selectors[0] == "root/*.md");
+}
+
+TEST_CASE("extract throws when an only entry matches nothing") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "root/file1.txt", "root/nope" } };
+
+  try {
+    envy::extract(archive, dest, opts);
+    FAIL("Expected exception for unmatched selector");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("test.tar.gz") != std::string::npos);
+    CHECK(msg.find("\"root/nope\"") != std::string::npos);
+    CHECK(msg.find("\"root/file1.txt\"") == std::string::npos);
+  }
+
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract rejects an unusable only entry") {
+  auto const dest{ make_temp_dir() };
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_options const opts{ .selectors = { "../escape" } };
+
+  try {
+    envy::extract(archive, dest, opts);
+    FAIL("Expected exception for traversal in selector");
+  } catch (std::runtime_error const &e) {
+    CHECK(std::string{ e.what() }.find("extract: 'only' entry") != std::string::npos);
+  }
+
+  CHECK(collect_files_recursive(dest).empty());
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("compute_archive_totals with only counts only selected entries") {
+  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+
+  envy::extract_totals const all{ envy::compute_archive_totals(archive) };
+  envy::extract_totals const subtree{
+    envy::compute_archive_totals(archive, { .selectors = { "root/subdir1" } })
+  };
+
+  CHECK(all.files == 5);
+  CHECK(subtree.files == 2);
+  CHECK(subtree.bytes < all.bytes);
+  CHECK(subtree.unmatched_selectors.empty());
+
+  envy::extract_totals const missing{ envy::compute_archive_totals(
+      archive,
+      { .selectors = { "root/subdir1", "root/nope" } }) };
+  REQUIRE(missing.unmatched_selectors.size() == 1);
+  CHECK(missing.unmatched_selectors[0] == "root/nope");
+}
+
+TEST_CASE("compute_extract_totals only spans archives and loose files") {
+  auto const fetch_dir{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+  { std::ofstream{ fetch_dir / "plain.txt", std::ios::binary } << "hello world"; }
+
+  // "plain.txt" comes from the loose file, "root/subdir2" from inside the archive:
+  // neither alone satisfies the list, so the union is what gets validated.
+  envy::extract_totals const totals{ envy::compute_extract_totals(
+      fetch_dir,
+      { .selectors = { "plain.txt", "root/subdir2" } }) };
+
+  CHECK(totals.files == 2);
+  CHECK(totals.unmatched_selectors.empty());
+
+  envy::extract_totals const missing{
+    envy::compute_extract_totals(fetch_dir, { .selectors = { "plain.txt", "nope" } })
+  };
+  REQUIRE(missing.unmatched_selectors.size() == 1);
+  CHECK(missing.unmatched_selectors[0] == "nope");
+
+  std::filesystem::remove_all(fetch_dir);
+}
+
+TEST_CASE("extract_all_archives with only copies loose files and archive subsets") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+  { std::ofstream{ fetch_dir / "plain.txt", std::ios::binary } << "hello world"; }
+  { std::ofstream{ fetch_dir / "skipped.txt", std::ios::binary } << "unwanted"; }
+
+  envy::extract_all_archives(
+      fetch_dir,
+      dest,
+      { .strip_components = 1, .selectors = { "subdir2", "plain.txt" } },
+      "test.pkg@v1",
+      envy::tui::kInvalidSection);
+
+  auto const files{ collect_files_recursive(dest) };
+  REQUIRE(files.size() == 2);
+  CHECK(files[0] == "plain.txt");
+  CHECK(files[1] == "subdir2/file5.txt");
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract_all_archives throws when nothing in the fetch dir matches a selector") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+
+  try {
+    envy::extract_all_archives(fetch_dir,
+                               dest,
+                               { .selectors = { "root/subdir2", "root/nope" } },
+                               "test.pkg@v1",
+                               envy::tui::kInvalidSection);
+    FAIL("Expected exception for unmatched selector");
+  } catch (std::runtime_error const &e) {
+    CHECK(std::string{ e.what() }.find("\"root/nope\"") != std::string::npos);
+  }
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}

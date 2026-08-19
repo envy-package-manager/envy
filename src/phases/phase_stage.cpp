@@ -54,18 +54,19 @@ std::filesystem::path determine_stage_destination(sol::state_view lua,
   return dest_dir;
 }
 
-struct stage_options {
-  int strip_components{ 0 };
-};
-
-stage_options parse_stage_options(sol::table const &stage_tbl, std::string const &key) {
-  stage_options opts;
+extract_options parse_stage_options(sol::table const &stage_tbl, std::string const &key) {
+  extract_options opts;
 
   if (auto strip{ sol_util_get_optional<int>(stage_tbl, "strip", key) }) {
     if (*strip < 0) {
       throw std::runtime_error("stage.strip must be non-negative for " + key);
     }
     opts.strip_components = *strip;
+  }
+
+  opts.selectors = sol_util_get_string_list(stage_tbl, "only", key);
+  if (opts.selectors.empty() && stage_tbl["only"].valid()) {
+    throw std::runtime_error("stage.only must list at least one path for " + key);
   }
 
   return opts;
@@ -132,7 +133,7 @@ void run_stage_phase(pkg *p, engine &eng) {
   platform::await_files_accessible(lock->fetch_dir());
 
   if (!stage_obj.valid()) {
-    extract_all_archives(lock->fetch_dir(), stage_dir, 0, identity, p->tui_section);
+    extract_all_archives(lock->fetch_dir(), stage_dir, {}, identity, p->tui_section);
   } else if (stage_obj.is<std::string>()) {
     auto const script_str{ stage_obj.as<std::string>() };
     run_shell_stage(script_str,
@@ -150,10 +151,9 @@ void run_stage_phase(pkg *p, engine &eng) {
                            eng,
                            p);
   } else if (stage_obj.is<sol::table>()) {
-    stage_options const opts{ parse_stage_options(stage_obj.as<sol::table>(), identity) };
     extract_all_archives(lock->fetch_dir(),
                          stage_dir,
-                         opts.strip_components,
+                         parse_stage_options(stage_obj.as<sol::table>(), identity),
                          identity,
                          p->tui_section);
   } else {

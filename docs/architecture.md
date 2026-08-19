@@ -179,7 +179,7 @@ Specs define verbs describing how to acquire, validate, and install packages:
   - Multiple files: `fetch = {{url="..."}, {url="..."}}` (concurrent, optional verification per-file)
   - Custom function: `FETCH = function(tmp_dir, options) envy.fetch(...) end` (imperative with `envy.fetch()` API)
   - Function returning declarative: `FETCH = function(tmp_dir, options) return "https://..." end` (enables templating with options; return value can be any declarative form: string, table, array; can mix with imperative `envy.fetch()` calls)
-- **`stage`** — Prepare staging area from fetched content. Default extracts archives; custom functions can manipulate source tree.
+- **`stage`** — Prepare staging area from fetched content. Default extracts archives; custom functions can manipulate source tree. Declarative form takes `strip` and `only`—`STAGE = {strip = 1, only = {"bin/clang-*", "lib/**/include/*.h"}}` extracts only matching paths (a directory takes its subtree), matched post-`strip`; the rest of the archive is never decompressed. Globs: `*`/`?` within a component, `**` across, `[a-z]` classes. An `only` entry nothing in the fetch dir provides is a hard error.
 - **`build`** — Compile or process staged content. Specs access staging directory, dependency artifacts, and install directory.
 - **`install`** — Write final artifacts to install directory. On success, envy atomically renames to asset directory and marks complete.
 - **`setup`** — Named host-side CHECK/INSTALL pairs (`SETUP = { name = { CHECK, INSTALL, PLATFORMS?, DEPENDS? } }`). Run after install, check-gated every invocation, never cached or hashed. Explicit-only selection; selected pairs run as parallel tasks. See below.

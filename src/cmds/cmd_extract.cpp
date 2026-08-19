@@ -20,6 +20,11 @@ void cmd_extract::register_cli(CLI::App &app, std::function<void(cfg)> on_select
   sub->add_option("destination",
                   cfg_ptr->destination,
                   "Destination directory (defaults to current directory)");
+  sub->add_option("--only",
+                  cfg_ptr->only,
+                  "Extract only this archive-relative path or glob; a directory takes its "
+                  "whole subtree (repeatable, default: everything)")
+      ->allow_extra_args(false);
   sub->callback(
       [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
 }
@@ -58,7 +63,9 @@ void cmd_extract::execute() {
             cfg_.archive_path.filename().string().c_str(),
             destination.string().c_str());
 
-  auto const file_count{ extract(cfg_.archive_path, destination) };
+  auto const file_count{
+    extract(cfg_.archive_path, destination, { .selectors = cfg_.only })
+  };
   tui::info("Extracted %llu files", static_cast<unsigned long long>(file_count));
 }
 

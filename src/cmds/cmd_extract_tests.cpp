@@ -54,6 +54,16 @@ TEST_CASE("cmd_extract config destination can be empty") {
   CHECK(cfg.destination.empty());
 }
 
+TEST_CASE("cmd_extract config only defaults empty and holds archive-relative paths") {
+  envy::cmd_extract::cfg cfg;
+  CHECK(cfg.only.empty());
+
+  cfg.only = { "bin/clang-format", "lib/clang" };
+  REQUIRE(cfg.only.size() == 2);
+  CHECK(cfg.only[0] == "bin/clang-format");
+  CHECK(cfg.only[1] == "lib/clang");
+}
+
 TEST_CASE("cmd_extract inherits from cmd") {
   CHECK(std::is_base_of_v<envy::cmd, envy::cmd_extract>);
 }

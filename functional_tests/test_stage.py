@@ -155,6 +155,218 @@ STAGE = {{
         self.assertTrue((pkg_path / "file2.txt").exists())
         self.assertTrue((pkg_path / "subdir1" / "file3.txt").exists())
 
+    def test_declarative_only_selects_file_and_subtree(self):
+        """STAGE = {only = {...}} extracts only the named file and directory."""
+        spec = """IDENTITY = "local.stage_only@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{
+  strip = 1,
+  only = {{ "file2.txt", "subdir1/subdir2" }}
+}}
+"""
+        self.write_spec("declarative_only", spec)
+        self.run_spec("declarative_only", "local.stage_only@v1")
+
+        pkg_path = self.get_pkg_path("local.stage_only@v1")
+        assert pkg_path
+
+        # only is matched after strip, so these are post-strip paths.
+        self.assertTrue((pkg_path / "file2.txt").exists())
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file4.txt").exists())
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file5.txt").exists())
+        self.assertFalse((pkg_path / "file1.txt").exists())
+        self.assertFalse((pkg_path / "subdir1" / "file3.txt").exists())
+
+    def test_declarative_only_unmatched_fails(self):
+        """An 'only' entry no archive provides fails the stage phase."""
+        spec = """IDENTITY = "local.stage_only_bad@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{
+  strip = 1,
+  only = {{ "file2.txt", "nope/missing.txt" }}
+}}
+"""
+        self.write_spec("declarative_only_bad", spec)
+        result = self.run_spec(
+            "declarative_only_bad", "local.stage_only_bad@v1", should_succeed=False
+        )
+
+        self.assertIn("nope/missing.txt", result.stdout + result.stderr)
+
+    def test_declarative_only_glob(self):
+        """STAGE only accepts glob patterns, matched post-strip."""
+        spec = """IDENTITY = "local.stage_only_glob@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{
+  strip = 1,
+  only = {{ "file[12].txt", "subdir1/**/file4.txt" }}
+}}
+"""
+        self.write_spec("declarative_only_glob", spec)
+        self.run_spec("declarative_only_glob", "local.stage_only_glob@v1")
+
+        pkg_path = self.get_pkg_path("local.stage_only_glob@v1")
+        assert pkg_path
+
+        self.assertTrue((pkg_path / "file1.txt").exists())
+        self.assertTrue((pkg_path / "file2.txt").exists())
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file4.txt").exists())
+        self.assertFalse((pkg_path / "subdir1" / "file3.txt").exists())
+        self.assertFalse((pkg_path / "subdir1" / "subdir2" / "file5.txt").exists())
+
+    def test_declarative_only_glob_unmatched_fails(self):
+        """A glob pattern matching nothing fails the stage phase."""
+        spec = """IDENTITY = "local.stage_glob_unmatched@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{ strip = 1, only = {{ "*.md" }} }}
+"""
+        self.write_spec("declarative_glob_unmatched", spec)
+        result = self.run_spec(
+            "declarative_glob_unmatched",
+            "local.stage_glob_unmatched@v1",
+            should_succeed=False,
+        )
+
+        self.assertIn("*.md", result.stdout + result.stderr)
+
+    def test_declarative_only_glob_malformed_fails(self):
+        """A malformed glob pattern fails the stage phase with a clear message."""
+        spec = """IDENTITY = "local.stage_glob_malformed@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{ strip = 1, only = {{ "file[12.txt" }} }}
+"""
+        self.write_spec("declarative_glob_malformed", spec)
+        result = self.run_spec(
+            "declarative_glob_malformed",
+            "local.stage_glob_malformed@v1",
+            should_succeed=False,
+        )
+
+        self.assertIn("unterminated '['", result.stdout + result.stderr)
+
+    def test_declarative_only_empty_fails(self):
+        """An empty 'only' list is an authoring mistake, not "extract everything"."""
+        spec = """IDENTITY = "local.stage_only_empty@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = {{ only = {{}} }}
+"""
+        self.write_spec("declarative_only_empty", spec)
+        result = self.run_spec(
+            "declarative_only_empty",
+            "local.stage_only_empty@v1",
+            should_succeed=False,
+        )
+
+        self.assertIn("only must list at least one path", result.stdout + result.stderr)
+
+    def test_imperative_extract_all_only(self):
+        """envy.extract_all honors only, so opts can drive the selection."""
+        spec = """IDENTITY = "local.stage_only_fn@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+OPTIONS = {{ files = {{ required = true, type = "list" }} }}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  envy.extract_all(fetch_dir, stage_dir, {{ strip = 1, only = options.files }})
+end
+
+INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
+  for _, f in ipairs(options.files) do
+    envy.copy(envy.path.join(stage_dir, f), envy.path.join(install_dir, f))
+  end
+end
+"""
+        self.write_spec("imperative_only", spec)
+        manifest = test_config.write_spec_manifest(
+            self.test_dir,
+            [
+                test_config.spec_entry(
+                    "local.stage_only_fn@v1",
+                    self.test_dir / "imperative_only.lua",
+                    options='{ files = { "file1.txt" } }',
+                )
+            ],
+        )
+        result = test_config.run(
+            [
+                str(self.envy),
+                f"--cache-root={self.cache_root}",
+                *self.trace_flag,
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"install failed: {result.stderr}")
+
+        pkg_path = self.get_pkg_path("local.stage_only_fn@v1")
+        assert pkg_path
+
+        self.assertTrue((pkg_path / "file1.txt").exists())
+        self.assertFalse((pkg_path / "file2.txt").exists())
+
+    def test_imperative_extract_glob_only(self):
+        """envy.extract honors glob only on a single archive."""
+        spec = """IDENTITY = "local.stage_extract_glob@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  local n = envy.extract(fetch_dir .. "/test.tar.gz", stage_dir,
+    {{ strip = 1, only = {{ "**/file[45].txt" }} }})
+  if n ~= 2 then error("expected 2 files, got " .. tostring(n)) end
+end
+"""
+        self.write_spec("imperative_extract_glob", spec)
+        self.run_spec("imperative_extract_glob", "local.stage_extract_glob@v1")
+
+        pkg_path = self.get_pkg_path("local.stage_extract_glob@v1")
+        assert pkg_path
+
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file4.txt").exists())
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file5.txt").exists())
+        self.assertFalse((pkg_path / "file1.txt").exists())
+        self.assertFalse((pkg_path / "subdir1" / "file3.txt").exists())
+
     def test_imperative_extract_all(self):
         """Spec with stage function using envy.extract_all works."""
         # Imperative stage using envy.extract_all with strip option

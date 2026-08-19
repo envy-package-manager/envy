@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace envy {
 
@@ -71,35 +72,14 @@ constexpr std::string_view type_name_for_error() {
 
 }  // namespace detail
 
-inline std::string sol_util_dump_table(sol::table const &tbl) {
-  std::string result{ "{" };
-  bool first{ true };
-  for (auto const &pair : tbl) {
-    if (!first) { result += ", "; }
-    first = false;
+// Render a table as "{k=v, ...}" for diagnostics; string values over 40 chars elide.
+std::string sol_util_dump_table(sol::table const &tbl);
 
-    if (pair.first.is<std::string>()) {
-      result += pair.first.as<std::string>();
-    } else if (pair.first.is<int>()) {
-      result += "[" + std::to_string(pair.first.as<int>()) + "]";
-    } else {
-      result += "?";
-    }
-
-    result += "=";
-    if (pair.second.is<std::string>()) {
-      std::string val{ pair.second.as<std::string>() };
-      if (val.size() > 40) { val = val.substr(0, 37) + "..."; }
-      result += "\"" + val + "\"";
-    } else if (pair.second.is<sol::table>()) {
-      result += "{...}";
-    } else {
-      result += sol::type_name(pair.first.lua_state(), pair.second.get_type());
-    }
-  }
-  result += "}";
-  return result;
-}
+// Out of line so the message building never lands in a template instantiation.
+[[noreturn]] void sol_util_throw_wrong_type(std::string_view context,
+                                            std::string_view key,
+                                            std::string_view expected);
+[[noreturn]] void sol_util_throw_missing(std::string_view context, std::string_view key);
 
 template <typename T>
 std::optional<T> sol_util_get_optional(sol::table const &table,
@@ -111,9 +91,7 @@ std::optional<T> sol_util_get_optional(sol::table const &table,
   }
 
   if (!obj->is<T>()) {
-    throw std::runtime_error(std::string(context) + ": " + std::string(key) +
-                             " must be a " +
-                             std::string(detail::type_name_for_error<T>()));
+    sol_util_throw_wrong_type(context, key, detail::type_name_for_error<T>());
   }
 
   return obj->as<T>();
@@ -125,14 +103,11 @@ T sol_util_get_required(sol::table const &table,
                         std::string_view context) {
   sol::optional<sol::object> obj = table[key];
   if (!obj || !obj->valid() || obj->get_type() == sol::type::lua_nil) {
-    throw std::runtime_error(std::string(context) + ": " + std::string(key) +
-                             " is required");
+    sol_util_throw_missing(context, key);
   }
 
   if (!obj->is<T>()) {
-    throw std::runtime_error(std::string(context) + ": " + std::string(key) +
-                             " must be a " +
-                             std::string(detail::type_name_for_error<T>()));
+    sol_util_throw_wrong_type(context, key, detail::type_name_for_error<T>());
   }
 
   return obj->as<T>();
@@ -146,5 +121,11 @@ T sol_util_get_or_default(sol::table const &table,
   auto opt{ sol_util_get_optional<T>(table, key, context) };
   return opt.value_or(default_value);
 }
+
+// Read an optional array-of-strings field; empty when the key is absent. Throws when
+// the value isn't a table or holds anything but non-empty strings.
+std::vector<std::string> sol_util_get_string_list(sol::table const &table,
+                                                  std::string_view key,
+                                                  std::string_view context);
 
 }  // namespace envy
