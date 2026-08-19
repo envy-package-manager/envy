@@ -199,6 +199,54 @@ TEST_CASE("cli_parse: cmd_extract") {
     REQUIRE(cfg != nullptr);
     CHECK(cfg->archive_path == temp_archive);
   }
+
+  SUBCASE("only defaults to empty") {
+    auto temp_archive{ std::filesystem::temp_directory_path() /
+                       "cli_test_no_only.tar.gz" };
+    std::ofstream{ temp_archive } << "fake archive\n";
+
+    std::vector<std::string> args{ "envy", "extract", temp_archive.string() };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    std::filesystem::remove(temp_archive);
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_extract::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->only.empty());
+  }
+
+  SUBCASE("repeated --only accumulates and leaves the destination positional") {
+    auto temp_archive{ std::filesystem::temp_directory_path() /
+                       "cli_test_only.tar.gz" };
+    auto temp_dest{ std::filesystem::temp_directory_path() / "cli_test_only_dest" };
+    std::ofstream{ temp_archive } << "fake archive\n";
+
+    std::vector<std::string> args{ "envy",
+                                   "extract",
+                                   temp_archive.string(),
+                                   "--only",
+                                   "bin/clang-format",
+                                   "--only",
+                                   "lib/clang",
+                                   temp_dest.string() };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    std::filesystem::remove(temp_archive);
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_extract::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->archive_path == temp_archive);
+    CHECK(cfg->destination == temp_dest);
+    REQUIRE(cfg->only.size() == 2);
+    CHECK(cfg->only[0] == "bin/clang-format");
+    CHECK(cfg->only[1] == "lib/clang");
+  }
 }
 
 TEST_CASE("cli_parse: cmd_fetch") {

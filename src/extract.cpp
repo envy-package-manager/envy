@@ -16,10 +16,26 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
 namespace envy {
+
+// Selector matching lives here and in extract_tests.cpp only, so extract.h publishes it
+// under ENVY_UNIT_TEST alone; these declarations serve the helpers below.
+std::string extract_canonical_match_path(std::string_view path);
+std::vector<std::string> extract_normalize_selectors(
+    std::vector<std::string> const &selectors,
+    std::string_view context);
+bool extract_glob_match(std::string_view pattern, std::string_view entry_path);
+bool extract_selectors_match(std::vector<std::string> const &selectors,
+                             std::string_view entry_path,
+                             std::vector<bool> &matched);
+std::vector<std::string> extract_unmatched_selectors(
+    std::vector<std::string> const &selectors,
+    std::vector<bool> const &matched);
+
 namespace {
 
 struct archive_reader : unmovable {
@@ -108,6 +124,195 @@ std::vector<std::string> collect_extract_items(std::filesystem::path const &fetc
     items.push_back(entry.path().filename().string());
   }
   return items;
+}
+
+// One '/'-delimited component off the front; rest is what follows the separator, empty
+// once nothing is left. Canonical paths have no empty components, so "" means exhausted.
+struct path_split {
+  std::string_view head, rest;
+};
+
+path_split split_component(std::string_view path) {
+  auto const slash{ path.find('/') };
+  return slash == std::string_view::npos
+             ? path_split{ path, {} }
+             : path_split{ path.substr(0, slash), path.substr(slash + 1) };
+}
+
+// Match c against the '[...]' class opening at pat[open]; returns the index past ']'.
+// Assumes the class is terminated - extract_normalize_selectors rejects the rest.
+std::pair<std::size_t, bool> glob_class_match(std::string_view pat,
+                                              std::size_t open,
+                                              char c) {
+  std::size_t i{ open + 1 };
+  bool const negate{ i < pat.size() && (pat[i] == '!' || pat[i] == '^') };
+  if (negate) { ++i; }
+
+  bool matched{ false };
+  for (bool first{ true }; i < pat.size(); ++i, first = false) {
+    if (pat[i] == ']' && !first) {
+      ++i;
+      break;
+    }
+    if (i + 2 < pat.size() && pat[i + 1] == '-' && pat[i + 2] != ']') {
+      if (c >= pat[i] && c <= pat[i + 2]) { matched = true; }
+      i += 2;
+      continue;
+    }
+    if (pat[i] == c) { matched = true; }
+  }
+  return { i, matched != negate };
+}
+
+// Match one path component: '*' any run, '?' one character, '[...]' a class, everything
+// else literal. One saved star is enough to be complete, so no recursion and no allocs.
+bool glob_component_match(std::string_view pat, std::string_view text) {
+  constexpr auto kNone{ std::string_view::npos };
+  std::size_t pi{ 0 }, ti{ 0 }, star_pi{ kNone }, star_ti{ 0 };
+
+  while (ti < text.size()) {
+    bool advanced{ false };
+    if (pi < pat.size()) {
+      if (pat[pi] == '*') {
+        star_pi = pi++;
+        star_ti = ti;
+        continue;
+      }
+      if (pat[pi] == '?') {
+        ++pi;
+        ++ti;
+        continue;
+      }
+      if (pat[pi] == '[') {
+        if (auto const [next, hit]{ glob_class_match(pat, pi, text[ti]) }; hit) {
+          pi = next;
+          ++ti;
+          advanced = true;
+        }
+      } else if (pat[pi] == text[ti]) {
+        ++pi;
+        ++ti;
+        advanced = true;
+      }
+    }
+    if (advanced) { continue; }
+    if (star_pi == kNone) { return false; }
+    pi = star_pi + 1;  // let the last '*' eat one more character
+    ti = ++star_ti;
+  }
+
+  while (pi < pat.size() && pat[pi] == '*') { ++pi; }
+  return pi == pat.size();
+}
+
+// Why a canonical selector can't be matched unambiguously, or nullopt when it can.
+// Rejecting beats guessing: a malformed pattern is a typo, and typos must be loud.
+std::optional<std::string_view> selector_problem(std::string_view entry) {
+  for (std::string_view rest{ entry }; !rest.empty();) {
+    auto const [component, tail]{ split_component(rest) };
+    rest = tail;
+
+    if (component.find("**") != std::string_view::npos && component != "**") {
+      return "must give '**' a path component of its own";
+    }
+
+    for (std::size_t i{ 0 }; i < component.size(); ++i) {
+      if (component[i] != '[') { continue; }
+      std::size_t scan{ i + 1 };
+      if (scan < component.size() && (component[scan] == '!' || component[scan] == '^')) {
+        ++scan;
+      }
+      if (scan < component.size() && component[scan] == ']') { ++scan; }  // literal ']'
+      auto const close{ component.find(']', scan) };
+      if (close == std::string_view::npos) { return "has an unterminated '[' class"; }
+      i = close;
+    }
+  }
+  return std::nullopt;
+}
+
+// The path extract() would write, canonicalized for selector matching: derived name for a
+// raw stream, else the stripped entry path. nullopt when strip drops the entry.
+std::optional<std::string> selector_match_path(
+    archive_entry *entry,
+    bool is_raw_stream,
+    std::optional<std::filesystem::path> const &bare_name,
+    int strip_components) {
+  if (is_raw_stream && bare_name) { return bare_name->generic_string(); }
+  auto const stripped{ strip_path_components(archive_entry_pathname(entry),
+                                             strip_components) };
+  if (!stripped) { return std::nullopt; }
+  return extract_canonical_match_path(*stripped);
+}
+
+// Add the file count and uncompressed bytes of the entries `selectors` selects (all when
+// empty) to totals, flagging selectors that matched. context prefixes errors.
+void accumulate_archive_totals(std::filesystem::path const &archive_path,
+                               std::vector<std::string> const &selectors,
+                               int strip_components,
+                               std::string_view context,
+                               extract_totals &totals,
+                               std::vector<bool> &selector_matched) {
+  auto const bare_name{ extract_bare_compressed_output_name(archive_path) };
+  archive_reader reader{ bare_name.has_value() };
+  if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
+      ARCHIVE_OK) {
+    throw std::runtime_error(std::string(context) + ": failed to open " +
+                             archive_path.string() + ": " +
+                             archive_error_string(reader.handle));
+  }
+
+  archive_entry *entry{ nullptr };
+  while (true) {
+    int const r{ archive_read_next_header(reader.handle, &entry) };
+    if (r == ARCHIVE_EOF) { break; }
+    if (r != ARCHIVE_OK) {
+      throw std::runtime_error(std::string(context) + ": header error in " +
+                               archive_path.string() + ": " +
+                               archive_error_string(reader.handle));
+    }
+    bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
+    // Mirror extract()'s validation: if the suffix promised compression but no
+    // decompression filter actually matched, this is corrupt or misnamed input.
+    if (is_raw_stream && bare_name &&
+        archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
+      throw std::runtime_error(std::string(context) +
+                               ": not a valid compressed stream: " +
+                               archive_path.string());
+    }
+
+    if (!selectors.empty()) {
+      auto const match_path{
+        selector_match_path(entry, is_raw_stream, bare_name, strip_components)
+      };
+      if (!match_path ||
+          !extract_selectors_match(selectors, *match_path, selector_matched)) {
+        continue;
+      }
+    }
+
+    if (!is_raw_stream && archive_entry_filetype(entry) != AE_IFREG) { continue; }
+    la_int64_t const size{ archive_entry_size(entry) };
+    if (size > 0) {
+      totals.bytes += static_cast<std::uint64_t>(size);
+    } else if (is_raw_stream) {
+      // Raw entries report size==-1 (unknown). Use compressed source size as an
+      // approximation for progress UI.
+      std::error_code ec;
+      auto const fsize{ std::filesystem::file_size(archive_path, ec) };
+      if (!ec) { totals.bytes += fsize; }
+    }
+    ++totals.files;
+  }
+}
+
+void throw_on_unmatched_selectors(std::vector<std::string> const &unmatched,
+                                 std::string_view context) {
+  if (unmatched.empty()) { return; }
+  std::string msg{ std::string(context) +
+                   ": 'only' entries matched no archive contents:" };
+  for (auto const &u : unmatched) { msg += " \"" + u + "\""; }
+  throw std::runtime_error(msg);
 }
 
 // TUI progress state for extract_all_archives
@@ -220,6 +425,102 @@ struct extract_tui_state {
 };
 
 }  // namespace
+
+std::string extract_canonical_match_path(std::string_view path) {
+  std::string collapsed;
+  collapsed.reserve(path.size());
+  for (char const c : path) {  // '\' is a separator, and "a//b" is "a/b"
+    char const sep{ (c == '\\') ? '/' : c };
+    if (sep == '/' && !collapsed.empty() && collapsed.back() == '/') { continue; }
+    collapsed.push_back(sep);
+  }
+
+  std::string_view view{ collapsed };
+  while (view.starts_with("./")) { view.remove_prefix(2); }
+  while (!view.empty() && view.back() == '/') { view.remove_suffix(1); }
+  if (view == ".") { view = {}; }  // "." names the root, which no selector can name
+  return std::string{ view };
+}
+
+bool extract_glob_match(std::string_view pattern, std::string_view entry_path) {
+  std::string_view star_pattern{}, star_path{};
+  bool have_star{ false };
+
+  while (true) {
+    // Pattern exhausted: whatever is left of the path sits under what already matched,
+    // which is how a directory entry pulls in its subtree.
+    if (pattern.empty()) { return true; }
+
+    auto const pat{ split_component(pattern) };
+    if (pat.head == "**") {  // start by letting it match zero components
+      have_star = true;
+      star_pattern = pat.rest;
+      star_path = entry_path;
+      pattern = pat.rest;
+      continue;
+    }
+
+    if (!entry_path.empty()) {
+      if (auto const path{ split_component(entry_path) };
+          glob_component_match(pat.head, path.head)) {
+        pattern = pat.rest;
+        entry_path = path.rest;
+        continue;
+      }
+    }
+
+    if (!have_star || star_path.empty()) { return false; }
+    star_path = split_component(star_path).rest;  // '**' eats one more component
+    pattern = star_pattern;
+    entry_path = star_path;
+  }
+}
+
+std::vector<std::string> extract_normalize_selectors(
+    std::vector<std::string> const &selectors,
+    std::string_view context) {
+  std::vector<std::string> normalized;
+  normalized.reserve(selectors.size());
+  for (auto const &raw : selectors) {
+    std::string canonical{ extract_canonical_match_path(raw) };
+    if (canonical.empty() || !extract_is_safe_archive_path(canonical.c_str())) {
+      throw std::runtime_error(std::string(context) +
+                               ": 'only' entry must be a non-empty archive-relative "
+                               "path without '..': \"" +
+                               raw + "\"");
+    }
+    if (auto const problem{ selector_problem(canonical) }; problem) {
+      throw std::runtime_error(std::string(context) + ": 'only' entry \"" + raw +
+                               "\" " + std::string(*problem));
+    }
+    normalized.push_back(std::move(canonical));
+  }
+  return normalized;
+}
+
+bool extract_selectors_match(std::vector<std::string> const &selectors,
+                             std::string_view entry_path,
+                             std::vector<bool> &matched) {
+  matched.resize(selectors.size(), false);
+  bool selected{ false };
+  for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
+    if (extract_glob_match(selectors[i], entry_path)) {
+      matched[i] = true;
+      selected = true;
+    }
+  }
+  return selected;
+}
+
+std::vector<std::string> extract_unmatched_selectors(
+    std::vector<std::string> const &selectors,
+    std::vector<bool> const &matched) {
+  std::vector<std::string> unmatched;
+  for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
+    if (i >= matched.size() || !matched[i]) { unmatched.push_back(selectors[i]); }
+  }
+  return unmatched;
+}
 
 bool extract_is_safe_archive_path(char const *path) {
   if (!path || path[0] == '\0') { return false; }
@@ -363,6 +664,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         archive_path.string());
   }
 
+  auto const selectors{ extract_normalize_selectors(options.selectors, "extract") };
+
   archive_reader reader{ bare_name.has_value() };
   archive_writer writer;
 
@@ -375,6 +678,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   archive_entry *entry{ nullptr };
   std::uint64_t processed{ 0 };
   std::uint64_t files_extracted{ 0 };
+  std::vector<bool> selector_matched(selectors.size(), false);
 
   while (true) {
     int const r{ archive_read_next_header(reader.handle, &entry) };
@@ -419,6 +723,15 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
                                entry_path);
     }
 
+    // Kept past the pathname rewrite below so hardlink diagnostics can name the entry.
+    std::string const canonical_entry{
+      selectors.empty() ? std::string{} : extract_canonical_match_path(entry_path)
+    };
+    if (!selectors.empty() &&
+        !extract_selectors_match(selectors, canonical_entry, selector_matched)) {
+      continue;  // Not selected: leave it compressed, never touch the disk.
+    }
+
     std::filesystem::path const full_path{ destination / entry_path };
     ensure_directory(full_path);
 
@@ -437,7 +750,15 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         throw std::runtime_error(std::string("extract: unsafe hardlink target: ") +
                                  hardlink_str);
       }
-      std::string const hardlink_full{ (destination / hardlink_str).string() };
+      std::filesystem::path const hardlink_path{ destination / hardlink_str };
+      // Hard links need their target on disk; a selector list that takes the link but
+      // not its target would otherwise fail deep inside libarchive.
+      if (!selectors.empty() && !std::filesystem::exists(hardlink_path)) {
+        throw std::runtime_error("extract: \"" + canonical_entry +
+                                 "\" is a hard link to \"" + hardlink_str +
+                                 "\", which 'only' does not select; name it too");
+      }
+      std::string const hardlink_full{ hardlink_path.string() };
       archive_entry_copy_hardlink(entry, hardlink_full.c_str());
     }
 
@@ -500,7 +821,14 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     if (is_regular_file) { ++files_extracted; }
   }
 
-  if (files_extracted == 0) {
+  if (options.require_all_selectors) {
+    throw_on_unmatched_selectors(extract_unmatched_selectors(selectors, selector_matched),
+                                "extract " + archive_path.filename().string());
+  }
+
+  // A selector list legitimately yields zero files (directories only, or nothing this
+  // archive contributes); only a wholesale extraction of nothing is a failure.
+  if (files_extracted == 0 && selectors.empty()) {
     std::string msg{ "Archive extraction failed: 0 files extracted from " +
                      archive_path.filename().string() };
     if (options.strip_components > 0) {
@@ -548,52 +876,27 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
   return stem;
 }
 
-extract_totals compute_archive_totals(std::filesystem::path const &archive_path) {
+extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
+                                      extract_options const &options) {
+  auto const selectors{ extract_normalize_selectors(options.selectors,
+                                                  "compute_archive_totals") };
+  std::vector<bool> selector_matched(selectors.size(), false);
   extract_totals totals{};
-  bool const enable_raw{ extract_bare_compressed_output_name(archive_path).has_value() };
-  archive_reader reader{ enable_raw };
-  if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
-      ARCHIVE_OK) {
-    throw std::runtime_error(std::string("compute_archive_totals: failed to open ") +
-                             archive_path.string() + ": " +
-                             archive_error_string(reader.handle));
-  }
-
-  archive_entry *entry{ nullptr };
-  while (true) {
-    int const r{ archive_read_next_header(reader.handle, &entry) };
-    if (r == ARCHIVE_EOF) { break; }
-    if (r != ARCHIVE_OK) {
-      throw std::runtime_error(std::string("compute_archive_totals: header error in ") +
-                               archive_path.string() + ": " +
-                               archive_error_string(reader.handle));
-    }
-    bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
-    // Mirror extract()'s validation: if the suffix promised compression but no
-    // decompression filter actually matched, this is corrupt or misnamed input.
-    if (is_raw_stream && enable_raw &&
-        archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-      throw std::runtime_error(
-          std::string("compute_archive_totals: not a valid compressed stream: ") +
-          archive_path.string());
-    }
-    if (!is_raw_stream && archive_entry_filetype(entry) != AE_IFREG) { continue; }
-    la_int64_t const size{ archive_entry_size(entry) };
-    if (size > 0) {
-      totals.bytes += static_cast<std::uint64_t>(size);
-    } else if (is_raw_stream) {
-      // Raw entries report size==-1 (unknown). Use compressed source size as an
-      // approximation for progress UI.
-      std::error_code ec;
-      auto const fsize{ std::filesystem::file_size(archive_path, ec) };
-      if (!ec) { totals.bytes += fsize; }
-    }
-    ++totals.files;
-  }
+  accumulate_archive_totals(archive_path,
+                            selectors,
+                            options.strip_components,
+                            "compute_archive_totals",
+                            totals,
+                            selector_matched);
+  totals.unmatched_selectors = extract_unmatched_selectors(selectors, selector_matched);
   return totals;
 }
 
-extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir) {
+extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
+                                      extract_options const &options) {
+  auto const selectors{ extract_normalize_selectors(options.selectors,
+                                                  "compute_extract_totals") };
+  std::vector<bool> selector_matched(selectors.size(), false);
   extract_totals totals{};
   if (!std::filesystem::exists(fetch_dir)) { return totals; }
 
@@ -602,6 +905,13 @@ extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir) {
     if (entry.path().filename() == "envy-complete") { continue; }
 
     if (!extract_is_archive_extension(entry.path())) {
+      // Loose files are copied verbatim, so selectors match their filename.
+      if (!selectors.empty() &&
+          !extract_selectors_match(selectors,
+                                   entry.path().filename().generic_string(),
+                                   selector_matched)) {
+        continue;
+      }
       std::error_code ec;
       totals.bytes += std::filesystem::file_size(entry.path(), ec);
       if (ec) {
@@ -612,52 +922,21 @@ extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir) {
       continue;
     }
 
-    bool const enable_raw{ extract_bare_compressed_output_name(entry.path()).has_value() };
-    archive_reader reader{ enable_raw };
-    if (archive_read_open_filename(reader.handle, entry.path().string().c_str(), 10240) !=
-        ARCHIVE_OK) {
-      throw std::runtime_error(std::string("compute_extract_totals: failed to open ") +
-                               entry.path().string() + ": " +
-                               archive_error_string(reader.handle));
-    }
-
-    archive_entry *ent{ nullptr };
-    while (true) {
-      int const r{ archive_read_next_header(reader.handle, &ent) };
-      if (r == ARCHIVE_EOF) { break; }
-      if (r != ARCHIVE_OK) {
-        throw std::runtime_error(std::string("compute_extract_totals: header error in ") +
-                                 entry.path().string() + ": " +
-                                 archive_error_string(reader.handle));
-      }
-
-      bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
-      if (is_raw_stream && enable_raw &&
-          archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-        throw std::runtime_error(
-            std::string("compute_extract_totals: not a valid compressed stream: ") +
-            entry.path().string());
-      }
-      if (!is_raw_stream && archive_entry_filetype(ent) != AE_IFREG) { continue; }
-
-      la_int64_t const size{ archive_entry_size(ent) };
-      if (size > 0) {
-        totals.bytes += static_cast<std::uint64_t>(size);
-      } else if (is_raw_stream) {
-        std::error_code ec;
-        auto const fsize{ std::filesystem::file_size(entry.path(), ec) };
-        if (!ec) { totals.bytes += fsize; }
-      }
-      ++totals.files;
-    }
+    accumulate_archive_totals(entry.path(),
+                              selectors,
+                              options.strip_components,
+                              "compute_extract_totals",
+                              totals,
+                              selector_matched);
   }
 
+  totals.unmatched_selectors = extract_unmatched_selectors(selectors, selector_matched);
   return totals;
 }
 
 void extract_all_archives(std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &dest_dir,
-                          int strip_components,
+                          extract_options const &options,
                           std::string const &pkg_identity,
                           tui::section_handle section) {
   if (!std::filesystem::exists(fetch_dir)) { return; }
@@ -665,6 +944,9 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   // Collect items to extract
   std::vector<std::string> const items{ collect_extract_items(fetch_dir) };
   if (items.empty()) { return; }
+
+  int const strip_components{ options.strip_components };
+  auto const selectors{ extract_normalize_selectors(options.selectors, "extract") };
 
   // Compute totals (with spinner if TUI enabled)
   std::optional<extract_tui_state> tui_state;
@@ -678,7 +960,12 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
                                 .start_time = std::chrono::steady_clock::now() } });
   }
 
-  extract_totals const totals{ compute_extract_totals(fetch_dir) };
+  // The pre-scan spans every archive — it, not the per-archive extract below, is where
+  // a selector that nothing in the fetch dir provides gets caught.
+  extract_totals const totals{ compute_extract_totals(
+      fetch_dir,
+      { .strip_components = strip_components, .selectors = selectors }) };
+  throw_on_unmatched_selectors(totals.unmatched_selectors, "extract");
 
   // Set up TUI state for extraction progress
   if (section != tui::kInvalidSection) {
@@ -689,6 +976,8 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   std::uint64_t total_files_extracted{ 0 };
   std::uint64_t total_files_copied{ 0 };
   std::uint64_t processed_bytes{ 0 };
+  // Scratch for the loose-file check below; the pre-scan owns selector validation.
+  std::vector<bool> loose_selector_matched;
 
   for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
     if (!entry.is_regular_file()) { continue; }
@@ -713,6 +1002,10 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
       std::uint64_t last_archive_bytes{ 0 };
 
       extract_options opts{ .strip_components = strip_components,
+                            .selectors = selectors,
+                            // The pre-scan already validated the selectors against
+                            // every archive; one archive alone need not satisfy it.
+                            .require_all_selectors = false,
                             .progress = [&](extract_progress const &p) -> bool {
                               last_archive_bytes = p.bytes_processed;
                               if (tui_state) {
@@ -740,6 +1033,12 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
 
       if (tui_state) { tui_state->on_progress(processed_bytes, {}, false); }
     } else {
+      // Loose files are copied whole, so selectors match their filename.
+      if (!selectors.empty() &&
+          !extract_selectors_match(selectors, filename, loose_selector_matched)) {
+        continue;
+      }
+
       std::filesystem::path const dest_path{ dest_dir / filename };
       std::filesystem::copy_file(path,
                                  dest_path,

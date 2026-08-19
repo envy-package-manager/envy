@@ -416,6 +416,234 @@ class EnvyExtractTests(unittest.TestCase):
                 self.assertTrue(extracted.exists(), f"missing {name}")
                 self.assertEqual(content, extracted.read_text(encoding="utf-8"))
 
+    def test_extract_only_single_file(self) -> None:
+        """--only takes exactly one named entry and leaves the rest compressed."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(archive), tmpdir, "--only", "root/subdir1/file3.txt"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 1 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertEqual(
+                "Subdirectory file\n", (dest / "root/subdir1/file3.txt").read_text()
+            )
+            self.assertFalse((dest / "root/file1.txt").exists())
+            self.assertFalse((dest / "root/subdir2").exists())
+
+    def test_extract_only_directory_subtree(self) -> None:
+        """A directory in --only takes everything beneath it."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(archive), tmpdir, "--only", "root/subdir1"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 2 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/subdir1/file3.txt").exists())
+            self.assertTrue((dest / "root/subdir1/nested/file4.txt").exists())
+            self.assertFalse((dest / "root/file1.txt").exists())
+            self.assertFalse((dest / "root/subdir2").exists())
+
+    def test_extract_only_repeated(self) -> None:
+        """Repeated --only accumulates entries."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/file1.txt",
+                "--only",
+                "root/subdir2",
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 2 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/file1.txt").exists())
+            self.assertTrue((dest / "root/subdir2/file5.txt").exists())
+            self.assertFalse((dest / "root/file2.txt").exists())
+
+    def test_extract_only_unmatched_errors(self) -> None:
+        """An --only entry that matches nothing must fail loudly, not silently."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/file1.txt",
+                "--only",
+                "root/typo.txt",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("root/typo.txt", result.stderr)
+
+    def test_extract_only_rejects_traversal(self) -> None:
+        """An --only entry with '..' must be refused before anything is written."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "dest"
+            dest.mkdir()
+            result = self._run_envy(
+                "extract", str(archive), str(dest), "--only", "../escape"
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("'only' entry", result.stderr)
+            self.assertEqual([], list(dest.iterdir()))
+
+    def test_extract_only_glob_star(self) -> None:
+        """A '*' in --only matches within one path component."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(archive), tmpdir, "--only", "root/*.txt"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 2 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/file1.txt").exists())
+            self.assertTrue((dest / "root/file2.txt").exists())
+            self.assertFalse((dest / "root/subdir1").exists())
+
+    def test_extract_only_glob_globstar(self) -> None:
+        """'**' in --only spans path components."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(archive), tmpdir, "--only", "root/**/file4.txt"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 1 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/subdir1/nested/file4.txt").exists())
+            self.assertFalse((dest / "root/file1.txt").exists())
+
+    def test_extract_only_glob_class_and_question(self) -> None:
+        """Character classes and '?' work, and '?' spans exactly one character."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/file[12].txt",
+                "--only",
+                "root/subdir?/file?.txt",
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 4 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/file1.txt").exists())
+            self.assertTrue((dest / "root/file2.txt").exists())
+            self.assertTrue((dest / "root/subdir1/file3.txt").exists())
+            self.assertTrue((dest / "root/subdir2/file5.txt").exists())
+            # '?' does not cross '/', so the nested file is not selected.
+            self.assertFalse((dest / "root/subdir1/nested").exists())
+
+    def test_extract_only_glob_unmatched_errors(self) -> None:
+        """A pattern matching nothing fails and names the pattern."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(archive), tmpdir, "--only", "root/**/*.md"
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("root/**/*.md", result.stderr)
+
+    def test_extract_only_glob_malformed_errors(self) -> None:
+        """A malformed pattern is rejected before anything is written."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        for bad in ("root/[abc", "root/a**b"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                dest = Path(tmpdir) / "dest"
+                dest.mkdir()
+                result = self._run_envy(
+                    "extract", str(archive), str(dest), "--only", bad
+                )
+
+                self.assertNotEqual(0, result.returncode, f"{bad} should be rejected")
+                self.assertIn("'only' entry", result.stderr)
+                self.assertEqual([], list(dest.iterdir()))
+
+    def test_extract_only_hardlink_without_target_errors(self) -> None:
+        """Selecting a hard link but not its target must name the missing target."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive = self._archives_dir / "hardlink.tar"
+            with tarfile.open(archive, "w") as tar:
+                data = b"payload\n"
+                target = tarfile.TarInfo(name="root/target.txt")
+                target.size = len(data)
+                tar.addfile(target, io.BytesIO(data))
+                link = tarfile.TarInfo(name="root/link.txt")
+                link.type = tarfile.LNKTYPE
+                link.linkname = "root/target.txt"
+                tar.addfile(link)
+
+            dest = Path(tmpdir) / "dest"
+            dest.mkdir()
+            result = self._run_envy(
+                "extract", str(archive), str(dest), "--only", "root/link.txt"
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("hard link", result.stderr)
+            self.assertIn("root/target.txt", result.stderr)
+
+    def test_extract_only_hardlink_with_target(self) -> None:
+        """A hard link extracts when its target is included too."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive = self._archives_dir / "hardlink_ok.tar"
+            with tarfile.open(archive, "w") as tar:
+                data = b"payload\n"
+                target = tarfile.TarInfo(name="root/target.txt")
+                target.size = len(data)
+                tar.addfile(target, io.BytesIO(data))
+                link = tarfile.TarInfo(name="root/link.txt")
+                link.type = tarfile.LNKTYPE
+                link.linkname = "root/target.txt"
+                tar.addfile(link)
+
+            dest = Path(tmpdir) / "dest"
+            dest.mkdir()
+            result = self._run_envy(
+                "extract", str(archive), str(dest), "--only", "root"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertEqual(b"payload\n", (dest / "root/target.txt").read_bytes())
+            self.assertEqual(b"payload\n", (dest / "root/link.txt").read_bytes())
+
     def test_extract_rejects_symlink_escape(self) -> None:
         """A symlink entry pointing outside dest plus a write through it must be
         refused (ARCHIVE_EXTRACT_SECURE_SYMLINKS) and must not write outside dest."""

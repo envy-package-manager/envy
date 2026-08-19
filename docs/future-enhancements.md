@@ -369,6 +369,14 @@ else if (v.starts_with(w + "-")) { result.push_back(v); }
 
 Higher-level abstraction for platform-specific variants within a single spec identity. Current Lua approach handles this programmatically.
 
+## Skip the Totals Pre-Scan for Selective Extraction
+
+`extract_all_archives` header-scans every archive for progress denominators, which for a tar.xz means a full decompression pass — so a selective stage decompresses twice. With one archive in the fetch dir, its own selector check is already the union check, so the pre-scan could be skipped (percent-less progress, half the work).
+
+```cpp
+if (!selectors.empty() && archive_count == 1) { /* extract() validates; totals stay {0,0} */ }
+```
+
 ## Trace Coverage for Bootstrap/Bundle/AWS
 
 Machinery trace events (`src/trace_events.def`) cover the scheduler, cache/lock, fetch, git-resolve, depot, and deploy paths but not `bootstrap.cpp`, `bundle.cpp`, or `aws_util.cpp`. Add events there if those subsystems need production diagnostics (e.g., `bundle_parsed`, `s3_request`).

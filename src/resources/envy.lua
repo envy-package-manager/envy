@@ -148,6 +148,10 @@ function envy.run(script, opts) end
 
 ---@class envy.extract_opts
 ---@field strip? integer Strip leading path components (default: 0)
+---@field only? string[] Extract only these archive-relative paths or globs, matched after
+--- strip; a directory takes its whole subtree (default: everything). Globs: '*'/'?' within
+--- one component, '**' across components, '[a-z]'/'[!a-z]' classes. An entry that matches
+--- nothing is an error.
 
 ---Extract single archive to destination directory
 ---@param archive_path string Path to archive file
@@ -282,7 +286,7 @@ PRODUCTS = {}
 ---@type envy.fetch_source|envy.fetch_source[]|fun(tmp_dir: string, options: table): string?, string?
 FETCH = {}
 
----@alias envy.stage_opts { strip?: integer }
+---@alias envy.stage_opts { strip?: integer, only?: string[] }
 
 ---STAGE phase: declarative options or function
 ---@type envy.stage_opts|fun(fetch_dir: string, stage_dir: string, tmp_dir: string, options: table)

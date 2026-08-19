@@ -43,7 +43,14 @@ envy sync                               # restamps scripts + .luarc.json as the 
 
 **`envy fetch <url> [destination]`** — Download file from any supported transport (HTTP/HTTPS, FTP/FTPS, SMB, Git, SSH, S3). Destination defaults to current directory with URL's filename. Verifies TLS, supports authentication (SSH keys, AWS credentials). Displays progress, optionally prints SHA256 on completion.
 
-**`envy extract <archive> [destination]`** — Extract archive to specified location (defaults to current directory). Supports all libarchive formats: tar, tar.gz, tar.xz, tar.bz2, tar.zst, zip, 7z, rar, iso. Preserves permissions, timestamps, symlinks. Reports file count on completion.
+**`envy extract <archive> [destination] [--only <path|glob>]...`** — Extract archive to specified location (defaults to current directory). Supports all libarchive formats: tar, tar.gz, tar.xz, tar.bz2, tar.zst, zip, 7z, rar, iso. Preserves permissions, timestamps, symlinks. Reports file count on completion. `--only` is an archive-relative path or glob—a file takes that entry, a directory takes its whole subtree; repeat for several. Everything unselected stays compressed, so pulling two tools out of a 10 GB toolchain tarball costs one streaming pass, not 10 GB of disk. An `--only` entry that matches nothing is an error, never a silent no-op; so is a malformed pattern. A selected hard link needs its target selected too.
+
+Glob syntax: `*` (any run) and `?` (one character) stay inside one path component, `**` spans components, `[a-z]`/`[!a-z]` are character classes (use `[*]`, `[?]`, `[[]` for literals). Matching is case-sensitive on every platform.
+
+```
+envy extract clang+llvm-20.1.0.tar.xz out --only 'clang+llvm-20.1.0/bin/clang-*' \
+                                          --only 'clang+llvm-20.1.0/lib/**/include/*.h'
+```
 
 **`envy compress <path> [output]`** — Create archive from file or directory. Format auto-detected from output extension (.tar.gz, .tgz, .tar.xz, .tar.bz2, .tar.zst, .tar, .zip). Defaults to `<basename>.tar.gz` if output not specified.
 

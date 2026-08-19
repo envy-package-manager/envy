@@ -125,18 +125,37 @@ Extract single archive; returns file count.
 
 **Options:**
 - `strip` — components to strip from paths (default: 0)
+- `only` — archive-relative paths or globs naming the sole entries to extract (omit for
+  everything). A path takes that entry; a directory takes its whole subtree. Matched
+  *after* `strip`. Unselected entries are never decompressed to disk. An entry matching
+  nothing is an error, as are a malformed pattern and an empty list; a selected hard link
+  needs its target selected too.
+
+Glob syntax: `*` (any run) and `?` (one char) stay inside one component, `**` spans
+components, `[a-z]`/`[!a-z]` are classes (`[*]`, `[?]`, `[[]` for literals). Case-sensitive
+everywhere, so one spec behaves the same on every platform.
 
 ```lua
 envy.extract(fetch_dir .. "/source.tar.gz", ".", { strip = 1 })
+envy.extract(fetch_dir .. "/llvm.tar.xz", ".", { strip = 1, only = { "bin/clang-*" } })
 ```
 
 ### envy.extract_all(src_dir, dest_dir, [opts])
 
-Extract all archives in directory.
+Extract all archives in directory; loose (non-archive) files are copied. Same options as
+`envy.extract`—`only` spans the whole directory (matching loose files by filename), so one
+entry per archive is enough to satisfy the list.
 
 ```lua
-envy.extract_all(fetch_dir, stage_dir, { strip = 1 })
+-- Take just the requested tools out of a 10 GB toolchain tarball; leave the rest packed.
+local want = {}
+for _, tool in ipairs(options.tools) do want[#want + 1] = "bin/" .. tool .. envy.EXE_EXT end
+envy.extract_all(fetch_dir, stage_dir, { strip = 1, only = want })
 ```
+
+A misspelled tool name fails here, at stage, instead of surfacing later as a missing file
+in `INSTALL`—which is why an assembled `only` list beats a broad glob for option-driven
+selections.
 
 ---
 

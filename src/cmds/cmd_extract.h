@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace CLI { class App; }
 
@@ -15,6 +17,7 @@ class cmd_extract : public cmd {
   struct cfg : cmd_cfg<cmd_extract> {
     std::filesystem::path archive_path;
     std::filesystem::path destination;
+    std::vector<std::string> only;  // Archive-relative paths/globs; empty = everything
   };
 
   static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);

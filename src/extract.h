@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace envy {
 
@@ -22,10 +25,21 @@ using extract_progress_cb_t = std::function<bool(extract_progress const &)>;
 struct extract_totals {
   std::uint64_t bytes{ 0 };
   std::uint64_t files{ 0 };
+  std::vector<std::string> unmatched_selectors;  // selectors that matched nothing
 };
 
 struct extract_options {
   int strip_components{ 0 };
+
+  // Archive-relative paths or glob patterns naming the only entries to extract, matched
+  // after strip_components: a match takes that entry, or its whole subtree when it names
+  // a directory. Empty extracts everything. Spelled "only" in Lua and on the CLI.
+  std::vector<std::string> selectors;
+
+  // Throw when a selector matched nothing. Callers spreading one selector list across
+  // several archives clear this and validate the union themselves.
+  bool require_all_selectors{ true };
+
   extract_progress_cb_t progress;
 };
 
@@ -55,21 +69,49 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
                                      std::string const &prefix,
                                      extract_progress_cb_t const &progress = {});
 
-// Extract all archives in fetch_dir to dest_dir.
-// If section != kInvalidSection, shows spinner during totals computation and progress bar
-// during extraction. Pass kInvalidSection for silent extraction.
+// Extract archives in fetch_dir to dest_dir; loose files are copied. Selectors span the
+// set as a union, progress/require_all_selectors ignored, kInvalidSection = silent.
 void extract_all_archives(std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &dest_dir,
-                          int strip_components,
+                          extract_options const &options,
                           std::string const &pkg_identity,
                           tui::section_handle section);
 
-// Pre-scan a single archive to count files and total uncompressed bytes.
-extract_totals compute_archive_totals(std::filesystem::path const &archive_path);
+// Pre-scan one archive for the file count and uncompressed bytes options would extract.
+extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
+                                      extract_options const &options = {});
 
 #ifdef ENVY_UNIT_TEST
 // Exposed for unit tests only - computes totals by scanning archives in a directory
-extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir);
+extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
+                                      extract_options const &options = {});
+
+// Selector matching, exposed for unit tests only - extract.cpp declares these for itself.
+// Canonical form for matching: '\' to '/', repeated '/' collapsed, leading "./" and
+// trailing '/' removed. Applied to selectors and archive paths alike.
+std::string extract_canonical_match_path(std::string_view path);
+
+// Canonicalize selectors and reject the unusable ones: empty, absolute, "..", malformed
+// glob (unterminated '[', '**' sharing a component). context prefixes errors.
+std::vector<std::string> extract_normalize_selectors(
+    std::vector<std::string> const &selectors,
+    std::string_view context);
+
+// True when canonical glob pattern matches canonical entry_path. '*' (any run) and '?'
+// (one char) stay inside one component, '**' spans components, '[a-z]'/'[!a-z]' are
+// classes; matching a directory takes everything under it. Literal patterns just compare.
+bool extract_glob_match(std::string_view pattern, std::string_view entry_path);
+
+// True when any selector names canonical entry_path, globs included. Flags every selector
+// that matched, so callers can report the ones that never hit anything.
+bool extract_selectors_match(std::vector<std::string> const &selectors,
+                             std::string_view entry_path,
+                             std::vector<bool> &matched);
+
+// Selectors never flagged in matched, in declaration order.
+std::vector<std::string> extract_unmatched_selectors(
+    std::vector<std::string> const &selectors,
+    std::vector<bool> const &matched);
 #endif
 
 }  // namespace envy
