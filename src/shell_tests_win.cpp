@@ -1,5 +1,6 @@
 #if defined(_WIN32)
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
@@ -179,6 +180,50 @@ TEST_CASE("shell_run cmd fails on nonexistent command") {
   CHECK(lines[0] == "before");
   // "after" should NOT appear
   for (auto const &line : lines) { CHECK(line != "after"); }
+}
+
+// shell_run must return when the direct child exits, not when the pipes reach EOF: `start
+// /b` hands our inherited stdout/stderr handles to a process that outlives the child, and
+// waiting for EOF would pin us for that descendant's entire lifetime.
+static constexpr char const *kLingeringDescendant{
+  "start /b cmd /c \"ping -n 11 127.0.0.1 > nul\""  // ~10s, holds both inherited handles
+};
+static constexpr double kExitLatencyBudgetSec{ 5.0 };  // half the descendant's lifetime
+
+static double run_with_lingering_descendant(std::string const &script,
+                                            std::vector<std::string> &lines) {
+  envy::shell_run_cfg inv{ .on_output_line =
+                               [&](std::string_view line) { lines.emplace_back(line); },
+                           .cwd = std::nullopt,
+                           .env = envy::shell_getenv(),
+                           .shell = envy::shell_choice::cmd };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const result{ envy::shell_run(script, inv) };
+  std::chrono::duration<double> const elapsed{ std::chrono::steady_clock::now() - start };
+  CHECK(result.exit_code == 0);
+  return elapsed.count();
+}
+
+TEST_CASE("shell_run returns when child exits with descendant holding pipes") {
+  std::vector<std::string> lines;
+  double const elapsed{
+    run_with_lingering_descendant(std::string{ "echo hi\n" } + kLingeringDescendant, lines)
+  };
+  CHECK(elapsed < kExitLatencyBudgetSec);
+  REQUIRE(lines.size() == 1);
+  CHECK(lines[0] == "hi");
+}
+
+TEST_CASE("shell_run delivers all pre-exit output despite lingering descendant") {
+  std::vector<std::string> lines;
+  double const elapsed{ run_with_lingering_descendant(
+      std::string{ kLingeringDescendant } +
+          "\nfor /L %%i in (1,1,200) do @echo 0123456789\necho tail",
+      lines) };
+  CHECK(elapsed < kExitLatencyBudgetSec);
+  REQUIRE(lines.size() == 201);
+  CHECK(lines[0] == "0123456789");
+  CHECK(lines[200] == "tail");
 }
 
 #endif  // _WIN32

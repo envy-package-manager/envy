@@ -4,6 +4,7 @@
 
 #include "shell.h"
 
+#include "tui.h"
 #include "util.h"
 
 #include <array>
@@ -36,6 +37,8 @@ namespace {
 
 constexpr int kChildErrorExit{ 127 };
 constexpr int kSignalExitBase{ 128 };
+constexpr int kPollIntervalMs{ 100 };  // bounds how long child exit can go unnoticed
+constexpr size_t kChunkSize{ 4096 };
 
 class fd_cleanup {
  public:
@@ -140,100 +143,159 @@ struct pipe_state {
   bool closed;
 };
 
-void stream_pipes(std::array<pipe_state, 2> &pipes, shell_run_cfg const &cfg) {
+void dispatch_line(pipe_state const &pipe,
+                   std::string_view line,
+                   shell_run_cfg const &cfg) {
+  if (pipe.stream == shell_stream::std_out) {
+    if (cfg.on_stdout_line) { cfg.on_stdout_line(line); }
+  } else {
+    if (cfg.on_stderr_line) { cfg.on_stderr_line(line); }
+  }
+  if (cfg.on_output_line) { cfg.on_output_line(line); }
+}
+
+void emit_complete_lines(pipe_state &pipe, shell_run_cfg const &cfg) {
+  size_t newline{ 0 };
+  while ((newline = pipe.pending.find('\n')) != std::string::npos) {
+    dispatch_line(pipe, std::string_view{ pipe.pending }.substr(0, newline), cfg);
+    pipe.pending.erase(0, newline + 1);
+  }
+}
+
+void close_pipe(pipe_state &pipe, shell_run_cfg const &cfg) {
+  if (!pipe.pending.empty()) {  // trailing partial line
+    dispatch_line(pipe, pipe.pending, cfg);
+    pipe.pending.clear();
+  }
+  pipe.closed = true;
+}
+
+enum class read_status { progress, would_block, eof };
+
+read_status read_pipe(pipe_state &pipe, shell_run_cfg const &cfg, std::string &chunk) {
+  ssize_t const read_bytes{ ::read(pipe.read_fd.get(), chunk.data(), chunk.size()) };
+  if (read_bytes == 0) { return read_status::eof; }
+  if (read_bytes == -1) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) { return read_status::would_block; }
+    if (errno == EINTR) { return read_status::progress; }
+    throw std::system_error(errno, std::generic_category(), "read failed");
+  }
+  pipe.pending.append(chunk.data(), static_cast<size_t>(read_bytes));
+  emit_complete_lines(pipe, cfg);
+  return read_status::progress;
+}
+
+class child_process {
+ public:
+  explicit child_process(pid_t pid) : pid_{ pid } {}
+  ~child_process() {
+    if (pid_ == -1) { return; }
+    ::kill(pid_, SIGKILL);
+    reap(true);
+  }
+
+  child_process(child_process const &) = delete;
+  child_process &operator=(child_process const &) = delete;
+
+  bool try_reap() { return pid_ == -1 || reap(false); }  // non-blocking exit check
+
+  shell_result wait() {
+    if (pid_ != -1 && !reap(true)) {
+      throw std::system_error(errno, std::generic_category(), "waitpid failed");
+    }
+    return result_;
+  }
+
+ private:
+  bool reap(bool block) {
+    int status{ 0 };
+    pid_t result{ 0 };
+    while ((result = ::waitpid(pid_, &status, block ? 0 : WNOHANG)) == -1 &&
+           errno == EINTR) {}
+    if (result != pid_) { return false; }
+    pid_ = -1;
+    if (WIFEXITED(status)) {
+      result_ = { .exit_code = WEXITSTATUS(status), .signal = std::nullopt };
+    } else if (WIFSIGNALED(status)) {
+      int const sig{ WTERMSIG(status) };
+      result_ = { .exit_code = kSignalExitBase + sig, .signal = sig };
+    } else {
+      result_ = { .exit_code = status, .signal = std::nullopt };
+    }
+    return true;
+  }
+
+  pid_t pid_;
+  shell_result result_{};
+};
+
+// The child is gone; flush what is already buffered instead of waiting for EOF, which a
+// surviving descendant holding an inherited write end would delay for its own lifetime.
+void drain_after_exit(std::array<pipe_state, 2> &pipes, shell_run_cfg const &cfg) {
+  std::string chunk(kChunkSize, '\0');
+  bool inherited{ false };
+
+  for (auto &pipe : pipes) {
+    if (pipe.closed) { continue; }
+
+    int const flags{ ::fcntl(pipe.read_fd.get(), F_GETFL, 0) };
+    if (flags == -1 || ::fcntl(pipe.read_fd.get(), F_SETFL, flags | O_NONBLOCK) == -1) {
+      throw std::system_error(errno, std::generic_category(), "fcntl failed");
+    }
+
+    read_status status{ read_status::progress };
+    while (status == read_status::progress) { status = read_pipe(pipe, cfg, chunk); }
+    inherited = inherited || status == read_status::would_block;
+    close_pipe(pipe, cfg);
+  }
+
+  if (inherited) {
+    tui::debug(
+        "shell: child exited with output pipes still held by a descendant; "
+        "output written after this point is dropped");
+  }
+}
+
+void stream_pipes(std::array<pipe_state, 2> &pipes,
+                  child_process &child,
+                  shell_run_cfg const &cfg) {
   std::array<pollfd, 2> poll_fds{};
-  std::string chunk(4096, '\0');
+  std::string chunk(kChunkSize, '\0');
   size_t closed_count{ 0 };
 
   for (size_t i{ 0 }; i < pipes.size(); ++i) {
-    poll_fds[i].fd = pipes[i].closed ? -1 : pipes[i].read_fd.get();
-    poll_fds[i].events = pipes[i].closed ? 0 : POLLIN;
+    poll_fds[i].fd = pipes[i].read_fd.get();
+    poll_fds[i].events = POLLIN;
     poll_fds[i].revents = 0;
   }
 
   while (closed_count < pipes.size()) {
-    int const poll_result{ ::poll(poll_fds.data(), poll_fds.size(), -1) };
-    if (poll_result == -1) {
+    if (::poll(poll_fds.data(), poll_fds.size(), kPollIntervalMs) == -1) {
       if (errno == EINTR) { continue; }
       throw std::system_error(errno, std::generic_category(), "poll failed");
     }
 
     for (size_t i{ 0 }; i < pipes.size(); ++i) {
-      if (pipes[i].closed) { continue; }
-
       short const revents{ poll_fds[i].revents };
-      if (revents == 0) { continue; }
+      if (pipes[i].closed || revents == 0) { continue; }
       if (revents & (POLLERR | POLLNVAL)) {
         throw std::runtime_error("poll failed on child pipe");
       }
+      if (read_pipe(pipes[i], cfg, chunk) != read_status::eof) { continue; }
 
-      ssize_t const read_bytes{
-        ::read(pipes[i].read_fd.get(), chunk.data(), chunk.size())
-      };
+      close_pipe(pipes[i], cfg);
+      ++closed_count;
+      poll_fds[i].fd = -1;
+      poll_fds[i].events = 0;
+      poll_fds[i].revents = 0;
+    }
 
-      if (read_bytes == -1) {
-        if (errno == EINTR) { continue; }
-        throw std::system_error(errno, std::generic_category(), "read failed");
-      }
-
-      if (read_bytes == 0) {
-        if (!pipes[i].pending.empty()) {
-          if (pipes[i].stream == shell_stream::std_out) {
-            if (cfg.on_stdout_line) { cfg.on_stdout_line(pipes[i].pending); }
-          } else {
-            if (cfg.on_stderr_line) { cfg.on_stderr_line(pipes[i].pending); }
-          }
-          if (cfg.on_output_line) { cfg.on_output_line(pipes[i].pending); }
-          pipes[i].pending.clear();
-        }
-
-        pipes[i].closed = true;
-        ++closed_count;
-
-        poll_fds[i].fd = -1;
-        poll_fds[i].events = 0;
-        poll_fds[i].revents = 0;
-        continue;
-      }
-
-      pipes[i].pending.append(chunk.data(), static_cast<size_t>(read_bytes));
-
-      size_t newline{ 0 };
-      while ((newline = pipes[i].pending.find('\n')) != std::string::npos) {
-        std::string line{ pipes[i].pending.substr(0, newline) };
-        if (pipes[i].stream == shell_stream::std_out) {
-          if (cfg.on_stdout_line) { cfg.on_stdout_line(line); }
-        } else {
-          if (cfg.on_stderr_line) { cfg.on_stderr_line(line); }
-        }
-        if (cfg.on_output_line) { cfg.on_output_line(line); }
-        pipes[i].pending.erase(0, newline + 1);
-      }
+    // Pipe EOF means every writer let go, not that the child exited - poll for exit too.
+    if (child.try_reap()) {
+      drain_after_exit(pipes, cfg);
+      return;
     }
   }
-}
-
-shell_result wait_for_child(pid_t child) {
-  int status{ 0 };
-  while (true) {
-    pid_t const result = ::waitpid(child, &status, 0);
-    if (result == -1 && errno == EINTR) { continue; }
-    if (result == -1) {
-      throw std::system_error(errno, std::generic_category(), "waitpid failed");
-    }
-    break;
-  }
-
-  if (WIFEXITED(status)) {
-    return { .exit_code = WEXITSTATUS(status), .signal = std::nullopt };
-  }
-
-  if (WIFSIGNALED(status)) {
-    int const sig{ WTERMSIG(status) };
-    return { .exit_code = kSignalExitBase + sig, .signal = sig };
-  }
-
-  return { .exit_code = status, .signal = std::nullopt };
 }
 
 [[noreturn]] void exec_child_process(fd_cleanup &stdout_read,
@@ -394,22 +456,14 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   stdout_write_end.release();  // Parent: close write ends and stream output
   stderr_write_end.release();
 
-  shell_result result;
-  try {
-    std::array<pipe_state, 2> pipes{
-      pipe_state{ std::move(stdout_read_end), shell_stream::std_out, {}, false },
-      pipe_state{ std::move(stderr_read_end), shell_stream::std_err, {}, false },
-    };
+  child_process child_proc{ child };  // kills and reaps if streaming throws
+  std::array<pipe_state, 2> pipes{
+    pipe_state{ std::move(stdout_read_end), shell_stream::std_out, {}, false },
+    pipe_state{ std::move(stderr_read_end), shell_stream::std_err, {}, false },
+  };
 
-    stream_pipes(pipes, cfg);
-    result = wait_for_child(child);
-  } catch (...) {
-    ::kill(child, SIGKILL);
-    wait_for_child(child);
-    throw;
-  }
-
-  return result;
+  stream_pipes(pipes, child_proc, cfg);
+  return child_proc.wait();
 }
 
 }  // namespace envy
