@@ -7,6 +7,7 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,10 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+// Long enough that waiting on it is unmistakable, short enough to not litter for long.
+static constexpr int kDescendantLifetimeSec{ 10 };
+static constexpr double kExitLatencyBudgetSec{ 3.0 };
 
 static std::vector<std::string> run_collect(std::string_view script,
                                             std::optional<fs::path> cwd = std::nullopt,
@@ -213,6 +218,56 @@ TEST_CASE("shell_run bash fails on command not found") {
   CHECK(lines[0] == "before");
   // "after" should NOT appear because fail-fast should stop execution
   for (auto const &line : lines) { CHECK(line != "after"); }
+}
+
+// shell_run must return when the direct child exits, not when the pipes reach EOF: a
+// descendant that inherits stdout/stderr and outlives the child would otherwise pin envy
+// for that descendant's entire lifetime.
+static double run_with_lingering_descendant(std::string_view script,
+                                            std::vector<std::string> &lines) {
+  envy::shell_run_cfg inv{ .on_output_line =
+                               [&](std::string_view line) { lines.emplace_back(line); },
+                           .env = envy::shell_getenv(),
+                           .shell = envy::shell_choice::bash };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const result{ envy::shell_run(script, inv) };
+  std::chrono::duration<double> const elapsed{ std::chrono::steady_clock::now() - start };
+  CHECK(result.exit_code == 0);
+  CHECK(!result.signal.has_value());
+  return elapsed.count();
+}
+
+TEST_CASE("shell_run returns when child exits with descendant holding stdout") {
+  std::vector<std::string> lines;
+  auto const script{ "echo hi; (sleep " + std::to_string(kDescendantLifetimeSec) +
+                     " 2>/dev/null &)" };
+  double const elapsed{ run_with_lingering_descendant(script, lines) };
+  CHECK(elapsed < kExitLatencyBudgetSec);
+  REQUIRE(lines.size() == 1);
+  CHECK(lines[0] == "hi");
+}
+
+TEST_CASE("shell_run returns when child exits with descendant holding stderr") {
+  std::vector<std::string> lines;
+  auto const script{ ">&2 echo hi; (sleep " + std::to_string(kDescendantLifetimeSec) +
+                     " >/dev/null &)" };
+  double const elapsed{ run_with_lingering_descendant(script, lines) };
+  CHECK(elapsed < kExitLatencyBudgetSec);
+  REQUIRE(lines.size() == 1);
+  CHECK(lines[0] == "hi");
+}
+
+TEST_CASE("shell_run delivers all pre-exit output despite lingering descendant") {
+  std::vector<std::string> lines;
+  auto const script{ "(sleep " + std::to_string(kDescendantLifetimeSec) +
+                     " &); for i in {1..500}; do printf '%0100d\\n' $i; done; "
+                     "printf 'tail-no-newline'" };
+  double const elapsed{ run_with_lingering_descendant(script, lines) };
+  CHECK(elapsed < kExitLatencyBudgetSec);
+  REQUIRE(lines.size() == 501);
+  CHECK(lines[0].size() == 100);
+  CHECK(lines[499].size() == 100);
+  CHECK(lines[500] == "tail-no-newline");
 }
 
 TEST_CASE("shell_run bash fails on exit 1 mid-script") {
