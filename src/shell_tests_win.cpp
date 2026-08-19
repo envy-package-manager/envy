@@ -206,8 +206,9 @@ static double run_with_lingering_descendant(std::string const &script,
 
 TEST_CASE("shell_run returns when child exits with descendant holding pipes") {
   std::vector<std::string> lines;
-  double const elapsed{ run_with_lingering_descendant(
-      std::string{ "echo hi\n" } + kLingeringDescendant, lines) };
+  double const elapsed{
+    run_with_lingering_descendant(std::string{ "echo hi\n" } + kLingeringDescendant, lines)
+  };
   CHECK(elapsed < kExitLatencyBudgetSec);
   REQUIRE(lines.size() == 1);
   CHECK(lines[0] == "hi");

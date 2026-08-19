@@ -143,7 +143,8 @@ struct pipe_state {
   bool closed;
 };
 
-void dispatch_line(pipe_state const &pipe, std::string_view line,
+void dispatch_line(pipe_state const &pipe,
+                   std::string_view line,
                    shell_run_cfg const &cfg) {
   if (pipe.stream == shell_stream::std_out) {
     if (cfg.on_stdout_line) { cfg.on_stdout_line(line); }
@@ -249,12 +250,14 @@ void drain_after_exit(std::array<pipe_state, 2> &pipes, shell_run_cfg const &cfg
   }
 
   if (inherited) {
-    tui::debug("shell: child exited with output pipes still held by a descendant; "
-               "output written after this point is dropped");
+    tui::debug(
+        "shell: child exited with output pipes still held by a descendant; "
+        "output written after this point is dropped");
   }
 }
 
-void stream_pipes(std::array<pipe_state, 2> &pipes, child_process &child,
+void stream_pipes(std::array<pipe_state, 2> &pipes,
+                  child_process &child,
                   shell_run_cfg const &cfg) {
   std::array<pollfd, 2> poll_fds{};
   std::string chunk(kChunkSize, '\0');

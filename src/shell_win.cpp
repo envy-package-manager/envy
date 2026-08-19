@@ -859,17 +859,18 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   std::atomic<bool> pipes_inherited{ false };
 
   {
-    auto const read_stream{ [&](HANDLE pipe, shell_stream stream,
-                                std::exception_ptr &slot) {
-      try {
-        if (stream_pipe_lines(pipe, stream, cfg, callback_mutex, child_exited)) {
-          pipes_inherited.store(true);
+    auto const read_stream{
+      [&](HANDLE pipe, shell_stream stream, std::exception_ptr &slot) {
+        try {
+          if (stream_pipe_lines(pipe, stream, cfg, callback_mutex, child_exited)) {
+            pipes_inherited.store(true);
+          }
+        } catch (...) {
+          slot = std::current_exception();
+          reader_failed.store(true);
         }
-      } catch (...) {
-        slot = std::current_exception();
-        reader_failed.store(true);
       }
-    } };
+    };
 
     std::thread stdout_reader{ [&]() {
       read_stream(stdout_read_end.get(), shell_stream::std_out, stdout_exception);
@@ -901,8 +902,9 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   if (stdout_exception) { std::rethrow_exception(stdout_exception); }
   if (stderr_exception) { std::rethrow_exception(stderr_exception); }
   if (pipes_inherited.load()) {
-    tui::debug("shell: child exited with output pipes still held by a descendant; "
-               "output written after this point is dropped");
+    tui::debug(
+        "shell: child exited with output pipes still held by a descendant; "
+        "output written after this point is dropped");
   }
 
   return result;
