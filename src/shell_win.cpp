@@ -589,9 +589,8 @@ void stream_pipes(std::array<pipe_state, 2> &pipes,
 
     // Idle waits double as the exit check; a talkative child never pays for a sleep.
     // Pipe EOF means every writer let go, not that the child exited - watch for both.
-    DWORD const wait_result{
-      ::WaitForSingleObject(process, read_any ? 0 : kPipePollIntervalMs)
-    };
+    DWORD const wait_result{ ::WaitForSingleObject(process,
+                                                   read_any ? 0 : kPipePollIntervalMs) };
     if (wait_result == WAIT_TIMEOUT) { continue; }
     if (wait_result != WAIT_OBJECT_0) {
       throw std::system_error(::GetLastError(),
