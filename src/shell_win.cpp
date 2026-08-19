@@ -872,25 +872,30 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
       }
     };
 
-    std::thread stdout_reader{ [&]() {
-      read_stream(stdout_read_end.get(), shell_stream::std_out, stdout_exception);
-    } };
-    std::thread stderr_reader{ [&]() {
-      read_stream(stderr_read_end.get(), shell_stream::std_err, stderr_exception);
-    } };
+    std::thread stdout_reader;
+    std::thread stderr_reader;
 
-    struct reader_stop {  // readers must be released and joined on every exit path
+    // Declared before the threads start so a failed startup still releases and joins
+    // whichever reader did start - a joinable thread destroyed here would terminate().
+    struct reader_stop {
       std::atomic<bool> &exited;
       std::thread &out;
       std::thread &err;
       ~reader_stop() {
         exited.store(true);
-        out.join();
-        err.join();
+        if (out.joinable()) { out.join(); }
+        if (err.joinable()) { err.join(); }
       }
     } const stop{ child_exited, stdout_reader, stderr_reader };
 
     try {
+      stdout_reader = std::thread{ [&]() {
+        read_stream(stdout_read_end.get(), shell_stream::std_out, stdout_exception);
+      } };
+      stderr_reader = std::thread{ [&]() {
+        read_stream(stderr_read_end.get(), shell_stream::std_err, stderr_exception);
+      } };
+
       result = wait_for_child(process.get(), reader_failed);
     } catch (...) {
       ::TerminateProcess(process.get(), 1);

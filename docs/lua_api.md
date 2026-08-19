@@ -85,8 +85,9 @@ if res.exit_code ~= 0 then error("foo not installed") end
 - SETUP pair CHECK/INSTALL: project_root
 
 **Backgrounded processes:** `envy.run` returns when the shell exits, not when its
-descendants do. Output a backgrounded grandchild writes after that point is dropped —
-redirect it (`cmd >log 2>&1 &`) if you need it.
+descendants do; output a backgrounded grandchild writes after that point is dropped.
+Redirect it to a file to keep it — `cmd >log 2>&1 &` (bash/sh), `start /b cmd >log 2>&1`
+(cmd), `Start-Process -RedirectStandardOutput log` (powershell).
 
 ---
 
