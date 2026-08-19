@@ -14,12 +14,10 @@
 #include <cwchar>
 #include <filesystem>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -28,9 +26,7 @@ namespace envy {
 namespace {
 
 constexpr DWORD kPipeBufferSize{ 4096 };
-constexpr size_t kLinePendingReserve{ 256 };
-constexpr DWORD kPipePollIntervalMs{ 10 };      // idle latency before re-peeking a pipe
-constexpr DWORD kProcessWaitIntervalMs{ 100 };  // bounds a wedged reader's stall
+constexpr DWORD kPipePollIntervalMs{ 10 };  // idle latency before re-peeking a pipe
 
 HANDLE g_job_object{ NULL };
 
@@ -483,13 +479,17 @@ std::vector<wchar_t> build_environment_block(shell_env_t const &env) {
   return block;
 }
 
-void dispatch_line(std::string_view line,
-                   shell_stream stream,
-                   shell_run_cfg const &cfg,
-                   std::mutex &callback_mutex) {
+struct pipe_state {
+  HANDLE handle;
+  shell_stream stream;
+  std::string pending;
+  size_t offset;
+  bool closed;
+};
+
+void dispatch_line(std::string_view line, shell_stream stream, shell_run_cfg const &cfg) {
   if (!line.empty() && line.back() == '\r') { line.remove_suffix(1); }
   while (!line.empty() && line.back() == ' ') { line.remove_suffix(1); }
-  std::lock_guard<std::mutex> lock{ callback_mutex };
   if (stream == shell_stream::std_out) {
     if (cfg.on_stdout_line) { cfg.on_stdout_line(line); }
   } else {
@@ -498,75 +498,110 @@ void dispatch_line(std::string_view line,
   if (cfg.on_output_line) { cfg.on_output_line(line); }
 }
 
-// Returns true if the pipe was abandoned while still open - i.e. the child exited but a
-// descendant inherited the write end and is keeping it unbroken.
-bool stream_pipe_lines(HANDLE pipe,
-                       shell_stream stream,
-                       shell_run_cfg const &cfg,
-                       std::mutex &callback_mutex,
-                       std::atomic<bool> const &child_exited) {
-  std::string pending{};
-  pending.reserve(kLinePendingReserve);
+void emit_complete_lines(pipe_state &pipe, shell_run_cfg const &cfg) {
+  size_t newline{ 0 };
+  while ((newline = pipe.pending.find('\n', pipe.offset)) != std::string::npos) {
+    dispatch_line({ pipe.pending.data() + pipe.offset, newline - pipe.offset },
+                  pipe.stream,
+                  cfg);
+    pipe.offset = newline + 1;
+  }
+
+  if (pipe.offset > kPipeBufferSize) {  // compact once the consumed prefix grows large
+    pipe.pending.erase(0, pipe.offset);
+    pipe.offset = 0;
+  }
+}
+
+void close_pipe(pipe_state &pipe, shell_run_cfg const &cfg) {
+  if (pipe.offset < pipe.pending.size()) {  // trailing partial line
+    dispatch_line({ pipe.pending.data() + pipe.offset, pipe.pending.size() - pipe.offset },
+                  pipe.stream,
+                  cfg);
+  }
+  pipe.pending.clear();
+  pipe.offset = 0;
+  pipe.closed = true;
+}
+
+// Dispatches everything currently buffered, never blocking. Returns false at pipe EOF.
+bool read_available(pipe_state &pipe, shell_run_cfg const &cfg, bool &read_any) {
   std::array<char, kPipeBufferSize> buffer{};
-  size_t offset{ 0 };
-  bool inherited{ false };
 
   while (true) {
     DWORD available{ 0 };
-    if (!::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
-      DWORD const err = ::GetLastError();
-      if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) { break; }
+    if (!::PeekNamedPipe(pipe.handle, nullptr, 0, nullptr, &available, nullptr)) {
+      DWORD const err{ ::GetLastError() };
+      if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) { return false; }
       throw std::system_error(err, std::system_category(), "PeekNamedPipe failed");
     }
-
-    if (available == 0) {
-      // Waiting for EOF here would pin us to the descendant's lifetime, not the child's;
-      // output it writes from now on is dropped instead.
-      if (child_exited.load()) {
-        inherited = true;
-        break;
-      }
-      ::Sleep(kPipePollIntervalMs);
-      continue;
-    }
+    if (available == 0) { return true; }
 
     DWORD read_bytes{ 0 };
     DWORD const want{ static_cast<DWORD>(  // bounded, so ReadFile never blocks
         std::min<size_t>(available, buffer.size())) };
-    BOOL const success{ ::ReadFile(pipe, buffer.data(), want, &read_bytes, nullptr) };
-    if (!success) {
-      DWORD const err = ::GetLastError();
-      if (err == ERROR_BROKEN_PIPE) { break; }
-      if (err == ERROR_HANDLE_EOF) { break; }
+    if (!::ReadFile(pipe.handle, buffer.data(), want, &read_bytes, nullptr)) {
+      DWORD const err{ ::GetLastError() };
+      if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) { return false; }
       throw std::system_error(err, std::system_category(), "ReadFile failed");
     }
-    if (read_bytes == 0) { break; }
+    if (read_bytes == 0) { return false; }
 
-    pending.append(buffer.data(), read_bytes);
+    read_any = true;
+    pipe.pending.append(buffer.data(), read_bytes);
+    emit_complete_lines(pipe, cfg);
+  }
+}
 
-    size_t newline{ 0 };
-    while ((newline = pending.find('\n', offset)) != std::string::npos) {
-      dispatch_line({ pending.data() + offset, newline - offset },
-                    stream,
-                    cfg,
-                    callback_mutex);
-      offset = newline + 1;
-    }
+// The child is gone; flush what is already buffered instead of waiting for EOF, which a
+// surviving descendant holding an inherited write end would delay for its own lifetime.
+void drain_after_exit(std::array<pipe_state, 2> &pipes, shell_run_cfg const &cfg) {
+  bool inherited{ false };
 
-    // Compact buffer when offset grows large
-    if (offset > kPipeBufferSize) {
-      pending.erase(0, offset);
-      offset = 0;
-    }
+  for (auto &pipe : pipes) {
+    if (pipe.closed) { continue; }
+    bool read_any{ false };
+    inherited = read_available(pipe, cfg, read_any) || inherited;
+    close_pipe(pipe, cfg);
   }
 
-  if (offset < pending.size()) {
-    dispatch_line({ pending.data() + offset, pending.size() - offset },
-                  stream,
-                  cfg,
-                  callback_mutex);
+  if (inherited) {
+    tui::debug(
+        "shell: child exited with output pipes still held by a descendant; "
+        "output written after this point is dropped");
   }
-  return inherited;
+}
+
+// One thread drains both pipes, stdout first, so causally ordered writes to the two
+// streams reach the callbacks in that order - two readers raced and could invert them.
+void stream_pipes(std::array<pipe_state, 2> &pipes,
+                  HANDLE process,
+                  shell_run_cfg const &cfg) {
+  size_t closed_count{ 0 };
+
+  while (closed_count < pipes.size()) {
+    bool read_any{ false };
+    for (auto &pipe : pipes) {
+      if (pipe.closed || read_available(pipe, cfg, read_any)) { continue; }
+      close_pipe(pipe, cfg);
+      ++closed_count;
+    }
+
+    // Idle waits double as the exit check; a talkative child never pays for a sleep.
+    // Pipe EOF means every writer let go, not that the child exited - watch for both.
+    DWORD const wait_result{
+      ::WaitForSingleObject(process, read_any ? 0 : kPipePollIntervalMs)
+    };
+    if (wait_result == WAIT_TIMEOUT) { continue; }
+    if (wait_result != WAIT_OBJECT_0) {
+      throw std::system_error(::GetLastError(),
+                              std::system_category(),
+                              "WaitForSingleObject failed");
+    }
+
+    drain_after_exit(pipes, cfg);
+    return;
+  }
 }
 
 shell_result child_result(HANDLE process) {
@@ -578,29 +613,6 @@ shell_result child_result(HANDLE process) {
   }
 
   return { .exit_code = static_cast<int>(exit_code), .signal = std::nullopt };
-}
-
-// Bounded waits: a reader that died mid-stream (callback threw) stops draining its pipe,
-// which would otherwise wedge the child on a full-pipe write forever.
-shell_result wait_for_child(HANDLE process, std::atomic<bool> const &reader_failed) {
-  while (true) {
-    DWORD const wait_result{ ::WaitForSingleObject(process, kProcessWaitIntervalMs) };
-    if (wait_result == WAIT_OBJECT_0) { return child_result(process); }
-    if (wait_result != WAIT_TIMEOUT) {
-      throw std::system_error(::GetLastError(),
-                              std::system_category(),
-                              "WaitForSingleObject failed");
-    }
-    if (!reader_failed.load()) { continue; }
-
-    ::TerminateProcess(process, 1);
-    if (::WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0) {
-      throw std::system_error(::GetLastError(),
-                              std::system_category(),
-                              "WaitForSingleObject failed");
-    }
-    return child_result(process);
-  }
 }
 
 std::wstring quote_arg(std::wstring_view arg) {
@@ -850,69 +862,25 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   stdout_write_end.reset();
   stderr_write_end.reset();
 
-  shell_result result{};
-  std::exception_ptr stdout_exception;
-  std::exception_ptr stderr_exception;
-  std::mutex callback_mutex;
-  std::atomic<bool> child_exited{ false };
-  std::atomic<bool> reader_failed{ false };
-  std::atomic<bool> pipes_inherited{ false };
+  std::array<pipe_state, 2> pipes{
+    pipe_state{ stdout_read_end.get(), shell_stream::std_out, {}, 0, false },
+    pipe_state{ stderr_read_end.get(), shell_stream::std_err, {}, 0, false },
+  };
 
-  {
-    auto const read_stream{
-      [&](HANDLE pipe, shell_stream stream, std::exception_ptr &slot) {
-        try {
-          if (stream_pipe_lines(pipe, stream, cfg, callback_mutex, child_exited)) {
-            pipes_inherited.store(true);
-          }
-        } catch (...) {
-          slot = std::current_exception();
-          reader_failed.store(true);
-        }
-      }
-    };
-
-    std::thread stdout_reader;
-    std::thread stderr_reader;
-
-    // Declared before the threads start so a failed startup still releases and joins
-    // whichever reader did start - a joinable thread destroyed here would terminate().
-    struct reader_stop {
-      std::atomic<bool> &exited;
-      std::thread &out;
-      std::thread &err;
-      ~reader_stop() {
-        exited.store(true);
-        if (out.joinable()) { out.join(); }
-        if (err.joinable()) { err.join(); }
-      }
-    } const stop{ child_exited, stdout_reader, stderr_reader };
-
-    try {
-      stdout_reader = std::thread{ [&]() {
-        read_stream(stdout_read_end.get(), shell_stream::std_out, stdout_exception);
-      } };
-      stderr_reader = std::thread{ [&]() {
-        read_stream(stderr_read_end.get(), shell_stream::std_err, stderr_exception);
-      } };
-
-      result = wait_for_child(process.get(), reader_failed);
-    } catch (...) {
-      ::TerminateProcess(process.get(), 1);
-      ::WaitForSingleObject(process.get(), INFINITE);
-      throw;
+  try {
+    stream_pipes(pipes, process.get(), cfg);
+    if (::WaitForSingleObject(process.get(), INFINITE) != WAIT_OBJECT_0) {
+      throw std::system_error(::GetLastError(),
+                              std::system_category(),
+                              "WaitForSingleObject failed");
     }
+  } catch (...) {  // a throwing callback leaves the pipes undrained; do not wait on that
+    ::TerminateProcess(process.get(), 1);
+    ::WaitForSingleObject(process.get(), INFINITE);
+    throw;
   }
 
-  if (stdout_exception) { std::rethrow_exception(stdout_exception); }
-  if (stderr_exception) { std::rethrow_exception(stderr_exception); }
-  if (pipes_inherited.load()) {
-    tui::debug(
-        "shell: child exited with output pipes still held by a descendant; "
-        "output written after this point is dropped");
-  }
-
-  return result;
+  return child_result(process.get());
 }
 
 }  // namespace envy
