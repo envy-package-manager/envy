@@ -19,8 +19,8 @@ class cmd_init : public cmd {
     std::filesystem::path bin_dir;
     std::optional<std::string> mirror;
     std::optional<std::string> envy_version;  // re-exec into this envy to run the init
-    std::optional<bool> deploy{ true };  // @envy deploy directive value
-    std::optional<bool> root{ true };    // @envy root directive value
+    std::optional<bool> deploy{ true };       // @envy deploy directive value
+    std::optional<bool> root{ true };         // @envy root directive value
     bool pin_sums{ false };     // fetch this release's SHA256SUMS and pin its hash
     std::string platform_flag;  // "posix", "windows", "all", or empty (current OS)
   };

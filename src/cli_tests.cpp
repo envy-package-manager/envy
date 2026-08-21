@@ -1552,7 +1552,10 @@ TEST_CASE("cli_parse: cmd_init --envy-version") {
   }
 
   SUBCASE("value is required when the flag appears") {
-    std::vector<std::string> args{ "envy", "init", "/tmp/proj", "/tmp/bin",
+    std::vector<std::string> args{ "envy",
+                                   "init",
+                                   "/tmp/proj",
+                                   "/tmp/bin",
                                    "--envy-version" };
     auto argv{ make_argv(args) };
 
