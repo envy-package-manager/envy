@@ -114,8 +114,12 @@ TEST_CASE("reexec_argv_without: keeps every other option in order") {
                          "1.2.3",
                          "--pin-sums" }) };
   auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
-  CHECK(kept == std::vector<std::string>{ "envy", "init",     "proj",
-                                          "bin",  "--mirror", "https://m",
+  CHECK(kept == std::vector<std::string>{ "envy",
+                                          "init",
+                                          "proj",
+                                          "bin",
+                                          "--mirror",
+                                          "https://m",
                                           "--pin-sums" });
 }
 
