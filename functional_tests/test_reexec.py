@@ -562,7 +562,7 @@ class TestReexecInit(_ReexecTestBase):
         target, tools = self._init_target()
 
         result = self._run_envy(
-            ["init", target, tools, "--envy-version", "../evil"],
+            ["init", target, tools, "--envy-version", ".."],
             env=self._init_env(),
         )
 

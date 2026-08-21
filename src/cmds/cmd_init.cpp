@@ -202,7 +202,7 @@ void cmd_init::execute() {
     reexec_if_needed(envy_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror },
                      cli_cache_root_,
                      cfg_.project_dir);
-    if (*cfg_.envy_version != ENVY_VERSION_STR) {  // dev build, or ENVY_NO_REEXEC
+    if (*cfg_.envy_version != ENVY_VERSION_STR) {  // no re-exec, or it landed elsewhere
       tui::warn("init: not re-execing into envy %s; stamping %s instead",
                 cfg_.envy_version->c_str(),
                 ENVY_VERSION_STR);

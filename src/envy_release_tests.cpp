@@ -102,6 +102,17 @@ TEST_CASE("envy_release_version_is_valid: path traversal rejected") {
   CHECK_FALSE(envy::envy_release_version_is_valid("../../../etc/passwd"));
 }
 
+TEST_CASE("envy_release_version_is_valid: bare '.' and '..' rejected") {
+  // Both clear the character filter, and both name a directory instead of a release:
+  // '<cache>/envy/../envy' exists, so the re-exec fast path would try to exec it.
+  CHECK_FALSE(envy::envy_release_version_is_valid("."));
+  CHECK_FALSE(envy::envy_release_version_is_valid(".."));
+  // Only the whole component is special; a dot-led version is still a version.
+  CHECK(envy::envy_release_version_is_valid("..1"));
+  CHECK(envy::envy_release_version_is_valid("1.."));
+  CHECK(envy::envy_release_version_is_valid("..."));
+}
+
 TEST_CASE("envy_release_version_is_valid: slash rejected") {
   CHECK_FALSE(envy::envy_release_version_is_valid("1.2.3/evil"));
 }
