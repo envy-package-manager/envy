@@ -536,15 +536,22 @@ class TestReexecInit(_ReexecTestBase):
 
     @unittest.skipIf(sys.platform == "win32", "POSIX stand-in script")
     def test_cached_envy_version_needs_no_mirror(self) -> None:
-        """Cache hit: nothing is published, so a download attempt would fail outright."""
+        """Cache hit: nothing is published, so a download attempt would fail outright.
+
+        The flag assertion is not redundant with the download path's: each path throws its
+        own reexec_request, so only this catches a fast path that forgets to carry the
+        options the child must not see -- and it is the path a second init takes.
+        """
         cached = self._cached_binary_path("1.2.3")
         cached.parent.mkdir(parents=True)
         shutil.copy2(self._make_marker(), cached)
 
-        _, result = self._init("--envy-version", "1.2.3")
+        _, result = self._init("--envy-version", "1.2.3", "--pin-sums")
 
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn(f"{self.MARKER} init", result.stdout)
+        self.assertNotIn("--envy-version", result.stdout)
+        self.assertIn("--pin-sums", result.stdout)
 
     @unittest.skipIf(sys.platform == "win32", "POSIX stand-in script")
     def test_no_envy_version_never_reexecs(self) -> None:
