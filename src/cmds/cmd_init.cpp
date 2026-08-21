@@ -198,10 +198,10 @@ void cmd_init::execute() {
     }
     // The child inherits this process's argv, so the flag itself must not travel: it is a
     // parent-side instruction, and every release predating it rejects the unknown option.
-    reexec_drop_option("--envy-version");
     reexec_if_needed(envy_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror },
                      cli_cache_root_,
-                     cfg_.project_dir);
+                     cfg_.project_dir,
+                     { "--envy-version" });
     if (*cfg_.envy_version != ENVY_VERSION_STR) {  // no re-exec, or it landed elsewhere
       tui::warn("init: not re-execing into envy %s; stamping %s instead",
                 cfg_.envy_version->c_str(),

@@ -159,3 +159,29 @@ TEST_CASE("reexec_argv_without: result is always null-terminated") {
   REQUIRE(empty.size() == 1);
   CHECK(empty.back() == nullptr);
 }
+
+// --- reexec_child_argv: the whole of reexec_exec bar the exec ---
+
+TEST_CASE("reexec_child_argv: no dropped options passes argv through") {
+  auto argv{ make_argv({ "envy", "install", "--verbose" }) };
+  envy::reexec_request const req{ "/cache/envy/1.2.3/envy", {} };
+  CHECK(to_strings(envy::reexec_child_argv(req, argv.data())) ==
+        std::vector<std::string>{ "envy", "install", "--verbose" });
+}
+
+TEST_CASE("reexec_child_argv: every dropped option goes, in one pass each") {
+  auto argv{ make_argv(
+      { "envy", "init", "proj", "--envy-version", "1.2.3", "--tag=x", "--pin-sums" }) };
+  envy::reexec_request const req{ "/tmp/envy", { "--envy-version", "--tag" } };
+  CHECK(to_strings(envy::reexec_child_argv(req, argv.data())) ==
+        std::vector<std::string>{ "envy", "init", "proj", "--pin-sums" });
+}
+
+TEST_CASE("reexec_child_argv: result is owned and null-terminated") {
+  // reexec_exec hands .data() straight to exec, so the terminator is not optional.
+  auto argv{ make_argv({ "envy" }) };
+  envy::reexec_request const req{ "/tmp/envy", { "--envy-version" } };
+  auto const child{ envy::reexec_child_argv(req, argv.data()) };
+  REQUIRE(child.size() == 2);
+  CHECK(child.back() == nullptr);
+}

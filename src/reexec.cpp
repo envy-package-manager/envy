@@ -1,7 +1,6 @@
 #include "reexec.h"
 
 #include "cache.h"
-#include "cmd.h"
 #include "envy_release.h"
 #include "extract.h"
 #include "fetch.h"
@@ -23,9 +22,6 @@
 namespace envy {
 
 namespace {
-
-char **g_argv{};
-std::vector<char *> g_argv_filtered;  // backs g_argv once an option has been dropped
 
 std::string_view get_self_version() {
   if (auto const *v = std::getenv("ENVY_TEST_SELF_VERSION")) { return v; }
@@ -76,14 +72,7 @@ std::vector<std::string> build_child_env() {
   return result;
 }
 
-[[noreturn]] void do_reexec(std::filesystem::path const &binary) {
-  tui::info("reexec: switching to envy at %s", binary.string().c_str());
-  throw subprocess_exit{ platform::exec_process(binary, g_argv, build_child_env()) };
-}
-
 }  // namespace
-
-void reexec_init(char **argv) { g_argv = argv; }
 
 std::vector<char *> reexec_argv_without(char **argv, std::string_view option) {
   std::vector<char *> out;
@@ -107,9 +96,24 @@ std::vector<char *> reexec_argv_without(char **argv, std::string_view option) {
   return out;
 }
 
-void reexec_drop_option(std::string_view option) {
-  g_argv_filtered = reexec_argv_without(g_argv, option);
-  g_argv = g_argv_filtered.data();
+std::vector<char *> reexec_child_argv(reexec_request const &request, char **argv) {
+  std::vector<char *> acc;
+  for (char **p{ argv }; p && *p; ++p) { acc.push_back(*p); }
+  acc.push_back(nullptr);
+
+  // One pass per dropped option, each reading the array the last one produced. Only the
+  // pointer array is ever rebuilt; the strings stay argv's throughout.
+  for (auto const &option : request.drop_options) {
+    auto next{ reexec_argv_without(acc.data(), option) };
+    acc.swap(next);
+  }
+  return acc;
+}
+
+int reexec_exec(reexec_request const &request, char **argv) {
+  auto child_argv{ reexec_child_argv(request, argv) };  // not const: exec wants char **
+  tui::info("reexec: switching to envy at %s", request.binary.string().c_str());
+  return platform::exec_process(request.binary, child_argv.data(), build_child_env());
 }
 
 reexec_decision reexec_should(std::string_view self_version,
@@ -126,7 +130,8 @@ reexec_decision reexec_should(std::string_view self_version,
 
 void reexec_if_needed(envy_meta const &meta,
                       std::optional<std::filesystem::path> const &cli_cache_root,
-                      std::filesystem::path const &manifest_dir) {
+                      std::filesystem::path const &manifest_dir,
+                      std::vector<std::string> drop_options) {
   // Consume and unset the loop guard if present
   bool const reexec_env_set{ std::getenv("ENVY_REEXEC") != nullptr };
   if (reexec_env_set) { platform::env_var_unset("ENVY_REEXEC"); }
@@ -150,7 +155,9 @@ void reexec_if_needed(envy_meta const &meta,
     resolve_cache_root(cli_cache_root, meta.cache_for_platform(), manifest_dir)
   };
   auto const cached_binary{ cache_root / "envy" / version / platform::exe_name("envy") };
-  if (std::filesystem::exists(cached_binary)) { do_reexec(cached_binary); }
+  if (std::filesystem::exists(cached_binary)) {
+    throw reexec_request{ cached_binary, std::move(drop_options) };
+  }
 
   // Slow path: download to temp dir, re-exec from there.
   // The re-exec'd binary's own cache::ensure_envy() will install itself into cache.
@@ -234,7 +241,7 @@ void reexec_if_needed(envy_meta const &meta,
   make_executable(binary_path);
   remove_quarantine(binary_path);
 
-  do_reexec(binary_path);
+  throw reexec_request{ binary_path, std::move(drop_options) };
 }
 
 }  // namespace envy

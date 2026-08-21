@@ -10,25 +10,37 @@
 
 namespace envy {
 
-void reexec_init(char **argv);
-
-// Drop an option, and its value, from the argv the re-exec'd child receives. A flag the
-// parent consumed to choose *which* envy runs means nothing to that envy, and a release
-// predating the flag rejects the unknown option outright.
-void reexec_drop_option(std::string_view option);
-
-// The filtering reexec_drop_option applies: `argv` minus '<option> <value>' and
-// '<option>=<value>', null-terminated, sharing argv's strings.
-std::vector<char *> reexec_argv_without(char **argv, std::string_view option);
+// The requested envy, on disk and ready to run. Thrown rather than returned: a caller that
+// forgot to propagate a return value would carry on as the wrong version, and only main
+// holds the argv this has to be exec'd with anyway.
+struct reexec_request {
+  std::filesystem::path binary;
+  // Parent-side flags the child must not see: an option consumed to choose *which* envy
+  // runs means nothing to that envy, and a release predating it rejects it outright.
+  std::vector<std::string> drop_options;
+};
 
 // Called by manifest-aware commands after discovering metadata.
-// If version mismatch: downloads correct envy to cache, re-execs (never returns).
+// If version mismatch: downloads the correct envy, then throws reexec_request.
 // Returns normally if: no @envy version, version matches, dev build (0.0.0),
 // ENVY_REEXEC set, or ENVY_NO_REEXEC set.
 // `manifest_dir` anchors a relative '@envy cache-*' directive.
 void reexec_if_needed(envy_meta const &meta,
                       std::optional<std::filesystem::path> const &cli_cache_root,
-                      std::filesystem::path const &manifest_dir);
+                      std::filesystem::path const &manifest_dir,
+                      std::vector<std::string> drop_options = {});
+
+// Become the requested envy, with the loop guard set. Never returns where exec replaces
+// the process; elsewhere, the child's exit code.
+int reexec_exec(reexec_request const &request, char **argv);
+
+// What the child is handed: `argv` minus every option the request drops, null-terminated,
+// sharing argv's strings. All of reexec_exec except the exec itself.
+std::vector<char *> reexec_child_argv(reexec_request const &request, char **argv);
+
+// `argv` minus '<option> <value>' and '<option>=<value>', null-terminated, sharing argv's
+// strings. The filtering reexec_exec applies, exposed for its own sake.
+std::vector<char *> reexec_argv_without(char **argv, std::string_view option);
 
 enum class reexec_decision { PROCEED, REEXEC };
 
