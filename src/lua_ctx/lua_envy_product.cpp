@@ -47,11 +47,15 @@ void lua_envy_product_install(sol::table &envy_table) {
                                     : nullptr };
       if (!provider) { return std::nullopt; }
 
+      // dependencies is keyed by bare identity while pkg_key includes options, so a
+      // hit can name a different package than the registry's provider — a debug
+      // variant's edge does not order a release variant's payload.
       auto const edge_needed_by{ [&]() -> std::optional<pkg_phase> {
         std::lock_guard const deps_lock(consumer->deps_mutex);
         auto const it{ consumer->dependencies.find(provider->cfg->identity) };
-        return it == consumer->dependencies.end() ? std::nullopt
-                                                  : std::optional{ it->second.needed_by };
+        return it == consumer->dependencies.end() || it->second.p != provider
+                   ? std::nullopt
+                   : std::optional{ it->second.needed_by };
       }() };
       if (!edge_needed_by) {
         std::string const msg{ "envy.product: '" + provider->cfg->identity +

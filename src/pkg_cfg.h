@@ -119,10 +119,11 @@ struct pkg_cfg : unmovable {
                                    bool allow_weak_without_source = false);
 
   // Parse one `source.dependencies` entry, for either a spec's source table or a
-  // BUNDLES declaration's. Same as parse(..., true) except that a weak product
-  // reference is rejected: the weak pass runs only at a resolution barrier, after
-  // every spec_fetch has finished, so no dependency edge could ever gate the fetch
-  // function meant to consume the product.
+  // BUNDLES declaration's. Same as parse(..., true) except that the entry must name
+  // a 'spec' and be a strong reference — reference-only and `weak = {...}` forms are
+  // both rejected. The weak pass runs only at a resolution barrier, after every
+  // spec_fetch has finished, so no dependency edge could ever gate the fetch
+  // function waiting on the entry.
   static pkg_cfg *parse_fetch_dependency(sol::object const &entry,
                                          std::filesystem::path const &base_path);
 

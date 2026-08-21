@@ -448,6 +448,14 @@ pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
         (cfg->product.has_value() ? "product " + *cfg->product : cfg->identity) +
         "' must be a strong reference: give the entry a 'spec' and a 'source'");
   }
+  if (cfg->identity.empty()) {
+    // parse(..., true) allows a bare product entry to omit 'spec'. With a source
+    // present that is not a weak reference, so it would otherwise reach pkg_key and
+    // fail there as an invalid identity rather than as a non-strong prerequisite.
+    throw std::runtime_error(
+        "source.dependencies product '" + cfg->product.value_or(std::string{}) +
+        "' must name a 'spec'");
+  }
   return cfg;
 }
 

@@ -418,3 +418,57 @@ end
                 events[0]["reason"].endswith(f"/pkg/jf{i}"),
                 f"jf{i} resolved to {events[0]['reason']}",
             )
+
+    def test_edge_must_belong_to_the_registry_provider(self):
+        """The edge has to be *this* provider's, not merely one sharing its identity.
+
+        pkg::dependencies is keyed by bare identity while pkg_key includes options, so
+        two option variants of one spec are distinct packages under one map key. Here
+        the closure depends on the debug variant and only the release variant declares
+        the product, so an identity-keyed lookup finds the debug edge and then reads
+        the release package -- which nothing drove through install. Whether that
+        yields a path or "missing pkg path" is down to timing, which is the failure
+        mode the edge check exists to prevent.
+        """
+        variant_tool = self.write_spec(
+            "variant_tool.lua",
+            """IDENTITY = "local.tool@v1"
+PRODUCTS = function(options)
+  if options.variant == "release" then return { wk = "wk" } end
+  return {}
+end
+FETCH = function(tmp_dir)
+  local f = io.open(tmp_dir .. "/wk", "w") f:write("w") f:close()
+  envy.commit_fetch("wk")
+end
+STAGE = function() end
+INSTALL = function(install_dir, stage_dir, fetch_dir)
+  envy.copy(fetch_dir .. "wk", install_dir .. "wk")
+end
+""",
+        )
+        src = self.lua_path(variant_tool)
+        manifest = self.write_manifest(
+            f"""
+BUNDLES = {{
+  corp = {{ identity = "corp.specs@r1",
+    source = {{
+      dependencies = {{ {{ spec = "local.tool@v1", source = "{src}",
+                        options = {{ variant = "debug" }} }} }},
+      fetch = function(tmp_dir)
+{self.probe("wk")}
+{BUNDLE_TAIL}
+      end }} }},
+}}
+PACKAGES = {{
+  {{ spec = "corp.thing@r1", bundle = "corp" }},
+  {{ spec = "local.tool@v1", source = "{src}", options = {{ variant = "release" }} }},
+}}
+"""
+        )
+        run = self.sync(manifest)
+
+        self.assertIn("PROBE ok=false", run.stderr)
+        self.assertIn("does not depend on it", run.stderr)
+        event = self.product_events(run, "wk")[0]
+        self.assertFalse(event["allowed"], event)

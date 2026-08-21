@@ -1056,6 +1056,12 @@ void wire_dependency_graph(pkg *p, engine &eng) {
             (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
             p->cfg->identity + "' is a weak reference");
       }
+      // Check the flag in the same critical section as the append, against the same
+      // mutex mark_fetch_closure scans under. Checking outside it would leave a
+      // window where the mark sees no weak reference and this sees no flag, so the
+      // package enters the closure holding a reference nothing can resolve: either
+      // the mark observes this append, or this observes the mark.
+      std::lock_guard const deps_lock(p->deps_mutex);
       if (p->fetch_closure) {
         // This package runs its whole ladder while the resolution barrier is held
         // shut by the consumer waiting on its closure, so the weak pass could only
@@ -1065,7 +1071,6 @@ void wire_dependency_graph(pkg *p, engine &eng) {
             (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
             p->cfg->identity + "' is a weak reference");
       }
-      std::lock_guard const deps_lock(p->deps_mutex);
       p->weak_references.push_back(pkg::weak_reference{
           .query = is_product_dep ? *dep_cfg->product : dep_cfg->identity,
           .fallback = dep_cfg->weak,

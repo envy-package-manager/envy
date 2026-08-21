@@ -770,22 +770,17 @@ std::unique_ptr<pkg> make_bare_pkg(std::string identity) {
                                        .type = pkg_type::CACHE_MANAGED });
 }
 
+// mark_fetch_closure touches no engine or cache state, so the cache root is inert:
+// the constructor only stores the path, and nothing here creates or removes it.
 struct mark_closure_fixture {
-  std::filesystem::path cache_root;
-  cache c;
-  engine eng;
-
-  explicit mark_closure_fixture(char const *name)
-      : cache_root{ std::filesystem::temp_directory_path() / name },
-        c{ cache_root },
-        eng{ c } {}
-  ~mark_closure_fixture() { std::filesystem::remove_all(cache_root); }
+  cache c{ std::filesystem::path{ "envy-unit-test-inert-cache-root" } };
+  engine eng{ c };
 };
 
 }  // namespace
 
 TEST_CASE("mark_fetch_closure: unresolved weak reference is rejected") {
-  mark_closure_fixture fx{ "envy-mark-closure-unresolved" };
+  mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   p->weak_references.push_back(pkg::weak_reference{ .query = "wk", .is_product = true });
 
@@ -798,7 +793,7 @@ TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
   // Resolved at an earlier barrier iteration means the provider is wired and
   // ordered, so running early violates nothing. Throwing here would be a false
   // positive on a legal graph.
-  mark_closure_fixture fx{ "envy-mark-closure-resolved" };
+  mark_closure_fixture fx;
   auto provider{ make_bare_pkg("local.prov@v1") };
   auto p{ make_bare_pkg("local.p@v1") };
   p->weak_references.push_back(pkg::weak_reference{ .query = "wk",
@@ -810,7 +805,7 @@ TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
 }
 
 TEST_CASE("mark_fetch_closure: propagates to the transitive closure") {
-  mark_closure_fixture fx{ "envy-mark-closure-transitive" };
+  mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   auto mid{ make_bare_pkg("local.mid@v1") };
   auto leaf{ make_bare_pkg("local.leaf@v1") };
@@ -824,7 +819,7 @@ TEST_CASE("mark_fetch_closure: propagates to the transitive closure") {
 }
 
 TEST_CASE("mark_fetch_closure: rejects a weak reference held deeper in the closure") {
-  mark_closure_fixture fx{ "envy-mark-closure-deep" };
+  mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   auto leaf{ make_bare_pkg("local.leaf@v1") };
   p->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
@@ -835,7 +830,7 @@ TEST_CASE("mark_fetch_closure: rejects a weak reference held deeper in the closu
 }
 
 TEST_CASE("mark_fetch_closure: is idempotent and terminates on a dependency cycle") {
-  mark_closure_fixture fx{ "envy-mark-closure-cycle" };
+  mark_closure_fixture fx;
   auto a{ make_bare_pkg("local.a@v1") };
   auto b{ make_bare_pkg("local.b@v1") };
   a->dependencies["local.b@v1"] = { b.get(), pkg_phase::pkg_build };
