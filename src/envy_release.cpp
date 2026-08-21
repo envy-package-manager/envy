@@ -27,6 +27,9 @@ bool hex_equal(std::string_view a, std::string_view b) {
 
 bool envy_release_version_is_valid(std::string_view version) {
   if (version.empty()) { return false; }
+  // '.' and '..' clear the character filter but name a directory rather than a release:
+  // '<cache>/envy/../envy' exists, and reaching execve with it merely fails.
+  if (version == "." || version == "..") { return false; }
   // ASCII-only: version becomes the envy/<version> cache path component.
   for (char c : version) {
     if (!util_ascii_is_alnum(c) && c != '.' && c != '-' && c != '_') { return false; }

@@ -19,7 +19,6 @@ int main(int argc, char *argv[]) {
   envy::termination_handler_install();
   envy::tui::init();
   envy::shell_init();
-  envy::reexec_init(argv);
 
   auto args{ envy::cli_parse(argc, argv) };
   envy::tui::configure_trace_outputs(args.trace_outputs);
@@ -46,6 +45,9 @@ int main(int argc, char *argv[]) {
 
   try {
     cmd->execute();
+  } catch (envy::reexec_request const &rr) {
+    // argv belongs to this frame, so this is where a re-exec can happen at all.
+    return envy::reexec_exec(rr, argv);
   } catch (envy::subprocess_exit const &se) {
     return se.code;
   } catch (std::exception const &ex) {
