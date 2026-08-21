@@ -36,7 +36,7 @@ envy init <project-dir> <bin-dir> [--envy-version=X.Y.Z] [--mirror=URL] [--pin-s
 
 - `project-dir`: Where manifest (`envy.lua`) and IDE config (`.luarc.json`) live
 - `bin-dir`: Where bootstrap script (`envy`) lives
-- `--envy-version`: Initialize the project at this version instead of the running binary's. Every version `init` writes is the running binary's, so this re-execs into the requested one—downloading it to a temp dir if the cache lacks it—and that binary does the init. A dev build (0.0.0) or `ENVY_NO_REEXEC` cannot re-exec: `init` warns and stamps itself
+- `--envy-version`: Initialize the project at this version instead of the running binary's. Every version `init` writes is the running binary's, so this re-execs into the requested one—downloading it to a temp dir if the cache lacks it—and that binary does the init. The flag is parent-side and is stripped from the child's argv: a plain `init` stamps its own version, which is the requested one, and every release predating the flag would reject it as an unknown option. A dev build (0.0.0) or `ENVY_NO_REEXEC` cannot re-exec: `init` warns and stamps itself
 - `--mirror`: Override default GitHub releases URL (for enterprise/air-gapped environments). Also where `--envy-version` downloads the requested release from, since the flag's value is the `@envy mirror` the project is about to get—so precedence is the usual `ENVY_MIRROR` > `--mirror` > envy upstream, and an air-gapped init needs no env var
 - `--pin-sums`: Fetch this release's `SHA256SUMS` and pin its hash, so bootstrap attests every envy binary it downloads. Needs network; fails before writing anything. Runs after the `--envy-version` re-exec, so the pin describes the version actually stamped
 

@@ -196,6 +196,9 @@ void cmd_init::execute() {
     if (!envy_release_version_is_valid(*cfg_.envy_version)) {
       throw std::runtime_error("init: invalid version string: " + *cfg_.envy_version);
     }
+    // The child inherits this process's argv, so the flag itself must not travel: it is a
+    // parent-side instruction, and every release predating it rejects the unknown option.
+    reexec_drop_option("--envy-version");
     reexec_if_needed(envy_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror },
                      cli_cache_root_,
                      cfg_.project_dir);

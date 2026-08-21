@@ -477,6 +477,22 @@ class TestReexecInit(_ReexecTestBase):
             ["init", target, tools, *extra], env=self._init_env()
         )
 
+    def test_unpublished_envy_version_fails(self) -> None:
+        """The one assertion only a real fetch can satisfy, on every platform.
+
+        A success-path init writes the same tree whether or not the parent re-execs -- the
+        stand-in tests below prove the handoff, but they need a POSIX shell script. Asking
+        for a version the mirror does not carry can only pass if the parent truly went
+        looking for it, so this is what keeps the feature covered on Windows.
+        """
+        self._publish("1.2.3")  # a release exists, just not the one asked for
+
+        target, result = self._init("--envy-version", "9.8.7")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("9.8.7", result.stderr)
+        self.assertFalse(target.exists(), "the re-exec precedes every mkdir")
+
     def test_envy_version_downloads_and_initializes(self) -> None:
         """End to end against a real binary: the requested version need not be present."""
         self._publish("1.2.3")
@@ -499,6 +515,24 @@ class TestReexecInit(_ReexecTestBase):
             (target / "envy.lua").exists(),
             "the requested version was handed the init, so this binary wrote nothing",
         )
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX stand-in script")
+    def test_flag_does_not_travel_to_the_child(self) -> None:
+        """Every release predating the flag rejects it, so the child must never see it.
+
+        The child re-runs argv verbatim otherwise, and an unknown option is a usage error
+        there -- which would make '--envy-version' work only against releases that already
+        have it.
+        """
+        self._publish_marker("1.2.3")
+
+        _, result = self._init("--envy-version", "1.2.3", "--pin-sums")
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertIn(f"{self.MARKER} init", result.stdout)
+        self.assertNotIn("--envy-version", result.stdout)
+        self.assertNotIn("1.2.3", result.stdout)  # the value went with the flag
+        self.assertIn("--pin-sums", result.stdout)  # everything else is forwarded intact
 
     @unittest.skipIf(sys.platform == "win32", "POSIX stand-in script")
     def test_cached_envy_version_needs_no_mirror(self) -> None:

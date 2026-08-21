@@ -25,6 +25,7 @@ namespace envy {
 namespace {
 
 char **g_argv{};
+std::vector<char *> g_argv_filtered;  // backs g_argv once an option has been dropped
 
 std::string_view get_self_version() {
   if (auto const *v = std::getenv("ENVY_TEST_SELF_VERSION")) { return v; }
@@ -83,6 +84,33 @@ std::vector<std::string> build_child_env() {
 }  // namespace
 
 void reexec_init(char **argv) { g_argv = argv; }
+
+std::vector<char *> reexec_argv_without(char **argv, std::string_view option) {
+  std::vector<char *> out;
+
+  for (char **p{ argv }; p && *p; ++p) {
+    std::string_view const arg{ *p };
+    // A separated value is the next word, so it goes too -- leaving it behind would hand
+    // the child a bare version string as a positional argument.
+    if (arg == option) {
+      if (*(p + 1)) { ++p; }
+      continue;
+    }
+    if (arg.starts_with(option) && arg.size() > option.size() &&
+        arg[option.size()] == '=') {
+      continue;
+    }
+    out.push_back(*p);
+  }
+
+  out.push_back(nullptr);
+  return out;
+}
+
+void reexec_drop_option(std::string_view option) {
+  g_argv_filtered = reexec_argv_without(g_argv, option);
+  g_argv = g_argv_filtered.data();
+}
 
 reexec_decision reexec_should(std::string_view self_version,
                               std::optional<std::string> const &requested_version,

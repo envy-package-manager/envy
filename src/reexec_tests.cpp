@@ -2,6 +2,9 @@
 
 #include "doctest.h"
 
+#include <string>
+#include <vector>
+
 // --- reexec_should decision logic ---
 
 TEST_CASE("reexec_should: no @envy version returns PROCEED") {
@@ -60,4 +63,95 @@ TEST_CASE("reexec_should: ENVY_NO_REEXEC takes priority over version mismatch") 
   // no_reexec is checked before version comparison
   CHECK(envy::reexec_should("2.0.0", std::string{ "1.5.0" }, false, true) ==
         envy::reexec_decision::PROCEED);
+}
+
+// --- reexec_argv_without: what the re-exec'd child is handed ---
+
+namespace {
+
+// A mutable argv, as main() receives it. doctest owns nothing here; the string literals
+// outlive every test.
+std::vector<char *> make_argv(std::vector<char const *> const &args) {
+  std::vector<char *> argv;
+  argv.reserve(args.size() + 1);
+  for (auto const *a : args) { argv.push_back(const_cast<char *>(a)); }
+  argv.push_back(nullptr);
+  return argv;
+}
+
+std::vector<std::string> to_strings(std::vector<char *> const &argv) {
+  std::vector<std::string> out;
+  for (auto const *a : argv) {
+    if (!a) { break; }
+    out.emplace_back(a);
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("reexec_argv_without: drops a separated option and its value") {
+  // The value goes too: left behind, it reaches the child as a stray positional.
+  auto argv{ make_argv({ "envy", "init", "proj", "bin", "--envy-version", "1.2.3" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init", "proj", "bin" });
+}
+
+TEST_CASE("reexec_argv_without: drops the '=' form") {
+  auto argv{ make_argv({ "envy", "init", "--envy-version=1.2.3", "proj" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init", "proj" });
+}
+
+TEST_CASE("reexec_argv_without: keeps every other option in order") {
+  auto argv{ make_argv({ "envy",
+                         "init",
+                         "proj",
+                         "bin",
+                         "--mirror",
+                         "https://m",
+                         "--envy-version",
+                         "1.2.3",
+                         "--pin-sums" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init",     "proj",
+                                          "bin",  "--mirror", "https://m",
+                                          "--pin-sums" });
+}
+
+TEST_CASE("reexec_argv_without: absent option leaves argv untouched") {
+  auto argv{ make_argv({ "envy", "sync", "--verbose" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "sync", "--verbose" });
+}
+
+TEST_CASE("reexec_argv_without: trailing option with no value") {
+  // CLI11 would have rejected this already; the filter must not read past the terminator.
+  auto argv{ make_argv({ "envy", "init", "--envy-version" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init" });
+}
+
+TEST_CASE("reexec_argv_without: a repeated option is dropped every time") {
+  auto argv{ make_argv(
+      { "envy", "init", "--envy-version", "1.2.3", "--envy-version=4.5.6", "proj" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init", "proj" });
+}
+
+TEST_CASE("reexec_argv_without: a longer option that merely shares the prefix stays") {
+  auto argv{ make_argv({ "envy", "init", "--envy-version-check" }) };
+  auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
+  CHECK(kept == std::vector<std::string>{ "envy", "init", "--envy-version-check" });
+}
+
+TEST_CASE("reexec_argv_without: result is always null-terminated") {
+  auto argv{ make_argv({ "envy" }) };
+  auto const filtered{ envy::reexec_argv_without(argv.data(), "--envy-version") };
+  REQUIRE(filtered.size() == 2);
+  CHECK(filtered.back() == nullptr);
+
+  auto const empty{ envy::reexec_argv_without(nullptr, "--envy-version") };
+  REQUIRE(empty.size() == 1);
+  CHECK(empty.back() == nullptr);
 }
