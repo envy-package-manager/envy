@@ -437,8 +437,9 @@ TEST_CASE("parse_fetch_dependency: product entry with a source but no spec is re
   // Not a weak reference (it has a source), so the strong-reference rule lets it
   // through — but parse(..., true) allowed the missing 'spec', leaving an empty
   // identity that would otherwise surface much later as an invalid pkg_key.
-  sol::object entry{ eval_entry(
-      lua, R"({ product = "jf", source = "file:///tmp/tool.lua" })") };
+  sol::object entry{
+    eval_entry(lua, R"({ product = "jf", source = "file:///tmp/tool.lua" })")
+  };
   CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
                     doctest::Contains("must name a 'spec'"));
 }
