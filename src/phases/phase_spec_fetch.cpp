@@ -1131,7 +1131,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
     }
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = dep_cfg->identity,

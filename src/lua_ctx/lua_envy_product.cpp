@@ -50,9 +50,8 @@ void lua_envy_product_install(sol::table &envy_table) {
       auto const edge_needed_by{ [&]() -> std::optional<pkg_phase> {
         std::lock_guard const deps_lock(consumer->deps_mutex);
         auto const it{ consumer->dependencies.find(provider->cfg->identity) };
-        return it == consumer->dependencies.end()
-                   ? std::nullopt
-                   : std::optional{ it->second.needed_by };
+        return it == consumer->dependencies.end() ? std::nullopt
+                                                  : std::optional{ it->second.needed_by };
       }() };
       if (!edge_needed_by) {
         std::string const msg{ "envy.product: '" + provider->cfg->identity +

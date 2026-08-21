@@ -941,8 +941,8 @@ void engine::mark_fetch_closure(pkg *p) {
 
   if (!unresolved.empty()) {
     throw std::runtime_error(
-        "source.dependencies closure must use strong dependencies: '" +
-        p->cfg->identity + "' holds a weak reference to '" + unresolved +
+        "source.dependencies closure must use strong dependencies: '" + p->cfg->identity +
+        "' holds a weak reference to '" + unresolved +
         "' but runs during graph resolution, before weak references resolve");
   }
 
@@ -1042,9 +1042,9 @@ void engine::process_fetch_dependencies(pkg *p) {
     // entry here has a source. Programmatic construction bypasses that parse, so
     // assert it rather than fall through to ensure_pkg with no source.
     if (fetch_dep_cfg->is_weak_reference()) {
-      throw std::runtime_error("source.dependencies entry '" +
-                               fetch_dep_cfg->identity + "' in spec '" +
-                               p->cfg->identity + "' must be a strong reference");
+      throw std::runtime_error("source.dependencies entry '" + fetch_dep_cfg->identity +
+                               "' in spec '" + p->cfg->identity +
+                               "' must be a strong reference");
     }
 
     pkg *fetch_dep{ ensure_pkg(fetch_dep_cfg) };
@@ -1193,9 +1193,9 @@ void engine::register_products(pkg *p) {
     // sorted order so the message is reproducible.
     auto const &a{ it->second->cfg->identity };
     auto const &b{ p->cfg->identity };
-    throw std::runtime_error("Product '" + product_name +
-                             "' provided by multiple specs: " +
-                             (a < b ? a + ", " + b : b + ", " + a));
+    throw std::runtime_error(
+        "Product '" + product_name +
+        "' provided by multiple specs: " + (a < b ? a + ", " + b : b + ", " + a));
   }
 }
 

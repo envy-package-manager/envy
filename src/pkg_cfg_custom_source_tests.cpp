@@ -421,9 +421,11 @@ TEST_CASE("parse_fetch_dependency: weak-with-fallback entry is rejected") {
   sol::state &lua{ *lua_state };
 
   // The fallback would be instantiated by the same too-late pass.
-  sol::object entry{ eval_entry(
-      lua,
-      R"({ spec = "local.helper", weak = { spec = "local.fb@v1", source = "fb.lua" } })") };
+  sol::object entry{
+    eval_entry(
+        lua,
+        R"({ spec = "local.helper", weak = { spec = "local.fb@v1", source = "fb.lua" } })")
+  };
   CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
                     doctest::Contains("must be a strong reference"));
 }

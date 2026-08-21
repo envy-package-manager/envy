@@ -733,7 +733,6 @@ TEST_CASE("engine_filter_host_platform: preserves order of matching cfgs") {
   CHECK(result[2] == c);
 }
 
-
 // -- mark_fetch_closure -----------------------------------------------------
 //
 // A source.dependencies closure runs its whole phase ladder during graph
@@ -777,7 +776,8 @@ struct mark_closure_fixture {
   engine eng;
 
   explicit mark_closure_fixture(char const *name)
-      : cache_root{ std::filesystem::temp_directory_path() / name }, c{ cache_root },
+      : cache_root{ std::filesystem::temp_directory_path() / name },
+        c{ cache_root },
         eng{ c } {}
   ~mark_closure_fixture() { std::filesystem::remove_all(cache_root); }
 };
@@ -801,8 +801,9 @@ TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
   mark_closure_fixture fx{ "envy-mark-closure-resolved" };
   auto provider{ make_bare_pkg("local.prov@v1") };
   auto p{ make_bare_pkg("local.p@v1") };
-  p->weak_references.push_back(
-      pkg::weak_reference{ .query = "wk", .resolved = provider.get(), .is_product = true });
+  p->weak_references.push_back(pkg::weak_reference{ .query = "wk",
+                                                    .resolved = provider.get(),
+                                                    .is_product = true });
 
   CHECK_NOTHROW(fx.eng.mark_fetch_closure(p.get()));
   CHECK(p->fetch_closure);
