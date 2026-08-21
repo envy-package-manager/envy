@@ -151,9 +151,9 @@ class _ReexecTestBase(EnvyTestCase):
         env.update(overrides)
         return env
 
-    def _run_envy(self, args: list[str], **kwargs):
+    def _run_envy(self, args: list[str | Path], **kwargs):
         return test_config.run(
-            [str(self._envy)] + args,
+            [str(self._envy), *(str(a) for a in args)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -474,7 +474,7 @@ class TestReexecInit(_ReexecTestBase):
     def _init(self, *extra: str):
         target, tools = self._init_target()
         return target, self._run_envy(
-            ["init", str(target), str(tools), *extra], env=self._init_env()
+            ["init", target, tools, *extra], env=self._init_env()
         )
 
     def test_envy_version_downloads_and_initializes(self) -> None:
@@ -528,7 +528,7 @@ class TestReexecInit(_ReexecTestBase):
         target, tools = self._init_target()
 
         result = self._run_envy(
-            ["init", str(target), str(tools), "--envy-version", "../evil"],
+            ["init", target, tools, "--envy-version", "../evil"],
             env=self._init_env(),
         )
 
@@ -610,7 +610,7 @@ class TestReexecCachePath(_ReexecTestBase):
         env = self._get_env(ENVY_TEST_SELF_VERSION="9.9.9")
         env.pop("ENVY_CACHE_ROOT", None)
         result = self._run_envy(
-            ["--cache-root", str(cli_cache), "install"],
+            ["--cache-root", cli_cache, "install"],
             cwd=self._project,
             env=env,
         )
