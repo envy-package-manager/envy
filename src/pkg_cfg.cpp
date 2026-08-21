@@ -438,9 +438,14 @@ std::string pkg_cfg::format_key() const {
 pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
                                          std::filesystem::path const &base_path) {
   pkg_cfg *cfg{ parse(entry, base_path, true) };
-  if (cfg->product.has_value() && cfg->is_weak_reference()) {
+  if (cfg->is_weak_reference()) {
+    // A fetch prerequisite is needed at spec_fetch, but weak references resolve at
+    // a resolution barrier — which waits for every spec_fetch, including that of
+    // the consumer whose fetch function is waiting on this entry. Nothing can
+    // satisfy it in time, so refuse rather than order it silently wrong.
     throw std::runtime_error(
-        "source.dependencies product '" + *cfg->product +
+        "source.dependencies entry '" +
+        (cfg->product.has_value() ? "product " + *cfg->product : cfg->identity) +
         "' must be a strong reference: give the entry a 'spec' and a 'source'");
   }
   return cfg;

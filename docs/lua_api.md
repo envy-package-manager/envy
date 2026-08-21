@@ -292,9 +292,12 @@ source = {
 }
 ```
 
-A fetch dependency must be a strong reference to carry a product: the weak pass runs
-only at a resolution barrier, after every spec_fetch, so `{ product = "jf" }` with no
-`spec`/`source` could never be edged in time and is rejected at parse.
+Every `source.dependencies` entry must be a strong reference (`spec` + `source`). The
+weak pass runs only at a resolution barrier, after every spec_fetch — including that of
+the consumer whose fetch function is waiting — so nothing weak can be ordered in time.
+The same applies to the whole closure: a fetch dependency and its own dependencies run
+their phase ladders during resolution, so none of them may hold a weak reference
+either.
 
 ### envy.loadenv_spec(identity, module) → table
 

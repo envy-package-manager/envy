@@ -1056,6 +1056,15 @@ void wire_dependency_graph(pkg *p, engine &eng) {
             (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
             p->cfg->identity + "' is a weak reference");
       }
+      if (p->fetch_closure) {
+        // This package runs its whole ladder while the resolution barrier is held
+        // shut by the consumer waiting on its closure, so the weak pass could only
+        // resolve this after the phase that declared it needed it.
+        throw std::runtime_error(
+            "source.dependencies closure must use strong dependencies: '" +
+            (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
+            p->cfg->identity + "' is a weak reference");
+      }
       std::lock_guard const deps_lock(p->deps_mutex);
       p->weak_references.push_back(pkg::weak_reference{
           .query = is_product_dep ? *dep_cfg->product : dep_cfg->identity,
@@ -1080,6 +1089,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         pd.constraint_identity = dep_cfg->identity;
       }
       if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1101,6 +1111,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
       }
       if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1120,6 +1131,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
     }
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = dep_cfg->identity,

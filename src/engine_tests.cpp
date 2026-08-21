@@ -733,4 +733,117 @@ TEST_CASE("engine_filter_host_platform: preserves order of matching cfgs") {
   CHECK(result[2] == c);
 }
 
+
+// -- mark_fetch_closure -----------------------------------------------------
+//
+// A source.dependencies closure runs its whole phase ladder during graph
+// resolution, so nothing in it may hold a weak reference. Two checks enforce that,
+// one per order in which a package can enter a closure relative to its own
+// spec_fetch: wire_dependency_graph catches marked-then-declares, and this catches
+// declares-then-marked (a root that finished spec_fetch before something named it
+// in source.dependencies). The second order is a thread race, so it is covered
+// here rather than by a functional test that would have to win that race --
+// measured, the declaration-time check wins it 20 times out of 20.
+
+namespace {
+
+std::unique_ptr<pkg> make_bare_pkg(std::string identity) {
+  pkg_cfg *cfg{ pkg_cfg::pool()->emplace(std::move(identity),
+                                         pkg_cfg::weak_ref{},
+                                         "{}",
+                                         std::nullopt,
+                                         nullptr,
+                                         nullptr,
+                                         std::vector<pkg_cfg *>{},
+                                         std::nullopt,
+                                         std::filesystem::path{}) };
+  return std::unique_ptr<pkg>(new pkg{ .key = pkg_key(*cfg),
+                                       .cfg = cfg,
+                                       .cache_ptr = nullptr,
+                                       .default_shell_ptr = nullptr,
+                                       .tui_section = {},
+                                       .lua = nullptr,
+                                       .lock = nullptr,
+                                       .canonical_identity_hash = {},
+                                       .pkg_path = {},
+                                       .spec_file_path = std::nullopt,
+                                       .result_hash = {},
+                                       .type = pkg_type::CACHE_MANAGED });
+}
+
+struct mark_closure_fixture {
+  std::filesystem::path cache_root;
+  cache c;
+  engine eng;
+
+  explicit mark_closure_fixture(char const *name)
+      : cache_root{ std::filesystem::temp_directory_path() / name }, c{ cache_root },
+        eng{ c } {}
+  ~mark_closure_fixture() { std::filesystem::remove_all(cache_root); }
+};
+
+}  // namespace
+
+TEST_CASE("mark_fetch_closure: unresolved weak reference is rejected") {
+  mark_closure_fixture fx{ "envy-mark-closure-unresolved" };
+  auto p{ make_bare_pkg("local.p@v1") };
+  p->weak_references.push_back(pkg::weak_reference{ .query = "wk", .is_product = true });
+
+  CHECK_THROWS_WITH(fx.eng.mark_fetch_closure(p.get()),
+                    doctest::Contains("must use strong dependencies"));
+  CHECK(p->fetch_closure);  // flag is set before the throw; marking is not retried
+}
+
+TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
+  // Resolved at an earlier barrier iteration means the provider is wired and
+  // ordered, so running early violates nothing. Throwing here would be a false
+  // positive on a legal graph.
+  mark_closure_fixture fx{ "envy-mark-closure-resolved" };
+  auto provider{ make_bare_pkg("local.prov@v1") };
+  auto p{ make_bare_pkg("local.p@v1") };
+  p->weak_references.push_back(
+      pkg::weak_reference{ .query = "wk", .resolved = provider.get(), .is_product = true });
+
+  CHECK_NOTHROW(fx.eng.mark_fetch_closure(p.get()));
+  CHECK(p->fetch_closure);
+}
+
+TEST_CASE("mark_fetch_closure: propagates to the transitive closure") {
+  mark_closure_fixture fx{ "envy-mark-closure-transitive" };
+  auto p{ make_bare_pkg("local.p@v1") };
+  auto mid{ make_bare_pkg("local.mid@v1") };
+  auto leaf{ make_bare_pkg("local.leaf@v1") };
+  p->dependencies["local.mid@v1"] = { mid.get(), pkg_phase::pkg_build };
+  mid->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
+
+  CHECK_NOTHROW(fx.eng.mark_fetch_closure(p.get()));
+  CHECK(p->fetch_closure);
+  CHECK(mid->fetch_closure);
+  CHECK(leaf->fetch_closure);
+}
+
+TEST_CASE("mark_fetch_closure: rejects a weak reference held deeper in the closure") {
+  mark_closure_fixture fx{ "envy-mark-closure-deep" };
+  auto p{ make_bare_pkg("local.p@v1") };
+  auto leaf{ make_bare_pkg("local.leaf@v1") };
+  p->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
+  leaf->weak_references.push_back(pkg::weak_reference{ .query = "deep" });
+
+  CHECK_THROWS_WITH(fx.eng.mark_fetch_closure(p.get()),
+                    doctest::Contains("local.leaf@v1"));
+}
+
+TEST_CASE("mark_fetch_closure: is idempotent and terminates on a dependency cycle") {
+  mark_closure_fixture fx{ "envy-mark-closure-cycle" };
+  auto a{ make_bare_pkg("local.a@v1") };
+  auto b{ make_bare_pkg("local.b@v1") };
+  a->dependencies["local.b@v1"] = { b.get(), pkg_phase::pkg_build };
+  b->dependencies["local.a@v1"] = { a.get(), pkg_phase::pkg_build };
+
+  CHECK_NOTHROW(fx.eng.mark_fetch_closure(a.get()));
+  CHECK(a->fetch_closure);
+  CHECK(b->fetch_closure);
+  CHECK_NOTHROW(fx.eng.mark_fetch_closure(a.get()));  // second call is a no-op
+}
+
 }  // namespace envy

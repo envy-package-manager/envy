@@ -70,6 +70,14 @@ struct pkg {
   // engine::mark_depot_bootstrap, which propagates transitively.
   std::atomic_bool depot_bootstrap{ false };
 
+  // In some package's source.dependencies closure: runs its whole phase ladder
+  // during graph resolution, because a consumer is parked in spec_fetch waiting
+  // for it. The resolution barrier stays shut for that entire window, so a weak
+  // reference here would resolve after this package had already finished — hence
+  // weak references are rejected. Set via engine::mark_fetch_closure, which
+  // propagates transitively.
+  std::atomic_bool fetch_closure{ false };
+
   // Outcome accounting, all read only by this package's own worker thread at
   // completion (single-writer/single-reader, no synchronization needed).
   // build_start is stamped when the worker begins spec_fetch; imported flips

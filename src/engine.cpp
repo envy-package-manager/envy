@@ -209,6 +209,7 @@ void resolve_identity_ref(pkg *p,
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
     {
       std::lock_guard const deps_lock(p->deps_mutex);
       wr->resolved = dep;
@@ -246,6 +247,7 @@ void resolve_identity_ref(pkg *p,
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -308,6 +310,7 @@ void resolve_product_ref(pkg *p,
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
     set_product_provider(dep);
     trace_product_resolution(p, wr, dep, "registry");
     ++result.resolved;
@@ -321,6 +324,7 @@ void resolve_product_ref(pkg *p,
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
     if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -914,6 +918,37 @@ void engine::mark_depot_bootstrap(pkg *p) {
   core_.notify_global();  // Wake a depot wait this package may be blocked in
 }
 
+void engine::mark_fetch_closure(pkg *p) {
+  if (p->fetch_closure.exchange(true)) { return; }
+
+  // Snapshot then recurse without holding the lock (no nested pkg locks). The
+  // unresolved-weak check has to happen here as well as at declaration time: a
+  // package can complete spec_fetch as a root — registering its weak references
+  // and passing that check — before another package names it in
+  // source.dependencies and ratchets it through the whole ladder. Only
+  // *unresolved* references are a violation; one already resolved at an earlier
+  // barrier is wired and ordered.
+  auto const [deps, unresolved]{ [&] {
+    std::lock_guard const deps_lock(p->deps_mutex);
+    std::vector<pkg *> snapshot;
+    snapshot.reserve(p->dependencies.size());
+    for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
+    auto const it{ std::ranges::find_if(p->weak_references,
+                                        [](auto const &wr) { return !wr.resolved; }) };
+    return std::pair{ std::move(snapshot),
+                      it == p->weak_references.end() ? std::string{} : it->query };
+  }() };
+
+  if (!unresolved.empty()) {
+    throw std::runtime_error(
+        "source.dependencies closure must use strong dependencies: '" +
+        p->cfg->identity + "' holds a weak reference to '" + unresolved +
+        "' but runs during graph resolution, before weak references resolve");
+  }
+
+  for (auto *dep : deps) { mark_fetch_closure(dep); }
+}
+
 bundle *engine::register_bundle(std::string const &identity,
                                 std::unordered_map<std::string, std::string> specs,
                                 std::filesystem::path cache_path) {
@@ -1003,27 +1038,21 @@ void engine::process_fetch_dependencies(pkg *p) {
                                      p->cfg->identity,
                                      "Fetch dependency");
 
-    // A weak product reference never reaches here: pkg_cfg::parse_fetch_dependency
-    // rejects it, so this branch always has a non-empty identity to query on.
-    if (fetch_dep_cfg->is_weak_reference()) {  // Defer resolution to weak pass
-      if (p->depot_bootstrap) {
-        // Bootstrap packages may run after the resolution loop has finished,
-        // so weak/product references could never resolve.
-        throw std::runtime_error(
-            "package-depot dependency closure must use strong dependencies: '" +
-            fetch_dep_cfg->identity + "' in spec '" + p->cfg->identity +
-            "' is a weak reference");
-      }
-      pkg::weak_reference wr;
-      wr.query = fetch_dep_cfg->identity;
-      wr.needed_by = pkg_phase::spec_fetch;
-      wr.fallback = fetch_dep_cfg->weak;
-      std::lock_guard const deps_lock(p->deps_mutex);
-      p->weak_references.push_back(std::move(wr));
-      continue;
+    // pkg_cfg::parse_fetch_dependency rejects weak fetch prerequisites, so every
+    // entry here has a source. Programmatic construction bypasses that parse, so
+    // assert it rather than fall through to ensure_pkg with no source.
+    if (fetch_dep_cfg->is_weak_reference()) {
+      throw std::runtime_error("source.dependencies entry '" +
+                               fetch_dep_cfg->identity + "' in spec '" +
+                               p->cfg->identity + "' must be a strong reference");
     }
 
     pkg *fetch_dep{ ensure_pkg(fetch_dep_cfg) };
+
+    // This package runs its whole ladder during graph resolution, so nothing in its
+    // closure may hold a weak reference. Mark before starting its worker, so its own
+    // wire_dependency_graph sees the flag.
+    mark_fetch_closure(fetch_dep);
 
     // Add to dependencies map - the edge query will block spec_fetch on it.
     // An explicit `product` on the entry additionally pins the name to this

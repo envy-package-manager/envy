@@ -132,6 +132,12 @@ class engine : unmovable {
   // blocked depot waits. Idempotent.
   void mark_depot_bootstrap(pkg *p);
 
+  // Flag `p` and its dependency closure as belonging to a source.dependencies
+  // closure. Idempotent. Throws if any member already holds an unresolved weak
+  // reference: the closure runs its ladder before the next resolution barrier,
+  // so that reference is guaranteed to resolve too late to order anything.
+  void mark_fetch_closure(pkg *p);
+
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
   export_phase_config const *export_config() const;

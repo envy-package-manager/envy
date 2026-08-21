@@ -502,95 +502,23 @@ SETUP = {
         self.assertIn("local.branch_two@v1", output)
         self.assertIn("local.shared@v1", output)
 
-    def test_nested_weak_fetch_dep_uses_fallback(self):
-        # Root spec with a dependency that uses custom fetch and a weak fetch prerequisite
-        weak_custom_fetch_root = """-- Root spec with a dependency that uses custom fetch and a weak fetch prerequisite
-IDENTITY = "local.weak_custom_fetch_root@v1"
+    def test_nested_weak_fetch_dep_rejected_even_when_helper_exists(self):
+        """A weak source.dependencies entry is refused even if a provider is present.
 
-DEPENDENCIES = {
-  {
-    spec = "local.custom_fetch_dep@v1",
-    source = {
-      dependencies = {
-        { spec = "local.helper", weak = { spec = "local.helper.fallback@v1", source = "weak_helper_fallback.lua" } },
-      },
-      fetch = function(tmp_dir, options)
-        local path = tmp_dir .. "/spec.lua"
-        local f, err = io.open(path, "w")
-        if not f then
-          error("failed to write custom fetch recipe: " .. tostring(err))
-        end
-        f:write([[
-IDENTITY = "local.custom_fetch_dep@v1"
+        The tempting reading is that rejection is only needed when nothing could
+        satisfy the entry. It is not: satisfaction happens in
+        resolve_weak_references(), which runs only once every spec_fetch has
+        completed -- including that of the consumer whose fetch function is waiting on
+        this entry. So an available provider changes nothing about the ordering, and
+        accepting the entry would mean running the fetch function without it. Measured
+        before this was enforced: the fetch function ran at seq <=11 while the entry's
+        provider had not started its spec_fetch until seq 14.
 
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options) return true end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op; custom fetch dependency performs work, root install not needed.
-    end,
-  },
-}
-]])
-        f:close()
-        envy.commit_fetch("spec.lua")
-      end,
-    },
-  },
-}
-
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options)
-      return true
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op; check returns true so install is skipped.
-    end,
-  },
-}
-"""
-        self.write_spec("weak_custom_fetch_root.lua", weak_custom_fetch_root)
-
-        # Fallback helper for weak custom fetch dependency
-        weak_helper_fallback = """-- Fallback helper for weak custom fetch dependency
-IDENTITY = "local.helper.fallback@v1"
-
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options)
-      return true
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op for helper fallback; check returns true so install is skipped.
-    end,
-  },
-}
-
-"""
-        self.write_spec("weak_helper_fallback.lua", weak_helper_fallback)
-
-        result = self.run_engine(
-            "local.weak_custom_fetch_root@v1",
-            "weak_custom_fetch_root.lua",
-        )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-
-        output = self.registered()
-        self.assertIn("local.weak_custom_fetch_root@v1", output)
-        self.assertIn("local.custom_fetch_dep@v1", output)
-        self.assertIn("local.helper.fallback@v1", output)
-        self.assertNotIn("local.helper@v1", output)
-
-    def test_nested_weak_fetch_dep_prefers_existing_helper(self):
-        # Root spec where the custom fetch dependency has a weak fetch prerequisite,
-        # but a strong helper already exists in the graph.
-        weak_custom_fetch_root_with_helper = """-- Root spec where the custom fetch dependency has a weak fetch prerequisite,
--- but a strong helper already exists in the graph.
-IDENTITY = "local.weak_custom_fetch_root_with_helper@v1"
+        Rejection is therefore unconditional, which is what this pins. Both the
+        reference-only and `weak = { ... }` forms are covered in
+        test_fetch_closure_weak_refs.py.
+        """
+        root = """IDENTITY = "local.weak_custom_fetch_root_with_helper@v1"
 
 DEPENDENCIES = {
   { spec = "local.helper@v1", source = "weak_helper_strong.lua" },
@@ -601,24 +529,9 @@ DEPENDENCIES = {
         { spec = "local.helper", weak = { spec = "local.helper.fallback@v1", source = "weak_helper_fallback.lua" } },
       },
       fetch = function(tmp_dir, options)
-        local path = tmp_dir .. "/spec.lua"
-        local f, err = io.open(path, "w")
-        if not f then
-          error("failed to write custom fetch recipe: " .. tostring(err))
-        end
-        f:write([[
-IDENTITY = "local.custom_fetch_dep@v1"
-
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options) return true end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op; custom fetch dependency performs work, root install not needed.
-    end,
-  },
-}
-]])
+        local f = io.open(tmp_dir .. "/spec.lua", "w")
+        f:write('IDENTITY = "local.custom_fetch_dep@v1"\\nUSER_MANAGED = true\\n' ..
+                'SETUP = { main = { CHECK = function() return true end, INSTALL = function() end } }\\n')
         f:close()
         envy.commit_fetch("spec.lua")
       end,
@@ -629,68 +542,33 @@ SETUP = {
 USER_MANAGED = true
 SETUP = {
   main = {
-    CHECK = function(pkg_dir, options)
-      return true
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op; check returns true so install is skipped.
-    end,
+    CHECK = function(pkg_dir, options) return true end,
+    INSTALL = function(pkg_dir, options) end,
   },
 }
 """
+        helper = """IDENTITY = "local.helper@v1"
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return true end,
+    INSTALL = function(pkg_dir, options) end,
+  },
+}
+"""
+        self.write_spec("weak_custom_fetch_root_with_helper.lua", root)
+        self.write_spec("weak_helper_strong.lua", helper)
         self.write_spec(
-            "weak_custom_fetch_root_with_helper.lua", weak_custom_fetch_root_with_helper
+            "weak_helper_fallback.lua", helper.replace("local.helper@v1", "local.helper.fallback@v1")
         )
-
-        # Strong provider for helper identity
-        weak_helper_strong = """-- Strong provider for helper identity
-IDENTITY = "local.helper@v1"
-
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options)
-      return true
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op; check returns true so install is skipped.
-    end,
-  },
-}
-
-"""
-        self.write_spec("weak_helper_strong.lua", weak_helper_strong)
-
-        # Fallback helper for weak custom fetch dependency
-        weak_helper_fallback = """-- Fallback helper for weak custom fetch dependency
-IDENTITY = "local.helper.fallback@v1"
-
-USER_MANAGED = true
-SETUP = {
-  main = {
-    CHECK = function(pkg_dir, options)
-      return true
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- No-op for helper fallback; check returns true so install is skipped.
-    end,
-  },
-}
-
-"""
-        self.write_spec("weak_helper_fallback.lua", weak_helper_fallback)
 
         result = self.run_engine(
             "local.weak_custom_fetch_root_with_helper@v1",
             "weak_custom_fetch_root_with_helper.lua",
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-        output = self.registered()
-        self.assertIn("local.weak_custom_fetch_root_with_helper@v1", output)
-        self.assertIn("local.custom_fetch_dep@v1", output)
-        self.assertIn("local.helper@v1", output)
-        self.assertNotIn("local.helper.fallback@v1", output)
+        self.assertNotEqual(result.returncode, 0, f"expected rejection\n{result.stderr}")
+        self.assertIn("must be a strong reference", result.stderr)
 
     def test_weak_resolution_detects_cycles(self):
         """Weak reference resolution must detect cycles introduced after resolution."""

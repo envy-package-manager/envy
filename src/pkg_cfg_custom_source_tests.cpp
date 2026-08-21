@@ -404,18 +404,28 @@ TEST_CASE("parse_fetch_dependency: strong product entry is accepted and pins pro
   CHECK_FALSE(cfg->is_weak_reference());
 }
 
-TEST_CASE("parse_fetch_dependency: weak entry without a product is still allowed") {
+TEST_CASE("parse_fetch_dependency: reference-only entry is rejected") {
   auto lua_state{ envy::sol_util_make_lua_state() };
   sol::state &lua{ *lua_state };
 
-  // Identity-only weak fetch dependencies predate product references and stay
-  // legal; only the product form is rejected.
+  // A fetch prerequisite is needed at spec_fetch; the weak pass runs only after
+  // every spec_fetch, including the consumer's own. Nothing can satisfy it, so the
+  // identity form is refused alongside the product form.
   sol::object entry{ eval_entry(lua, R"({ spec = "local.tool@v1" })") };
-  envy::pkg_cfg *cfg{ envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()) };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}
 
-  CHECK(cfg->identity == "local.tool@v1");
-  CHECK(cfg->is_weak_reference());
-  CHECK_FALSE(cfg->product.has_value());
+TEST_CASE("parse_fetch_dependency: weak-with-fallback entry is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // The fallback would be instantiated by the same too-late pass.
+  sol::object entry{ eval_entry(
+      lua,
+      R"({ spec = "local.helper", weak = { spec = "local.fb@v1", source = "fb.lua" } })") };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
 }
 
 TEST_CASE("parse_fetch_dependency: source.dependencies rejects a bare product entry") {
