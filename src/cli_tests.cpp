@@ -1503,6 +1503,66 @@ TEST_CASE("cli_parse: cmd_init --pin-sums") {
   }
 }
 
+TEST_CASE("cli_parse: cmd_init --envy-version") {
+  SUBCASE("absent by default") {
+    // Omitted means "this binary", the only version an init can stamp without re-execing.
+    std::vector<std::string> args{ "envy", "init", "/tmp/proj", "/tmp/bin" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_init::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK_FALSE(cfg->envy_version.has_value());
+  }
+
+  SUBCASE("takes a version value") {
+    std::vector<std::string> args{ "envy",     "init",           "/tmp/proj",
+                                   "/tmp/bin", "--envy-version", "1.2.3" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_init::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    REQUIRE(cfg->envy_version.has_value());
+    CHECK(*cfg->envy_version == "1.2.3");
+  }
+
+  SUBCASE("composes with --mirror and --pin-sums") {
+    // The requested version is downloaded from that mirror, and the child pins the sums of
+    // the version it turned out to be, so all three have to be usable together.
+    std::vector<std::string> args{ "envy",     "init",           "/tmp/proj",
+                                   "/tmp/bin", "--envy-version", "9.8.7",
+                                   "--mirror", "s3://b/rel",     "--pin-sums" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_init::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    REQUIRE(cfg->envy_version.has_value());
+    CHECK(*cfg->envy_version == "9.8.7");
+    REQUIRE(cfg->mirror.has_value());
+    CHECK(*cfg->mirror == "s3://b/rel");
+    CHECK(cfg->pin_sums);
+  }
+
+  SUBCASE("value is required when the flag appears") {
+    std::vector<std::string> args{ "envy", "init", "/tmp/proj", "/tmp/bin",
+                                   "--envy-version" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+}
+
 TEST_CASE("cli_parse: cmd_export") {
   SUBCASE("no arguments (export all)") {
     std::vector<std::string> args{ "envy", "export" };

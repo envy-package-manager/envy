@@ -6,7 +6,9 @@
 #include "envy_release.h"
 #include "fetch.h"
 #include "luarc.h"
+#include "manifest.h"
 #include "platform.h"
+#include "reexec.h"
 #include "sha256.h"
 #include "tui.h"
 #include "tui_actions.h"
@@ -36,6 +38,10 @@ void cmd_init::register_cli(CLI::App &app, std::function<void(cfg)> on_selected)
   sub->add_option("bin-dir", cfg_ptr->bin_dir, "Directory for bootstrap scripts")
       ->required();
   sub->add_option("--mirror", cfg_ptr->mirror, "Override download mirror URL");
+  sub->add_option("--envy-version",
+                  cfg_ptr->envy_version,
+                  "Initialize the project at this envy version instead of this binary's, "
+                  "re-execing into it (downloading it if the cache lacks it)");
   sub->add_flag("--pin-sums",
                 cfg_ptr->pin_sums,
                 "Fetch this release's SHA256SUMS and pin its hash in @envy sha256sums, so "
@@ -182,6 +188,23 @@ void cmd_init::execute() {
   // Before creating any directories: the mirror is written verbatim into a quoted manifest
   // directive that both bootstrap scripts parse back out.
   if (cfg_.mirror) { envy_release_validate_mirror(*cfg_.mirror, "init"); }
+
+  // Every version this command writes -- the manifest directive, the bootstrap fallback,
+  // the cached types -- is the running binary's, so a requested one is honored by handing
+  // the whole init to that binary rather than by stamping a number this one is not.
+  if (cfg_.envy_version) {
+    if (!envy_release_version_is_valid(*cfg_.envy_version)) {
+      throw std::runtime_error("init: invalid version string: " + *cfg_.envy_version);
+    }
+    reexec_if_needed(envy_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror },
+                     cli_cache_root_,
+                     cfg_.project_dir);
+    if (*cfg_.envy_version != ENVY_VERSION_STR) {  // dev build, or ENVY_NO_REEXEC
+      tui::warn("init: not re-execing into envy %s; stamping %s instead",
+                cfg_.envy_version->c_str(),
+                ENVY_VERSION_STR);
+    }
+  }
 
   // Also before creating anything: --pin-sums needs the network, and failing after having
   // written a manifest and two scripts would leave a project half-initialized and
