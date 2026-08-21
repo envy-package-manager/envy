@@ -262,15 +262,39 @@ end
 
 ### envy.product(name) → string
 
-Get named product value from provider dependency.
+Get a named product value from a provider you depend on. The name resolves either
+from an explicit `product =` on a dependency entry or, failing that, from the
+project-wide product registry — but a dependency edge is required either way, and
+its `needed_by` must already have been reached. The edge is what drove the provider
+through install; the registry only answers *who* provides the name. A provider you
+reach only transitively is refused.
 
 ```lua
--- Spec declares: NEEDS_PRODUCTS = { python_path = { needed_by = "build" } }
+DEPENDENCIES = {
+  { spec = "corp.python@v3", source = "python.lua", needed_by = "build" },
+}
 BUILD = function(...)
-  local python = envy.product("python_path")
+  local python = envy.product("python_path")  -- registry names the provider, edge allows it
   envy.run(python .. " setup.py build")
 end
 ```
+
+Works inside a `source.fetch` function too: `source.dependencies` entries are wired
+with `needed_by = spec_fetch` before the fetch function runs, so their products are
+readable there.
+
+```lua
+source = {
+  dependencies = { { spec = "tools.jfrog-cli@r1", source = "jfrog.lua" } },
+  fetch = function(tmp_dir)
+    envy.run(envy.product("jf") .. " rt dl specs/ " .. tmp_dir)
+  end,
+}
+```
+
+A fetch dependency must be a strong reference to carry a product: the weak pass runs
+only at a resolution barrier, after every spec_fetch, so `{ product = "jf" }` with no
+`spec`/`source` could never be edged in time and is rejected at parse.
 
 ### envy.loadenv_spec(identity, module) → table
 

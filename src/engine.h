@@ -153,7 +153,13 @@ class engine : unmovable {
   task_engine::observer make_trace_observer();
   std::string trace_display(std::string const &key) const;
   void process_fetch_dependencies(pkg *p);
-  void update_product_registry();
+
+  // Publish `p`'s PRODUCTS into the project-wide registry, called by p's own
+  // worker the instant its spec is known. Eager (not barrier-batched) so a
+  // consumer whose dependency edge forced `p` through pkg_export is guaranteed
+  // to observe the entry — that edge is what makes the provider's payload
+  // readable, so registry visibility must not lag behind it.
+  void register_products(pkg *p);
   void validate_product_fallbacks();
   void validate_setup_selections();
   bool pkg_provides_product_transitively(pkg *p, std::string const &product_name) const;

@@ -7,6 +7,8 @@
 #include "product_util.h"
 #include "trace.h"
 
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -34,7 +36,47 @@ void lua_envy_product_install(sol::table &envy_table) {
       if (dep_it == consumer->product_dependencies.end()) { return std::nullopt; }
       return dep_it->second;
     }() };
-    if (!dep_opt) {
+    // No declared product dependency: consult the project-wide registry so a
+    // package that already depends on the provider by identity can name its
+    // products without restating `product =` on the entry. The dependency edge
+    // stays mandatory — it is what drove the provider through install, and
+    // nothing else makes its payload readable at this point.
+    auto const registry_dep{ [&]() -> std::optional<pkg::product_dependency> {
+      if (dep_opt) { return std::nullopt; }
+      pkg *const provider{ ctx->eng ? ctx->eng->find_product_provider(product_name)
+                                    : nullptr };
+      if (!provider) { return std::nullopt; }
+
+      auto const edge_needed_by{ [&]() -> std::optional<pkg_phase> {
+        std::lock_guard const deps_lock(consumer->deps_mutex);
+        auto const it{ consumer->dependencies.find(provider->cfg->identity) };
+        return it == consumer->dependencies.end()
+                   ? std::nullopt
+                   : std::optional{ it->second.needed_by };
+      }() };
+      if (!edge_needed_by) {
+        std::string const msg{ "envy.product: '" + provider->cfg->identity +
+                               "' provides product '" + product_name + "', but pkg '" +
+                               consumer->cfg->identity +
+                               "' does not depend on it — declare it as a dependency" };
+        ENVY_TRACE(lua_ctx_product_access,
+                   consumer->cfg->identity,
+                   .target = product_name,
+                   .provider = provider->cfg->identity,
+                   .current_phase = current_phase,
+                   .needed_by = pkg_phase::none,
+                   .allowed = false,
+                   .reason = msg);
+        throw std::runtime_error(msg);
+      }
+
+      return pkg::product_dependency{ .name = product_name,
+                                      .needed_by = *edge_needed_by,
+                                      .provider = provider,
+                                      .constraint_identity = {} };
+    }() };
+
+    if (!dep_opt && !registry_dep) {
       std::string const msg{ "envy.product: pkg '" + consumer->cfg->identity +
                              "' does not declare product dependency on '" + product_name +
                              "'" };
@@ -49,7 +91,7 @@ void lua_envy_product_install(sol::table &envy_table) {
       throw std::runtime_error(msg);
     }
 
-    pkg::product_dependency const &dep{ *dep_opt };
+    pkg::product_dependency const &dep{ dep_opt ? *dep_opt : *registry_dep };
 
     auto emit_access = [&](bool allowed, std::string const &reason) {
       std::string const provider_identity{ dep.provider ? dep.provider->cfg->identity

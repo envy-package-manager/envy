@@ -269,10 +269,13 @@ void resolve_identity_ref(pkg *p,
   }
 }
 
+// `registry_provider` is the registry's answer for wr->query, already read under
+// the engine's mutex_ by the caller — worker threads publish into that map
+// concurrently, so it must never be traversed here.
 void resolve_product_ref(pkg *p,
                          pkg::weak_reference *wr,
                          engine::weak_resolution_result &result,
-                         std::unordered_map<std::string, pkg *> const &registry,
+                         pkg *registry_provider,
                          engine &eng) {
   auto set_product_provider = [&](pkg *provider) {
     std::lock_guard const deps_lock(p->deps_mutex);
@@ -286,10 +289,8 @@ void resolve_product_ref(pkg *p,
     }
   };
 
-  auto const it{ registry.find(wr->query) };
-
-  if (it != registry.end()) {
-    pkg *dep{ it->second };
+  if (registry_provider) {
+    pkg *dep{ registry_provider };
 
     if (!wr->constraint_identity.empty() &&
         dep->cfg->identity != wr->constraint_identity) {
@@ -336,7 +337,10 @@ bool pkg_provides_product_transitively_impl(pkg *p,
                                             std::unordered_set<pkg const *> &visited) {
   if (!visited.insert(p).second) { return false; }
 
-  if (p->products.contains(product_name)) { return true; }
+  {
+    std::lock_guard const deps_lock(p->deps_mutex);
+    if (p->products.contains(product_name)) { return true; }
+  }
 
   auto const deps{ [&] {
     std::lock_guard const deps_lock(p->deps_mutex);
@@ -470,6 +474,10 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
     phase_dispatch_table[step](p, *this);
 
     if (static_cast<pkg_phase>(step) == pkg_phase::spec_fetch) {
+      // Publish before the completion flag: a consumer's edge waits on
+      // pkg_export, which is strictly later, so the entry is always visible by
+      // the time anyone can legally read this package's products.
+      register_products(p);
       p->spec_fetch_completed = true;
       on_spec_fetch_complete(p->cfg->identity);
 
@@ -577,6 +585,9 @@ std::vector<product_info> engine::collect_all_products() const {
     std::lock_guard const lock(mutex_);
 
     for (auto const &[key, package] : packages_) {
+      // products/resolved_platforms are deps_mutex-guarded; mutex_ → deps_mutex
+      // matches the resolution loop's order.
+      std::lock_guard const deps_lock(package->deps_mutex);
       for (auto const &[prod_name, prod_entry] : package->products) {
         auto plats{ util_platform_intersect(prod_entry.platforms,
                                             package->resolved_platforms) };
@@ -992,6 +1003,8 @@ void engine::process_fetch_dependencies(pkg *p) {
                                      p->cfg->identity,
                                      "Fetch dependency");
 
+    // A weak product reference never reaches here: pkg_cfg::parse_fetch_dependency
+    // rejects it, so this branch always has a non-empty identity to query on.
     if (fetch_dep_cfg->is_weak_reference()) {  // Defer resolution to weak pass
       if (p->depot_bootstrap) {
         // Bootstrap packages may run after the resolution loop has finished,
@@ -1012,10 +1025,26 @@ void engine::process_fetch_dependencies(pkg *p) {
 
     pkg *fetch_dep{ ensure_pkg(fetch_dep_cfg) };
 
-    // Add to dependencies map - the edge query will block spec_fetch on it
+    // Add to dependencies map - the edge query will block spec_fetch on it.
+    // An explicit `product` on the entry additionally pins the name to this
+    // provider, so envy.product reports a mismatch instead of silently reading
+    // whichever package the registry happens to hold.
     {
       std::lock_guard const deps_lock(p->deps_mutex);
       p->dependencies[fetch_dep_cfg->identity] = { fetch_dep, pkg_phase::spec_fetch };
+      if (fetch_dep_cfg->product.has_value()) {
+        auto const [it, inserted]{ p->product_dependencies.emplace(
+            *fetch_dep_cfg->product,
+            pkg::product_dependency{ .name = *fetch_dep_cfg->product,
+                                     .needed_by = pkg_phase::spec_fetch,
+                                     .provider = fetch_dep,
+                                     .constraint_identity = fetch_dep_cfg->identity }) };
+        if (!inserted && it->second.provider != fetch_dep) {
+          throw std::runtime_error("Duplicate product dependency '" +
+                                   *fetch_dep_cfg->product + "' in spec '" +
+                                   p->cfg->identity + "'");
+        }
+      }
     }
     if (p->depot_bootstrap) { mark_depot_bootstrap(fetch_dep); }
     ENVY_TRACE(dependency_added,
@@ -1110,54 +1139,34 @@ pkg_result_map_t engine::run_full(std::vector<pkg_cfg const *> const &roots) {
   return results;
 }
 
-void engine::update_product_registry() {
-  std::unordered_map<std::string, std::vector<pkg *>> providers_by_product;
+void engine::register_products(pkg *p) {
+  // Snapshot names under deps_mutex, publish under mutex_ — sequential, never
+  // nested, so this never inverts the resolution loop's mutex_ → deps_mutex
+  // order. Sorted so a package declaring several colliding products always
+  // reports the same one first.
+  auto const names{ [p] {
+    std::vector<std::string> n;
+    std::lock_guard const deps_lock(p->deps_mutex);
+    n.reserve(p->products.size());
+    for (auto const &[product_name, _] : p->products) { n.push_back(product_name); }
+    std::ranges::sort(n);
+    return n;
+  }() };
 
-  // mutex_ guards product_registry_ for the whole function - readers
-  // (find_product_provider) may run concurrently on worker threads.
+  if (names.empty()) { return; }
+
   std::lock_guard const lock(mutex_);
+  for (auto const &product_name : names) {
+    auto const [it, inserted]{ product_registry_.emplace(product_name, p) };
+    if (inserted || it->second == p) { continue; }
 
-  for (auto &[key, package] : packages_) {
-    if (!package->spec_fetch_completed.load()) { continue; }
-
-    for (auto const &[product_name, _] : package->products) {
-      // Skip already-registered providers (added in prior iterations)
-      if (product_registry_.contains(product_name)) { continue; }
-      providers_by_product[product_name].push_back(package.get());
-    }
-  }
-
-  std::vector<std::string> collisions;
-
-  for (auto const &[product_name, providers] : providers_by_product) {
-    if (providers.size() == 1) {
-      // Collision if an existing provider was already registered
-      if (product_registry_.contains(product_name)) {
-        collisions.push_back("Product '" + product_name +
+    // Whichever provider registered first is scheduling-dependent; name them in
+    // sorted order so the message is reproducible.
+    auto const &a{ it->second->cfg->identity };
+    auto const &b{ p->cfg->identity };
+    throw std::runtime_error("Product '" + product_name +
                              "' provided by multiple specs: " +
-                             product_registry_.at(product_name)->cfg->identity + ", " +
-                             providers.front()->cfg->identity);
-      } else {
-        product_registry_[product_name] = providers.front();
-      }
-    } else if (!providers.empty()) {
-      std::ostringstream oss;
-      oss << "Product '" << product_name << "' provided by multiple specs: ";
-      for (size_t i{ 0 }; i < providers.size(); ++i) {
-        if (i) { oss << ", "; }
-        oss << providers[i]->cfg->identity;
-      }
-      collisions.push_back(oss.str());
-    }
-  }
-
-  if (!collisions.empty()) {
-    std::ostringstream oss;
-    for (size_t i{ 0 }; i < collisions.size(); ++i) {
-      if (i) { oss << "\n"; }
-      oss << collisions[i];
-    }
-    throw std::runtime_error(oss.str());
+                             (a < b ? a + ", " + b : b + ", " + a));
   }
 }
 
@@ -1281,7 +1290,7 @@ engine::weak_resolution_result engine::resolve_weak_references() {
 
   for (auto [p, wr] : collect_unresolved()) {
     if (wr->is_product) {
-      resolve_product_ref(p, wr, result, product_registry_, *this);
+      resolve_product_ref(p, wr, result, find_product_provider(wr->query), *this);
     } else {
       resolve_identity_ref(p, wr, result, ambiguity_messages, *this);
     }
@@ -1369,7 +1378,9 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
       throw std::runtime_error(oss.str());
     }
 
-    update_product_registry();
+    // No registry sweep here: register_products publishes at each package's own
+    // spec_fetch completion, so by this barrier the registry already holds
+    // everything a sweep would have found.
     weak_resolution_result const resolution{ resolve_weak_references() };
 
     if (resolution.resolved == 0 && resolution.fallbacks_started == 0) {

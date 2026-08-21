@@ -57,13 +57,10 @@ Specs can declare products (name→value map) and depend on products instead of 
 
 ### Product Registry and Collision Detection
 
-- [x] Add `void engine::update_product_registry()` method in `src/engine.cpp`
-- [x] Iterate all specs beyond recipe_fetch phase (check `current_phase > recipe_fetch`) after each `wait_for_resolution_phase()` iteration
-- [x] Build collision map: `product_name → vector<recipe*>`
-- [x] For products with multiple providers, collect error messages with all provider identities
-- [x] For products with single provider, register in `product_registry_`
-- [x] Throw aggregated error if any collisions detected (collision is always error, no priority rules)
-- [x] Call `build_product_registry()` in `engine::resolve_graph()` after `wait_for_resolution_phase()`, before weak resolution; rebuild each iteration so late providers participate
+- [x] `void engine::register_products(pkg *)` publishes a package's PRODUCTS from its own worker at spec_fetch completion — eager, not batched at the resolution barrier, so a consumer whose dependency edge forced the provider through `pkg_export` always observes the entry
+- [x] Names snapshotted under `deps_mutex`, published under `mutex_` — sequential, never nested, so the resolution loop's `mutex_` → `deps_mutex` order is never inverted
+- [x] Collision = a second provider for a registered name; first-wins is scheduling-dependent, so the message sorts the two identities and stays reproducible. Thrown from the package worker, surfacing through `collect_failed()`
+- [x] All reads go through the locked `find_product_provider()`; `resolve_product_ref` takes the provider as an argument rather than traversing the map
 
 ### Product Dependency Resolution
 

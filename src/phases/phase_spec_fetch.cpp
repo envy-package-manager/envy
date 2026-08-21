@@ -1435,7 +1435,11 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     tui::debug(user_managed ? "spec: user-managed (setup-only)" : "spec: cache-managed");
   }
 
-  p->products = parse_products_table(cfg, *lua, p);
+  {  // deps_mutex-guarded: engine::register_products reads this from the barrier side
+    auto parsed{ parse_products_table(cfg, *lua, p) };
+    std::lock_guard const deps_lock(p->deps_mutex);
+    p->products = std::move(parsed);
+  }
 
   // Extract spec PLATFORMS and intersect with manifest-level platforms
   {
