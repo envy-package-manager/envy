@@ -1056,10 +1056,9 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       // source.dependencies closure runs while the barrier is held shut by the
       // consumer waiting on it. Same refusal either way.
       auto const reject{ [&](char const *closure) {
-        throw std::runtime_error(std::string{ closure } +
-                                 " must use strong dependencies: '" + query +
-                                 "' in spec '" + p->cfg->identity +
-                                 "' is a weak reference");
+        throw std::runtime_error(
+            std::string{ closure } + " must use strong dependencies: '" + query +
+            "' in spec '" + p->cfg->identity + "' is a weak reference");
       } };
       if (p->depot_bootstrap) { reject("package-depot dependency closure"); }
 

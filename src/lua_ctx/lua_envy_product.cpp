@@ -44,12 +44,12 @@ void lua_envy_product_install(sol::table &envy_table) {
                  .allowed = allowed,
                  .reason = reason);
     } };
-    auto const refuse{ [&](std::string const &provider_identity,
-                           pkg_phase needed_by,
-                           std::string msg) {
-      trace(provider_identity, needed_by, false, msg);
-      return std::runtime_error{ std::move(msg) };
-    } };
+    auto const refuse{
+      [&](std::string const &provider_identity, pkg_phase needed_by, std::string msg) {
+        trace(provider_identity, needed_by, false, msg);
+        return std::runtime_error{ std::move(msg) };
+      }
+    };
 
     pkg::product_dependency const dep{ [&] {
       {  // A declared product dependency wins. Copy under deps_mutex — the
@@ -86,9 +86,8 @@ void lua_envy_product_install(sol::table &envy_table) {
       if (!edge) {
         throw refuse(provider->cfg->identity,
                      pkg_phase::none,
-                     "envy.product: '" + provider->cfg->identity +
-                         "' provides product '" + product_name + "', but pkg '" +
-                         consumer->cfg->identity +
+                     "envy.product: '" + provider->cfg->identity + "' provides product '" +
+                         product_name + "', but pkg '" + consumer->cfg->identity +
                          "' does not depend on it — declare it as a dependency");
       }
 
