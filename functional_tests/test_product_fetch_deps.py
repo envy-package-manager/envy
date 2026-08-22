@@ -170,8 +170,16 @@ PACKAGES = {{ {{ spec = "corp.thing@r1", bundle = "corp" }} }}
         package_value = next(
             e["reason"] for e in package_events if e["target"] == "local.tool@v1"
         )
-        # envy.product is envy.package plus the PRODUCTS-relative suffix.
-        self.assertEqual(product_value, package_value.rstrip("/") + "/jf")
+        # envy.product is envy.package plus the PRODUCTS-relative suffix. The two
+        # disagree on separators: product_util_resolve returns generic_string() while
+        # envy.package returns the native path, so on Windows one is "/" and the other
+        # "\". That predates this change, so normalize rather than assert one style.
+        def slashes(path: str) -> str:
+            return path.replace("\\", "/")
+
+        self.assertEqual(
+            slashes(product_value), slashes(package_value).rstrip("/") + "/jf"
+        )
 
     # -- the near-misses that must fail deterministically --------------------
 
