@@ -299,7 +299,11 @@ PACKAGES = {{
         result = self.run_envy(["product", "tool", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/tool"), f"unexpected output: {output}")
+        # `envy product` returns native separators; compare the tail, not the spelling.
+        self.assertTrue(
+            output.replace("\\", "/").endswith("bin/tool"),
+            f"unexpected output: {output}",
+        )
         self.assertIn("local.product_provider@v1", output)
 
     def test_product_command_programmatic_provider_returns_raw_value(self):
@@ -358,13 +362,19 @@ PACKAGES = {{
         result = self.run_envy(["product", "python3.14", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/python"), f"unexpected output: {output}")
+        self.assertTrue(
+            output.replace("\\", "/").endswith("bin/python"),
+            f"unexpected output: {output}",
+        )
 
         # Verify second product also works
         result = self.run_envy(["product", "pip3.14", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/pip"), f"unexpected output: {output}")
+        self.assertTrue(
+            output.replace("\\", "/").endswith("bin/pip"),
+            f"unexpected output: {output}",
+        )
 
     def test_absolute_path_in_product_value_rejected(self):
         """Product values with absolute paths should be rejected during parsing."""
@@ -687,7 +697,7 @@ PACKAGES = {{
 
         # Cache-managed: resolved value should be an absolute path ending with bin/tool
         self.assertTrue(
-            products["tool"].endswith("bin/tool"),
+            products["tool"].replace("\\", "/").endswith("bin/tool"),
             f"unexpected tool value: {products['tool']}",
         )
         self.assertIn("packages", products["tool"])

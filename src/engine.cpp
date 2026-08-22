@@ -880,7 +880,7 @@ void engine::run_depot_step() {
       std::vector<std::pair<std::string, std::string>> dep_paths;
       dep_paths.reserve(deps.size());
       for (pkg *dep : deps) {
-        dep_paths.emplace_back(dep->cfg->identity, util_normalized_path(dep->pkg_path));
+        dep_paths.emplace_back(dep->cfg->identity, dep->pkg_path.string());
       }
 
       phase_context ctx{ .eng = this,

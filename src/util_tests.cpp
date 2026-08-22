@@ -829,22 +829,26 @@ TEST_CASE("util_path_with_separator handles empty path") {
 }
 
 TEST_CASE("util_path_with_separator adds separator to path without one") {
-  std::filesystem::path const p{ "/path/to/dir" };
+  std::filesystem::path const p{ "path/to/dir" };
   std::string const result{ envy::util_path_with_separator(p) };
   CHECK(!result.empty());
   // Result should end with preferred separator
   char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
   CHECK(result.back() == sep);
-  // Verify the path content is preserved
-  CHECK(result.substr(0, result.size() - 1) == p.string());
+  // Content preserved, in normalized spelling — p.string() keeps whatever separators
+  // it was constructed with, which on Windows is not what a spec is handed.
+  CHECK(result.substr(0, result.size() - 1) == envy::util_normalized_path(p));
 }
 
-TEST_CASE("util_path_with_separator preserves path already ending with forward slash") {
-  std::filesystem::path const p{ "/path/to/dir/" };
+TEST_CASE("util_path_with_separator normalizes a trailing separator without doubling") {
+  // Where '/' is already the preferred separator this is a no-op; on Windows the
+  // trailing '/' is a separator too, so it is converted rather than appended to.
+  std::filesystem::path const p{ "path/to/dir/" };
   std::string const result{ envy::util_path_with_separator(p) };
-  // Should not add another separator
+  char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
   CHECK(result.size() == p.string().size());
-  CHECK(result.back() == '/');
+  CHECK(result.back() == sep);
+  CHECK(result.find(sep == '/' ? '\\' : '/') == std::string::npos);
 }
 
 #ifdef _WIN32

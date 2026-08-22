@@ -26,6 +26,11 @@ from pathlib import Path
 from .env import EnvyTestCase
 
 
+def slashes(path: str) -> str:
+    """A path with separators flattened, for comparing tails across platforms."""
+    return path.replace("\\", "/")
+
+
 # A cache-managed provider: its product resolves to pkg_path/jf, which only exists
 # once install has run. Asserting on that path is how these tests prove the edge
 # drove the provider all the way through install, not merely through spec_fetch.
@@ -136,7 +141,7 @@ PACKAGES = {{ {{ spec = "corp.thing@r1", bundle = "corp" }} }}
         self.assertEqual("spec_fetch", event["current_phase"])
         # reason carries the resolved value; /pkg/ means install completed.
         self.assertTrue(
-            event["reason"].endswith("/pkg/jf"),
+            slashes(event["reason"]).endswith("/pkg/jf"),
             f"product did not resolve under the installed pkg dir: {event['reason']}",
         )
 
@@ -420,7 +425,7 @@ end
             self.assertTrue(events[0]["allowed"], events[0])
             self.assertEqual(f"local.tool{i}@v1", events[0]["provider"])
             self.assertTrue(
-                events[0]["reason"].endswith(f"/pkg/jf{i}"),
+                slashes(events[0]["reason"]).endswith(f"/pkg/jf{i}"),
                 f"jf{i} resolved to {events[0]['reason']}",
             )
 

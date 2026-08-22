@@ -730,7 +730,7 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
   sol::table deps_table{ lua_view.create_table() };
   for (auto const &[identity, pkg_path] : deps) {
     sol::table d{ lua_view.create_table() };
-    d["pkg_path"] = pkg_path;
+    d["pkg_path"] = util_normalized_path(pkg_path);
     deps_table[identity] = d;
   }
   ctx["deps"] = deps_table;

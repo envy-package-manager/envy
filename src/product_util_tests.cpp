@@ -43,11 +43,22 @@ std::unique_ptr<pkg> make_pkg(std::string identity, pkg_type type) {
 
 TEST_CASE("product_util_resolve returns joined path for cache-managed provider") {
   auto provider{ make_pkg("local.provider@v1", pkg_type::CACHE_MANAGED) };
+  // Drive-qualified on Windows: a leading backslash alone is drive-relative, not
+  // absolute. The product value keeps the forward slash a spec author would write, so
+  // this also pins that normalization reaches inside the joined-on component.
+#ifdef _WIN32
+  provider->pkg_path = std::filesystem::path("C:\\tmp\\provider");
+#else
   provider->pkg_path = std::filesystem::path("/tmp/provider");
+#endif
   provider->products["tool"] = product_entry{ "bin/tool", true };
 
   auto const value{ product_util_resolve(provider.get(), "tool") };
+#ifdef _WIN32
+  CHECK(value == "C:\\tmp\\provider\\bin\\tool");
+#else
   CHECK(value == "/tmp/provider/bin/tool");
+#endif
 }
 
 TEST_CASE("product_util_resolve returns raw value for user-managed provider") {
