@@ -204,14 +204,18 @@ std::string util_format_bytes(std::uint64_t bytes) {
   return oss.str();
 }
 
+std::string util_normalized_path(std::filesystem::path path) {
+  return path.make_preferred().string();
+}
+
 std::string util_path_with_separator(std::filesystem::path const &path) {
-  std::string result{ path.string() };
+  std::string result{ util_normalized_path(path) };
   if (result.empty()) { return result; }
 
+  // Normalized, so the only separator that can already be trailing is the preferred
+  // one; anything else is a literal character in a filename.
   char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
-  if (result.back() != sep && result.back() != '/' && result.back() != '\\') {
-    result += sep;
-  }
+  if (result.back() != sep) { result += sep; }
 
   return result;
 }

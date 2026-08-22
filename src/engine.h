@@ -25,6 +25,7 @@ namespace envy {
 
 struct manifest;
 struct pkg;
+enum class pkg_closure : uint8_t;
 
 enum class pkg_type {
   UNKNOWN,        // Not yet determined or failed
@@ -128,9 +129,16 @@ class engine : unmovable {
   // depot dependency failed.
   package_depot_index const *depot_index_for(pkg *p);
 
-  // Flag `p` and its dependency closure as depot-bootstrap and wake any
-  // blocked depot waits. Idempotent.
-  void mark_depot_bootstrap(pkg *p);
+  // Flag `p` and its dependency closure as a member of `kind`. Idempotent. Throws
+  // if any member already holds an unresolved weak reference: neither closure
+  // overlaps the resolution barrier, so such a reference could only resolve after
+  // the phase that needed it. depot_bootstrap additionally wakes blocked depot
+  // waits, since membership exempts a package from consulting the depot at all.
+  void mark_closure(pkg *p, pkg_closure kind);
+
+  // Carry every closure membership from a package to a dependency just wired to it.
+  // Every wiring site calls this, so a new closure kind is one edit in kAllClosures.
+  void propagate_closures(pkg *from, pkg *to);
 
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
@@ -153,10 +161,15 @@ class engine : unmovable {
   task_engine::observer make_trace_observer();
   std::string trace_display(std::string const &key) const;
   void process_fetch_dependencies(pkg *p);
-  void update_product_registry();
+
+  // Publish `p`'s PRODUCTS into the project-wide registry, called by p's own
+  // worker the instant its spec is known. Eager (not barrier-batched) so a
+  // consumer whose dependency edge forced `p` through pkg_export is guaranteed
+  // to observe the entry — that edge is what makes the provider's payload
+  // readable, so registry visibility must not lag behind it.
+  void register_products(pkg *p);
   void validate_product_fallbacks();
   void validate_setup_selections();
-  bool pkg_provides_product_transitively(pkg *p, std::string const &product_name) const;
   void extend_dependencies_recursive(pkg *p, std::unordered_set<pkg_key> &visited);
   void wait_for_resolution_phase();
   void on_spec_fetch_start();
@@ -175,7 +188,7 @@ class engine : unmovable {
   manifest const *manifest_{ nullptr };  // For bundle fetch function lookup
 
   // Depot state machine: importers block on the global condition until READY/
-  // FAILED (or their own depot_bootstrap flag flips). depot_index_ is written
+  // FAILED (or their own depot_bootstrap membership lands). depot_index_ is written
   // by the #depot worker (or set_depot_index) strictly before READY publishes.
   std::once_flag depot_task_once_;
   std::optional<package_depot_index> depot_index_;

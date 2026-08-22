@@ -1359,13 +1359,21 @@ PACKAGE_DEPOTS = {
 )",
                                fs::path("/fake/envy.lua")) };
 
-  auto const result{ m->run_depot_fetch(1,
-                                        nullptr,
-                                        fs::path("/fake/tmp"),
-                                        { { "tools.jfrog@v1", "/fake/pkg" } }) };
+  // ctx.tmp_dir and ctx.deps[].pkg_path are both normalized at the Lua boundary, so a
+  // FETCH function sees one separator spelling whatever the caller passed.
+#ifdef _WIN32
+  auto const tmp{ fs::path("C:\\fake\\tmp") };
+  char const *dep{ "C:/fake/pkg" };
+  char const *expected{ "C:\\fake\\tmp|C:\\fake\\pkg" };
+#else
+  auto const tmp{ fs::path("/fake/tmp") };
+  char const *dep{ "/fake/pkg" };
+  char const *expected{ "/fake/tmp|/fake/pkg" };
+#endif
+  auto const result{ m->run_depot_fetch(1, nullptr, tmp, { { "tools.jfrog@v1", dep } }) };
   auto const *text{ std::get_if<std::string>(&result) };
   REQUIRE(text);
-  CHECK(*text == "/fake/tmp|/fake/pkg");
+  CHECK(*text == expected);
 }
 
 TEST_CASE("PACKAGE_DEPOTS: run_depot_fetch converts entries table") {

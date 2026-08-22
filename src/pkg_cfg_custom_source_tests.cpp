@@ -346,3 +346,124 @@ TEST_CASE("pkg_cfg - no function without source table") {
   CHECK_FALSE(cfg->has_fetch_function());
   CHECK(cfg->source_dependencies.empty());
 }
+
+// -- fetch-dependency product references ------------------------------------
+//
+// A `source.dependencies` entry is parsed through parse_fetch_dependency, which
+// is parse(..., allow_weak=true) plus two rules: the entry must be a strong
+// reference — reference-only and `weak = {...}` alike — and it must name a
+// `spec`. The weak pass runs only at a resolution barrier, after every
+// spec_fetch, so nothing weak could be edged before the fetch function waiting
+// on it. Rejecting at parse also stops an entry that parses to an empty identity
+// from reaching the graph, where it would surface as an invalid pkg_key.
+
+namespace {
+
+sol::object eval_entry(sol::state &lua, std::string const &lua_code) {
+  auto result{ lua.safe_script("return " + lua_code, sol::script_pass_on_error) };
+  if (!result.valid()) {
+    sol::error err = result;
+    throw std::runtime_error("Lua error: " + std::string{ err.what() });
+  }
+  return result;
+}
+
+}  // namespace
+
+TEST_CASE("parse_fetch_dependency: bare product entry is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // No 'spec', no 'source' — parse(..., allow_weak=true) yields an empty identity,
+  // which would be pushed into the weak pass as an unmatchable empty query.
+  sol::object entry{ eval_entry(lua, R"({ product = "jf" })") };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}
+
+TEST_CASE("parse_fetch_dependency: product with spec but no source is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  sol::object entry{ eval_entry(lua, R"({ spec = "local.tool@v1", product = "jf" })") };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}
+
+TEST_CASE("parse_fetch_dependency: strong product entry is accepted and pins provider") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  sol::object entry{ eval_entry(
+      lua,
+      R"({ spec = "local.tool@v1", source = "file:///tmp/tool.lua", product = "jf" })") };
+  envy::pkg_cfg *cfg{ envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()) };
+
+  CHECK(cfg->identity == "local.tool@v1");
+  CHECK(cfg->product.has_value());
+  CHECK(*cfg->product == "jf");
+  CHECK_FALSE(cfg->is_weak_reference());
+}
+
+TEST_CASE("parse_fetch_dependency: reference-only entry is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // A fetch prerequisite is needed at spec_fetch; the weak pass runs only after
+  // every spec_fetch, including the consumer's own. Nothing can satisfy it, so the
+  // identity form is refused alongside the product form.
+  sol::object entry{ eval_entry(lua, R"({ spec = "local.tool@v1" })") };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}
+
+TEST_CASE("parse_fetch_dependency: weak-with-fallback entry is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // The fallback would be instantiated by the same too-late pass.
+  sol::object entry{
+    eval_entry(
+        lua,
+        R"({ spec = "local.helper", weak = { spec = "local.fb@v1", source = "fb.lua" } })")
+  };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}
+
+TEST_CASE("parse_fetch_dependency: product entry with a source but no spec is rejected") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // Not a weak reference (it has a source), so the strong-reference rule lets it
+  // through — but parse(..., true) allowed the missing 'spec', leaving an empty
+  // identity that would otherwise surface much later as an invalid pkg_key.
+  sol::object entry{
+    eval_entry(lua, R"({ product = "jf", source = "file:///tmp/tool.lua" })")
+  };
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse_fetch_dependency(entry, fs::current_path()),
+                    doctest::Contains("must name a 'spec'"));
+}
+
+TEST_CASE("parse_fetch_dependency: source.dependencies rejects a bare product entry") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  // Reaching the rule through a whole source table, not just the entry helper:
+  // both fetch-dependency parse sites must funnel through parse_fetch_dependency.
+  std::string const lua_code{ R"(
+    return {
+      spec = "local.parent@v1",
+      source = {
+        dependencies = { { product = "jf" } },
+        fetch = function(tmp) end,
+      },
+    }
+  )" };
+  auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
+  REQUIRE(result.valid());
+  sol::object val = result;
+
+  CHECK_THROWS_WITH(envy::pkg_cfg::parse(val, fs::current_path()),
+                    doctest::Contains("must be a strong reference"));
+}

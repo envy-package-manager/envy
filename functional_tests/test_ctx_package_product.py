@@ -288,7 +288,8 @@ DEPENDENCIES = {{
 
 STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
   local val = envy.product("tool")
-  assert(val:match("bin/tool"), "expected product path")
+  -- "." spans either separator; envy.product returns the platform's own.
+  assert(val:match("bin.tool"), "expected product path")
 end
 
 INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)

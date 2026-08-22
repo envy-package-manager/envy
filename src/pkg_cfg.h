@@ -118,6 +118,15 @@ struct pkg_cfg : unmovable {
                                    std::filesystem::path const &base_path,
                                    bool allow_weak_without_source = false);
 
+  // Parse one `source.dependencies` entry, for either a spec's source table or a
+  // BUNDLES declaration's. Same as parse(..., true) except that the entry must name
+  // a 'spec' and be a strong reference — reference-only and `weak = {...}` forms are
+  // both rejected. The weak pass runs only at a resolution barrier, after every
+  // spec_fetch has finished, so no dependency edge could ever gate the fetch
+  // function waiting on the entry.
+  static pkg_cfg *parse_fetch_dependency(sol::object const &entry,
+                                         std::filesystem::path const &base_path);
+
   // Serialize sol::object to canonical string for stable package option hashing
   static std::string serialize_option_table(sol::object const &val);
 

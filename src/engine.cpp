@@ -18,6 +18,7 @@
 #include "pkg_phase.h"
 #include "platform.h"
 #include "tui.h"
+#include "util.h"
 
 #include <algorithm>
 #include <array>
@@ -65,6 +66,32 @@ constexpr pkg_phase phase_from_watermark(int w) { return static_cast<pkg_phase>(
 
 constexpr bool is_setup_pair_key(std::string_view key) {
   return key.find("#setup:") != std::string_view::npos;
+}
+
+// Walk `root` and everything reachable through its dependencies, calling `visit`
+// once per package. One worklist serves the whole traversal, so this does not copy a
+// node's dependency list per node; a node's lock is held only long enough to append
+// its dependencies, and `visit` runs outside it, so no two pkg locks ever nest.
+// `kind`'s bit doubles as the visited set: subtrees already in this closure are
+// skipped, which also makes this terminate on a dependency cycle and cheap to call
+// repeatedly. A package may be in several closures at once, so the bits are
+// independent — marking one never re-walks or clears another.
+constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap, pkg_closure::fetch };
+
+template <typename Fn>
+void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
+  auto const bit{ static_cast<uint8_t>(kind) };
+  std::vector<pkg *> work{ root };
+  while (!work.empty()) {
+    pkg *p{ work.back() };
+    work.pop_back();
+    if (p->closures.fetch_or(bit) & bit) { continue; }
+
+    visit(p);
+
+    std::lock_guard const deps_lock(p->deps_mutex);
+    for (auto const &[_, dep_info] : p->dependencies) { work.push_back(dep_info.p); }
+  }
 }
 
 bool has_dependency_path(pkg const *from, pkg const *to) {
@@ -208,7 +235,7 @@ void resolve_identity_ref(pkg *p,
 
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    eng.propagate_closures(p, dep);
     {
       std::lock_guard const deps_lock(p->deps_mutex);
       wr->resolved = dep;
@@ -245,7 +272,7 @@ void resolve_identity_ref(pkg *p,
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    eng.propagate_closures(p, dep);
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -269,10 +296,13 @@ void resolve_identity_ref(pkg *p,
   }
 }
 
+// `registry_provider` is the registry's answer for wr->query, already read under
+// the engine's mutex_ by the caller — worker threads publish into that map
+// concurrently, so it must never be traversed here.
 void resolve_product_ref(pkg *p,
                          pkg::weak_reference *wr,
                          engine::weak_resolution_result &result,
-                         std::unordered_map<std::string, pkg *> const &registry,
+                         pkg *registry_provider,
                          engine &eng) {
   auto set_product_provider = [&](pkg *provider) {
     std::lock_guard const deps_lock(p->deps_mutex);
@@ -286,10 +316,8 @@ void resolve_product_ref(pkg *p,
     }
   };
 
-  auto const it{ registry.find(wr->query) };
-
-  if (it != registry.end()) {
-    pkg *dep{ it->second };
+  if (registry_provider) {
+    pkg *dep{ registry_provider };
 
     if (!wr->constraint_identity.empty() &&
         dep->cfg->identity != wr->constraint_identity) {
@@ -306,7 +334,7 @@ void resolve_product_ref(pkg *p,
 
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    eng.propagate_closures(p, dep);
     set_product_provider(dep);
     trace_product_resolution(p, wr, dep, "registry");
     ++result.resolved;
@@ -319,7 +347,7 @@ void resolve_product_ref(pkg *p,
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    eng.propagate_closures(p, dep);
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -331,26 +359,18 @@ void resolve_product_ref(pkg *p,
   }
 }
 
-bool pkg_provides_product_transitively_impl(pkg *p,
-                                            std::string const &product_name,
-                                            std::unordered_set<pkg const *> &visited) {
-  if (!visited.insert(p).second) { return false; }
+bool pkg_provides_product(pkg *root, std::string const &product_name) {
+  std::vector<pkg *> work{ root };
+  std::unordered_set<pkg const *> visited{ root };
 
-  if (p->products.contains(product_name)) { return true; }
+  while (!work.empty()) {
+    pkg *p{ work.back() };
+    work.pop_back();
 
-  auto const deps{ [&] {
     std::lock_guard const deps_lock(p->deps_mutex);
-    std::vector<std::pair<std::string, pkg *>> snapshot;
-    snapshot.reserve(p->dependencies.size());
-    for (auto const &[dep_id, dep_info] : p->dependencies) {
-      snapshot.emplace_back(dep_id, dep_info.p);
-    }
-    return snapshot;
-  }() };
-
-  for (auto const &[dep_id, dep] : deps) {
-    if (pkg_provides_product_transitively_impl(dep, product_name, visited)) {
-      return true;
+    if (p->products.contains(product_name)) { return true; }
+    for (auto const &[_, dep_info] : p->dependencies) {
+      if (visited.insert(dep_info.p).second) { work.push_back(dep_info.p); }
     }
   }
 
@@ -470,6 +490,10 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
     phase_dispatch_table[step](p, *this);
 
     if (static_cast<pkg_phase>(step) == pkg_phase::spec_fetch) {
+      // Publish before the completion flag: a consumer's edge waits on
+      // pkg_export, which is strictly later, so the entry is always visible by
+      // the time anyone can legally read this package's products.
+      register_products(p);
       p->spec_fetch_completed = true;
       on_spec_fetch_complete(p->cfg->identity);
 
@@ -577,6 +601,9 @@ std::vector<product_info> engine::collect_all_products() const {
     std::lock_guard const lock(mutex_);
 
     for (auto const &[key, package] : packages_) {
+      // products/resolved_platforms are deps_mutex-guarded; mutex_ → deps_mutex
+      // matches the resolution loop's order.
+      std::lock_guard const deps_lock(package->deps_mutex);
       for (auto const &[prod_name, prod_entry] : package->products) {
         auto plats{ util_platform_intersect(prod_entry.platforms,
                                             package->resolved_platforms) };
@@ -736,18 +763,20 @@ package_depot_index const *engine::depot_index_for(pkg *p) {
 
   if (!manifest_ || manifest_->package_depots.empty()) { return nullptr; }
 
-  if (p->depot_bootstrap) { return nullptr; }  // Bootstrap: never consult the depot
+  // Bootstrap: never consult the depot
+  if (p->in_closure(pkg_closure::depot_bootstrap)) { return nullptr; }
 
   ensure_depot_task_started();
 
   // The #depot worker broadcasts the global condition on completion/failure;
-  // mark_depot_bootstrap broadcasts when this package's exemption flips late
+  // mark_closure broadcasts when this package's exemption flips late
   // (it was wired into the depot's DEPENDS closure after blocking here).
   core_.wait_global([this, p] {
-    return depot_state_ != depot_state::NOT_READY || p->depot_bootstrap.load();
+    return depot_state_ != depot_state::NOT_READY ||
+           p->in_closure(pkg_closure::depot_bootstrap);
   });
 
-  if (p->depot_bootstrap) { return nullptr; }
+  if (p->in_closure(pkg_closure::depot_bootstrap)) { return nullptr; }
   if (depot_state_ == depot_state::FAILED) { throw std::runtime_error(depot_error_); }
   return depot_index_ ? &*depot_index_ : nullptr;
 }
@@ -812,7 +841,7 @@ std::vector<pkg *> engine::spawn_depot_dependencies() {
       fn_deps.reserve(cfgs.size());
       for (auto const *cfg : cfgs) {
         pkg *dep{ ensure_pkg(cfg) };
-        mark_depot_bootstrap(dep);
+        mark_closure(dep, pkg_closure::depot_bootstrap);
         fn_deps.push_back(dep);
         if (seen.insert(dep).second) {
           edge_deps.push_back(dep);
@@ -887,20 +916,37 @@ void engine::run_depot_step() {
   fs::remove_all(depot_tmp, ec);
 }
 
-void engine::mark_depot_bootstrap(pkg *p) {
-  if (p->depot_bootstrap.exchange(true)) { return; }
+void engine::mark_closure(pkg *p, pkg_closure kind) {
+  walk_closure(p, kind, [this, kind](pkg *member) {
+    // Checked per member here as well as at declaration time, because a package can
+    // complete spec_fetch as a root — registering its weak references and passing that
+    // check — before anything pulls it into a closure. Only *unresolved* references
+    // are a violation; one already resolved at an earlier barrier is wired and
+    // ordered.
+    auto const unresolved{ [member] {
+      std::lock_guard const deps_lock(member->deps_mutex);
+      auto const it{ std::ranges::find_if(member->weak_references,
+                                          [](auto const &wr) { return !wr.resolved; }) };
+      return it == member->weak_references.end() ? std::string{} : it->query;
+    }() };
+    if (!unresolved.empty()) {
+      throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
+                               " must use strong dependencies: '" + member->cfg->identity +
+                               "' holds a weak reference to '" + unresolved +
+                               "' but runs outside the window where weak references "
+                               "resolve");
+    }
 
-  // Snapshot then recurse without holding the lock (no nested pkg locks).
-  auto const deps{ [&] {
-    std::lock_guard const deps_lock(p->deps_mutex);
-    std::vector<pkg *> snapshot;
-    snapshot.reserve(p->dependencies.size());
-    for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
-    return snapshot;
-  }() };
-  for (auto *dep : deps) { mark_depot_bootstrap(dep); }
+    if (kind == pkg_closure::depot_bootstrap) {
+      core_.notify_global();  // Wake a depot wait this package may be blocked in
+    }
+  });
+}
 
-  core_.notify_global();  // Wake a depot wait this package may be blocked in
+void engine::propagate_closures(pkg *from, pkg *to) {
+  for (auto const kind : kAllClosures) {
+    if (from->in_closure(kind)) { mark_closure(to, kind); }
+  }
 }
 
 bundle *engine::register_bundle(std::string const &identity,
@@ -992,32 +1038,44 @@ void engine::process_fetch_dependencies(pkg *p) {
                                      p->cfg->identity,
                                      "Fetch dependency");
 
-    if (fetch_dep_cfg->is_weak_reference()) {  // Defer resolution to weak pass
-      if (p->depot_bootstrap) {
-        // Bootstrap packages may run after the resolution loop has finished,
-        // so weak/product references could never resolve.
-        throw std::runtime_error(
-            "package-depot dependency closure must use strong dependencies: '" +
-            fetch_dep_cfg->identity + "' in spec '" + p->cfg->identity +
-            "' is a weak reference");
-      }
-      pkg::weak_reference wr;
-      wr.query = fetch_dep_cfg->identity;
-      wr.needed_by = pkg_phase::spec_fetch;
-      wr.fallback = fetch_dep_cfg->weak;
-      std::lock_guard const deps_lock(p->deps_mutex);
-      p->weak_references.push_back(std::move(wr));
-      continue;
+    // pkg_cfg::parse_fetch_dependency rejects weak fetch prerequisites, so every
+    // entry here has a source. Programmatic construction bypasses that parse, so
+    // assert it rather than fall through to ensure_pkg with no source.
+    if (fetch_dep_cfg->is_weak_reference()) {
+      throw std::runtime_error("source.dependencies entry '" + fetch_dep_cfg->identity +
+                               "' in spec '" + p->cfg->identity +
+                               "' must be a strong reference");
     }
 
     pkg *fetch_dep{ ensure_pkg(fetch_dep_cfg) };
 
-    // Add to dependencies map - the edge query will block spec_fetch on it
+    // This package runs its whole ladder during graph resolution, so nothing in its
+    // closure may hold a weak reference. Mark before starting its worker, so its own
+    // wire_dependency_graph sees the flag.
+    mark_closure(fetch_dep, pkg_closure::fetch);
+
+    // Add to dependencies map - the edge query will block spec_fetch on it.
+    // An explicit `product` on the entry additionally pins the name to this
+    // provider, so envy.product reports a mismatch instead of silently reading
+    // whichever package the registry happens to hold.
     {
       std::lock_guard const deps_lock(p->deps_mutex);
       p->dependencies[fetch_dep_cfg->identity] = { fetch_dep, pkg_phase::spec_fetch };
+      if (fetch_dep_cfg->product.has_value()) {
+        auto const [it, inserted]{ p->product_dependencies.emplace(
+            *fetch_dep_cfg->product,
+            pkg::product_dependency{ .name = *fetch_dep_cfg->product,
+                                     .needed_by = pkg_phase::spec_fetch,
+                                     .provider = fetch_dep,
+                                     .constraint_identity = fetch_dep_cfg->identity }) };
+        if (!inserted && it->second.provider != fetch_dep) {
+          throw std::runtime_error("Duplicate product dependency '" +
+                                   *fetch_dep_cfg->product + "' in spec '" +
+                                   p->cfg->identity + "'");
+        }
+      }
     }
-    if (p->depot_bootstrap) { mark_depot_bootstrap(fetch_dep); }
+    propagate_closures(p, fetch_dep);
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = fetch_dep_cfg->identity,
@@ -1110,54 +1168,34 @@ pkg_result_map_t engine::run_full(std::vector<pkg_cfg const *> const &roots) {
   return results;
 }
 
-void engine::update_product_registry() {
-  std::unordered_map<std::string, std::vector<pkg *>> providers_by_product;
+void engine::register_products(pkg *p) {
+  // Snapshot names under deps_mutex, publish under mutex_ — sequential, never
+  // nested, so this never inverts the resolution loop's mutex_ → deps_mutex
+  // order. Sorted so a package declaring several colliding products always
+  // reports the same one first.
+  auto const names{ [p] {
+    std::vector<std::string> n;
+    std::lock_guard const deps_lock(p->deps_mutex);
+    n.reserve(p->products.size());
+    for (auto const &[product_name, _] : p->products) { n.push_back(product_name); }
+    std::ranges::sort(n);
+    return n;
+  }() };
 
-  // mutex_ guards product_registry_ for the whole function - readers
-  // (find_product_provider) may run concurrently on worker threads.
+  if (names.empty()) { return; }
+
   std::lock_guard const lock(mutex_);
+  for (auto const &product_name : names) {
+    auto const [it, inserted]{ product_registry_.emplace(product_name, p) };
+    if (inserted || it->second == p) { continue; }
 
-  for (auto &[key, package] : packages_) {
-    if (!package->spec_fetch_completed.load()) { continue; }
-
-    for (auto const &[product_name, _] : package->products) {
-      // Skip already-registered providers (added in prior iterations)
-      if (product_registry_.contains(product_name)) { continue; }
-      providers_by_product[product_name].push_back(package.get());
-    }
-  }
-
-  std::vector<std::string> collisions;
-
-  for (auto const &[product_name, providers] : providers_by_product) {
-    if (providers.size() == 1) {
-      // Collision if an existing provider was already registered
-      if (product_registry_.contains(product_name)) {
-        collisions.push_back("Product '" + product_name +
-                             "' provided by multiple specs: " +
-                             product_registry_.at(product_name)->cfg->identity + ", " +
-                             providers.front()->cfg->identity);
-      } else {
-        product_registry_[product_name] = providers.front();
-      }
-    } else if (!providers.empty()) {
-      std::ostringstream oss;
-      oss << "Product '" << product_name << "' provided by multiple specs: ";
-      for (size_t i{ 0 }; i < providers.size(); ++i) {
-        if (i) { oss << ", "; }
-        oss << providers[i]->cfg->identity;
-      }
-      collisions.push_back(oss.str());
-    }
-  }
-
-  if (!collisions.empty()) {
-    std::ostringstream oss;
-    for (size_t i{ 0 }; i < collisions.size(); ++i) {
-      if (i) { oss << "\n"; }
-      oss << collisions[i];
-    }
-    throw std::runtime_error(oss.str());
+    // Whichever provider registered first is scheduling-dependent; name them in
+    // sorted order so the message is reproducible.
+    auto const &a{ it->second->cfg->identity };
+    auto const &b{ p->cfg->identity };
+    throw std::runtime_error(
+        "Product '" + product_name +
+        "' provided by multiple specs: " + (a < b ? a + ", " + b : b + ", " + a));
   }
 }
 
@@ -1179,7 +1217,7 @@ void engine::validate_product_fallbacks() {
 
   for (auto const &[p, wr] : to_validate) {
     std::unordered_set<pkg const *> visited;
-    if (!pkg_provides_product_transitively(wr->resolved, wr->query)) {
+    if (!pkg_provides_product(wr->resolved, wr->query)) {
       errors.push_back("Fallback for product '" + wr->query + "' in spec '" +
                        p->cfg->identity + "' resolved to '" + wr->resolved->cfg->identity +
                        "', which does not provide product transitively");
@@ -1256,12 +1294,6 @@ void engine::validate_setup_selections() {
   }
 }
 
-bool engine::pkg_provides_product_transitively(pkg *p,
-                                               std::string const &product_name) const {
-  std::unordered_set<pkg const *> visited;
-  return pkg_provides_product_transitively_impl(p, product_name, visited);
-}
-
 engine::weak_resolution_result engine::resolve_weak_references() {
   weak_resolution_result result{};
 
@@ -1281,7 +1313,7 @@ engine::weak_resolution_result engine::resolve_weak_references() {
 
   for (auto [p, wr] : collect_unresolved()) {
     if (wr->is_product) {
-      resolve_product_ref(p, wr, result, product_registry_, *this);
+      resolve_product_ref(p, wr, result, find_product_provider(wr->query), *this);
     } else {
       resolve_identity_ref(p, wr, result, ambiguity_messages, *this);
     }
@@ -1369,7 +1401,9 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
       throw std::runtime_error(oss.str());
     }
 
-    update_product_registry();
+    // No registry sweep here: register_products publishes at each package's own
+    // spec_fetch completion, so by this barrier the registry already holds
+    // everything a sweep would have found.
     weak_resolution_result const resolution{ resolve_weak_references() };
 
     if (resolution.resolved == 0 && resolution.fallbacks_started == 0) {

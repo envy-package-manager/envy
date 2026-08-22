@@ -448,8 +448,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
                                      tmp_dir,
                                      cache_result.lock.get() };
 
-      sol::protected_function_result fetch_result{ (*fetch_func_opt)(tmp_dir.string(),
-                                                                     options_obj) };
+      sol::protected_function_result fetch_result{ (
+          *fetch_func_opt)(util_normalized_path(tmp_dir), options_obj) };
 
       if (!fetch_result.valid()) {
         sol::error err = fetch_result;
@@ -673,8 +673,8 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
       }
       sol::table deps_table{ deps_obj.as<sol::table>() };
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
-        pkg_cfg *dep_cfg{ pkg_cfg::parse(deps_table[i], spec_path, true) };
-        custom.dependencies.push_back(dep_cfg);
+        custom.dependencies.push_back(
+            pkg_cfg::parse_fetch_dependency(deps_table[i], spec_path));
       }
     }
 
@@ -1025,6 +1025,9 @@ void wire_dependency_graph(pkg *p, engine &eng) {
                                          ? static_cast<pkg_phase>(*dep_cfg->needed_by)
                                          : pkg_phase::pkg_build };
     bool const is_product_dep{ dep_cfg->product.has_value() };
+    // What a weak reference for this entry resolves on: the product name when there
+    // is one, else the identity.
+    std::string const &query{ is_product_dep ? *dep_cfg->product : dep_cfg->identity };
 
     if (is_product_dep) {
       std::string const &product_name{ *dep_cfg->product };
@@ -1048,17 +1051,26 @@ void wire_dependency_graph(pkg *p, engine &eng) {
     }
 
     if (dep_cfg->is_weak_reference()) {
-      if (p->depot_bootstrap) {
-        // Bootstrap packages may run after the resolution loop has finished,
-        // so weak/product references could never resolve.
-        throw std::runtime_error(
-            "package-depot dependency closure must use strong dependencies: '" +
-            (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
-            p->cfg->identity + "' is a weak reference");
-      }
+      // No closure overlaps the window where the weak pass can satisfy a reference:
+      // depot bootstrap runs after the resolution loop has finished, and a
+      // source.dependencies closure runs while the barrier is held shut by the
+      // consumer waiting on it. Same refusal either way, named by the closure.
+      //
+      // Checked in the same critical section as the append, against the same mutex
+      // engine::mark_closure scans under. Checking outside it would leave a window
+      // where the mark sees no weak reference and this sees no membership, so the
+      // package joins a closure holding a reference nothing can resolve: either the
+      // mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
+      for (auto const kind : { pkg_closure::depot_bootstrap, pkg_closure::fetch }) {
+        if (p->in_closure(kind)) {
+          throw std::runtime_error(
+              std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
+              query + "' in spec '" + p->cfg->identity + "' is a weak reference");
+        }
+      }
       p->weak_references.push_back(pkg::weak_reference{
-          .query = is_product_dep ? *dep_cfg->product : dep_cfg->identity,
+          .query = query,
           .fallback = dep_cfg->weak,
           .needed_by = needed_by_phase,
           .resolved = nullptr,
@@ -1079,7 +1091,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         pd.provider = dep;
         pd.constraint_identity = dep_cfg->identity;
       }
-      if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+      eng.propagate_closures(p, dep);
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1100,7 +1112,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         std::lock_guard const deps_lock(p->deps_mutex);
         p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
       }
-      if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+      eng.propagate_closures(p, dep);
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1119,7 +1131,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       std::lock_guard const deps_lock(p->deps_mutex);
       p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
     }
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
+    eng.propagate_closures(p, dep);
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = dep_cfg->identity,
@@ -1265,7 +1277,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
                 tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
                 sol::protected_function_result result{ (*fetch_func_opt)(
-                    tmp_dir.string()) };
+                    util_normalized_path(tmp_dir)) };
 
                 if (!result.valid()) {
                   sol::error err = result;
@@ -1435,7 +1447,11 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     tui::debug(user_managed ? "spec: user-managed (setup-only)" : "spec: cache-managed");
   }
 
-  p->products = parse_products_table(cfg, *lua, p);
+  {  // deps_mutex-guarded: engine::register_products reads this from the barrier side
+    auto parsed{ parse_products_table(cfg, *lua, p) };
+    std::lock_guard const deps_lock(p->deps_mutex);
+    p->products = std::move(parsed);
+  }
 
   // Extract spec PLATFORMS and intersect with manifest-level platforms
   {
@@ -1462,6 +1478,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     if (intersected.empty() && !cfg.platforms.empty() && !spec_platforms.empty()) {
       intersected.emplace_back(kPlatformNone);
     }
+    std::lock_guard const deps_lock(p->deps_mutex);  // guards resolved_platforms
     p->resolved_platforms = std::move(intersected);
   }
 

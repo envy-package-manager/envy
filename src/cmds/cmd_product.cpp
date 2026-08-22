@@ -59,7 +59,7 @@ void print_products_json(engine &eng, cache &c) {
                                               platform::os_name(),
                                               platform::arch_name(),
                                               hash_prefix) };
-      return (pkg_path / pi.value).generic_string();
+      return util_normalized_path(pkg_path / pi.value);
     }() };
     obj[pi.product_name] = picojson::value(resolved);
   }

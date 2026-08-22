@@ -299,7 +299,7 @@ PACKAGES = {{
         result = self.run_envy(["product", "tool", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/tool"), f"unexpected output: {output}")
+        self.assertPathEndsWith(output, "bin/tool")
         self.assertIn("local.product_provider@v1", output)
 
     def test_product_command_programmatic_provider_returns_raw_value(self):
@@ -358,13 +358,13 @@ PACKAGES = {{
         result = self.run_envy(["product", "python3.14", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/python"), f"unexpected output: {output}")
+        self.assertPathEndsWith(output, "bin/python")
 
         # Verify second product also works
         result = self.run_envy(["product", "pip3.14", "--manifest", str(manifest)])
         self.assertEqual(result.returncode, 0, result.stderr)
         output = result.stdout.strip()
-        self.assertTrue(output.endswith("bin/pip"), f"unexpected output: {output}")
+        self.assertPathEndsWith(output, "bin/pip")
 
     def test_absolute_path_in_product_value_rejected(self):
         """Product values with absolute paths should be rejected during parsing."""
@@ -686,10 +686,7 @@ PACKAGES = {{
         self.assertIn("tool", products)
 
         # Cache-managed: resolved value should be an absolute path ending with bin/tool
-        self.assertTrue(
-            products["tool"].endswith("bin/tool"),
-            f"unexpected tool value: {products['tool']}",
-        )
+        self.assertPathEndsWith(products["tool"], "bin/tool")
         self.assertIn("packages", products["tool"])
 
     def test_product_listing_programmatic_marked(self):
@@ -787,8 +784,8 @@ PACKAGES = {{
 
         # Verify the output contains the expected path
         output = result.stdout.strip()
-        self.assertIn(
-            "bin/query_tool", output, f"Expected product path in output: {output}"
+        self.assertPathContains(
+            output, "bin/query_tool", f"Expected product path in output: {output}"
         )
         self.assertIn(
             "local.test_product_query_provider@v1",

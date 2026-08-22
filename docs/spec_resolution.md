@@ -21,7 +21,7 @@
 - **Strong**: full spec (manifest-sourced or explicit `source`) → instantiated immediately.
 - **Weak**: partial `recipe` plus `weak = { ... }` fallback spec → resolved iteratively; fallback spawned only if no match exists.
 - **Reference-only**: partial `recipe` with no `source`/`weak` → must resolve to some other provider; error after convergence if missing.
-- **Nested fetch prerequisites**: inside `source.dependencies` for custom fetch; may also be weak/reference-only and must complete before parent `recipe_fetch`.
+- **Nested fetch prerequisites**: inside `source.dependencies` for custom fetch; must be strong, and must complete before parent `recipe_fetch`.
 Each dependency entry may include `needed_by` (default: `"fetch"`); weak fallbacks must not carry `needed_by`.
 
 **Spec object:** DAG node carrying `recipe::cfg` (identity, source, options), `lua_state_ptr` (for verb execution), and dependency pointers. Each spec owns its Lua state; verbs query this state at execution time.
@@ -39,7 +39,7 @@ Each dependency entry may include `needed_by` (default: `"fetch"`); weak fallbac
 6. For each dependency:
    - Strong deps: ensure node exists (canonical key lookup), add edges based on `needed_by`, start toward target phase
    - Weak/ref-only: record in `recipe::weak_references` for later resolution (no node yet unless fallback is spawned)
-7. Nested fetch prerequisites (`source.dependencies`): treated as dependencies with `needed_by = recipe_fetch`; they participate in weak resolution if partial and must complete before parent fetch executes.
+7. Nested fetch prerequisites (`source.dependencies`): treated as dependencies with `needed_by = recipe_fetch` and must complete before parent fetch executes. They do *not* participate in weak resolution — that pass runs only once every spec_fetch has finished, which is strictly after the fetch function that needs them, so weak entries are rejected at parse. The same applies transitively: every package in the closure runs its ladder while the barrier is held shut, so `engine::mark_closure` rejects weak references anywhere inside it — the same mechanism, and the same rule, as the package-depot bootstrap closure.
 8. Complete `recipe_fetch` node, unblock dependent phases
 
 **Memoization:** Nodes keyed by canonical `(identity, options)` string; first creator wins, later users reuse. Prevents duplicate work when multiple specs depend on the same config.

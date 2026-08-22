@@ -59,8 +59,8 @@ bundle_decl::source_t parse_source_table_for_bundle(
     }
     sol::table deps_table{ deps_obj.as<sol::table>() };
     for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
-      pkg_cfg *dep_cfg{ pkg_cfg::parse(deps_table[i], base_path, true) };
-      result.dependencies.push_back(dep_cfg);
+      result.dependencies.push_back(
+          pkg_cfg::parse_fetch_dependency(deps_table[i], base_path));
     }
   }
 

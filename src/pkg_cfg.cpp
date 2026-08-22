@@ -63,8 +63,8 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
       sol::table deps_table{ deps_obj.as<sol::table>() };
       has_dependencies = true;
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
-        pkg_cfg *dep_cfg{ pkg_cfg::parse(deps_table[i], base_path, true) };
-        out_dependencies.push_back(dep_cfg);
+        out_dependencies.push_back(
+            pkg_cfg::parse_fetch_dependency(deps_table[i], base_path));
       }
     } else {
       throw std::runtime_error("source.dependencies must be array (table)");
@@ -433,6 +433,30 @@ std::string pkg_cfg::format_key(std::string const &identity,
 
 std::string pkg_cfg::format_key() const {
   return format_key(identity, serialized_options);
+}
+
+pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
+                                         std::filesystem::path const &base_path) {
+  pkg_cfg *cfg{ parse(entry, base_path, true) };
+  if (cfg->is_weak_reference()) {
+    // A fetch prerequisite is needed at spec_fetch, but weak references resolve at
+    // a resolution barrier — which waits for every spec_fetch, including that of
+    // the consumer whose fetch function is waiting on this entry. Nothing can
+    // satisfy it in time, so refuse rather than order it silently wrong.
+    throw std::runtime_error(
+        "source.dependencies entry '" +
+        (cfg->product.has_value() ? "product " + *cfg->product : cfg->identity) +
+        "' must be a strong reference: give the entry a 'spec' and a 'source'");
+  }
+  if (cfg->identity.empty()) {
+    // parse(..., true) allows a bare product entry to omit 'spec'. With a source
+    // present that is not a weak reference, so it would otherwise reach pkg_key and
+    // fail there as an invalid identity rather than as a non-strong prerequisite.
+    throw std::runtime_error("source.dependencies product '" +
+                             cfg->product.value_or(std::string{}) +
+                             "' must name a 'spec'");
+  }
+  return cfg;
 }
 
 pkg_cfg *pkg_cfg::parse_from_stack(sol::state_view lua,

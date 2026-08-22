@@ -24,7 +24,7 @@ void lua_envy_path_install(sol::table &envy_table) {
         result /= part;
       }
     }
-    return result.string();
+    return util_normalized_path(result);
   };
 
   // envy.path.basename(path) - Extract filename with extension
@@ -34,7 +34,7 @@ void lua_envy_path_install(sol::table &envy_table) {
 
   // envy.path.dirname(path) - Extract parent directory path
   path_table["dirname"] = [](std::string const &path_str) -> std::string {
-    return std::filesystem::path{ path_str }.parent_path().string();
+    return util_normalized_path(std::filesystem::path{ path_str }.parent_path());
   };
 
   // envy.path.stem(path) - Extract filename without extension
@@ -70,7 +70,7 @@ void lua_envy_path_install(sol::table &envy_table) {
       throw std::runtime_error("envy.abspath: cannot determine script directory");
     }
 
-    return util_absolute_path(path_str, anchor).string();
+    return util_normalized_path(util_absolute_path(path_str, anchor));
   });
 }
 

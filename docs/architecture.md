@@ -68,7 +68,7 @@ PACKAGES = ENVY_PLATFORM == "darwin" and envy.join(common, darwin_packages)
   - **Strong:** full spec spec with `source` (or manifest-provided source)
   - **Weak:** partial `recipe` plus `weak = { ... }` fallback spec
   - **Reference-only:** partial `recipe` with no `source`/`weak` (must be satisfied by some other provider)
-  - **Nested fetch prerequisites:** inside `source.dependencies`, may also be weak/reference-only
+  - **Nested fetch prerequisites:** inside `source.dependencies`; must be strong (weak/reference-only is rejected)
 - `needed_by` — Phase dependency annotation (default: `"fetch"`, custom: `"recipe_fetch"`, `"build"`, etc.)
 
 **Uniqueness validation:** Envy validates manifests post-execution. Duplicate recipe+options combinations error (deep comparison—string `"foo@v1"` matches `{ spec = "foo@v1" }`). Same spec with conflicting sources (different `source`/`sha256`/`file`/`fetch`) errors. Same recipe+options from identical sources is duplicate. Different options yield different deployments—allowed.
@@ -139,7 +139,7 @@ end
 - **Declarative:** `source` field with URL (http/https/s3/file) or git repo; verified via `sha256` (URL) or `ref` (git); cached
 - **Custom fetch:** `fetch` function with verification enforced at API boundary (`envy.fetch`, `envy.commit_fetch`); cached
 - **Project-local:** `file` path in project tree; never cached; `local.*` namespace only
-- **Fetch prerequisites (nested):** `source.dependencies` declares specs that must reach completion before this recipe’s fetch runs. These can be strong, weak, or reference-only.
+- **Fetch prerequisites (nested):** `source.dependencies` declares specs that must reach completion before this recipe’s fetch runs. Strong only — weak resolution happens at a barrier that waits for every spec_fetch, including that of the consumer whose fetch function is waiting, so nothing weak can be ordered in time.
 
 **Formats:**
 - **Single-file:** `.lua` file (declarative sources only)
@@ -166,7 +166,7 @@ end
 - **Strong dependencies** provide a complete spec (manifest or explicit `source`). They are instantiated immediately and run toward their target phase.
 - **Weak dependencies** specify a query (`spec = "name"` or partial identity) plus a fallback spec in `weak = { ... }`. The engine tries to satisfy the query from existing/manifest/other strong nodes; if no match, it spawns the fallback. Ambiguities raise errors with all candidates listed.
 - **Reference-only dependencies** provide only a query (no `source`/`weak`). They must be satisfied by some other spec in the graph; otherwise resolution fails after convergence.
-- **Nested fetch prerequisites** live in `source.dependencies` and follow the same rules. They must complete (typically to `completion`) before the parent’s `recipe_fetch` runs.
+- **Nested fetch prerequisites** live in `source.dependencies` and follow the same rules, except that they must be strong. They must complete (typically to `completion`) before the parent’s `recipe_fetch` runs — and because the whole closure therefore runs during resolution, nothing in it may hold a weak reference either.
 - Resolution is iterative: the engine waits for all active specs to reach their target phases, runs weak-resolution passes (matching or spawning fallbacks), and repeats while progress is made. Progress accounts for newly spawned fallbacks even when unresolved counts stay flat.
 
 ### Verbs

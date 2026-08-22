@@ -243,6 +243,20 @@ end
 
 ---
 
+## Paths
+
+Every path envy hands a spec — phase arguments, `envy.package`, `envy.product`,
+`envy.path.*`, `envy.abspath`, depot `ctx.tmp_dir`/`ctx.deps` — uses the platform's
+own separator throughout. envy assembles paths from a cache root, manifest text and
+Lua fragments, any of which may be spelled either way, so joining alone would
+otherwise yield `C:/cache/pkg\file`. Two APIs naming the same location always agree
+on spelling: `envy.product("jf")` equals `envy.package(provider) .. "jf"` exactly.
+
+Archive entry paths (`envy.extract`'s `only` patterns) stay forward-slash on every
+platform, matching the archive formats themselves.
+
+---
+
 ## Dependency Access
 
 ### envy.asset(identity) → string
@@ -262,15 +276,42 @@ end
 
 ### envy.product(name) → string
 
-Get named product value from provider dependency.
+Get a named product value from a provider you depend on. The name resolves either
+from an explicit `product =` on a dependency entry or, failing that, from the
+project-wide product registry — but a dependency edge is required either way, and
+its `needed_by` must already have been reached. The edge is what drove the provider
+through install; the registry only answers *who* provides the name. A provider you
+reach only transitively is refused.
 
 ```lua
--- Spec declares: NEEDS_PRODUCTS = { python_path = { needed_by = "build" } }
+DEPENDENCIES = {
+  { spec = "corp.python@v3", source = "python.lua", needed_by = "build" },
+}
 BUILD = function(...)
-  local python = envy.product("python_path")
+  local python = envy.product("python_path")  -- registry names the provider, edge allows it
   envy.run(python .. " setup.py build")
 end
 ```
+
+Works inside a `source.fetch` function too: `source.dependencies` entries are wired
+with `needed_by = spec_fetch` before the fetch function runs, so their products are
+readable there.
+
+```lua
+source = {
+  dependencies = { { spec = "tools.jfrog-cli@r1", source = "jfrog.lua" } },
+  fetch = function(tmp_dir)
+    envy.run(envy.product("jf") .. " rt dl specs/ " .. tmp_dir)
+  end,
+}
+```
+
+Every `source.dependencies` entry must be a strong reference (`spec` + `source`). The
+weak pass runs only at a resolution barrier, after every spec_fetch — including that of
+the consumer whose fetch function is waiting — so nothing weak can be ordered in time.
+The same applies to the whole closure: a fetch dependency and its own dependencies run
+their phase ladders during resolution, so none of them may hold a weak reference
+either.
 
 ### envy.loadenv_spec(identity, module) → table
 
