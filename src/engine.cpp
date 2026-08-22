@@ -68,14 +68,25 @@ constexpr bool is_setup_pair_key(std::string_view key) {
   return key.find("#setup:") != std::string_view::npos;
 }
 
-// Dependency pointers copied out under the lock: a closure walk recurses, and no
-// two pkg locks may nest.
-std::vector<pkg *> snapshot_dependencies(pkg const *p) {
-  std::lock_guard const deps_lock(p->deps_mutex);
-  std::vector<pkg *> snapshot;
-  snapshot.reserve(p->dependencies.size());
-  for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
-  return snapshot;
+// Walk `root` and everything reachable through its dependencies, calling `visit`
+// once per package. One worklist serves the whole traversal, so this does not copy a
+// node's dependency list per node; a node's lock is held only long enough to append
+// its dependencies, and `visit` runs outside it, so no two pkg locks ever nest.
+// `flag` doubles as the visited set: already-flagged subtrees are skipped, which also
+// makes this terminate on a dependency cycle and cheap to call repeatedly.
+template <typename Fn>
+void mark_closure(pkg *root, std::atomic_bool pkg::*flag, Fn &&visit) {
+  std::vector<pkg *> work{ root };
+  while (!work.empty()) {
+    pkg *p{ work.back() };
+    work.pop_back();
+    if ((p->*flag).exchange(true)) { continue; }
+
+    visit(p);
+
+    std::lock_guard const deps_lock(p->deps_mutex);
+    for (auto const &[_, dep_info] : p->dependencies) { work.push_back(dep_info.p); }
+  }
 }
 
 bool has_dependency_path(pkg const *from, pkg const *to) {
@@ -343,19 +354,18 @@ void resolve_product_ref(pkg *p,
   }
 }
 
-bool pkg_provides_product_transitively_impl(pkg *p,
-                                            std::string const &product_name,
-                                            std::unordered_set<pkg const *> &visited) {
-  if (!visited.insert(p).second) { return false; }
+bool pkg_provides_product(pkg *root, std::string const &product_name) {
+  std::vector<pkg *> work{ root };
+  std::unordered_set<pkg const *> visited{ root };
 
-  {
+  while (!work.empty()) {
+    pkg *p{ work.back() };
+    work.pop_back();
+
     std::lock_guard const deps_lock(p->deps_mutex);
     if (p->products.contains(product_name)) { return true; }
-  }
-
-  for (auto *dep : snapshot_dependencies(p)) {
-    if (pkg_provides_product_transitively_impl(dep, product_name, visited)) {
-      return true;
+    for (auto const &[_, dep_info] : p->dependencies) {
+      if (visited.insert(dep_info.p).second) { work.push_back(dep_info.p); }
     }
   }
 
@@ -900,36 +910,33 @@ void engine::run_depot_step() {
 }
 
 void engine::mark_depot_bootstrap(pkg *p) {
-  if (p->depot_bootstrap.exchange(true)) { return; }
-
-  for (auto *dep : snapshot_dependencies(p)) { mark_depot_bootstrap(dep); }
-
-  core_.notify_global();  // Wake a depot wait this package may be blocked in
+  mark_closure(p, &pkg::depot_bootstrap, [this](pkg *) {
+    core_.notify_global();  // Wake a depot wait this package may be blocked in
+  });
 }
 
 void engine::mark_fetch_closure(pkg *p) {
-  if (p->fetch_closure.exchange(true)) { return; }
-
-  // The unresolved-weak check happens here as well as at declaration time: a package
-  // can complete spec_fetch as a root — registering its weak references and passing
-  // that check — before another package names it in source.dependencies and ratchets
-  // it through the whole ladder. Only *unresolved* references are a violation; one
-  // already resolved at an earlier barrier is wired and ordered.
-  auto const unresolved{ [p] {
-    std::lock_guard const deps_lock(p->deps_mutex);
-    auto const it{ std::ranges::find_if(p->weak_references,
-                                        [](auto const &wr) { return !wr.resolved; }) };
-    return it == p->weak_references.end() ? std::string{} : it->query;
-  }() };
-
-  if (!unresolved.empty()) {
-    throw std::runtime_error(
-        "source.dependencies closure must use strong dependencies: '" + p->cfg->identity +
-        "' holds a weak reference to '" + unresolved +
-        "' but runs during graph resolution, before weak references resolve");
-  }
-
-  for (auto *dep : snapshot_dependencies(p)) { mark_fetch_closure(dep); }
+  // The unresolved-weak check happens per member here as well as at declaration time:
+  // a package can complete spec_fetch as a root — registering its weak references and
+  // passing that check — before another package names it in source.dependencies and
+  // ratchets it through the whole ladder. Only *unresolved* references are a
+  // violation; one already resolved at an earlier barrier is wired and ordered.
+  mark_closure(p, &pkg::fetch_closure, [](pkg *member) {
+    auto const unresolved{ [member] {
+      std::lock_guard const deps_lock(member->deps_mutex);
+      auto const it{ std::ranges::find_if(member->weak_references,
+                                          [](auto const &wr) { return !wr.resolved; }) };
+      return it == member->weak_references.end() ? std::string{} : it->query;
+    }() };
+    if (!unresolved.empty()) {
+      throw std::runtime_error("source.dependencies closure must use strong "
+                               "dependencies: '" +
+                               member->cfg->identity + "' holds a weak reference to '" +
+                               unresolved +
+                               "' but runs during graph resolution, before weak "
+                               "references resolve");
+    }
+  });
 }
 
 void engine::propagate_closures(pkg *from, pkg *to) {
@@ -1205,7 +1212,7 @@ void engine::validate_product_fallbacks() {
 
   for (auto const &[p, wr] : to_validate) {
     std::unordered_set<pkg const *> visited;
-    if (!pkg_provides_product_transitively(wr->resolved, wr->query)) {
+    if (!pkg_provides_product(wr->resolved, wr->query)) {
       errors.push_back("Fallback for product '" + wr->query + "' in spec '" +
                        p->cfg->identity + "' resolved to '" + wr->resolved->cfg->identity +
                        "', which does not provide product transitively");
@@ -1280,12 +1287,6 @@ void engine::validate_setup_selections() {
     }
     throw std::runtime_error(oss.str());
   }
-}
-
-bool engine::pkg_provides_product_transitively(pkg *p,
-                                               std::string const &product_name) const {
-  std::unordered_set<pkg const *> visited;
-  return pkg_provides_product_transitively_impl(p, product_name, visited);
 }
 
 engine::weak_resolution_result engine::resolve_weak_references() {
