@@ -1051,24 +1051,26 @@ void wire_dependency_graph(pkg *p, engine &eng) {
     }
 
     if (dep_cfg->is_weak_reference()) {
-      // Neither closure overlaps the window where the weak pass can satisfy a
-      // reference: depot bootstrap runs after the resolution loop has finished, and a
+      // No closure overlaps the window where the weak pass can satisfy a reference:
+      // depot bootstrap runs after the resolution loop has finished, and a
       // source.dependencies closure runs while the barrier is held shut by the
-      // consumer waiting on it. Same refusal either way.
-      auto const reject{ [&](char const *closure) {
-        throw std::runtime_error(
-            std::string{ closure } + " must use strong dependencies: '" + query +
-            "' in spec '" + p->cfg->identity + "' is a weak reference");
-      } };
-      if (p->depot_bootstrap) { reject("package-depot dependency closure"); }
-
-      // Check the flag in the same critical section as the append, against the same
-      // mutex mark_fetch_closure scans under. Checking outside it would leave a
-      // window where the mark sees no weak reference and this sees no flag, so the
-      // package enters the closure holding a reference nothing can resolve: either
-      // the mark observes this append, or this observes the mark.
+      // consumer waiting on it. Same refusal either way, named by the closure.
+      //
+      // Checked in the same critical section as the append, against the same mutex
+      // engine::mark_closure scans under. Checking outside it would leave a window
+      // where the mark sees no weak reference and this sees no membership, so the
+      // package joins a closure holding a reference nothing can resolve: either the
+      // mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
-      if (p->fetch_closure) { reject("source.dependencies closure"); }
+      for (auto const kind :
+           { pkg_closure::depot_bootstrap, pkg_closure::fetch }) {
+        if (p->in_closure(kind)) {
+          throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
+                                   " must use strong dependencies: '" + query +
+                                   "' in spec '" + p->cfg->identity +
+                                   "' is a weak reference");
+        }
+      }
       p->weak_references.push_back(pkg::weak_reference{
           .query = query,
           .fallback = dep_cfg->weak,

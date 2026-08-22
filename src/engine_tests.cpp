@@ -522,14 +522,14 @@ PACKAGE_DEPOTS = { { FETCH = function(ctx) error("must not run") end } }
   engine eng{ c, m.get() };
 
   pkg *p{ eng.ensure_pkg(make_local_cfg("local.a@r0", "test_data/specs/simple_uv.lua")) };
-  eng.mark_depot_bootstrap(p);
-  CHECK(p->depot_bootstrap.load());
+  eng.mark_closure(p, pkg_closure::depot_bootstrap);
+  CHECK(p->in_closure(pkg_closure::depot_bootstrap));
   CHECK(eng.depot_index_for(p) == nullptr);  // Returns before starting depot task
 
   fs::remove_all(cache_root);
 }
 
-TEST_CASE("mark_depot_bootstrap: propagates through dependency closure") {
+TEST_CASE("mark_closure: depot_bootstrap propagates through dependency closure") {
   namespace fs = std::filesystem;
   fs::path const cache_root{ fs::temp_directory_path() / "envy-depot-eng-mark" };
   cache c{ cache_root };
@@ -546,13 +546,13 @@ TEST_CASE("mark_depot_bootstrap: propagates through dependency closure") {
   auto const ninja_matches{ eng.find_matches("local.ninja@r0") };
   REQUIRE(ninja_matches.size() == 1);
 
-  CHECK_FALSE(gn->depot_bootstrap.load());
-  CHECK_FALSE(ninja_matches[0]->depot_bootstrap.load());
+  CHECK_FALSE(gn->in_closure(pkg_closure::depot_bootstrap));
+  CHECK_FALSE(ninja_matches[0]->in_closure(pkg_closure::depot_bootstrap));
 
-  eng.mark_depot_bootstrap(gn);
+  eng.mark_closure(gn, pkg_closure::depot_bootstrap);
 
-  CHECK(gn->depot_bootstrap.load());
-  CHECK(ninja_matches[0]->depot_bootstrap.load());
+  CHECK(gn->in_closure(pkg_closure::depot_bootstrap));
+  CHECK(ninja_matches[0]->in_closure(pkg_closure::depot_bootstrap));
 
   fs::remove_all(cache_root);
 }
@@ -679,10 +679,10 @@ PACKAGE_DEPOTS = {
   // The tool and its transitive dependency are flagged depot-bootstrap.
   auto const gn_matches{ eng.find_matches("local.gn@r0") };
   REQUIRE(gn_matches.size() == 1);
-  CHECK(gn_matches[0]->depot_bootstrap.load());
+  CHECK(gn_matches[0]->in_closure(pkg_closure::depot_bootstrap));
   auto const ninja_matches{ eng.find_matches("local.ninja@r0") };
   REQUIRE(ninja_matches.size() == 1);
-  CHECK(ninja_matches[0]->depot_bootstrap.load());
+  CHECK(ninja_matches[0]->in_closure(pkg_closure::depot_bootstrap));
 
   fs::remove_all(cache_root);
 }
@@ -733,12 +733,12 @@ TEST_CASE("engine_filter_host_platform: preserves order of matching cfgs") {
   CHECK(result[2] == c);
 }
 
-// -- mark_fetch_closure -----------------------------------------------------
+// -- mark_closure -----------------------------------------------------
 //
 // A source.dependencies closure runs its whole phase ladder during graph
 // resolution, so nothing in it may hold a weak reference. Two checks enforce that,
 // one per order in which a package can enter a closure relative to its own
-// spec_fetch: wire_dependency_graph catches marked-then-declares, and this catches
+// spec_fetch: wire_dependency_graph catches marked-then-declares, and mark_closure catches
 // declares-then-marked (a root that finished spec_fetch before something named it
 // in source.dependencies). The second order is a thread race, so it is covered
 // here rather than by a functional test that would have to win that race --
@@ -770,7 +770,7 @@ std::unique_ptr<pkg> make_bare_pkg(std::string identity) {
                                        .type = pkg_type::CACHE_MANAGED });
 }
 
-// mark_fetch_closure touches no engine or cache state, so the cache root is inert:
+// mark_closure touches no engine or cache state, so the cache root is inert:
 // the constructor only stores the path, and nothing here creates or removes it.
 struct mark_closure_fixture {
   cache c{ std::filesystem::path{ "envy-unit-test-inert-cache-root" } };
@@ -779,17 +779,17 @@ struct mark_closure_fixture {
 
 }  // namespace
 
-TEST_CASE("mark_fetch_closure: unresolved weak reference is rejected") {
+TEST_CASE("mark_closure: unresolved weak reference is rejected") {
   mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   p->weak_references.push_back(pkg::weak_reference{ .query = "wk", .is_product = true });
 
-  CHECK_THROWS_WITH(fx.eng.mark_fetch_closure(p.get()),
+  CHECK_THROWS_WITH(fx.eng.mark_closure(p.get(), pkg_closure::fetch),
                     doctest::Contains("must use strong dependencies"));
-  CHECK(p->fetch_closure);  // flag is set before the throw; marking is not retried
+  CHECK(p->in_closure(pkg_closure::fetch));  // flag is set before the throw; marking is not retried
 }
 
-TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
+TEST_CASE("mark_closure: already-resolved weak reference is accepted") {
   // Resolved at an earlier barrier iteration means the provider is wired and
   // ordered, so running early violates nothing. Throwing here would be a false
   // positive on a legal graph.
@@ -800,11 +800,11 @@ TEST_CASE("mark_fetch_closure: already-resolved weak reference is accepted") {
                                                     .resolved = provider.get(),
                                                     .is_product = true });
 
-  CHECK_NOTHROW(fx.eng.mark_fetch_closure(p.get()));
-  CHECK(p->fetch_closure);
+  CHECK_NOTHROW(fx.eng.mark_closure(p.get(), pkg_closure::fetch));
+  CHECK(p->in_closure(pkg_closure::fetch));
 }
 
-TEST_CASE("mark_fetch_closure: propagates to the transitive closure") {
+TEST_CASE("mark_closure: propagates to the transitive closure") {
   mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   auto mid{ make_bare_pkg("local.mid@v1") };
@@ -812,34 +812,76 @@ TEST_CASE("mark_fetch_closure: propagates to the transitive closure") {
   p->dependencies["local.mid@v1"] = { mid.get(), pkg_phase::pkg_build };
   mid->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
 
-  CHECK_NOTHROW(fx.eng.mark_fetch_closure(p.get()));
-  CHECK(p->fetch_closure);
-  CHECK(mid->fetch_closure);
-  CHECK(leaf->fetch_closure);
+  CHECK_NOTHROW(fx.eng.mark_closure(p.get(), pkg_closure::fetch));
+  CHECK(p->in_closure(pkg_closure::fetch));
+  CHECK(mid->in_closure(pkg_closure::fetch));
+  CHECK(leaf->in_closure(pkg_closure::fetch));
 }
 
-TEST_CASE("mark_fetch_closure: rejects a weak reference held deeper in the closure") {
+TEST_CASE("mark_closure: rejects a weak reference held deeper in the closure") {
   mark_closure_fixture fx;
   auto p{ make_bare_pkg("local.p@v1") };
   auto leaf{ make_bare_pkg("local.leaf@v1") };
   p->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
   leaf->weak_references.push_back(pkg::weak_reference{ .query = "deep" });
 
-  CHECK_THROWS_WITH(fx.eng.mark_fetch_closure(p.get()),
+  CHECK_THROWS_WITH(fx.eng.mark_closure(p.get(), pkg_closure::fetch),
                     doctest::Contains("local.leaf@v1"));
 }
 
-TEST_CASE("mark_fetch_closure: is idempotent and terminates on a dependency cycle") {
+TEST_CASE("mark_closure: is idempotent and terminates on a dependency cycle") {
   mark_closure_fixture fx;
   auto a{ make_bare_pkg("local.a@v1") };
   auto b{ make_bare_pkg("local.b@v1") };
   a->dependencies["local.b@v1"] = { b.get(), pkg_phase::pkg_build };
   b->dependencies["local.a@v1"] = { a.get(), pkg_phase::pkg_build };
 
-  CHECK_NOTHROW(fx.eng.mark_fetch_closure(a.get()));
-  CHECK(a->fetch_closure);
-  CHECK(b->fetch_closure);
-  CHECK_NOTHROW(fx.eng.mark_fetch_closure(a.get()));  // second call is a no-op
+  CHECK_NOTHROW(fx.eng.mark_closure(a.get(), pkg_closure::fetch));
+  CHECK(a->in_closure(pkg_closure::fetch));
+  CHECK(b->in_closure(pkg_closure::fetch));
+  CHECK_NOTHROW(fx.eng.mark_closure(a.get(), pkg_closure::fetch));  // second call is a no-op
+}
+
+TEST_CASE("mark_closure: memberships are independent bits") {
+  // One bitmask now carries both closures, so marking one must not imply or clear the
+  // other, and a package legitimately in both must stay in both.
+  mark_closure_fixture fx;
+  auto p{ make_bare_pkg("local.p@v1") };
+
+  fx.eng.mark_closure(p.get(), pkg_closure::fetch);
+  CHECK(p->in_closure(pkg_closure::fetch));
+  CHECK_FALSE(p->in_closure(pkg_closure::depot_bootstrap));
+
+  fx.eng.mark_closure(p.get(), pkg_closure::depot_bootstrap);
+  CHECK(p->in_closure(pkg_closure::fetch));
+  CHECK(p->in_closure(pkg_closure::depot_bootstrap));
+}
+
+TEST_CASE("mark_closure: a bit already set does not stop the other propagating") {
+  // The bit doubles as the visited set, so a closure that stops at an already-marked
+  // node must still be able to walk past it for a *different* closure.
+  mark_closure_fixture fx;
+  auto root{ make_bare_pkg("local.root@v1") };
+  auto leaf{ make_bare_pkg("local.leaf@v1") };
+  root->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
+
+  fx.eng.mark_closure(root.get(), pkg_closure::fetch);
+  fx.eng.mark_closure(root.get(), pkg_closure::depot_bootstrap);
+
+  CHECK(leaf->in_closure(pkg_closure::fetch));
+  CHECK(leaf->in_closure(pkg_closure::depot_bootstrap));
+}
+
+TEST_CASE("mark_closure: depot_bootstrap rejects an unresolved weak reference too") {
+  // Both closures run outside the weak-resolution window, so both refuse. Before the
+  // two flags shared one mechanism, only the source.dependencies closure checked this
+  // at mark time, and the message names which closure refused.
+  mark_closure_fixture fx;
+  auto p{ make_bare_pkg("local.p@v1") };
+  p->weak_references.push_back(pkg::weak_reference{ .query = "wk" });
+
+  CHECK_THROWS_WITH(fx.eng.mark_closure(p.get(), pkg_closure::depot_bootstrap),
+                    doctest::Contains("package-depot dependency closure"));
 }
 
 }  // namespace envy

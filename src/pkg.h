@@ -14,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -21,6 +22,24 @@
 namespace envy {
 
 enum class pkg_type;
+
+// Closures whose members run outside the window where resolve_weak_references() can
+// satisfy a reference, so no member of one may hold a weak reference. Set via
+// engine::mark_closure, which propagates transitively over dependencies.
+enum class pkg_closure : uint8_t {
+  // package-depot DEPENDS closure: never consults the depot, which breaks the
+  // bootstrap circularity, and may run after the resolution loop has finished.
+  depot_bootstrap = 1u << 0,
+  // Some package's source.dependencies closure: runs its whole phase ladder during
+  // graph resolution, because a consumer parked in spec_fetch waiting for it holds
+  // the resolution barrier shut for that entire window.
+  fetch = 1u << 1,
+};
+
+constexpr std::string_view pkg_closure_name(pkg_closure kind) {
+  return kind == pkg_closure::depot_bootstrap ? "package-depot dependency closure"
+                                              : "source.dependencies closure";
+}
 
 struct product_entry {
   std::string value;
@@ -66,18 +85,9 @@ struct pkg {
   std::atomic<pkg_phase> current_phase{ pkg_phase::none };
   std::atomic_bool spec_fetch_completed{ false };
 
-  // In the package-depot DEPENDS closure: never consults the depot (breaks the
-  // bootstrap circularity) and unblocks any in-flight depot wait. Set via
-  // engine::mark_depot_bootstrap, which propagates transitively.
-  std::atomic_bool depot_bootstrap{ false };
-
-  // In some package's source.dependencies closure: runs its whole phase ladder
-  // during graph resolution, because a consumer is parked in spec_fetch waiting
-  // for it. The resolution barrier stays shut for that entire window, so a weak
-  // reference here would resolve after this package had already finished — hence
-  // weak references are rejected. Set via engine::mark_fetch_closure, which
-  // propagates transitively.
-  std::atomic_bool fetch_closure{ false };
+  // Closure memberships as a pkg_closure bitmask; a package can be in more than one.
+  std::atomic<uint8_t> closures{ 0 };
+  bool in_closure(pkg_closure kind) const;
 
   // Outcome accounting, all read only by this package's own worker thread at
   // completion (single-writer/single-reader, no synchronization needed).
@@ -131,5 +141,9 @@ struct pkg {
   std::unordered_set<std::string> setup_selected;
   bool setup_selection_consumed{ false };
 };
+
+inline bool pkg::in_closure(pkg_closure kind) const {
+  return (closures.load() & static_cast<uint8_t>(kind)) != 0;
+}
 
 }  // namespace envy

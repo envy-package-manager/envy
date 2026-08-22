@@ -39,7 +39,7 @@ Each dependency entry may include `needed_by` (default: `"fetch"`); weak fallbac
 6. For each dependency:
    - Strong deps: ensure node exists (canonical key lookup), add edges based on `needed_by`, start toward target phase
    - Weak/ref-only: record in `recipe::weak_references` for later resolution (no node yet unless fallback is spawned)
-7. Nested fetch prerequisites (`source.dependencies`): treated as dependencies with `needed_by = recipe_fetch` and must complete before parent fetch executes. They do *not* participate in weak resolution — that pass runs only once every spec_fetch has finished, which is strictly after the fetch function that needs them, so weak entries are rejected at parse. The same applies transitively: every package in the closure runs its ladder while the barrier is held shut, so `engine::mark_fetch_closure` rejects weak references anywhere inside it.
+7. Nested fetch prerequisites (`source.dependencies`): treated as dependencies with `needed_by = recipe_fetch` and must complete before parent fetch executes. They do *not* participate in weak resolution — that pass runs only once every spec_fetch has finished, which is strictly after the fetch function that needs them, so weak entries are rejected at parse. The same applies transitively: every package in the closure runs its ladder while the barrier is held shut, so `engine::mark_closure` rejects weak references anywhere inside it — the same mechanism, and the same rule, as the package-depot bootstrap closure.
 8. Complete `recipe_fetch` node, unblock dependent phases
 
 **Memoization:** Nodes keyed by canonical `(identity, options)` string; first creator wins, later users reuse. Prevents duplicate work when multiple specs depend on the same config.

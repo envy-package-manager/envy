@@ -72,15 +72,20 @@ constexpr bool is_setup_pair_key(std::string_view key) {
 // once per package. One worklist serves the whole traversal, so this does not copy a
 // node's dependency list per node; a node's lock is held only long enough to append
 // its dependencies, and `visit` runs outside it, so no two pkg locks ever nest.
-// `flag` doubles as the visited set: already-flagged subtrees are skipped, which also
-// makes this terminate on a dependency cycle and cheap to call repeatedly.
+// `kind`'s bit doubles as the visited set: subtrees already in this closure are
+// skipped, which also makes this terminate on a dependency cycle and cheap to call
+// repeatedly. A package may be in several closures at once, so the bits are
+// independent — marking one never re-walks or clears another.
+constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap, pkg_closure::fetch };
+
 template <typename Fn>
-void mark_closure(pkg *root, std::atomic_bool pkg::*flag, Fn &&visit) {
+void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
+  auto const bit{ static_cast<uint8_t>(kind) };
   std::vector<pkg *> work{ root };
   while (!work.empty()) {
     pkg *p{ work.back() };
     work.pop_back();
-    if ((p->*flag).exchange(true)) { continue; }
+    if (p->closures.fetch_or(bit) & bit) { continue; }
 
     visit(p);
 
@@ -758,18 +763,20 @@ package_depot_index const *engine::depot_index_for(pkg *p) {
 
   if (!manifest_ || manifest_->package_depots.empty()) { return nullptr; }
 
-  if (p->depot_bootstrap) { return nullptr; }  // Bootstrap: never consult the depot
+  // Bootstrap: never consult the depot
+  if (p->in_closure(pkg_closure::depot_bootstrap)) { return nullptr; }
 
   ensure_depot_task_started();
 
   // The #depot worker broadcasts the global condition on completion/failure;
-  // mark_depot_bootstrap broadcasts when this package's exemption flips late
+  // mark_closure broadcasts when this package's exemption flips late
   // (it was wired into the depot's DEPENDS closure after blocking here).
   core_.wait_global([this, p] {
-    return depot_state_ != depot_state::NOT_READY || p->depot_bootstrap.load();
+    return depot_state_ != depot_state::NOT_READY ||
+           p->in_closure(pkg_closure::depot_bootstrap);
   });
 
-  if (p->depot_bootstrap) { return nullptr; }
+  if (p->in_closure(pkg_closure::depot_bootstrap)) { return nullptr; }
   if (depot_state_ == depot_state::FAILED) { throw std::runtime_error(depot_error_); }
   return depot_index_ ? &*depot_index_ : nullptr;
 }
@@ -834,7 +841,7 @@ std::vector<pkg *> engine::spawn_depot_dependencies() {
       fn_deps.reserve(cfgs.size());
       for (auto const *cfg : cfgs) {
         pkg *dep{ ensure_pkg(cfg) };
-        mark_depot_bootstrap(dep);
+        mark_closure(dep, pkg_closure::depot_bootstrap);
         fn_deps.push_back(dep);
         if (seen.insert(dep).second) {
           edge_deps.push_back(dep);
@@ -909,19 +916,13 @@ void engine::run_depot_step() {
   fs::remove_all(depot_tmp, ec);
 }
 
-void engine::mark_depot_bootstrap(pkg *p) {
-  mark_closure(p, &pkg::depot_bootstrap, [this](pkg *) {
-    core_.notify_global();  // Wake a depot wait this package may be blocked in
-  });
-}
-
-void engine::mark_fetch_closure(pkg *p) {
-  // The unresolved-weak check happens per member here as well as at declaration time:
-  // a package can complete spec_fetch as a root — registering its weak references and
-  // passing that check — before another package names it in source.dependencies and
-  // ratchets it through the whole ladder. Only *unresolved* references are a
-  // violation; one already resolved at an earlier barrier is wired and ordered.
-  mark_closure(p, &pkg::fetch_closure, [](pkg *member) {
+void engine::mark_closure(pkg *p, pkg_closure kind) {
+  walk_closure(p, kind, [this, kind](pkg *member) {
+    // Checked per member here as well as at declaration time, because a package can
+    // complete spec_fetch as a root — registering its weak references and passing that
+    // check — before anything pulls it into a closure. Only *unresolved* references
+    // are a violation; one already resolved at an earlier barrier is wired and
+    // ordered.
     auto const unresolved{ [member] {
       std::lock_guard const deps_lock(member->deps_mutex);
       auto const it{ std::ranges::find_if(member->weak_references,
@@ -929,19 +930,24 @@ void engine::mark_fetch_closure(pkg *p) {
       return it == member->weak_references.end() ? std::string{} : it->query;
     }() };
     if (!unresolved.empty()) {
-      throw std::runtime_error(
-          "source.dependencies closure must use strong "
-          "dependencies: '" +
-          member->cfg->identity + "' holds a weak reference to '" + unresolved +
-          "' but runs during graph resolution, before weak "
-          "references resolve");
+      throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
+                               " must use strong dependencies: '" +
+                               member->cfg->identity + "' holds a weak reference to '" +
+                               unresolved +
+                               "' but runs outside the window where weak references "
+                               "resolve");
+    }
+
+    if (kind == pkg_closure::depot_bootstrap) {
+      core_.notify_global();  // Wake a depot wait this package may be blocked in
     }
   });
 }
 
 void engine::propagate_closures(pkg *from, pkg *to) {
-  if (from->depot_bootstrap) { mark_depot_bootstrap(to); }
-  if (from->fetch_closure) { mark_fetch_closure(to); }
+  for (auto const kind : kAllClosures) {
+    if (from->in_closure(kind)) { mark_closure(to, kind); }
+  }
 }
 
 bundle *engine::register_bundle(std::string const &identity,
@@ -1047,7 +1053,7 @@ void engine::process_fetch_dependencies(pkg *p) {
     // This package runs its whole ladder during graph resolution, so nothing in its
     // closure may hold a weak reference. Mark before starting its worker, so its own
     // wire_dependency_graph sees the flag.
-    mark_fetch_closure(fetch_dep);
+    mark_closure(fetch_dep, pkg_closure::fetch);
 
     // Add to dependencies map - the edge query will block spec_fetch on it.
     // An explicit `product` on the entry additionally pins the name to this
@@ -1070,7 +1076,7 @@ void engine::process_fetch_dependencies(pkg *p) {
         }
       }
     }
-    if (p->depot_bootstrap) { mark_depot_bootstrap(fetch_dep); }
+    propagate_closures(p, fetch_dep);
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = fetch_dep_cfg->identity,
