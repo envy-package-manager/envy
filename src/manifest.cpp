@@ -348,15 +348,14 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
 // parse_shell_config_from_lua returns the flat variant; DEFAULT_SHELL stores the
 // nested one, where the two custom forms share a `custom_shell` arm.
 default_shell_value default_shell_from_lua(sol::object const &obj, char const *context) {
-  return std::visit(
-      match{ [](shell_choice c) -> default_shell_value { return c; },
-             [](custom_shell_file const &f) -> default_shell_value {
-               return custom_shell{ f };
-             },
-             [](custom_shell_inline const &i) -> default_shell_value {
-               return custom_shell{ i };
-             } },
-      parse_shell_config_from_lua(obj, context));
+  return std::visit(match{ [](shell_choice c) -> default_shell_value { return c; },
+                           [](custom_shell_file const &f) -> default_shell_value {
+                             return custom_shell{ f };
+                           },
+                           [](custom_shell_inline const &i) -> default_shell_value {
+                             return custom_shell{ i };
+                           } },
+                    parse_shell_config_from_lua(obj, context));
 }
 
 }  // namespace

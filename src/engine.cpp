@@ -1055,9 +1055,7 @@ resolved_shell engine::default_shell(pkg *p) {
   std::call_once(default_shell_once_, [this] {
     try {
       resolve_default_shell_fn();
-    } catch (std::exception const &e) {
-      default_shell_error_ = e.what();
-    }
+    } catch (std::exception const &e) { default_shell_error_ = e.what(); }
     default_shell_ready_ = true;  // failed or not: nothing waits on it after this
   });
 
@@ -1072,8 +1070,9 @@ void engine::start_default_shell_deps() {
     }
 
     // DEPENDS names packages the manifest already declares, as PACKAGE_DEPOTS does.
-    auto const cfgs{ engine_resolve_targets(
-        manifest_->packages, default_shell_decl_.depends, "DEFAULT_SHELL") };
+    auto const cfgs{ engine_resolve_targets(manifest_->packages,
+                                            default_shell_decl_.depends,
+                                            "DEFAULT_SHELL") };
 
     default_shell_deps_.reserve(cfgs.size());
     for (auto const *cfg : cfgs) {
@@ -1085,9 +1084,7 @@ void engine::start_default_shell_deps() {
     // Started only once every member carries the carve-out, and to full completion:
     // the first shell request can land before or after the resolution loop, so
     // nothing else is guaranteed to ratchet these.
-    for (pkg *dep : default_shell_deps_) {
-      start_pkg_thread(dep, pkg_phase::completion);
-    }
+    for (pkg *dep : default_shell_deps_) { start_pkg_thread(dep, pkg_phase::completion); }
   });
 }
 
@@ -1110,23 +1107,22 @@ void engine::resolve_default_shell_fn() {
                                std::optional<std::string>{},
                                manifest_->manifest_path);
 
-  default_shell_consumer_.reset(
-      new pkg{ .key = pkg_key{ *default_shell_consumer_cfg_ },
-               .cfg = default_shell_consumer_cfg_,
-               .cache_ptr = &cache_,
-               .eng = this,
-               .tui_section = tui::kInvalidSection,
-               .lua = nullptr,
-               .lock = nullptr,
-               .canonical_identity_hash = {},
-               .pkg_path = std::filesystem::path{},
-               .result_hash = {},
-               .type = pkg_type::UNKNOWN,
-               .declared_dependencies = {},
-               .owned_dependency_cfgs = {},
-               .dependencies = {},
-               .product_dependencies = {},
-               .weak_references = {} });
+  default_shell_consumer_.reset(new pkg{ .key = pkg_key{ *default_shell_consumer_cfg_ },
+                                         .cfg = default_shell_consumer_cfg_,
+                                         .cache_ptr = &cache_,
+                                         .eng = this,
+                                         .tui_section = tui::kInvalidSection,
+                                         .lua = nullptr,
+                                         .lock = nullptr,
+                                         .canonical_identity_hash = {},
+                                         .pkg_path = std::filesystem::path{},
+                                         .result_hash = {},
+                                         .type = pkg_type::UNKNOWN,
+                                         .declared_dependencies = {},
+                                         .owned_dependency_cfgs = {},
+                                         .dependencies = {},
+                                         .product_dependencies = {},
+                                         .weak_references = {} });
   default_shell_consumer_->current_phase = pkg_phase::completion;
 
   // Flagged, not walked: it is not a graph node, but it is the one package that most

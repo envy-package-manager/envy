@@ -2067,7 +2067,7 @@ constexpr char kNativeShell[]{
 #endif
 };
 
-constexpr envy::shell_choice kNativeChoice {
+constexpr envy::shell_choice kNativeChoice{
 #if defined(_WIN32)
   envy::shell_choice::powershell
 #else
