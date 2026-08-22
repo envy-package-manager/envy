@@ -303,3 +303,54 @@ PACKAGES = {{
         resolved = [e for e in run.events("product_resolved", spec="local.p@v1")]
         self.assertEqual(1, len(resolved), resolved)
         self.assertEqual("local.prov@v1", resolved[0].raw["provider"])
+
+    # -- the third source.dependencies funnel -------------------------------
+
+    def pure_bundle_dep_manifest(self, entry: str) -> Path:
+        """A spec whose DEPENDENCIES holds a pure bundle dep with a source table.
+
+        Distinct parse site from the manifest BUNDLES table and from a spec entry's
+        own source table -- try_parse_pure_bundle_dep in phase_spec_fetch.cpp. It
+        reaches source.dependencies too, so the same rules have to apply here.
+        """
+        root = self.write_spec(
+            "bundle_root.lua",
+            f"""IDENTITY = "local.root@v1"
+USER_MANAGED = true
+DEPENDENCIES = {{
+  {{ bundle = "corp.specs@r1",
+    source = {{
+      dependencies = {{ {entry} }},
+      fetch = function(tmp_dir) end }} }},
+}}
+SETUP = {{ m = {{ CHECK = function() return true end, INSTALL = function() end }} }}
+""",
+        )
+        return self.write_manifest(
+            f'PACKAGES = {{ {{ spec = "local.root@v1", '
+            f'source = "{self.lua_path(root)}" }} }}'
+        )
+
+    def test_pure_bundle_dep_rejects_weak_product_prerequisite(self):
+        """The product form, which is what actually regressed on this funnel.
+
+        The engine-side guard in process_fetch_dependencies catches a weak entry here
+        either way, but it reports the identity — empty for a bare product entry — so
+        before the conversion this read `entry '' ... must be a strong reference` and
+        the product name was lost. Asserting the name is what distinguishes the two.
+        """
+        run = self.sync(self.pure_bundle_dep_manifest('{ product = "wk" }'))
+        self.assertRejected(run, "must be a strong reference", "product wk")
+
+    def test_pure_bundle_dep_rejects_product_entry_without_spec(self):
+        """A product entry with a source but no spec: not weak, so identity is empty.
+
+        Before this funnel was converted it reached pkg_key and failed there with
+        "Invalid identity (missing namespace)" instead of naming the real problem.
+        """
+        src = self.lua_path(self.prov)
+        run = self.sync(
+            self.pure_bundle_dep_manifest(f'{{ product = "wk", source = "{src}" }}')
+        )
+        self.assertRejected(run, "must name a 'spec'", "wk")
+        self.assertNotIn("Invalid identity", run.stderr)

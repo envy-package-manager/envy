@@ -350,11 +350,12 @@ TEST_CASE("pkg_cfg - no function without source table") {
 // -- fetch-dependency product references ------------------------------------
 //
 // A `source.dependencies` entry is parsed through parse_fetch_dependency, which
-// is parse(..., allow_weak=true) plus one extra rule: a `product` reference must
-// be strong. The weak pass runs only at a resolution barrier, after every
-// spec_fetch, so a weak product reference could never be edged before the fetch
-// function that consumes it. Rejecting at parse time also stops a bare entry
-// (which parses to an empty identity) from reaching the graph.
+// is parse(..., allow_weak=true) plus two rules: the entry must be a strong
+// reference — reference-only and `weak = {...}` alike — and it must name a
+// `spec`. The weak pass runs only at a resolution barrier, after every
+// spec_fetch, so nothing weak could be edged before the fetch function waiting
+// on it. Rejecting at parse also stops an entry that parses to an empty identity
+// from reaching the graph, where it would surface as an invalid pkg_key.
 
 namespace {
 

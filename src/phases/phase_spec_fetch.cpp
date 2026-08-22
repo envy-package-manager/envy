@@ -673,8 +673,8 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
       }
       sol::table deps_table{ deps_obj.as<sol::table>() };
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
-        pkg_cfg *dep_cfg{ pkg_cfg::parse(deps_table[i], spec_path, true) };
-        custom.dependencies.push_back(dep_cfg);
+        custom.dependencies.push_back(
+            pkg_cfg::parse_fetch_dependency(deps_table[i], spec_path));
       }
     }
 
@@ -1483,6 +1483,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     if (intersected.empty() && !cfg.platforms.empty() && !spec_platforms.empty()) {
       intersected.emplace_back(kPlatformNone);
     }
+    std::lock_guard const deps_lock(p->deps_mutex);  // guards resolved_platforms
     p->resolved_platforms = std::move(intersected);
   }
 
