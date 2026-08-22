@@ -422,12 +422,18 @@ end
         """The edge has to be *this* provider's, not merely one sharing its identity.
 
         pkg::dependencies is keyed by bare identity while pkg_key includes options, so
-        two option variants of one spec are distinct packages under one map key. Here
-        the closure depends on the debug variant and only the release variant declares
-        the product, so an identity-keyed lookup finds the debug edge and then reads
-        the release package -- which nothing drove through install. Whether that
-        yields a path or "missing pkg path" is down to timing, which is the failure
-        mode the edge check exists to prevent.
+        two option variants of one spec are distinct packages under one map key. The
+        closure depends on the debug variant and only the release variant declares the
+        product, so an identity-keyed lookup would find the debug edge and then read
+        the release package -- which the closure never drove through install.
+
+        Deterministic by construction, like test_transitive_provider_is_rejected:
+        local.gate@v1 is a fetch dep of the closure and depends on the release variant
+        at needed_by=build, so that variant is through pkg_export -- hence registered
+        -- before the fetch function runs. The registry therefore does answer, and the
+        refusal comes from the edge check alone. Without that ordering the release
+        variant is an unordered root and the refusal races between this message and
+        the plain "does not declare product dependency" miss.
         """
         variant_tool = self.write_spec(
             "variant_tool.lua",
@@ -447,13 +453,25 @@ end
 """,
         )
         src = self.lua_path(variant_tool)
+        gate = self.write_spec(
+            "variant_gate.lua",
+            f"""IDENTITY = "local.gate@v1"
+USER_MANAGED = true
+DEPENDENCIES = {{ {{ spec = "local.tool@v1", source = "{src}", needed_by = "build",
+                  options = {{ variant = "release" }} }} }}
+SETUP = {{ m = {{ CHECK = function() return true end, INSTALL = function() end }} }}
+""",
+        )
         manifest = self.write_manifest(
             f"""
 BUNDLES = {{
   corp = {{ identity = "corp.specs@r1",
     source = {{
-      dependencies = {{ {{ spec = "local.tool@v1", source = "{src}",
-                        options = {{ variant = "debug" }} }} }},
+      dependencies = {{
+        {{ spec = "local.tool@v1", source = "{src}",
+          options = {{ variant = "debug" }} }},
+        {{ spec = "local.gate@v1", source = "{self.lua_path(gate)}" }},
+      }},
       fetch = function(tmp_dir)
 {self.probe("wk")}
 {BUNDLE_TAIL}
@@ -468,6 +486,9 @@ PACKAGES = {{
         run = self.sync(manifest)
 
         self.assertIn("PROBE ok=false", run.stderr)
+        self.assertIn("'local.tool@v1' provides product 'wk'", run.stderr)
         self.assertIn("does not depend on it", run.stderr)
         event = self.product_events(run, "wk")[0]
         self.assertFalse(event["allowed"], event)
+        # Non-empty provider is the registry-answered proof: a miss reports "".
+        self.assertEqual("local.tool@v1", event["provider"])
