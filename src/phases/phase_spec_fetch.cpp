@@ -448,8 +448,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
                                      tmp_dir,
                                      cache_result.lock.get() };
 
-      sol::protected_function_result fetch_result{ (*fetch_func_opt)(util_normalized_path(tmp_dir),
-                                                                     options_obj) };
+      sol::protected_function_result fetch_result{ (
+          *fetch_func_opt)(util_normalized_path(tmp_dir), options_obj) };
 
       if (!fetch_result.valid()) {
         sol::error err = fetch_result;

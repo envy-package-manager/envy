@@ -7,8 +7,8 @@
 #include "lua_shell.h"
 #include "shell.h"
 #include "sol_util.h"
-#include "util.h"
 #include "tui.h"
+#include "util.h"
 
 #include <cstring>
 #include <stdexcept>

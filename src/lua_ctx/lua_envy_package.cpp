@@ -2,11 +2,11 @@
 
 #include "engine.h"
 #include "lua_envy_dep_util.h"
-#include "util.h"
 #include "lua_phase_context.h"
 #include "pkg.h"
 #include "pkg_phase.h"
 #include "trace.h"
+#include "util.h"
 
 #include <optional>
 #include <stdexcept>

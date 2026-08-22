@@ -929,12 +929,12 @@ void engine::mark_fetch_closure(pkg *p) {
       return it == member->weak_references.end() ? std::string{} : it->query;
     }() };
     if (!unresolved.empty()) {
-      throw std::runtime_error("source.dependencies closure must use strong "
-                               "dependencies: '" +
-                               member->cfg->identity + "' holds a weak reference to '" +
-                               unresolved +
-                               "' but runs during graph resolution, before weak "
-                               "references resolve");
+      throw std::runtime_error(
+          "source.dependencies closure must use strong "
+          "dependencies: '" +
+          member->cfg->identity + "' holds a weak reference to '" + unresolved +
+          "' but runs during graph resolution, before weak "
+          "references resolve");
     }
   });
 }
