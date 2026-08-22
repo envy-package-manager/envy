@@ -170,16 +170,13 @@ PACKAGES = {{ {{ spec = "corp.thing@r1", bundle = "corp" }} }}
         package_value = next(
             e["reason"] for e in package_events if e["target"] == "local.tool@v1"
         )
-        # envy.product is envy.package plus the PRODUCTS-relative suffix. The two
-        # disagree on separators: product_util_resolve returns generic_string() while
-        # envy.package returns the native path, so on Windows one is "/" and the other
-        # "\". That predates this change, so normalize rather than assert one style.
-        def slashes(path: str) -> str:
-            return path.replace("\\", "/")
-
-        self.assertEqual(
-            slashes(product_value), slashes(package_value).rstrip("/") + "/jf"
-        )
+        # envy.product is envy.package plus the PRODUCTS-relative suffix, in the same
+        # spelling: both go through util_normalized_path, so this is exact equality
+        # rather than a separator-insensitive comparison. Asserted strictly on purpose
+        # — the two used to disagree on Windows, where one returned generic separators
+        # and the other native ones.
+        sep = "\\" if package_value[1:3] == ":\\" else "/"
+        self.assertEqual(product_value, package_value.rstrip(sep) + sep + "jf")
 
     # -- the near-misses that must fail deterministically --------------------
 

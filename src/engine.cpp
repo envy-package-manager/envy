@@ -18,6 +18,7 @@
 #include "pkg_phase.h"
 #include "platform.h"
 #include "tui.h"
+#include "util.h"
 
 #include <algorithm>
 #include <array>
@@ -862,7 +863,7 @@ void engine::run_depot_step() {
       std::vector<std::pair<std::string, std::string>> dep_paths;
       dep_paths.reserve(deps.size());
       for (pkg *dep : deps) {
-        dep_paths.emplace_back(dep->cfg->identity, dep->pkg_path.string());
+        dep_paths.emplace_back(dep->cfg->identity, util_normalized_path(dep->pkg_path));
       }
 
       phase_context ctx{ .eng = this,

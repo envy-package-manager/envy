@@ -243,6 +243,20 @@ end
 
 ---
 
+## Paths
+
+Every path envy hands a spec — phase arguments, `envy.package`, `envy.product`,
+`envy.path.*`, `envy.abspath`, depot `ctx.tmp_dir`/`ctx.deps` — uses the platform's
+own separator throughout. envy assembles paths from a cache root, manifest text and
+Lua fragments, any of which may be spelled either way, so joining alone would
+otherwise yield `C:/cache/pkg\file`. Two APIs naming the same location always agree
+on spelling: `envy.product("jf")` equals `envy.package(provider) .. "jf"` exactly.
+
+Archive entry paths (`envy.extract`'s `only` patterns) stay forward-slash on every
+platform, matching the archive formats themselves.
+
+---
+
 ## Dependency Access
 
 ### envy.asset(identity) → string

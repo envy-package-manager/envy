@@ -448,7 +448,7 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
                                      tmp_dir,
                                      cache_result.lock.get() };
 
-      sol::protected_function_result fetch_result{ (*fetch_func_opt)(tmp_dir.string(),
+      sol::protected_function_result fetch_result{ (*fetch_func_opt)(util_normalized_path(tmp_dir),
                                                                      options_obj) };
 
       if (!fetch_result.valid()) {
@@ -1277,7 +1277,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
                 tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
                 sol::protected_function_result result{ (*fetch_func_opt)(
-                    tmp_dir.string()) };
+                    util_normalized_path(tmp_dir)) };
 
                 if (!result.valid()) {
                   sol::error err = result;

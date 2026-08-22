@@ -2,6 +2,7 @@
 
 #include "engine.h"
 #include "pkg.h"
+#include "util.h"
 
 #include <filesystem>
 #include <stdexcept>
@@ -33,8 +34,7 @@ std::string product_util_resolve(pkg *provider, std::string const &product_name)
                              provider->cfg->identity + "' missing pkg path");
   }
 
-  std::filesystem::path const full_path{ provider->pkg_path / value };
-  return full_path.generic_string();
+  return util_normalized_path(provider->pkg_path / value);
 }
 
 }  // namespace envy

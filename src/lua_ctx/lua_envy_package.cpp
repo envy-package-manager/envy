@@ -2,6 +2,7 @@
 
 #include "engine.h"
 #include "lua_envy_dep_util.h"
+#include "util.h"
 #include "lua_phase_context.h"
 #include "pkg.h"
 #include "pkg_phase.h"
@@ -91,7 +92,7 @@ void lua_envy_package_install(sol::table &envy_table) {
       throw std::runtime_error(msg);
     }
 
-    std::string const pkg_path{ dep->pkg_path.string() };
+    std::string const pkg_path{ util_normalized_path(dep->pkg_path) };
     emit_access(true, first_needed_by, pkg_path);
     return pkg_path;
   };

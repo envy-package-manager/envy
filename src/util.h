@@ -90,6 +90,12 @@ std::string util_flatten_script_with_semicolons(std::string_view script);
 
 // Convert filesystem path to string with trailing separator.
 // Ensures Lua expressions like `dir .. "filename"` produce correct paths.
+// A path as a spec sees it, with separators uniformly the platform's own. envy
+// assembles paths from a cache root, manifest text and Lua fragments, any of which
+// may be spelled with either separator, so joining alone yields things like
+// "C:/cache/pkg\\file". Every path handed to a spec goes through here so none does.
+std::string util_normalized_path(std::filesystem::path path);
+
 std::string util_path_with_separator(std::filesystem::path const &path);
 
 // Forward-declared from platform.h (can't include here — platform.h includes util.h).

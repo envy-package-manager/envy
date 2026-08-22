@@ -773,6 +773,55 @@ TEST_CASE("util_absolute_path handles empty relative") {
 }
 #endif
 
+// util_normalized_path tests
+//
+// envy assembles paths from a cache root, manifest text and Lua fragments, so a join
+// can mix separators — "C:/cache/pkg" / "file" is "C:/cache/pkg\\file". Anything a
+// spec sees goes through util_normalized_path, so envy.package and envy.product agree
+// on spelling and no path envy emits is mixed.
+
+TEST_CASE("util_normalized_path leaves an empty path empty") {
+  CHECK(envy::util_normalized_path(std::filesystem::path{}).empty());
+}
+
+TEST_CASE("util_normalized_path emits only the preferred separator") {
+  char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
+  char const other{ sep == '/' ? '\\' : '/' };
+
+  // A joined path is where mixing appears: the base keeps whatever spelling it was
+  // given, and operator/ appends the preferred separator.
+  std::filesystem::path base{ std::string{ "a" } + other + "b" };
+  std::string const joined{ envy::util_normalized_path(base / "c") };
+
+  // On Windows both characters are separators, so all three components are joined by
+  // the preferred one. On POSIX a backslash is an ordinary filename character, so the
+  // base is one component and there is nothing to convert.
+#ifdef _WIN32
+  CHECK(joined == "a\\b\\c");
+  CHECK(joined.find('/') == std::string::npos);
+#else
+  CHECK(joined == std::string{ "a" } + other + "b/c");
+#endif
+}
+
+TEST_CASE("util_normalized_path is idempotent") {
+  std::filesystem::path const p{ std::filesystem::path{ "x" } / "y" / "z" };
+  std::string const once{ envy::util_normalized_path(p) };
+  CHECK(envy::util_normalized_path(std::filesystem::path{ once }) == once);
+}
+
+#ifdef _WIN32
+TEST_CASE("util_normalized_path converts forward slashes on Windows") {
+  CHECK(envy::util_normalized_path("C:/cache/pkg/file") == "C:\\cache\\pkg\\file");
+}
+
+TEST_CASE("util_path_with_separator normalizes before appending") {
+  CHECK(envy::util_path_with_separator("C:/cache/pkg") == "C:\\cache\\pkg\\");
+  // Already separator-terminated, in the other spelling: normalized, not doubled.
+  CHECK(envy::util_path_with_separator("C:/cache/pkg/") == "C:\\cache\\pkg\\");
+}
+#endif
+
 // util_path_with_separator tests
 
 TEST_CASE("util_path_with_separator handles empty path") {

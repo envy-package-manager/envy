@@ -7,6 +7,7 @@
 #include "lua_shell.h"
 #include "shell.h"
 #include "sol_util.h"
+#include "util.h"
 #include "tui.h"
 
 #include <cstring>
@@ -678,7 +679,7 @@ std::optional<std::string> manifest::run_bundle_fetch(
 
   lua_view.registry()[ENVY_PHASE_CTX_RIDX] = phase_ctx;
 
-  sol::protected_function_result result{ fetch_func(tmp_dir.string()) };
+  sol::protected_function_result result{ fetch_func(util_normalized_path(tmp_dir)) };
   if (!result.valid()) {
     sol::error err = result;
     return std::string(err.what());
@@ -725,7 +726,7 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
   lua_view.registry()[ENVY_PHASE_CTX_RIDX] = phase_ctx;
 
   sol::table ctx{ lua_view.create_table() };
-  ctx["tmp_dir"] = tmp_dir.string();
+  ctx["tmp_dir"] = util_normalized_path(tmp_dir);
   sol::table deps_table{ lua_view.create_table() };
   for (auto const &[identity, pkg_path] : deps) {
     sol::table d{ lua_view.create_table() };
