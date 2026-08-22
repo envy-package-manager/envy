@@ -940,61 +940,6 @@ end
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         self.assertIn("local.dep_val_parallel_manifest@v1", output)
 
-    def test_default_shell_with_dependency(self):
-        """default_shell function calls envy.package(), spec declares dependency - should succeed."""
-        # Tool spec that provides shell configuration
-        self.write_spec(
-            "dep_val_shell_tool.lua",
-            """-- Tool spec that provides shell configuration
-IDENTITY = "local.dep_val_shell_tool@v1"
-
-FETCH = {{
-  source = "{ARCHIVE_PATH}",
-  sha256 = "{ARCHIVE_HASH}"
-}}
-
-STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
-  envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
-end
-""",
-        )
-
-        # Spec with default_shell function that calls envy.package() on declared dependency
-        self.write_spec(
-            "dep_val_shell_with_dep.lua",
-            """-- Spec with default_shell function that calls envy.package() on declared dependency
-IDENTITY = "local.dep_val_shell_with_dep@v1"
-
-DEPENDENCIES = {{
-  {{ spec = "local.dep_val_shell_tool@v1", source = "{SPECS_DIR}/dep_val_shell_tool.lua" }}
-}}
-
-DEFAULT_SHELL = function()
-  -- Access declared dependency in default_shell
-  envy.package("local.dep_val_shell_tool@v1")
-  return ENVY_SHELL.BASH
-end
-
-FETCH = {{
-  source = "{ARCHIVE_PATH}",
-  sha256 = "{ARCHIVE_HASH}"
-}}
-
-STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
-  envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
-  -- Run a command to trigger default_shell evaluation
-  envy.run("echo 'test'")
-end
-""",
-        )
-
-        result, output = self.install_spec(
-            "local.dep_val_shell_with_dep@v1", "dep_val_shell_with_dep.lua"
-        )
-
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("local.dep_val_shell_with_dep@v1", output)
-
     def test_deep_chain_parallel(self):
         """Deep transitive chain under parallel execution - validation doesn't race."""
         # Level A (bottom) for 5-level chain

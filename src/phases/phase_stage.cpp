@@ -139,7 +139,7 @@ void run_stage_phase(pkg *p, engine &eng) {
     run_shell_stage(script_str,
                     stage_dir,
                     identity,
-                    shell_resolve_default(p->default_shell_ptr),
+                    pkg_default_shell(p),
                     p->tui_section,
                     eng.cache_root());
   } else if (stage_obj.is<sol::protected_function>()) {

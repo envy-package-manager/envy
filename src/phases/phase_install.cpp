@@ -102,7 +102,7 @@ bool run_programmatic_install(sol::protected_function install_func,
                              stage_dir,
                              lock,
                              identity,
-                             shell_resolve_default(p->default_shell_ptr),
+                             pkg_default_shell(p),
                              p->tui_section,
                              eng.cache_root());
   }
@@ -165,7 +165,7 @@ void run_install_phase(pkg *p, engine &eng) {
                                         lock->stage_dir(),
                                         lock.get(),
                                         p->cfg->identity,
-                                        shell_resolve_default(p->default_shell_ptr),
+                                        pkg_default_shell(p),
                                         p->tui_section,
                                         eng.cache_root());
   } else if (install_obj.is<sol::protected_function>()) {

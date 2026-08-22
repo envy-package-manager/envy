@@ -110,24 +110,22 @@ Manifests can specify a `DEFAULT_SHELL` global to control how `envy.run()` execu
 - **Inline mode:** `{inline = {"/path/to/exe", "-c"}}`
   - Script content passed as final argument (no temp file)
 
-**Dynamic shell selection (function):**
+**Dynamic shell selection (function):** takes no arguments; returns a constant or custom-shell table. Wrap it in `{DEPENDS, SHELL}`—mirroring `PACKAGE_DEPOTS`—to name an envy-managed interpreter. `DEPENDS` lists identities from `PACKAGES`; they install before any other package's first string verb, and are what `envy.product`/`envy.package` authorize against.
+
 ```lua
-DEFAULT_SHELL = function(ctx)
-  -- Query deployed assets to use as interpreter
-  -- Note: ctx:asset() used here (not envy.asset()) because DEFAULT_SHELL
-  -- runs in manifest context before spec phases execute
-  local python = ctx:asset("python@v3.11")
-  return {inline = {python .. "/bin/python3", "-c"}}
-end
+DEFAULT_SHELL = {
+  DEPENDS = { "py.python@v3.11" },
+  SHELL = function() return {inline = {envy.product("python3"), "-c"}} end,
+}
 ```
 
-**Use case:** Express all build scripts in a custom language (Python, Tcl, Ruby) without assuming it's pre-installed. The function can query `ctx:asset()` to locate envy-deployed interpreters. Bootstrap specs (Python itself) must use built-in shells.
+**Use case:** Express all build scripts in a custom language (Python, Tcl, Ruby) without assuming it's pre-installed.
 
-**Implementation notes:**
-- Functions evaluated lazily during engine execution (after dependency graph built)
-- Result cached per manifest
-- DEFAULT_SHELL functions use `ctx:asset()` (not `envy.asset()`) because they run in manifest context
-- **Future work:** Dependency analysis—extract `ctx:asset()` calls from function to add implicit dependencies, ensuring interpreter deploys before dependent specs run
+**Semantics:**
+- Value forms (constant, custom table) resolve at manifest load; a function is evaluated once, on first use by a verb needing a shell, and memoized for the run. Evaluating at load is impossible—no package exists yet to own the interpreter dependency.
+- The `DEPENDS` closure gets the platform built-in for its own string verbs: it supplies the shell and cannot consume it. Bootstrap specs (Python itself) need no annotation—membership is enough.
+- `DEPENDS` is a strong-only closure, like `source.dependencies`; a weak reference in it is an error. `DEPENDS` without a function `SHELL` is rejected.
+- The function authorizes against a synthetic consumer, `envy.DEFAULT_SHELL@v1`, holding one edge per `DEPENDS` entry—so it appears in the access traces and in errors.
 
 ## Specs
 

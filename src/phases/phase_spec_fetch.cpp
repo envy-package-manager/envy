@@ -1052,9 +1052,12 @@ void wire_dependency_graph(pkg *p, engine &eng) {
 
     if (dep_cfg->is_weak_reference()) {
       // No closure overlaps the window where the weak pass can satisfy a reference:
-      // depot bootstrap runs after the resolution loop has finished, and a
+      // depot bootstrap runs after the resolution loop has finished; a
       // source.dependencies closure runs while the barrier is held shut by the
-      // consumer waiting on it. Same refusal either way, named by the closure.
+      // consumer waiting on it; a DEFAULT_SHELL closure is started at
+      // target=completion before any worker exists, so it reaches its own string
+      // verbs well ahead of the barrier. Same refusal in every case, named by the
+      // closure.
       //
       // Checked in the same critical section as the append, against the same mutex
       // engine::mark_closure scans under. Checking outside it would leave a window
@@ -1062,7 +1065,9 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       // package joins a closure holding a reference nothing can resolve: either the
       // mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
-      for (auto const kind : { pkg_closure::depot_bootstrap, pkg_closure::fetch }) {
+      for (auto const kind : { pkg_closure::depot_bootstrap,
+                               pkg_closure::fetch,
+                               pkg_closure::default_shell }) {
         if (p->in_closure(kind)) {
           throw std::runtime_error(
               std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +

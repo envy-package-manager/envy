@@ -43,7 +43,7 @@ bool run_pair_check_command(pkg *p, std::string_view cmd, std::string const &con
   cfg.on_stdout_line = [](std::string_view) {};
   cfg.on_stderr_line = [](std::string_view) {};
   cfg.cwd = pkg_cfg::compute_project_root(p->cfg);
-  cfg.shell = shell_resolve_default(p->default_shell_ptr);
+  cfg.shell = pkg_default_shell(p);
 
   shell_result const result{ [&] {
     try {
@@ -156,7 +156,7 @@ void run_pair_install(pkg *p,
                                         "Setup",
                                         project_root,
                                         log_identity,
-                                        shell_resolve_default(p->default_shell_ptr),
+                                        pkg_default_shell(p),
                                         section,
                                         eng.cache_root());
   }

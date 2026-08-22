@@ -759,7 +759,7 @@ std::unique_ptr<pkg> make_bare_pkg(std::string identity) {
   return std::unique_ptr<pkg>(new pkg{ .key = pkg_key(*cfg),
                                        .cfg = cfg,
                                        .cache_ptr = nullptr,
-                                       .default_shell_ptr = nullptr,
+                                       .eng = nullptr,
                                        .tui_section = {},
                                        .lua = nullptr,
                                        .lock = nullptr,

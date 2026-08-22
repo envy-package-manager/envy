@@ -23,7 +23,11 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -76,7 +80,9 @@ constexpr bool is_setup_pair_key(std::string_view key) {
 // skipped, which also makes this terminate on a dependency cycle and cheap to call
 // repeatedly. A package may be in several closures at once, so the bits are
 // independent — marking one never re-walks or clears another.
-constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap, pkg_closure::fetch };
+constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap,
+                                      pkg_closure::fetch,
+                                      pkg_closure::default_shell };
 
 template <typename Fn>
 void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
@@ -403,8 +409,8 @@ void engine_validate_dependency_cycle(std::string const &candidate_identity,
 
 engine::engine(cache &cache, manifest const *manifest)
     : cache_(cache),
-      default_shell_(manifest ? manifest->get_default_shell() : std::nullopt),
       manifest_(manifest),
+      default_shell_decl_(manifest ? manifest->get_default_shell() : default_shell_decl{}),
       core_(make_trace_observer()) {}
 
 engine::~engine() = default;  // core_ (declared last) fails + joins workers first
@@ -526,7 +532,7 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
     auto p{ std::unique_ptr<pkg>(new pkg{ .key = key,
                                           .cfg = cfg,
                                           .cache_ptr = &cache_,
-                                          .default_shell_ptr = &default_shell_,
+                                          .eng = this,
                                           .tui_section = tui::section_create(),
                                           .lua = nullptr,
                                           .lock = nullptr,
@@ -1017,6 +1023,131 @@ void engine::on_spec_fetch_complete(std::string const &) {
   if (pending_spec_fetches_.fetch_sub(1) - 1 == 0) { core_.notify_global(); }
 }
 
+bool engine::is_default_shell_member(pkg *p) {
+  if (p->in_closure(pkg_closure::default_shell)) { return true; }
+
+  // The bit is the whole answer once the shell has resolved: there is no wait left to
+  // deadlock against, and propagate_closures has long since caught up. Before that it
+  // can be stale — a package the interpreter depends on may have started its own
+  // worker before the interpreter's spec_fetch wired the edge that flags it, and that
+  // package is exactly who default_shell()'s wait would deadlock against. So ask the
+  // graph directly in that window, and flag what it finds to keep the next call cheap.
+  if (default_shell_ready_.load()) { return false; }
+
+  start_default_shell_deps();
+  for (pkg *dep : default_shell_deps_) {
+    if (!has_dependency_path(dep, p)) { continue; }
+    mark_closure(p, pkg_closure::default_shell);
+    return true;
+  }
+  return false;
+}
+
+resolved_shell engine::default_shell(pkg *p) {
+  if (!default_shell_decl_.is_function) {
+    return shell_resolve_default(&default_shell_decl_.value);
+  }
+
+  // The interpreter's own closure cannot run its string verbs through the shell it
+  // supplies, so it never reaches the evaluation below.
+  if (p && is_default_shell_member(p)) { return shell_resolve_default(nullptr); }
+
+  std::call_once(default_shell_once_, [this] {
+    try {
+      resolve_default_shell_fn();
+    } catch (std::exception const &e) { default_shell_error_ = e.what(); }
+    default_shell_ready_ = true;  // failed or not: nothing waits on it after this
+  });
+
+  if (!default_shell_error_.empty()) { throw std::runtime_error(default_shell_error_); }
+  return shell_resolve_default(&default_shell_);
+}
+
+void engine::start_default_shell_deps() {
+  std::call_once(default_shell_deps_once_, [this] {
+    if (!default_shell_decl_.is_function || default_shell_decl_.depends.empty()) {
+      return;
+    }
+
+    // DEPENDS names packages the manifest already declares, as PACKAGE_DEPOTS does.
+    auto const cfgs{ engine_resolve_targets(manifest_->packages,
+                                            default_shell_decl_.depends,
+                                            "DEFAULT_SHELL") };
+
+    default_shell_deps_.reserve(cfgs.size());
+    for (auto const *cfg : cfgs) {
+      pkg *dep{ ensure_pkg(cfg) };
+      mark_closure(dep, pkg_closure::default_shell);
+      default_shell_deps_.push_back(dep);
+    }
+
+    // Started only once every member carries the carve-out, and to full completion:
+    // the first shell request can land before or after the resolution loop, so
+    // nothing else is guaranteed to ratchet these.
+    for (pkg *dep : default_shell_deps_) { start_pkg_thread(dep, pkg_phase::completion); }
+  });
+}
+
+void engine::resolve_default_shell_fn() {
+  start_default_shell_deps();  // no-op after resolve_graph; covers callers without one
+  for (pkg *dep : default_shell_deps_) { wait_for_completion(dep->key); }
+
+  // A manifest-wide shell has no package of its own to authorize against, so it gets
+  // one: a consumer holding an edge to each DEPENDS entry. It is deliberately absent
+  // from packages_ — it is never scheduled, matched, or reported — and sits at
+  // completion because every edge it holds is already satisfied by the waits above.
+  default_shell_consumer_cfg_ =
+      pkg_cfg::pool()->emplace("envy.DEFAULT_SHELL@v1",
+                               pkg_cfg::source_t{ pkg_cfg::weak_ref{} },
+                               std::string{},
+                               std::optional<pkg_phase>{},
+                               nullptr,
+                               nullptr,
+                               std::vector<pkg_cfg *>{},
+                               std::optional<std::string>{},
+                               manifest_->manifest_path);
+
+  default_shell_consumer_.reset(new pkg{ .key = pkg_key{ *default_shell_consumer_cfg_ },
+                                         .cfg = default_shell_consumer_cfg_,
+                                         .cache_ptr = &cache_,
+                                         .eng = this,
+                                         .tui_section = tui::kInvalidSection,
+                                         .lua = nullptr,
+                                         .lock = nullptr,
+                                         .canonical_identity_hash = {},
+                                         .pkg_path = std::filesystem::path{},
+                                         .result_hash = {},
+                                         .type = pkg_type::UNKNOWN,
+                                         .declared_dependencies = {},
+                                         .owned_dependency_cfgs = {},
+                                         .dependencies = {},
+                                         .product_dependencies = {},
+                                         .weak_references = {} });
+  default_shell_consumer_->current_phase = pkg_phase::completion;
+
+  // Flagged, not walked: it is not a graph node, but it is the one package that most
+  // obviously supplies the shell rather than consuming it. Without the bit, an
+  // envy.run() inside the SHELL function would ask this same engine for a shell and
+  // re-enter the call_once this thread is holding — a self-deadlock. It gets the
+  // platform built-in, which is what the function ran under before it had a context.
+  default_shell_consumer_->closures = static_cast<uint8_t>(pkg_closure::default_shell);
+
+  for (pkg *dep : default_shell_deps_) {
+    default_shell_consumer_->dependencies[dep->cfg->identity] = { dep,
+                                                                  pkg_phase::spec_fetch };
+  }
+
+  phase_context ctx{ .eng = this,
+                     .p = default_shell_consumer_.get(),
+                     .run_dir = std::nullopt,
+                     .lock = nullptr };
+  default_shell_ = manifest_->run_default_shell_fn(&ctx);
+}
+
+resolved_shell pkg_default_shell(pkg *p) {
+  return p && p->eng ? p->eng->default_shell(p) : shell_resolve_default(nullptr);
+}
+
 void engine::process_fetch_dependencies(pkg *p) {
   // Process fetch dependencies - added to dependencies map with needed_by=spec_fetch
   // The per-step edge query handles blocking automatically
@@ -1361,6 +1492,10 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
   std::vector<pkg *> root_pkgs;
   root_pkgs.reserve(roots.size());
   for (auto const *cfg : roots) { root_pkgs.push_back(ensure_pkg(cfg)); }
+
+  // After root registration (its ensure_pkg calls may name the same packages) but
+  // before any worker exists, so no string verb can outrun the shell's carve-out.
+  start_default_shell_deps();
 
   for (size_t i{ 0 }; i < root_pkgs.size(); ++i) {
     start_pkg_thread(root_pkgs[i], pkg_phase::spec_fetch);

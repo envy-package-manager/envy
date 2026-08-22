@@ -344,8 +344,14 @@ EXPORTABLE = nil
 ---@type envy.package_spec[]
 PACKAGES = {}
 
----Default shell configuration for all phases
----@type integer|envy.shell_config|fun(ctx: { package: fun(identity: string): string }): integer|envy.shell_config
+---A shell function takes no arguments. It is evaluated on first use, so it may call
+---envy.product()/envy.package() to name an interpreter listed in DEPENDS.
+---@alias envy.default_shell_fn fun(): integer|envy.shell_config
+
+---Default shell configuration for all phases. DEPENDS lists PACKAGES identities that
+---install before any other package's first string verb; they run their own string
+---verbs under the platform built-in.
+---@type integer|envy.shell_config|envy.default_shell_fn|{ DEPENDS?: string[], SHELL: integer|envy.shell_config|envy.default_shell_fn }
 DEFAULT_SHELL = nil
 
 --------------------------------------------------------------------------------

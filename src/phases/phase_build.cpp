@@ -72,7 +72,7 @@ void run_programmatic_build(sol::protected_function build_func,
       execute_build_script(script,
                            stage_dir,
                            identity,
-                           shell_resolve_default(p->default_shell_ptr),
+                           pkg_default_shell(p),
                            p->tui_section,
                            eng.cache_root());
     }
@@ -89,7 +89,7 @@ void run_shell_build(std::string_view script,
   execute_build_script(script,
                        stage_dir,
                        identity,
-                       shell_resolve_default(p->default_shell_ptr),
+                       pkg_default_shell(p),
                        tui_section,
                        cache_root);
 }
