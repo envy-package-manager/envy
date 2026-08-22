@@ -107,9 +107,16 @@ struct manifest : unmovable {
   static std::unique_ptr<manifest> load(char const *script,
                                         std::filesystem::path const &manifest_path);
 
-  // Get DEFAULT_SHELL global type and value
-  // Returns nullopt if no DEFAULT_SHELL specified
-  default_shell_cfg_t get_default_shell() const;
+  // Parse the DEFAULT_SHELL global. Value forms (ENVY_SHELL constant, custom shell
+  // table) resolve here; a function — bare, or the SHELL field of a
+  // {DEPENDS, SHELL} table — only records that it must be evaluated later.
+  // Returns a decl with no value and no depends when DEFAULT_SHELL is absent.
+  default_shell_decl get_default_shell() const;
+
+  // Execute the DEFAULT_SHELL function under the manifest Lua lock with `phase_ctx`
+  // installed, so envy.product/envy.package resolve against the caller's consumer.
+  // Throws on Lua error or an unusable return value.
+  default_shell_value run_default_shell_fn(void *phase_ctx) const;
 
   // Execute bundle custom fetch function from BUNDLES table
   // Sets up phase context, executes fetch function, cleans up

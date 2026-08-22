@@ -2045,3 +2045,144 @@ TEST_CASE("parse_envy_meta accepts a mirror containing backslashes") {
     CHECK(*meta.mirror == "\\\\srv\\envy");
   }
 }
+
+// ============================================================================
+// DEFAULT_SHELL global tests
+// ============================================================================
+
+namespace {
+
+envy::default_shell_decl load_default_shell(std::string const &body) {
+  auto m{ envy::manifest::load(("-- @envy bin \"tools\"\nPACKAGES = {}\n" + body).c_str(),
+                               fs::path("/fake/envy.lua")) };
+  return m->get_default_shell();
+}
+
+// The platform's own built-in, so a value-form case reads the same on either host.
+constexpr char kNativeShell[]{
+#if defined(_WIN32)
+  "ENVY_SHELL.POWERSHELL"
+#else
+  "ENVY_SHELL.BASH"
+#endif
+};
+
+constexpr envy::shell_choice kNativeChoice {
+#if defined(_WIN32)
+  envy::shell_choice::powershell
+#else
+  envy::shell_choice::bash
+#endif
+};
+
+}  // namespace
+
+TEST_CASE("DEFAULT_SHELL: absent yields an empty decl") {
+  auto const decl{ load_default_shell("") };
+  CHECK_FALSE(decl.is_function);
+  CHECK_FALSE(decl.value.has_value());
+  CHECK(decl.depends.empty());
+}
+
+TEST_CASE("DEFAULT_SHELL: ENVY_SHELL constant resolves at load") {
+  auto const decl{ load_default_shell(std::string{ "DEFAULT_SHELL = " } + kNativeShell) };
+  CHECK_FALSE(decl.is_function);
+  REQUIRE(decl.value.has_value());
+  CHECK(std::get<envy::shell_choice>(*decl.value) == kNativeChoice);
+}
+
+TEST_CASE("DEFAULT_SHELL: a bare function is recorded, never called at load") {
+  // The body errors: parsing that ran it would surface here instead of deferring.
+  auto const decl{ load_default_shell(
+      "DEFAULT_SHELL = function() error('must not run at load') end") };
+  CHECK(decl.is_function);
+  CHECK_FALSE(decl.value.has_value());
+  CHECK(decl.depends.empty());
+}
+
+TEST_CASE("DEFAULT_SHELL: {DEPENDS, SHELL} records depends and defers the function") {
+  auto const decl{ load_default_shell(R"(
+DEFAULT_SHELL = {
+  DEPENDS = { "py.python@v3", "tools.tcl@v1" },
+  SHELL = function() error('must not run at load') end,
+}
+)") };
+  CHECK(decl.is_function);
+  CHECK_FALSE(decl.value.has_value());
+  REQUIRE(decl.depends.size() == 2);
+  CHECK(decl.depends[0] == "py.python@v3");
+  CHECK(decl.depends[1] == "tools.tcl@v1");
+}
+
+TEST_CASE("DEFAULT_SHELL: SHELL alone may be a value form") {
+  auto const decl{ load_default_shell(std::string{ "DEFAULT_SHELL = { SHELL = " } +
+                                      kNativeShell + " }") };
+  CHECK_FALSE(decl.is_function);
+  CHECK(decl.depends.empty());
+  REQUIRE(decl.value.has_value());
+  CHECK(std::get<envy::shell_choice>(*decl.value) == kNativeChoice);
+}
+
+TEST_CASE("DEFAULT_SHELL: DEPENDS requires a function SHELL") {
+  CHECK_THROWS_WITH_AS(
+      load_default_shell(std::string{ "DEFAULT_SHELL = { DEPENDS = { 'py.python@v3' }, "
+                                      "SHELL = " } +
+                         kNativeShell + " }"),
+      doctest::Contains("DEPENDS requires SHELL to be a function"),
+      std::runtime_error);
+}
+
+TEST_CASE("DEFAULT_SHELL: DEPENDS must be a table") {
+  CHECK_THROWS_WITH_AS(
+      load_default_shell(
+          "DEFAULT_SHELL = { DEPENDS = 'py.python@v3', SHELL = function() end }"),
+      doctest::Contains("DEPENDS must be a table"),
+      std::runtime_error);
+}
+
+TEST_CASE("DEFAULT_SHELL: DEPENDS entries must be non-empty strings") {
+  CHECK_THROWS_WITH_AS(
+      load_default_shell("DEFAULT_SHELL = { DEPENDS = { '' }, SHELL = function() end }"),
+      doctest::Contains("DEPENDS entries must be non-empty strings"),
+      std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      load_default_shell("DEFAULT_SHELL = { DEPENDS = { 42 }, SHELL = function() end }"),
+      doctest::Contains("DEPENDS entries must be non-empty strings"),
+      std::runtime_error);
+}
+
+TEST_CASE("DEFAULT_SHELL: a table without SHELL is still the custom-shell value form") {
+#if !defined(_WIN32)
+  auto const decl{ load_default_shell(
+      "DEFAULT_SHELL = { inline = { '/bin/sh', '-c' } }") };
+  CHECK_FALSE(decl.is_function);
+  REQUIRE(decl.value.has_value());
+  auto const &custom{ std::get<envy::custom_shell>(*decl.value) };
+  auto const &inline_cfg{ std::get<envy::custom_shell_inline>(custom) };
+  REQUIRE(inline_cfg.argv.size() == 2);
+  CHECK(inline_cfg.argv[0] == "/bin/sh");
+#endif
+}
+
+TEST_CASE("DEFAULT_SHELL: run_default_shell_fn evaluates the deferred function") {
+  auto m{ envy::manifest::load(
+      (std::string{ "-- @envy bin \"tools\"\nPACKAGES = {}\nDEFAULT_SHELL = function() "
+                    "return " } +
+       kNativeShell + " end")
+          .c_str(),
+      fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->get_default_shell().is_function);
+  CHECK(std::get<envy::shell_choice>(m->run_default_shell_fn(nullptr)) == kNativeChoice);
+}
+
+TEST_CASE("DEFAULT_SHELL: a failing function reports the Lua error") {
+  auto m{ envy::manifest::load(
+      "-- @envy bin \"tools\"\nPACKAGES = {}\n"
+      "DEFAULT_SHELL = function() error('boom') end",
+      fs::path("/fake/envy.lua")) };
+
+  CHECK_THROWS_WITH_AS(m->run_default_shell_fn(nullptr),
+                       doctest::Contains("DEFAULT_SHELL function failed"),
+                       std::runtime_error);
+}

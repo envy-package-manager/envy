@@ -46,6 +46,15 @@ using default_shell_value =
 // Manifest DEFAULT_SHELL configuration (optional, nullopt if not specified)
 using default_shell_cfg_t = std::optional<default_shell_value>;
 
+// DEFAULT_SHELL as declared, parsed but not necessarily evaluated. A value form
+// resolves at manifest load; a function form cannot, because naming an envy-managed
+// interpreter needs `depends` installed first — so it is evaluated on first use.
+struct default_shell_decl {
+  std::vector<std::string> depends;  // package identities, resolved against PACKAGES
+  bool is_function{ false };
+  default_shell_cfg_t value;  // set only when !is_function
+};
+
 // Resolve manifest default shell (or platform default if unset)
 resolved_shell shell_resolve_default(default_shell_cfg_t const *cfg);
 

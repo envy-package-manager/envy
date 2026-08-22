@@ -4,7 +4,6 @@
 #include "pkg_cfg.h"
 #include "pkg_key.h"
 #include "pkg_phase.h"
-#include "shell.h"
 #include "sol_util.h"
 #include "tui.h"
 
@@ -21,6 +20,7 @@
 
 namespace envy {
 
+class engine;
 enum class pkg_type;
 
 // Closures whose members run outside the window where resolve_weak_references() can
@@ -34,11 +34,19 @@ enum class pkg_closure : uint8_t {
   // graph resolution, because a consumer parked in spec_fetch waiting for it holds
   // the resolution barrier shut for that entire window.
   fetch = 1u << 1,
+  // DEFAULT_SHELL DEPENDS closure: gets the platform built-in shell for its own
+  // string verbs, since it is what supplies the manifest's shell, and runs to
+  // completion before any other package's first string verb.
+  default_shell = 1u << 2,
 };
 
 constexpr std::string_view pkg_closure_name(pkg_closure kind) {
-  return kind == pkg_closure::depot_bootstrap ? "package-depot dependency closure"
-                                              : "source.dependencies closure";
+  switch (kind) {
+    case pkg_closure::depot_bootstrap: return "package-depot dependency closure";
+    case pkg_closure::fetch: return "source.dependencies closure";
+    case pkg_closure::default_shell: return "DEFAULT_SHELL dependency closure";
+  }
+  return "dependency closure";
 }
 
 struct product_entry {
@@ -71,11 +79,12 @@ struct pkg {
     std::vector<std::string> setup;
   };
 
-  // Immutable after construction
+  // Immutable after construction. eng is null only in unit tests, which then get
+  // the platform built-in shell from pkg_default_shell().
   pkg_key const key;
   pkg_cfg const *const cfg;
   cache *const cache_ptr;
-  default_shell_cfg_t const *const default_shell_ptr;
+  engine *const eng;
   tui::section_handle const tui_section;
 
   // Execution mirror: the phase currently executing on this package's worker

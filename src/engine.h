@@ -92,6 +92,15 @@ class engine : unmovable {
   // one exception. Called by the parent's setup phase.
   void run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pair_names);
 
+  // Shell for `p`'s string verbs. A DEFAULT_SHELL function is evaluated on first
+  // use — never at construction, where no package exists to own the interpreter
+  // dependency — and the result memoized for the run. The first caller drives
+  // DEFAULT_SHELL.DEPENDS to completion and blocks here until they land, so the
+  // interpreter is installed before any string verb runs. Members of the
+  // default-shell closure get the platform built-in: they supply the shell and
+  // cannot be its consumers. Throws the evaluation failure to every caller.
+  resolved_shell default_shell(pkg *p);
+
   // High-level execution
   pkg_result_map_t run_full(std::vector<pkg_cfg const *> const &roots);
 
@@ -162,6 +171,19 @@ class engine : unmovable {
   std::string trace_display(std::string const &key) const;
   void process_fetch_dependencies(pkg *p);
 
+  // Intern DEFAULT_SHELL.DEPENDS, flag the closure, and start each package toward
+  // completion. Idempotent, and must run before any worker exists: a member's own
+  // string verbs need the carve-out in place, or the interpreter waits on itself.
+  void start_default_shell_deps();
+
+  // Whether `p` supplies the default shell rather than consuming it. Flags `p` when
+  // it answers yes by graph reachability rather than by an already-set closure bit.
+  bool is_default_shell_member(pkg *p);
+
+  // Wait for those packages, then evaluate the SHELL function against the
+  // bootstrap consumer. Called once, under default_shell_once_.
+  void resolve_default_shell_fn();
+
   // Publish `p`'s PRODUCTS into the project-wide registry, called by p's own
   // worker the instant its spec is known. Eager (not barrier-batched) so a
   // consumer whose dependency edge forced `p` through pkg_export is guaranteed
@@ -184,8 +206,20 @@ class engine : unmovable {
   void run_depot_step();                          // #depot step 0 (worker thread)
 
   cache &cache_;
-  default_shell_cfg_t default_shell_;
   manifest const *manifest_{ nullptr };  // For bundle fetch function lookup
+
+  // DEFAULT_SHELL: the declaration is parsed at construction (so a malformed one
+  // fails the run early), the function form evaluated at most once on first use.
+  // default_shell_error_ is written before the once_flag retires, read after.
+  default_shell_decl default_shell_decl_;
+  std::once_flag default_shell_deps_once_;
+  std::vector<pkg *> default_shell_deps_;  // written under default_shell_deps_once_
+  std::once_flag default_shell_once_;
+  std::atomic_bool default_shell_ready_{ false };  // retires the reachability re-check
+  default_shell_cfg_t default_shell_;
+  std::string default_shell_error_;
+  pkg_cfg const *default_shell_consumer_cfg_{ nullptr };
+  std::unique_ptr<pkg> default_shell_consumer_;
 
   // Depot state machine: importers block on the global condition until READY/
   // FAILED (or their own depot_bootstrap membership lands). depot_index_ is written
@@ -221,6 +255,10 @@ class engine : unmovable {
   // must be destroyed before the maps above.
   task_engine core_;
 };
+
+// engine::default_shell for `p`, or the platform built-in when `p` has no engine
+// (unit-test packages). Phase code reaches the manifest shell through here.
+resolved_shell pkg_default_shell(pkg *p);
 
 // Filter pkg_cfgs to those matching the current host platform.
 // Packages with empty platforms match all hosts.

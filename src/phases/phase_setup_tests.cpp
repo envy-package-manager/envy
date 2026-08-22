@@ -50,7 +50,7 @@ struct setup_test_fixture {
     p = std::unique_ptr<pkg>(new pkg{ .key = pkg_key(*cfg),
                                       .cfg = cfg,
                                       .cache_ptr = nullptr,
-                                      .default_shell_ptr = nullptr,
+                                      .eng = nullptr,
                                       .lua = std::move(lua_state),
                                       .lock = nullptr,
                                       .canonical_identity_hash = {},

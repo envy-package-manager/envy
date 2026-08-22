@@ -345,6 +345,20 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
   return depots;
 }
 
+// parse_shell_config_from_lua returns the flat variant; DEFAULT_SHELL stores the
+// nested one, where the two custom forms share a `custom_shell` arm.
+default_shell_value default_shell_from_lua(sol::object const &obj, char const *context) {
+  return std::visit(
+      match{ [](shell_choice c) -> default_shell_value { return c; },
+             [](custom_shell_file const &f) -> default_shell_value {
+               return custom_shell{ f };
+             },
+             [](custom_shell_inline const &i) -> default_shell_value {
+               return custom_shell{ i };
+             } },
+      parse_shell_config_from_lua(obj, context));
+}
+
 }  // namespace
 
 std::optional<std::string> const &envy_meta::cache_for_platform() const {
@@ -592,42 +606,91 @@ std::unique_ptr<manifest> manifest::load(char const *script,
               manifest_path);
 }
 
-default_shell_cfg_t manifest::get_default_shell() const {
-  if (!lua_) { return std::nullopt; }
+default_shell_decl manifest::get_default_shell() const {
+  std::lock_guard const lock(lua_mutex_);
+
+  if (!lua_) { return {}; }
 
   sol::object default_shell_obj{ (*lua_)["DEFAULT_SHELL"] };
-  if (!default_shell_obj.valid()) { return std::nullopt; }
+  if (!default_shell_obj.valid()) { return {}; }
 
-  // Helper to convert flat variant to nested variant structure
-  auto const convert_parsed{ [](resolved_shell const &parsed) -> default_shell_value {
-    return std::visit(match{ [](shell_choice c) -> default_shell_value { return c; },
-                             [](custom_shell_file const &f) -> default_shell_value {
-                               return custom_shell{ f };
-                             },
-                             [](custom_shell_inline const &i) -> default_shell_value {
-                               return custom_shell{ i };
-                             } },
-                      parsed);
-  } };
+  if (default_shell_obj.is<sol::protected_function>()) { return { .is_function = true }; }
 
-  if (default_shell_obj.is<sol::protected_function>()) {
-    sol::protected_function default_shell_func{
-      default_shell_obj.as<sol::protected_function>()
-    };
+  // A table carrying SHELL is the {DEPENDS, SHELL} wrapper; any other table is the
+  // custom-shell value form, whose 'file'/'inline' keys cannot collide with it.
+  if (default_shell_obj.is<sol::table>()) {
+    sol::table wrapper{ default_shell_obj.as<sol::table>() };
+    if (sol::object shell_obj{ wrapper["SHELL"] };
+        shell_obj.valid() && shell_obj.get_type() != sol::type::lua_nil) {
+      default_shell_decl decl{ .is_function = shell_obj.is<sol::protected_function>() };
 
-    // DEFAULT_SHELL functions can use envy.package() directly via phase context
-    sol::protected_function_result result{ default_shell_func() };
-    if (!result.valid()) {
-      sol::error err = result;
-      throw std::runtime_error("DEFAULT_SHELL function failed: " +
-                               std::string{ err.what() });
+      if (sol::object dep_obj{ wrapper["DEPENDS"] };
+          dep_obj.valid() && dep_obj.get_type() != sol::type::lua_nil) {
+        if (!dep_obj.is<sol::table>()) {
+          throw std::runtime_error(
+              "DEFAULT_SHELL DEPENDS must be a table of package identities");
+        }
+        sol::table dt{ dep_obj.as<sol::table>() };
+        for (size_t i{ 1 }; i <= dt.size(); ++i) {
+          sol::object d{ dt[i] };
+          if (!d.is<std::string>() || d.as<std::string>().empty()) {
+            throw std::runtime_error(
+                "DEFAULT_SHELL DEPENDS entries must be non-empty strings");
+          }
+          decl.depends.push_back(d.as<std::string>());
+        }
+      }
+
+      // Only a function is evaluated after its DEPENDS install; a value form is
+      // read here, before any package exists, so it could never name one.
+      if (!decl.depends.empty() && !decl.is_function) {
+        throw std::runtime_error("DEFAULT_SHELL DEPENDS requires SHELL to be a function");
+      }
+      if (!decl.is_function) {
+        decl.value = default_shell_from_lua(shell_obj, "DEFAULT_SHELL.SHELL");
+      }
+      return decl;
     }
-
-    return convert_parsed(
-        parse_shell_config_from_lua(result.get<sol::object>(), "DEFAULT_SHELL function"));
   }
 
-  return convert_parsed(parse_shell_config_from_lua(default_shell_obj, "DEFAULT_SHELL"));
+  return { .value = default_shell_from_lua(default_shell_obj, "DEFAULT_SHELL") };
+}
+
+default_shell_value manifest::run_default_shell_fn(void *phase_ctx) const {
+  std::lock_guard const lock(lua_mutex_);
+
+  if (!lua_) { throw std::runtime_error("DEFAULT_SHELL: manifest Lua state unavailable"); }
+
+  sol::state_view lua_view{ *lua_ };
+
+  sol::protected_function const shell_func{ [&]() -> sol::protected_function {
+    sol::object obj{ lua_view["DEFAULT_SHELL"] };
+    if (obj.is<sol::protected_function>()) { return obj.as<sol::protected_function>(); }
+    if (obj.is<sol::table>()) {
+      sol::object nested{ obj.as<sol::table>()["SHELL"] };
+      if (nested.is<sol::protected_function>()) {
+        return nested.as<sol::protected_function>();
+      }
+    }
+    throw std::runtime_error("DEFAULT_SHELL: function not found");
+  }() };
+
+  // RAII guard to clear registry on scope exit (including exceptions)
+  struct registry_guard {
+    sol::state_view &lua;
+    ~registry_guard() { lua.registry()[ENVY_PHASE_CTX_RIDX] = sol::lua_nil; }
+  } guard{ lua_view };
+
+  lua_view.registry()[ENVY_PHASE_CTX_RIDX] = phase_ctx;
+
+  sol::protected_function_result result{ shell_func() };
+  if (!result.valid()) {
+    sol::error err = result;
+    throw std::runtime_error("DEFAULT_SHELL function failed: " +
+                             std::string{ err.what() });
+  }
+
+  return default_shell_from_lua(result.get<sol::object>(), "DEFAULT_SHELL function");
 }
 
 std::optional<std::string> manifest::run_bundle_fetch(
