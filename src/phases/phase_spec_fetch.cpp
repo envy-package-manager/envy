@@ -1052,11 +1052,11 @@ void wire_dependency_graph(pkg *p, engine &eng) {
 
     if (dep_cfg->is_weak_reference()) {
       // No closure overlaps the window where the weak pass can satisfy a reference:
-      // depot bootstrap runs after the resolution loop has finished, a
+      // depot bootstrap runs after the resolution loop has finished; a
       // source.dependencies closure runs while the barrier is held shut by the
-      // consumer waiting on it, and a DEFAULT_SHELL closure is started at
+      // consumer waiting on it; a DEFAULT_SHELL closure is started at
       // target=completion before any worker exists, so it reaches its own string
-      // verbs well ahead of the barrier. Same refusal either way, named by the
+      // verbs well ahead of the barrier. Same refusal in every case, named by the
       // closure.
       //
       // Checked in the same critical section as the append, against the same mutex

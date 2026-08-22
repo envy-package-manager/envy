@@ -2084,6 +2084,13 @@ TEST_CASE("DEFAULT_SHELL: absent yields an empty decl") {
   CHECK(decl.depends.empty());
 }
 
+TEST_CASE("DEFAULT_SHELL: an explicit nil is absent, not a malformed value") {
+  auto const decl{ load_default_shell("DEFAULT_SHELL = nil") };
+  CHECK_FALSE(decl.is_function);
+  CHECK_FALSE(decl.value.has_value());
+  CHECK(decl.depends.empty());
+}
+
 TEST_CASE("DEFAULT_SHELL: ENVY_SHELL constant resolves at load") {
   auto const decl{ load_default_shell(std::string{ "DEFAULT_SHELL = " } + kNativeShell) };
   CHECK_FALSE(decl.is_function);
