@@ -1370,7 +1370,7 @@ PACKAGES = {{
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # The output should contain the full resolved path
-        self.assertIn("lib/libfoo.so", result.stdout)
+        self.assertPathContains(result.stdout, "lib/libfoo.so")
 
     def test_product_listing_includes_noscript(self):
         """envy product listing includes both script and noscript products."""

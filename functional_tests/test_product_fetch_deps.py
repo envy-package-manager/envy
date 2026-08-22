@@ -26,11 +26,6 @@ from pathlib import Path
 from .env import EnvyTestCase
 
 
-def slashes(path: str) -> str:
-    """A path with separators flattened, for comparing tails across platforms."""
-    return path.replace("\\", "/")
-
-
 # A cache-managed provider: its product resolves to pkg_path/jf, which only exists
 # once install has run. Asserting on that path is how these tests prove the edge
 # drove the provider all the way through install, not merely through spec_fetch.
@@ -140,10 +135,7 @@ PACKAGES = {{ {{ spec = "corp.thing@r1", bundle = "corp" }} }}
         self.assertEqual("spec_fetch", event["needed_by"])
         self.assertEqual("spec_fetch", event["current_phase"])
         # reason carries the resolved value; /pkg/ means install completed.
-        self.assertTrue(
-            slashes(event["reason"]).endswith("/pkg/jf"),
-            f"product did not resolve under the installed pkg dir: {event['reason']}",
-        )
+        self.assertPathEndsWith(event["reason"], "/pkg/jf")
 
     def test_explicit_product_pin_resolves(self):
         """`product =` on the entry pins the name to that provider, and still resolves."""
@@ -424,10 +416,7 @@ end
             self.assertEqual(1, len(events), f"jf{i}: {events}")
             self.assertTrue(events[0]["allowed"], events[0])
             self.assertEqual(f"local.tool{i}@v1", events[0]["provider"])
-            self.assertTrue(
-                slashes(events[0]["reason"]).endswith(f"/pkg/jf{i}"),
-                f"jf{i} resolved to {events[0]['reason']}",
-            )
+            self.assertPathEndsWith(events[0]["reason"], f"/pkg/jf{i}")
 
     def test_edge_must_belong_to_the_registry_provider(self):
         """The edge has to be *this* provider's, not merely one sharing its identity.

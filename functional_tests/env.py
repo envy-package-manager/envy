@@ -103,6 +103,25 @@ class EnvyTestCase(unittest.TestCase):
 
     # -- scratch space ------------------------------------------------------
 
+    def assertPathContains(self, haystack: str, needle: str, msg: str | None = None):
+        """Assert `needle` occurs in `haystack`, ignoring separator spelling.
+
+        Every path envy prints uses the platform's own separator, so a literal written
+        with forward slashes would only ever match on POSIX. Compare both flattened.
+        """
+        self.assertIn(
+            needle.replace("\\", "/"),
+            haystack.replace("\\", "/"),
+            msg if msg is not None else f"{needle!r} not in {haystack!r}",
+        )
+
+    def assertPathEndsWith(self, path: str, suffix: str):
+        """Assert `path` ends with `suffix`, ignoring separator spelling."""
+        self.assertTrue(
+            path.replace("\\", "/").endswith(suffix.replace("\\", "/")),
+            f"{path!r} does not end with {suffix!r}",
+        )
+
     def make_temp_dir(self, label: str = "dir") -> Path:
         """A temp directory removed when the test ends, however it ends."""
         path = Path(tempfile.mkdtemp(prefix=f"envy-test-{label}-"))
