@@ -1062,13 +1062,11 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       // package joins a closure holding a reference nothing can resolve: either the
       // mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
-      for (auto const kind :
-           { pkg_closure::depot_bootstrap, pkg_closure::fetch }) {
+      for (auto const kind : { pkg_closure::depot_bootstrap, pkg_closure::fetch }) {
         if (p->in_closure(kind)) {
-          throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
-                                   " must use strong dependencies: '" + query +
-                                   "' in spec '" + p->cfg->identity +
-                                   "' is a weak reference");
+          throw std::runtime_error(
+              std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
+              query + "' in spec '" + p->cfg->identity + "' is a weak reference");
         }
       }
       p->weak_references.push_back(pkg::weak_reference{

@@ -786,7 +786,8 @@ TEST_CASE("mark_closure: unresolved weak reference is rejected") {
 
   CHECK_THROWS_WITH(fx.eng.mark_closure(p.get(), pkg_closure::fetch),
                     doctest::Contains("must use strong dependencies"));
-  CHECK(p->in_closure(pkg_closure::fetch));  // flag is set before the throw; marking is not retried
+  CHECK(p->in_closure(
+      pkg_closure::fetch));  // flag is set before the throw; marking is not retried
 }
 
 TEST_CASE("mark_closure: already-resolved weak reference is accepted") {
@@ -839,7 +840,8 @@ TEST_CASE("mark_closure: is idempotent and terminates on a dependency cycle") {
   CHECK_NOTHROW(fx.eng.mark_closure(a.get(), pkg_closure::fetch));
   CHECK(a->in_closure(pkg_closure::fetch));
   CHECK(b->in_closure(pkg_closure::fetch));
-  CHECK_NOTHROW(fx.eng.mark_closure(a.get(), pkg_closure::fetch));  // second call is a no-op
+  CHECK_NOTHROW(
+      fx.eng.mark_closure(a.get(), pkg_closure::fetch));  // second call is a no-op
 }
 
 TEST_CASE("mark_closure: memberships are independent bits") {

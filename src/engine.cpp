@@ -931,9 +931,8 @@ void engine::mark_closure(pkg *p, pkg_closure kind) {
     }() };
     if (!unresolved.empty()) {
       throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
-                               " must use strong dependencies: '" +
-                               member->cfg->identity + "' holds a weak reference to '" +
-                               unresolved +
+                               " must use strong dependencies: '" + member->cfg->identity +
+                               "' holds a weak reference to '" + unresolved +
                                "' but runs outside the window where weak references "
                                "resolve");
     }
