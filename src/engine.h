@@ -138,6 +138,10 @@ class engine : unmovable {
   // so that reference is guaranteed to resolve too late to order anything.
   void mark_fetch_closure(pkg *p);
 
+  // Carry both closure memberships from a package to a dependency just wired to
+  // it. Every wiring site calls this, so a new closure kind is one edit here.
+  void propagate_closures(pkg *from, pkg *to);
+
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
   export_phase_config const *export_config() const;

@@ -29,7 +29,7 @@ race -- the same manifest failing loudly or miscompiling silently, run to run.
 
 from pathlib import Path
 
-from .env import EnvyTestCase
+from .env import EnvyRun, EnvyTestCase
 
 
 PROVIDER_SPEC = """IDENTITY = "local.prov@v1"
@@ -101,6 +101,16 @@ PACKAGES = {{
 """
         )
 
+    def sync_closure(self, dependencies: str, extra_packages: str = "") -> EnvyRun:
+        """Run local.p@v1 as the bundle's sole fetch dependency, declaring `dependencies`."""
+        spec = self.closure_pkg("p.lua", "local.p@v1", dependencies)
+        return self.sync(
+            self.bundle_manifest(
+                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}',
+                extra_packages,
+            )
+        )
+
     def prov_entry(self, needed_by: str = "build") -> str:
         return (
             f'{{ spec = "local.prov@v1", source = "{self.lua_path(self.prov)}", '
@@ -119,28 +129,12 @@ PACKAGES = {{
 
     def test_weak_product_ref_in_closure_is_rejected(self):
         """A fetch dependency may not hold a weak product reference."""
-        spec = self.closure_pkg(
-            "p.lua", "local.p@v1", '{ product = "wk", needed_by = "build" }'
-        )
-        run = self.sync(
-            self.bundle_manifest(
-                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}',
-                self.prov_root(),
-            )
-        )
+        run = self.sync_closure('{ product = "wk", needed_by = "build" }', self.prov_root())
         self.assertRejected(run, "must use strong dependencies", "wk")
 
     def test_weak_identity_ref_in_closure_is_rejected(self):
         """Reference-only entries are rejected on the same grounds as product ones."""
-        spec = self.closure_pkg(
-            "p.lua", "local.p@v1", '{ spec = "local.prov", needed_by = "build" }'
-        )
-        run = self.sync(
-            self.bundle_manifest(
-                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}',
-                self.prov_root(),
-            )
-        )
+        run = self.sync_closure('{ spec = "local.prov", needed_by = "build" }', self.prov_root())
         self.assertRejected(run, "must use strong dependencies", "local.prov")
 
     def test_transitive_closure_member_weak_ref_is_rejected(self):
@@ -152,15 +146,7 @@ PACKAGES = {{
         this case stays silently broken.
         """
         self.closure_pkg("r.lua", "local.r@v1", '{ product = "wk", needed_by = "build" }')
-        spec = self.closure_pkg(
-            "p.lua", "local.p@v1", '{ spec = "local.r@v1", source = "r.lua" }'
-        )
-        run = self.sync(
-            self.bundle_manifest(
-                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}',
-                self.prov_root(),
-            )
-        )
+        run = self.sync_closure('{ spec = "local.r@v1", source = "r.lua" }', self.prov_root())
         self.assertRejected(run, "must use strong dependencies", "local.r@v1", "wk")
 
     def test_spec_declared_fetch_dep_closure_is_rejected(self):
@@ -208,15 +194,10 @@ PACKAGES = {{
         which check fires is not. That is the point: without the second check the
         error itself would be racy.
         """
-        spec = self.closure_pkg(
-            "p.lua", "local.p@v1", '{ product = "wk", needed_by = "build" }'
-        )
-        run = self.sync(
-            self.bundle_manifest(
-                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}',
-                self.prov_root() + f'\n  {{ spec = "local.p@v1", '
-                f'source = "{self.lua_path(spec)}" }},',
-            )
+        run = self.sync_closure(
+            '{ product = "wk", needed_by = "build" }',
+            self.prov_root() + f'\n  {{ spec = "local.p@v1", '
+            f'source = "{self.lua_path(self.work / "p.lua")}" }},',
         )
         self.assertRejected(run, "strong dependencies", "wk")
 
@@ -251,12 +232,7 @@ PACKAGES = {{
         strong ones are genuinely ordered. Asserted on the trace rather than on exit
         status, because a silent violation is exactly what exits 0.
         """
-        spec = self.closure_pkg("p.lua", "local.p@v1", self.prov_entry())
-        run = self.sync(
-            self.bundle_manifest(
-                f'{{ spec = "local.p@v1", source = "{self.lua_path(spec)}" }}'
-            )
-        )
+        run = self.sync_closure(self.prov_entry())
 
         self.assertEqual(0, run.returncode, run.stderr)
         prov_installed = [

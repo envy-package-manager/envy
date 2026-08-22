@@ -1025,6 +1025,9 @@ void wire_dependency_graph(pkg *p, engine &eng) {
                                          ? static_cast<pkg_phase>(*dep_cfg->needed_by)
                                          : pkg_phase::pkg_build };
     bool const is_product_dep{ dep_cfg->product.has_value() };
+    // What a weak reference for this entry resolves on: the product name when there
+    // is one, else the identity.
+    std::string const &query{ is_product_dep ? *dep_cfg->product : dep_cfg->identity };
 
     if (is_product_dep) {
       std::string const &product_name{ *dep_cfg->product };
@@ -1048,31 +1051,27 @@ void wire_dependency_graph(pkg *p, engine &eng) {
     }
 
     if (dep_cfg->is_weak_reference()) {
-      if (p->depot_bootstrap) {
-        // Bootstrap packages may run after the resolution loop has finished,
-        // so weak/product references could never resolve.
-        throw std::runtime_error(
-            "package-depot dependency closure must use strong dependencies: '" +
-            (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
-            p->cfg->identity + "' is a weak reference");
-      }
+      // Neither closure overlaps the window where the weak pass can satisfy a
+      // reference: depot bootstrap runs after the resolution loop has finished, and a
+      // source.dependencies closure runs while the barrier is held shut by the
+      // consumer waiting on it. Same refusal either way.
+      auto const reject{ [&](char const *closure) {
+        throw std::runtime_error(std::string{ closure } +
+                                 " must use strong dependencies: '" + query +
+                                 "' in spec '" + p->cfg->identity +
+                                 "' is a weak reference");
+      } };
+      if (p->depot_bootstrap) { reject("package-depot dependency closure"); }
+
       // Check the flag in the same critical section as the append, against the same
       // mutex mark_fetch_closure scans under. Checking outside it would leave a
       // window where the mark sees no weak reference and this sees no flag, so the
       // package enters the closure holding a reference nothing can resolve: either
       // the mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
-      if (p->fetch_closure) {
-        // This package runs its whole ladder while the resolution barrier is held
-        // shut by the consumer waiting on its closure, so the weak pass could only
-        // resolve this after the phase that declared it needed it.
-        throw std::runtime_error(
-            "source.dependencies closure must use strong dependencies: '" +
-            (is_product_dep ? *dep_cfg->product : dep_cfg->identity) + "' in spec '" +
-            p->cfg->identity + "' is a weak reference");
-      }
+      if (p->fetch_closure) { reject("source.dependencies closure"); }
       p->weak_references.push_back(pkg::weak_reference{
-          .query = is_product_dep ? *dep_cfg->product : dep_cfg->identity,
+          .query = query,
           .fallback = dep_cfg->weak,
           .needed_by = needed_by_phase,
           .resolved = nullptr,
@@ -1093,8 +1092,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         pd.provider = dep;
         pd.constraint_identity = dep_cfg->identity;
       }
-      if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+      eng.propagate_closures(p, dep);
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1115,8 +1113,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
         std::lock_guard const deps_lock(p->deps_mutex);
         p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
       }
-      if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-      if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+      eng.propagate_closures(p, dep);
       ENVY_TRACE(dependency_added,
                  p->cfg->identity,
                  .dependency = dep_cfg->identity,
@@ -1135,8 +1132,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       std::lock_guard const deps_lock(p->deps_mutex);
       p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
     }
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    eng.propagate_closures(p, dep);
     ENVY_TRACE(dependency_added,
                p->cfg->identity,
                .dependency = dep_cfg->identity,

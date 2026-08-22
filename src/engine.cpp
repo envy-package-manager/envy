@@ -67,6 +67,16 @@ constexpr bool is_setup_pair_key(std::string_view key) {
   return key.find("#setup:") != std::string_view::npos;
 }
 
+// Dependency pointers copied out under the lock: a closure walk recurses, and no
+// two pkg locks may nest.
+std::vector<pkg *> snapshot_dependencies(pkg const *p) {
+  std::lock_guard const deps_lock(p->deps_mutex);
+  std::vector<pkg *> snapshot;
+  snapshot.reserve(p->dependencies.size());
+  for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
+  return snapshot;
+}
+
 bool has_dependency_path(pkg const *from, pkg const *to) {
   if (from == to) { return true; }
 
@@ -208,8 +218,7 @@ void resolve_identity_ref(pkg *p,
 
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    eng.propagate_closures(p, dep);
     {
       std::lock_guard const deps_lock(p->deps_mutex);
       wr->resolved = dep;
@@ -246,8 +255,7 @@ void resolve_identity_ref(pkg *p,
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    eng.propagate_closures(p, dep);
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -309,8 +317,7 @@ void resolve_product_ref(pkg *p,
 
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    eng.propagate_closures(p, dep);
     set_product_provider(dep);
     trace_product_resolution(p, wr, dep, "registry");
     ++result.resolved;
@@ -323,8 +330,7 @@ void resolve_product_ref(pkg *p,
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    if (p->depot_bootstrap) { eng.mark_depot_bootstrap(dep); }
-    if (p->fetch_closure) { eng.mark_fetch_closure(dep); }
+    eng.propagate_closures(p, dep);
 
     std::vector<std::string> child_chain{ p->ancestor_chain };
     child_chain.push_back(p->cfg->identity);
@@ -346,17 +352,7 @@ bool pkg_provides_product_transitively_impl(pkg *p,
     if (p->products.contains(product_name)) { return true; }
   }
 
-  auto const deps{ [&] {
-    std::lock_guard const deps_lock(p->deps_mutex);
-    std::vector<std::pair<std::string, pkg *>> snapshot;
-    snapshot.reserve(p->dependencies.size());
-    for (auto const &[dep_id, dep_info] : p->dependencies) {
-      snapshot.emplace_back(dep_id, dep_info.p);
-    }
-    return snapshot;
-  }() };
-
-  for (auto const &[dep_id, dep] : deps) {
+  for (auto *dep : snapshot_dependencies(p)) {
     if (pkg_provides_product_transitively_impl(dep, product_name, visited)) {
       return true;
     }
@@ -905,15 +901,7 @@ void engine::run_depot_step() {
 void engine::mark_depot_bootstrap(pkg *p) {
   if (p->depot_bootstrap.exchange(true)) { return; }
 
-  // Snapshot then recurse without holding the lock (no nested pkg locks).
-  auto const deps{ [&] {
-    std::lock_guard const deps_lock(p->deps_mutex);
-    std::vector<pkg *> snapshot;
-    snapshot.reserve(p->dependencies.size());
-    for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
-    return snapshot;
-  }() };
-  for (auto *dep : deps) { mark_depot_bootstrap(dep); }
+  for (auto *dep : snapshot_dependencies(p)) { mark_depot_bootstrap(dep); }
 
   core_.notify_global();  // Wake a depot wait this package may be blocked in
 }
@@ -921,22 +909,16 @@ void engine::mark_depot_bootstrap(pkg *p) {
 void engine::mark_fetch_closure(pkg *p) {
   if (p->fetch_closure.exchange(true)) { return; }
 
-  // Snapshot then recurse without holding the lock (no nested pkg locks). The
-  // unresolved-weak check has to happen here as well as at declaration time: a
-  // package can complete spec_fetch as a root — registering its weak references
-  // and passing that check — before another package names it in
-  // source.dependencies and ratchets it through the whole ladder. Only
-  // *unresolved* references are a violation; one already resolved at an earlier
-  // barrier is wired and ordered.
-  auto const [deps, unresolved]{ [&] {
+  // The unresolved-weak check happens here as well as at declaration time: a package
+  // can complete spec_fetch as a root — registering its weak references and passing
+  // that check — before another package names it in source.dependencies and ratchets
+  // it through the whole ladder. Only *unresolved* references are a violation; one
+  // already resolved at an earlier barrier is wired and ordered.
+  auto const unresolved{ [p] {
     std::lock_guard const deps_lock(p->deps_mutex);
-    std::vector<pkg *> snapshot;
-    snapshot.reserve(p->dependencies.size());
-    for (auto const &[_, dep_info] : p->dependencies) { snapshot.push_back(dep_info.p); }
     auto const it{ std::ranges::find_if(p->weak_references,
                                         [](auto const &wr) { return !wr.resolved; }) };
-    return std::pair{ std::move(snapshot),
-                      it == p->weak_references.end() ? std::string{} : it->query };
+    return it == p->weak_references.end() ? std::string{} : it->query;
   }() };
 
   if (!unresolved.empty()) {
@@ -946,7 +928,12 @@ void engine::mark_fetch_closure(pkg *p) {
         "' but runs during graph resolution, before weak references resolve");
   }
 
-  for (auto *dep : deps) { mark_fetch_closure(dep); }
+  for (auto *dep : snapshot_dependencies(p)) { mark_fetch_closure(dep); }
+}
+
+void engine::propagate_closures(pkg *from, pkg *to) {
+  if (from->depot_bootstrap) { mark_depot_bootstrap(to); }
+  if (from->fetch_closure) { mark_fetch_closure(to); }
 }
 
 bundle *engine::register_bundle(std::string const &identity,

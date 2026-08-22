@@ -61,7 +61,8 @@ struct pkg {
 
   // Execution mirror: the phase currently executing on this package's worker
   // (written by the engine's step wrapper, read by lua_ctx access gating) and
-  // whether spec_fetch has completed (read by product-registry updates).
+  // whether spec_fetch has completed (read on failure, to balance the pending
+  // spec-fetch count exactly once).
   std::atomic<pkg_phase> current_phase{ pkg_phase::none };
   std::atomic_bool spec_fetch_completed{ false };
 
