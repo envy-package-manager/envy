@@ -1095,12 +1095,18 @@ void print_stdout(char const *fmt, ...) {
 
 void pause_rendering() {
   std::lock_guard lock{ s_tui.mutex };
-  if (is_ansi_supported() && s_progress.last_line_count > 0) {
-    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count);
-    std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
-    s_progress.last_line_count = 0;
-    std::fflush(stderr);
+  if (!is_ansi_supported() || s_progress.last_line_count == 0) { return; }
+
+  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew:
+  // stepping up one *less* than the row count lands on the first row. Stepping up the
+  // full count lands a line higher and erases a line the section area never owned.
+  std::fprintf(stderr, "\r");
+  if (s_progress.last_line_count > 1) {
+    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
   }
+  std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
+  s_progress.last_line_count = 0;
+  std::fflush(stderr);
 }
 
 void resume_rendering() {
@@ -1150,6 +1156,13 @@ void section_set_complete(section_handle h) {
       it != s_progress.sections.end()) {
     it->complete = true;
   }
+}
+
+void sections_clear() {
+  if (!s_progress.enabled) { return; }
+
+  std::lock_guard lock{ s_tui.mutex };
+  s_progress.sections.clear();
 }
 
 void section_delete(section_handle h) {

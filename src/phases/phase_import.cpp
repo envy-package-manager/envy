@@ -102,14 +102,10 @@ void run_import_phase(pkg *p, engine &eng) {
     // SHA256 verification when present (text manifests always supply it;
     // only build_from_directory without checksums omits it).
     if (location->sha256) {
-      tui::section_set_content(
-          p->tui_section,
-          tui::section_frame{ .label = label,
-                              .content = tui::spinner_data{
-                                  .text = "verifying SHA256...",
-                                  .start_time = std::chrono::steady_clock::now() } });
-
-      auto const actual{ sha256(archive_path) };
+      auto const actual{ tui_actions::sha256_tracked(archive_path,
+                                                     p->tui_section,
+                                                     p->cfg->identity,
+                                                     "verifying") };
       auto const actual_hex{ util_bytes_to_hex(actual.data(), actual.size()) };
       if (actual_hex != *location->sha256) {
         ENVY_TRACE(depot_check,

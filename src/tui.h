@@ -120,6 +120,11 @@ void section_set_complete(section_handle h);
 void section_delete(section_handle h);
 bool section_has_content(section_handle h);
 
+// Drop every row. For handing the terminal to someone else: whatever is on screen is
+// erased by the interactive-mode guard, and nothing may be painted back over output that
+// is no longer ours.
+void sections_clear();
+
 // Interactive mode API
 void acquire_interactive_mode();
 void release_interactive_mode();
