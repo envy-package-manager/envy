@@ -93,8 +93,8 @@ class scan_pool : unmovable {
       total.files.fetch_add(acc.files);
       total.dirs.fetch_add(acc.dirs);
 
-      // Snapshot under the lock, report outside it: the callback is arbitrary work (a
-      // TUI update), and every other worker needs this mutex once per directory.
+      // Snapshot under the lock, report outside it: the callback is arbitrary work, and
+      // every other worker needs this mutex once per directory.
       dir_size snapshot{};
       bool report{ false };
       {

@@ -115,10 +115,8 @@ int reexec_exec(reexec_request const &request, char **argv) {
   auto child_argv{ reexec_child_argv(request, argv) };  // not const: exec wants char **
   tui::info("reexec: switching to envy at %s", request.binary.string().c_str());
 
-  // The child owns the terminal from here: on POSIX this process is replaced outright and
-  // never renders again, on Windows it sits waiting. Either way the download and unpack
-  // rows come down first, so the child's output starts on a line of its own and no final
-  // render paints them back over it.
+  // The child owns the terminal from here: POSIX replaces this process, Windows waits. The
+  // rows come down first so its output starts clean and no final render paints them back.
   tui::sections_clear();
   tui::interactive_mode_guard const terminal_handoff;
 

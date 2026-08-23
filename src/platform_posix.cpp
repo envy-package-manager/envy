@@ -154,10 +154,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
 
-    // Probe before committing to the blocking call: a refusal means another process
-    // holds the entry, so the wait is open-ended — the only kind worth announcing. The
-    // in-process mutex above is deliberately not announced: it serializes threads of
-    // this run, which the engine already keys apart, and "another envy" would be a lie.
+    // Probe first: a refusal means another process holds the entry, so the wait below is
+    // open-ended — the only kind worth announcing. The mutex above serializes threads of
+    // this run, which the engine already keys apart, so it stays silent.
     if (::fcntl(fd, F_SETLK, &fl) == -1) {
       if ((errno == EAGAIN || errno == EACCES) && on_contended) { on_contended(); }
 

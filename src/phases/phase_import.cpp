@@ -163,8 +163,8 @@ void run_import_phase(pkg *p, engine &eng) {
         status += util_format_bytes(bytes_done);
       }
 
-      // The pre-scan sized nothing, so there is no total to divide by: spin on the
-      // running counts rather than show a bar that never leaves 0%.
+      // The pre-scan sized nothing, so there is nothing to divide by: spin on the running
+      // counts rather than draw a bar that never leaves 0%.
       if (totals.files == 0 && totals.bytes == 0) {
         tui::section_set_content(p->tui_section,
                                  tui::section_frame{ .label = label,

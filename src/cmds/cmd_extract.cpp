@@ -65,8 +65,8 @@ void cmd_extract::execute() {
             cfg_.archive_path.filename().string().c_str(),
             destination.string().c_str());
 
-  // No pre-scan, so no total: the row spins on the running counts and lands on a full bar
-  // once the archive is out. The section outlives the call as the command's record of it.
+  // No pre-scan, so no total: the row spins on running counts, then lands on a full bar.
+  // It outlives the call as the command's record of the work.
   auto const section{ tui::section_create() };
   tui_actions::extract_progress_tracker tracker{ section,
                                                  "extract",

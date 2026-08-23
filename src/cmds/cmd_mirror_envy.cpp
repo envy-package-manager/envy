@@ -317,8 +317,8 @@ void cmd_mirror_envy::execute() {
     for (auto &t : workers) { t.join(); }
   }
 
-  // Same bargain as a download row: a finished upload keeps its full bar as the record, a
-  // failed one yields the row to the error text below.
+  // Same bargain as a download row: a finished upload keeps its full bar, a failed one
+  // yields the row to the error text below.
   if (std::ranges::all_of(errors, [](std::string const &e) { return e.empty(); })) {
     upload_tracker.finish();
   } else {

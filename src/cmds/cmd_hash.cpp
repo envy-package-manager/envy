@@ -51,8 +51,8 @@ void cmd_hash::execute() {
     throw std::runtime_error("hash: at least one path is required");
   }
 
-  // One row for the command, reused per file: hashing a multi-hundred-megabyte archive is
-  // a wait, and the digests themselves go to stdout.
+  // One row for the command, reused per file: a big archive is a real wait, and the
+  // digests themselves go to stdout.
   auto const section{ tui::section_create() };
 
   for (auto const &path : cfg_.paths) {

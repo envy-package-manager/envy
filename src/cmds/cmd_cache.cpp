@@ -116,8 +116,8 @@ void cmd_cache::execute() {
     if (e.name != "packages" && e.name != "envy") { add(other, e.name, root / e.name); }
   }
 
-  // A recursive walk of every cache tree: seconds on a populated cache, and the total is
-  // unknowable until it ends, so the row spins on what has been counted so far.
+  // Seconds on a populated cache, and no total is knowable until the walk ends: the row
+  // spins on what has been counted so far.
   auto const scan_section{ tui::section_create() };
   auto const scan_start{ std::chrono::steady_clock::now() };
   auto const sizes{ platform::dir_sizes(

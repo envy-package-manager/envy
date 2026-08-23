@@ -87,8 +87,8 @@ import_result import_one_archive(cache &c,
     return { parsed->identity, result.pkg_path, true, false };
   }
 
-  // A lone archive is extracted without a pre-scan, so no total is knowable: the tracker
-  // spins on the running counts and lands on a full bar when the archive is out.
+  // No pre-scan for a lone archive, so no total: the tracker spins on the running counts
+  // and lands on a full bar once the archive is out.
   std::optional<tui_actions::extract_progress_tracker> tracker;
   if (section) {
     tracker.emplace(section, parsed->identity, archive_path.filename().string());

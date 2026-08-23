@@ -92,8 +92,8 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
                             "Failed to open lock file: " + path.string());
   }
 
-  // Probe before committing to the blocking call: a refusal means someone else holds the
-  // entry, so the wait is open-ended — the only kind worth announcing.
+  // Probe first: a refusal means someone else holds the entry, so the wait below is
+  // open-ended — the only kind worth announcing.
   OVERLAPPED probe{};
   if (!::LockFileEx(h,
                     LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
@@ -101,8 +101,7 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
                     MAXDWORD,
                     MAXDWORD,
                     &probe)) {
-    // Only a held lock is contention; a bad handle or an I/O error is not, and the
-    // blocking call below reports it for what it is.
+    // A held lock is contention; a bad handle is not, and the call below reports it.
     if (::GetLastError() == ERROR_LOCK_VIOLATION && on_contended) { on_contended(); }
 
     OVERLAPPED ovlp{};

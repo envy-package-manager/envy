@@ -1097,9 +1097,8 @@ void pause_rendering() {
   std::lock_guard lock{ s_tui.mutex };
   if (!is_ansi_supported() || s_progress.last_line_count == 0) { return; }
 
-  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew:
-  // stepping up one *less* than the row count lands on the first row. Stepping up the
-  // full count lands a line higher and erases a line the section area never owned.
+  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
+  // one *less* than the row count. The full count erases a line the region never owned.
   std::fprintf(stderr, "\r");
   if (s_progress.last_line_count > 1) {
     std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);

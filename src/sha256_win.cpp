@@ -22,9 +22,8 @@ sha256_t sha256(std::filesystem::path const &file_path,
     throw std::runtime_error("sha256: file does not exist: " + file_path.string());
   }
 
-  // A length is what makes hashing a bar rather than a spinner. When the stat fails there
-  // is nothing to divide by, so no per-chunk update is reported at all — only the single
-  // terminal one below, which also gives an empty file a row of its own.
+  // A length is what makes this a bar. Without one, no per-chunk report goes out at all —
+  // only the terminal one below, which also gives an empty file a row.
   std::error_code size_ec;
   auto const total{ std::filesystem::file_size(file_path, size_ec) };
   bool const total_known{ !size_ec };

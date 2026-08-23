@@ -70,9 +70,8 @@ class cache : unmovable {
     scoped_entry_lock::ptr_t lock;  // if present, lock held for installation
   };
 
-  // `on_lock_contended` fires when another envy already holds this entry and the call is
-  // about to block on it for as long as that one takes. It is the caller's chance to say
-  // so on screen; see tui_actions::lock_wait_spinner.
+  // `on_lock_contended` fires when another envy holds this entry and this call is about to
+  // block on it for however long that takes. See tui_actions::lock_wait_spinner.
   ensure_result ensure_pkg(std::string_view identity,
                            std::string_view platform,
                            std::string_view arch,

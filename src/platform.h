@@ -39,8 +39,8 @@ namespace envy::platform {
 
 class file_lock : uncopyable {
  public:
-  // Called once, before blocking, when the lock is already held. The wait is unbounded —
-  // another envy owns the entry — so a caller can put a row up instead of looking hung.
+  // Called once before blocking, when the lock is already held. That wait is unbounded —
+  // another envy owns the entry — so a caller can draw a row instead of looking hung.
   using contended_cb_t = std::function<void()>;
 
   explicit file_lock(std::filesystem::path const &path, contended_cb_t on_contended = {});
@@ -89,9 +89,8 @@ struct dir_size {
 // Immediate children of `dir`, in filesystem order; empty if unreadable.
 std::vector<dir_entry> dir_list(std::filesystem::path const &dir);
 
-// Running totals summed across every root, reported from a worker thread at most ~20x a
-// second. The end total is unknowable until the walk finishes, so a caller drawing this
-// draws an indeterminate spinner, never a bar.
+// Running totals across every root, reported from a worker thread at most ~20x a second.
+// No end total until the walk finishes, so a caller draws a spinner, never a bar.
 using dir_scan_progress = std::function<void(dir_size const &running)>;
 
 // Measure every root concurrently; results are index-aligned with `roots`.

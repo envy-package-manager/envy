@@ -180,9 +180,8 @@ void fetch_all_progress_tracker::update_transfer(std::size_t slot,
 
   std::string const &item_label = children_[slot].label;
 
-  // curl advertises no length until the headers land, and none again once the handle
-  // winds down. A total, once seen, sticks — otherwise a download ending on one of those
-  // length-less callbacks snaps its bar back to 0% just as it completes.
+  // curl advertises no length until the headers land, and none again as the handle winds
+  // down. A total, once seen, sticks — else the bar snaps to 0% just as it completes.
   slot_total const total{ [&] {
     std::lock_guard const lock{ mutex_ };
     slot_total &st{ slot_totals_[slot] };
@@ -449,9 +448,8 @@ std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
 
   auto results{ fetch(requests, std::move(trace_spec)) };
 
-  // A completed download is the command's only record of itself, so its row stays and the
-  // final render leaves it on screen at 100%. A failure has an error to speak for it, and
-  // a bar frozen mid-transfer would only muddy that, so the row goes away.
+  // A finished download is the command's record of itself, so its row stays for the final
+  // render to leave at 100%. A failure has an error to speak for it, so the row goes.
   if (std::ranges::all_of(results, [](fetch_result_t const &r) {
         return std::holds_alternative<fetch_result>(r);
       })) {

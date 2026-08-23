@@ -31,9 +31,9 @@ cmd_git_resolve::cmd_git_resolve(
     : cfg_{ std::move(cfg) } {}
 
 void cmd_git_resolve::execute() {
-  // A ref advertisement is a network round trip that reports nothing along the way, so the
-  // row is a bare spinner. It goes away once the sha is in hand — stdout carries the
-  // answer, and a finished spinner says nothing.
+  // A ref advertisement reports nothing along the way, so the row is a bare spinner. It
+  // goes once the sha is in hand: stdout carries the answer, and a stopped spinner says
+  // nothing.
   auto const section{ tui::section_create() };
   tui::section_set_content(
       section,

@@ -354,8 +354,7 @@ struct extract_tui_state {
 
   void update_progress(bool terminal = false) {
     bool const known{ totals.files > 0 || totals.bytes > 0 };
-    // Clamped by hand, not std::min: archive.h drags in windows.h without NOMINMAX (this
-    // file does not include platform.h, which is where that is set), so `min` is a macro.
+    // Clamped by hand: archive.h drags in windows.h without NOMINMAX, so `min` is a macro.
     double const percent{ [&]() -> double {
       if (terminal) { return 100.0; }
       double raw{ 0.0 };
@@ -382,8 +381,8 @@ struct extract_tui_state {
     std::string const text{ (grouped || item.empty()) ? status.str()
                                                       : status.str() + " " + item };
 
-    // The pre-scan came up empty (an archive whose entries it could not size), so there
-    // is nothing to divide by: spin on the running counts instead of a 0% bar.
+    // The pre-scan sized nothing, so there is nothing to divide by: spin on the running
+    // counts instead of a bar stuck at 0%.
     auto const kids{ grouped ? children : std::vector<tui::section_frame>{} };
     if (!known && !terminal) {
       tui::section_set_content(
@@ -436,8 +435,8 @@ struct extract_tui_state {
     return true;
   }
 
-  // Everything is unpacked, but the counters trail the pre-scan totals (a directory or
-  // symlink entry is not a counted file) and the last archive is still marked in-flight.
+  // Everything is out, but the counters trail the pre-scan totals (a directory entry is
+  // not a counted file) and the last archive still reads in-flight.
   void finish() {
     if (current_file_idx && *current_file_idx < children.size()) {
       children[*current_file_idx].content = tui::static_text_data{ .text = "done" };
