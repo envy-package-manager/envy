@@ -251,14 +251,12 @@ void cmd_mirror_envy::execute() {
   for (auto const &item : plan.items) {
     if (item.relpath == plan.sums_relpath) { continue; }
     auto const name{ fs::path{ item.relpath }.filename().string() };
-    envy_release_verify_artifact(staging / item.relpath,
-                                 name,
-                                 sums_text,
-                                 "mirror-envy",
-                                 tui_actions::byte_progress_bar(attest_section,
-                                                                "mirror-envy",
-                                                                "attesting",
-                                                                name));
+    envy_release_verify_artifact(
+        staging / item.relpath,
+        name,
+        sums_text,
+        "mirror-envy",
+        tui_actions::byte_progress_bar(attest_section, "mirror-envy", "attesting", name));
   }
   tui::debug("attested %zu archives against %s",
              plan.items.size() - 1,

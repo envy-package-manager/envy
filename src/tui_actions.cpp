@@ -114,9 +114,9 @@ void extract_progress_tracker::publish(extract_progress const &prog, bool termin
     if (prog.total_files && *prog.total_files > 0) {
       return std::min(100.0, (files / static_cast<double>(*prog.total_files)) * 100.0);
     }
-    return std::min(100.0,
-                    (prog.bytes_processed / static_cast<double>(*prog.total_bytes)) *
-                        100.0);
+    return std::min(
+        100.0,
+        (prog.bytes_processed / static_cast<double>(*prog.total_bytes)) * 100.0);
   }() };
 
   tui::section_set_content(
@@ -206,10 +206,11 @@ void fetch_all_progress_tracker::update_transfer(std::size_t slot,
   // No advertised length — chunked or streamed. Bytes so far are all anyone can know, so
   // they ride a spinner instead of a bar that would read 0% start to finish.
   if (!total.bytes_known) {
-    set_frame(slot,
-              tui::section_frame{ .label = item_label,
-                                  .content = tui::spinner_data{
-                                      .text = oss.str(), .start_time = start_time_ } });
+    set_frame(
+        slot,
+        tui::section_frame{ .label = item_label,
+                            .content = tui::spinner_data{ .text = oss.str(),
+                                                          .start_time = start_time_ } });
     return;
   }
 
@@ -406,9 +407,9 @@ byte_progress_cb_t byte_progress_bar(tui::section_handle section,
           label = "[" + row_label + "]",
           verb = std::move(verb),
           item = std::move(item)](std::uint64_t done, std::uint64_t total) {
-    auto const percent{
-      total ? std::min(100.0, (done / static_cast<double>(total)) * 100.0) : 100.0
-    };
+    auto const percent{ total
+                            ? std::min(100.0, (done / static_cast<double>(total)) * 100.0)
+                            : 100.0 };
     std::ostringstream status;
     status << verb << " " << util_format_bytes(done) << "/" << util_format_bytes(total);
     if (!item.empty()) { status << " " << item; }
@@ -426,11 +427,9 @@ sha256_t sha256_tracked(std::filesystem::path const &file,
                         tui::section_handle section,
                         std::string const &row_label,
                         std::string verb) {
-  return sha256(file,
-                byte_progress_bar(section,
-                                  row_label,
-                                  std::move(verb),
-                                  file.filename().string()));
+  return sha256(
+      file,
+      byte_progress_bar(section, row_label, std::move(verb), file.filename().string()));
 }
 
 // ==== run_shell_with_progress ====

@@ -137,12 +137,15 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
   } };
 
   // Acquire in-process mutex for this lock path, ensure one thread per cache entry
-  std::unique_lock<std::mutex> path_lock{ *[&]() {
-    std::lock_guard<std::mutex> lock(impl::s_lock_map_mutex);
-    auto &mutex_ptr{ impl::s_lock_mutexes[canonical_key] };
-    if (!mutex_ptr) { mutex_ptr = std::make_unique<std::mutex>(); }
-    return mutex_ptr.get();
-  }(), std::defer_lock };
+  std::unique_lock<std::mutex> path_lock{
+    *[&]() {
+      std::lock_guard<std::mutex> lock(impl::s_lock_map_mutex);
+      auto &mutex_ptr{ impl::s_lock_mutexes[canonical_key] };
+      if (!mutex_ptr) { mutex_ptr = std::make_unique<std::mutex>(); }
+      return mutex_ptr.get();
+    }(),
+    std::defer_lock
+  };
 
   if (!path_lock.try_lock()) {  // another thread here owns it; say so before blocking
     announce();

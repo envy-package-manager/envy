@@ -43,8 +43,7 @@ class file_lock : uncopyable {
   // another envy owns the entry — so a caller can put a row up instead of looking hung.
   using contended_cb_t = std::function<void()>;
 
-  explicit file_lock(std::filesystem::path const &path,
-                     contended_cb_t on_contended = {});
+  explicit file_lock(std::filesystem::path const &path, contended_cb_t on_contended = {});
   ~file_lock();
   file_lock(file_lock &&) noexcept;
   file_lock &operator=(file_lock &&) noexcept;

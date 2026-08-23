@@ -47,13 +47,12 @@ cache::ensure_result compute_hash_and_lookup_cache(pkg *p) {
                       lua["envy"]["ARCH"].get<std::string>() };
   }() };
 
-  return p->cache_ptr->ensure_pkg(p->cfg->identity,
-                                  platform,
-                                  arch,
-                                  hash_prefix,
-                                  tui_actions::lock_wait_spinner(p->tui_section,
-                                                                 p->cfg->identity,
-                                                                 p->cfg->identity));
+  return p->cache_ptr->ensure_pkg(
+      p->cfg->identity,
+      platform,
+      arch,
+      hash_prefix,
+      tui_actions::lock_wait_spinner(p->tui_section, p->cfg->identity, p->cfg->identity));
 }
 
 }  // namespace

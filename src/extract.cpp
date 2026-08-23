@@ -388,20 +388,20 @@ struct extract_tui_state {
     if (!known && !terminal) {
       tui::section_set_content(
           section,
-          tui::section_frame{ .label = label,
-                              .content = tui::spinner_data{ .text = text,
-                                                            .start_time = start_time },
-                              .children = kids });
+          tui::section_frame{
+              .label = label,
+              .content = tui::spinner_data{ .text = text, .start_time = start_time },
+              .children = kids });
       return;
     }
 
     tui::section_set_content(
         section,
-        tui::section_frame{
-            .label = label,
-            .content = tui::progress_data{ .percent = percent, .status = text },
-            .children = kids,
-            .terminal = terminal });
+        tui::section_frame{ .label = label,
+                            .content =
+                                tui::progress_data{ .percent = percent, .status = text },
+                            .children = kids,
+                            .terminal = terminal });
   }
 
   void on_file_start(std::string const &name) {

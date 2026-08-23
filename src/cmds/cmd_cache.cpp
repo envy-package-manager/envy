@@ -126,12 +126,12 @@ void cmd_cache::execute() {
       [&](platform::dir_size const &running) {
         tui::section_set_content(
             scan_section,
-            tui::section_frame{
-                .label = "[cache]",
-                .content = tui::spinner_data{
-                    .text = "scanning, " + std::to_string(running.files) +
-                            " files, " + util_format_bytes(running.bytes) + " counted",
-                    .start_time = scan_start } });
+            tui::section_frame{ .label = "[cache]",
+                                .content = tui::spinner_data{
+                                    .text = "scanning, " + std::to_string(running.files) +
+                                            " files, " + util_format_bytes(running.bytes) +
+                                            " counted",
+                                    .start_time = scan_start } });
       }) };
   tui::section_delete(scan_section);  // the report below is the answer
 

@@ -69,13 +69,12 @@ import_result import_one_archive(cache &c,
 
   std::string const label{ "[" + parsed->identity + "]" };
 
-  auto result{ c.ensure_pkg(parsed->identity,
-                            parsed->platform,
-                            parsed->arch,
-                            parsed->hash_prefix,
-                            tui_actions::lock_wait_spinner(section,
-                                                           parsed->identity,
-                                                           parsed->identity)) };
+  auto result{ c.ensure_pkg(
+      parsed->identity,
+      parsed->platform,
+      parsed->arch,
+      parsed->hash_prefix,
+      tui_actions::lock_wait_spinner(section, parsed->identity, parsed->identity)) };
 
   if (!result.lock) {
     if (section) {
