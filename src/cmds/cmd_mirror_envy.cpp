@@ -12,6 +12,7 @@
 
 #include "CLI11.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -246,12 +247,18 @@ void cmd_mirror_envy::execute() {
   auto const sums_text{
     envy_release_load_sums(staging / plan.sums_relpath, std::nullopt, "mirror-envy")
   };
+  auto const attest_section{ tui::section_create() };
   for (auto const &item : plan.items) {
     if (item.relpath == plan.sums_relpath) { continue; }
+    auto const name{ fs::path{ item.relpath }.filename().string() };
     envy_release_verify_artifact(staging / item.relpath,
-                                 fs::path{ item.relpath }.filename().string(),
+                                 name,
                                  sums_text,
-                                 "mirror-envy");
+                                 "mirror-envy",
+                                 tui_actions::byte_progress_bar(attest_section,
+                                                                "mirror-envy",
+                                                                "attesting",
+                                                                name));
   }
   tui::debug("attested %zu archives against %s",
              plan.items.size() - 1,
@@ -311,7 +318,14 @@ void cmd_mirror_envy::execute() {
     }
     for (auto &t : workers) { t.join(); }
   }
-  tui::section_delete(upload_section);
+
+  // Same bargain as a download row: a finished upload keeps its full bar as the record, a
+  // failed one yields the row to the error text below.
+  if (std::ranges::all_of(errors, [](std::string const &e) { return e.empty(); })) {
+    upload_tracker.finish();
+  } else {
+    tui::section_delete(upload_section);
+  }
 
   size_t upload_failures{ 0 };
   for (auto const &error : errors) {

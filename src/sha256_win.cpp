@@ -3,21 +3,28 @@
 #include "platform.h"
 #include "util.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <bcrypt.h>
 
 namespace envy {
 
-sha256_t sha256(std::filesystem::path const &file_path) {
+sha256_t sha256(std::filesystem::path const &file_path,
+                byte_progress_cb_t const &progress) {
   if (!std::filesystem::exists(file_path)) {
     throw std::runtime_error("sha256: file does not exist: " + file_path.string());
   }
+
+  std::error_code size_ec;
+  auto const total{ std::filesystem::file_size(file_path, size_ec) };
+  std::uint64_t hashed{ 0 };
 
   BCRYPT_ALG_HANDLE alg_handle{ nullptr };
   NTSTATUS status{
@@ -56,6 +63,8 @@ sha256_t sha256(std::filesystem::path const &file_path) {
       if (!BCRYPT_SUCCESS(status)) {
         throw std::runtime_error("sha256: BCryptHashData failed");
       }
+      hashed += read_bytes;
+      if (progress) { progress(hashed, size_ec ? hashed : total); }
     }
 
     if (read_bytes < buffer.size()) {

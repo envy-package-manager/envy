@@ -325,6 +325,7 @@ struct extract_tui_state {
   std::uint64_t bytes_processed{ 0 };
   std::filesystem::path last_file_seen;
   std::optional<std::size_t> current_file_idx;
+  std::chrono::steady_clock::time_point start_time{ std::chrono::steady_clock::now() };
 
   extract_tui_state(tui::section_handle s,
                     std::string const &pkg_identity,
@@ -351,14 +352,20 @@ struct extract_tui_state {
                                 .start_time = std::chrono::steady_clock::now() } });
   }
 
-  void update_progress() {
-    double percent{ 0.0 };
-    if (totals.files > 0) {
-      percent = (files_processed / static_cast<double>(totals.files)) * 100.0;
-    } else if (totals.bytes > 0) {
-      percent = (bytes_processed / static_cast<double>(totals.bytes)) * 100.0;
-    }
-    if (percent > 100.0) { percent = 100.0; }
+  void update_progress(bool terminal = false) {
+    bool const known{ totals.files > 0 || totals.bytes > 0 };
+    double const percent{ [&] {
+      if (terminal) { return 100.0; }
+      if (totals.files > 0) {
+        return std::min(100.0,
+                        (files_processed / static_cast<double>(totals.files)) * 100.0);
+      }
+      if (totals.bytes > 0) {
+        return std::min(100.0,
+                        (bytes_processed / static_cast<double>(totals.bytes)) * 100.0);
+      }
+      return 0.0;
+    }() };
 
     std::ostringstream status;
     status << files_processed;
@@ -371,23 +378,30 @@ struct extract_tui_state {
       status << " " << util_format_bytes(bytes_processed);
     }
 
-    if (grouped) {
+    std::string const item{ children.empty() ? "" : children.front().label };
+    std::string const text{ (grouped || item.empty()) ? status.str()
+                                                      : status.str() + " " + item };
+
+    // The pre-scan came up empty (an archive whose entries it could not size), so there
+    // is nothing to divide by: spin on the running counts instead of a 0% bar.
+    auto const kids{ grouped ? children : std::vector<tui::section_frame>{} };
+    if (!known && !terminal) {
       tui::section_set_content(
           section,
-          tui::section_frame{
-              .label = label,
-              .content = tui::progress_data{ .percent = percent, .status = status.str() },
-              .children = children });
-    } else {
-      std::string item{ children.empty() ? "" : children.front().label };
-      tui::section_set_content(
-          section,
-          tui::section_frame{
-              .label = label,
-              .content = tui::progress_data{
-                  .percent = percent,
-                  .status = item.empty() ? status.str() : (status.str() + " " + item) } });
+          tui::section_frame{ .label = label,
+                              .content = tui::spinner_data{ .text = text,
+                                                            .start_time = start_time },
+                              .children = kids });
+      return;
     }
+
+    tui::section_set_content(
+        section,
+        tui::section_frame{
+            .label = label,
+            .content = tui::progress_data{ .percent = percent, .status = text },
+            .children = kids,
+            .terminal = terminal });
   }
 
   void on_file_start(std::string const &name) {
@@ -420,6 +434,18 @@ struct extract_tui_state {
     }
     update_progress();
     return true;
+  }
+
+  // Everything is unpacked, but the counters trail the pre-scan totals (a directory or
+  // symlink entry is not a counted file) and the last archive is still marked in-flight.
+  void finish() {
+    if (current_file_idx && *current_file_idx < children.size()) {
+      children[*current_file_idx].content = tui::static_text_data{ .text = "done" };
+      current_file_idx.reset();
+    }
+    files_processed = totals.files;
+    bytes_processed = totals.bytes;
+    update_progress(true);
   }
 };
 
@@ -1066,6 +1092,8 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
       if (tui_state) { tui_state->on_progress(processed_bytes, dest_path, true); }
     }
   }
+
+  if (tui_state) { tui_state->finish(); }
 
   tui::debug("stage: extracted %llu file(s) from archives, copied %llu",
              static_cast<unsigned long long>(total_files_extracted),

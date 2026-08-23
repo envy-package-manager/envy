@@ -9,6 +9,7 @@
 #include "reexec.h"
 #include "self_deploy.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include "CLI11.hpp"
@@ -17,6 +18,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -66,9 +69,13 @@ import_result import_one_archive(cache &c,
 
   std::string const label{ "[" + parsed->identity + "]" };
 
-  auto result{
-    c.ensure_pkg(parsed->identity, parsed->platform, parsed->arch, parsed->hash_prefix)
-  };
+  auto result{ c.ensure_pkg(parsed->identity,
+                            parsed->platform,
+                            parsed->arch,
+                            parsed->hash_prefix,
+                            tui_actions::lock_wait_spinner(section,
+                                                           parsed->identity,
+                                                           parsed->identity)) };
 
   if (!result.lock) {
     if (section) {
@@ -81,41 +88,17 @@ import_result import_one_archive(cache &c,
     return { parsed->identity, result.pkg_path, true, false };
   }
 
-  // Compute archive size for progress reporting
-  std::uint64_t const archive_bytes{ std::filesystem::file_size(archive_path) };
-
+  // A lone archive is extracted without a pre-scan, so no total is knowable: the tracker
+  // spins on the running counts and lands on a full bar when the archive is out.
+  std::optional<tui_actions::extract_progress_tracker> tracker;
   if (section) {
-    tui::section_set_content(
-        section,
-        tui::section_frame{ .label = label,
-                            .content = tui::spinner_data{
-                                .text = "extracting...",
-                                .start_time = std::chrono::steady_clock::now() } });
+    tracker.emplace(section, parsed->identity, archive_path.filename().string());
   }
 
   extract_options opts;
-  if (section) {
-    opts.progress = [&](extract_progress const &ep) -> bool {
-      double percent{ 0.0 };
-      if (archive_bytes > 0) {
-        percent =
-            std::min(100.0,
-                     (ep.bytes_processed / static_cast<double>(archive_bytes)) * 100.0);
-      }
-
-      std::ostringstream status;
-      status << ep.files_processed << " files";
-      if (archive_bytes > 0) { status << " " << util_format_bytes(ep.bytes_processed); }
-
-      tui::section_set_content(
-          section,
-          tui::section_frame{ .label = label,
-                              .content = tui::progress_data{ .percent = percent,
-                                                             .status = status.str() } });
-      return true;
-    };
-  }
+  if (tracker) { opts.progress = std::ref(*tracker); }
   extract(archive_path, result.entry_path, opts);
+  if (tracker) { tracker->finish(); }
 
   if (directory_has_entries(result.lock->install_dir())) {
     result.lock->mark_install_complete();

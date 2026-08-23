@@ -70,10 +70,14 @@ class cache : unmovable {
     scoped_entry_lock::ptr_t lock;  // if present, lock held for installation
   };
 
+  // `on_lock_contended` fires when another envy already holds this entry and the call is
+  // about to block on it for as long as that one takes. It is the caller's chance to say
+  // so on screen; see tui_actions::lock_wait_spinner.
   ensure_result ensure_pkg(std::string_view identity,
                            std::string_view platform,
                            std::string_view arch,
-                           std::string_view hash_prefix);
+                           std::string_view hash_prefix,
+                           platform::file_lock::contended_cb_t on_lock_contended = {});
 
   path compute_pkg_path(std::string_view identity,
                         std::string_view platform,
@@ -85,7 +89,9 @@ class cache : unmovable {
   // redeclared against a different source lands in a different entry instead of
   // silently reusing the old one: a complete entry is never revalidated, and
   // identity alone does not pin content.
-  ensure_result ensure_spec(std::string_view identity, std::string_view source_key);
+  ensure_result ensure_spec(std::string_view identity,
+                            std::string_view source_key,
+                            platform::file_lock::contended_cb_t on_lock_contended = {});
 
   struct envy_ensure_result {
     path envy_dir;                            // $CACHE/envy/$VERSION/

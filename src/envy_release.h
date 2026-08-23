@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sha256.h"
+
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -110,6 +112,7 @@ std::string envy_release_load_sums(std::filesystem::path const &sums_file,
 void envy_release_verify_artifact(std::filesystem::path const &artifact,
                                   std::string_view artifact_name,
                                   std::string_view sums_text,
-                                  std::string_view op);
+                                  std::string_view op,
+                                  byte_progress_cb_t const &progress = {});
 
 }  // namespace envy

@@ -39,7 +39,12 @@ namespace envy::platform {
 
 class file_lock : uncopyable {
  public:
-  explicit file_lock(std::filesystem::path const &path);
+  // Called once, before blocking, when the lock is already held. The wait is unbounded —
+  // another envy owns the entry — so a caller can put a row up instead of looking hung.
+  using contended_cb_t = std::function<void()>;
+
+  explicit file_lock(std::filesystem::path const &path,
+                     contended_cb_t on_contended = {});
   ~file_lock();
   file_lock(file_lock &&) noexcept;
   file_lock &operator=(file_lock &&) noexcept;
@@ -85,6 +90,11 @@ struct dir_size {
 // Immediate children of `dir`, in filesystem order; empty if unreadable.
 std::vector<dir_entry> dir_list(std::filesystem::path const &dir);
 
+// Running totals summed across every root, reported from a worker thread at most ~20x a
+// second. The end total is unknowable until the walk finishes, so a caller drawing this
+// draws an indeterminate spinner, never a bar.
+using dir_scan_progress = std::function<void(dir_size const &running)>;
+
 // Measure every root concurrently; results are index-aligned with `roots`.
 // Missing or unreadable roots yield zeroes. `threads == 0` uses hardware
 // concurrency. Traversal is native (openat/fdopendir/fstatat, FindFirstFileExW
@@ -92,7 +102,8 @@ std::vector<dir_entry> dir_list(std::filesystem::path const &dir);
 // re-resolves a full path per entry and cannot be driven from many threads
 // without re-walking shared prefixes.
 std::vector<dir_size> dir_sizes(std::vector<std::filesystem::path> const &roots,
-                                unsigned threads = 0);
+                                unsigned threads = 0,
+                                dir_scan_progress const &progress = {});
 
 // Native path string: UTF-16 on Windows, bytes elsewhere. Traversal stays in
 // the OS encoding; conversion happens only at the public boundary.

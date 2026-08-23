@@ -229,10 +229,12 @@ void run_setup_pair(pkg *p,
   auto const digest{ blake3_hash(lock_key.data(), lock_key.size()) };
   std::string const hash_prefix{ util_bytes_to_hex(digest.data(), 8) };
 
-  auto cache_result{ p->cache_ptr->ensure_pkg(p->cfg->identity,
-                                              platform::os_name(),
-                                              platform::arch_name(),
-                                              hash_prefix) };
+  auto cache_result{ p->cache_ptr->ensure_pkg(
+      p->cfg->identity,
+      platform::os_name(),
+      platform::arch_name(),
+      hash_prefix,
+      tui_actions::lock_wait_spinner(section, log_identity, "setup:" + name)) };
   if (!cache_result.lock) {
     // Pair entries are always purged on release; a completed entry means a
     // stale/corrupt cache. Mirror legacy user-managed behavior: warn and skip.

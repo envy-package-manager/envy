@@ -227,6 +227,131 @@ class FetchCommandFunctionalTest(unittest.TestCase):
                     any(url in ln for ln in rows),
                     f"progress rows do not name the source: {rows}",
                 )
+                self.assertTrue(
+                    rows[-1].endswith(": 100.0%"),
+                    f"transfer did not finish on a full bar: {rows}",
+                )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+
+    def test_fetch_without_content_length_spins_instead_of_stalling_at_zero(self) -> None:
+        """No advertised length means no percentage: the row spins on the byte count.
+
+        A bar would read 0% from the first byte to the last, which is what a stalled
+        transfer looks like. Served chunked so curl never learns a total.
+        """
+        envy = test_config.get_envy_executable()
+        payload = os.urandom(192 * 1024)
+
+        class _ChunkedHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003
+                return
+
+            def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+                self.send_response(200)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                step = len(payload) // 6
+                for start in range(0, len(payload), step):
+                    piece = payload[start : start + step]
+                    self.wfile.write(b"%x\r\n" % len(piece) + piece + b"\r\n")
+                    self.wfile.flush()
+                    time.sleep(0.2)
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _ChunkedHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"
+                destination = Path(temp_dir) / "out.bin"
+
+                env = test_config.get_test_env()
+                env["TERM"] = "dumb"
+                env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+                result = test_config.run(
+                    [str(envy), "fetch", url, str(destination)],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+                self.assertEqual(payload, destination.read_bytes())
+
+                rows = [ln.strip() for ln in result.stderr.splitlines() if url in ln]
+                self.assertTrue(rows, f"no progress rows rendered: {result.stderr}")
+
+                # Spinner rows carry bytes and no percentage; nothing may report 0.0%.
+                self.assertTrue(
+                    any(re.search(r"\d+\.\d\dKB " + re.escape(url) + r"\.+$", ln)
+                        for ln in rows),
+                    f"no indeterminate spinner carrying a byte count: {rows}",
+                )
+                self.assertEqual(
+                    [], [ln for ln in rows if ln.endswith(": 0.0%")],
+                    f"length-less transfer drew a 0% bar: {rows}",
+                )
+                self.assertTrue(
+                    rows[-1].endswith(": 100.0%"),
+                    f"transfer did not finish on a full bar: {rows}",
+                )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+
+    def test_fetch_finishes_on_a_full_bar(self) -> None:
+        """A completed transfer is the command's record of itself, so it must read 100%.
+
+        No throttle override here: the terminal frame is what has to reach the renderer,
+        and a fetch this small finishes well inside the fallback throttle window.
+        """
+        envy = test_config.get_envy_executable()
+        payload = os.urandom(64 * 1024)
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003
+                return
+
+            def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"
+                destination = Path(temp_dir) / "out.bin"
+
+                env = test_config.get_test_env()
+                env["TERM"] = "dumb"
+                result = test_config.run(
+                    [str(envy), "fetch", url, str(destination)],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+                self.assertEqual(payload, destination.read_bytes())
+
+                size = f"{len(payload) / 1024:.2f}KB"
+                self.assertIn(
+                    f"{size}/{size} {url}: 100.0%",
+                    result.stderr,
+                    f"no full bar for the finished transfer: {result.stderr}",
+                )
         finally:
             server.shutdown()
             thread.join(timeout=5)
