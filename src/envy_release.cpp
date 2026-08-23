@@ -155,7 +155,8 @@ std::string envy_release_load_sums(std::filesystem::path const &sums_file,
 void envy_release_verify_artifact(std::filesystem::path const &artifact,
                                   std::string_view artifact_name,
                                   std::string_view sums_text,
-                                  std::string_view op) {
+                                  std::string_view op,
+                                  byte_progress_cb_t const &progress) {
   auto const expected{ envy_release_sums_lookup(sums_text, artifact_name) };
   if (!expected) {
     std::ostringstream msg;
@@ -163,7 +164,7 @@ void envy_release_verify_artifact(std::filesystem::path const &artifact,
     throw std::runtime_error(msg.str());
   }
 
-  auto const actual{ sha256(artifact) };
+  auto const actual{ sha256(artifact, progress) };
   auto const actual_hex{ util_bytes_to_hex(actual.data(), actual.size()) };
   if (!hex_equal(actual_hex, *expected)) {
     std::ostringstream msg;

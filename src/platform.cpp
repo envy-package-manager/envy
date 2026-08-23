@@ -4,6 +4,7 @@
 #include "platform.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
@@ -32,10 +33,14 @@ struct root_total {
   std::atomic<std::uint64_t> dirs{ 0 };
 };
 
+constexpr std::chrono::milliseconds kProgressInterval{ 50 };
+
 class scan_pool : unmovable {
  public:
-  scan_pool(std::vector<std::filesystem::path> const &roots, unsigned threads)
-      : totals_(roots.size()) {
+  scan_pool(std::vector<std::filesystem::path> const &roots,
+            unsigned threads,
+            dir_scan_progress const &progress)
+      : totals_(roots.size()), progress_{ progress } {
     queue_.reserve(roots.size());
     for (std::size_t i{ 0 }; i < roots.size(); ++i) {
       queue_.push_back({ dir_scan_root(roots[i]), i });
@@ -88,15 +93,39 @@ class scan_pool : unmovable {
       total.files.fetch_add(acc.files);
       total.dirs.fetch_add(acc.dirs);
 
-      std::lock_guard<std::mutex> lock{ mutex_ };
-      if (!--pending_) {
-        done_ = true;
-        cv_.notify_all();
+      // Snapshot under the lock, report outside it: the callback is arbitrary work, and
+      // every other worker needs this mutex once per directory.
+      dir_size snapshot{};
+      bool report{ false };
+      {
+        std::lock_guard<std::mutex> lock{ mutex_ };
+        running_.bytes += acc.bytes;
+        running_.files += acc.files;
+        running_.dirs += acc.dirs;
+
+        if (progress_) {
+          if (auto const now{ std::chrono::steady_clock::now() };
+              now - last_report_ >= kProgressInterval) {
+            last_report_ = now;
+            snapshot = running_;
+            report = true;
+          }
+        }
+
+        if (!--pending_) {
+          done_ = true;
+          cv_.notify_all();
+        }
       }
+
+      if (report) { progress_(snapshot); }
     }
   }
 
   std::vector<root_total> totals_;
+  dir_scan_progress progress_;
+  dir_size running_{};
+  std::chrono::steady_clock::time_point last_report_{};
   std::vector<work_item> queue_;
   std::size_t pending_{ 0 };
   bool done_{ false };
@@ -107,8 +136,9 @@ class scan_pool : unmovable {
 }  // namespace
 
 std::vector<dir_size> dir_sizes(std::vector<std::filesystem::path> const &roots,
-                                unsigned threads) {
-  return scan_pool{ roots, threads }.results();
+                                unsigned threads,
+                                dir_scan_progress const &progress) {
+  return scan_pool{ roots, threads, progress }.results();
 }
 
 }  // namespace envy::platform

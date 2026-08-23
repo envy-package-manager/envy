@@ -5,6 +5,7 @@
 
 #include "CLI11.hpp"
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <utility>
@@ -30,7 +31,20 @@ cmd_git_resolve::cmd_git_resolve(
     : cfg_{ std::move(cfg) } {}
 
 void cmd_git_resolve::execute() {
-  tui::print_stdout("%s\n", git_resolve_remote(cfg_.repo, cfg_.ref).c_str());
+  // A ref advertisement reports nothing along the way, so the row is a bare spinner. It
+  // goes once the sha is in hand: stdout carries the answer, and a stopped spinner says
+  // nothing.
+  auto const section{ tui::section_create() };
+  tui::section_set_content(
+      section,
+      tui::section_frame{ .label = "[git-resolve]",
+                          .content = tui::spinner_data{
+                              .text = "resolving " + cfg_.ref + " in " + cfg_.repo,
+                              .start_time = std::chrono::steady_clock::now() } });
+
+  auto const sha{ git_resolve_remote(cfg_.repo, cfg_.ref) };
+  tui::section_delete(section);
+  tui::print_stdout("%s\n", sha.c_str());
 }
 
 }  // namespace envy

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -145,8 +146,6 @@ package_depot_index package_depot_index::build(std::vector<std::string> const &d
   }
 
   if (!requests.empty()) {
-    auto const section{ tui::section_create() };
-
     auto const labels{ [&] {
       std::vector<std::string> l;
       l.reserve(requests.size());
@@ -158,12 +157,9 @@ package_depot_index package_depot_index::build(std::vector<std::string> const &d
       return l;
     }() };
 
-    tui_actions::fetch_all_progress_tracker tracker{ section, "depot", labels, "fetch" };
-    for (size_t i{ 0 }; i < requests.size(); ++i) {
-      std::visit([&](auto &r) { r.progress = tracker.make_callback(i); }, requests[i]);
-    }
-
-    auto const results{ fetch(requests, "#depot") };
+    auto const results{
+      tui_actions::fetch_tracked(std::move(requests), "depot", labels, "#depot")
+    };
 
     for (size_t req_idx{ 0 }; req_idx < results.size(); ++req_idx) {
       auto const dl_idx{ request_to_download[req_idx] };
@@ -185,8 +181,6 @@ package_depot_index package_depot_index::build(std::vector<std::string> const &d
                   error ? error->c_str() : "unknown error");
       }
     }
-
-    tui::section_delete(section);
   }
 
   // Parse all downloaded manifests into one merged index

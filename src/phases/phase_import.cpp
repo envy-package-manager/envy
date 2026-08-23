@@ -96,19 +96,16 @@ void run_import_phase(pkg *p, engine &eng) {
                   error ? error->c_str() : "unknown error");
         return;  // Fall through to fetch phase
       }
+      tracker.finish();
     }
 
     // SHA256 verification when present (text manifests always supply it;
     // only build_from_directory without checksums omits it).
     if (location->sha256) {
-      tui::section_set_content(
-          p->tui_section,
-          tui::section_frame{ .label = label,
-                              .content = tui::spinner_data{
-                                  .text = "verifying SHA256...",
-                                  .start_time = std::chrono::steady_clock::now() } });
-
-      auto const actual{ sha256(archive_path) };
+      auto const actual{ tui_actions::sha256_tracked(archive_path,
+                                                     p->tui_section,
+                                                     p->cfg->identity,
+                                                     "verifying") };
       auto const actual_hex{ util_bytes_to_hex(actual.data(), actual.size()) };
       if (actual_hex != *location->sha256) {
         ENVY_TRACE(depot_check,
@@ -139,21 +136,13 @@ void run_import_phase(pkg *p, engine &eng) {
     std::uint64_t files_done{ 0 };
     std::uint64_t bytes_done{ 0 };
     fs::path last_file;
+    auto const extract_start{ std::chrono::steady_clock::now() };
 
     extract_options opts{ .progress = [&](extract_progress const &ep) -> bool {
       bytes_done = ep.bytes_processed;
       if (ep.is_regular_file && ep.current_entry != last_file) {
         ++files_done;
         last_file = ep.current_entry;
-      }
-
-      double percent{ 0.0 };
-      if (totals.files > 0) {
-        percent =
-            std::min(100.0, (files_done / static_cast<double>(totals.files)) * 100.0);
-      } else if (totals.bytes > 0) {
-        percent =
-            std::min(100.0, (bytes_done / static_cast<double>(totals.bytes)) * 100.0);
       }
 
       std::string status;
@@ -169,8 +158,27 @@ void run_import_phase(pkg *p, engine &eng) {
         status += util_format_bytes(bytes_done);
         status += "/";
         status += util_format_bytes(totals.bytes);
+      } else if (bytes_done > 0) {
+        status += " ";
+        status += util_format_bytes(bytes_done);
       }
 
+      // The pre-scan sized nothing, so there is nothing to divide by: spin on the running
+      // counts rather than draw a bar that never leaves 0%.
+      if (totals.files == 0 && totals.bytes == 0) {
+        tui::section_set_content(p->tui_section,
+                                 tui::section_frame{ .label = label,
+                                                     .content = tui::spinner_data{
+                                                         .text = status,
+                                                         .start_time = extract_start } });
+        return true;
+      }
+
+      double const percent{
+        totals.files > 0
+            ? std::min(100.0, (files_done / static_cast<double>(totals.files)) * 100.0)
+            : std::min(100.0, (bytes_done / static_cast<double>(totals.bytes)) * 100.0)
+      };
       tui::section_set_content(
           p->tui_section,
           tui::section_frame{

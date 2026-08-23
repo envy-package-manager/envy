@@ -319,6 +319,7 @@ void fetch_with_progress(fetch_request req,
         std::string{ "Failed to fetch " } + what + ": " +
         (results.empty() ? "no results" : std::get<std::string>(results[0])));
   }
+  tracker.finish();
 }
 
 // A fetched spec together with the cache entry lock that still guards it, if the
@@ -338,7 +339,10 @@ spec_fetch_result fetch_local_source(pkg_cfg const &cfg) {
 
 spec_fetch_result fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
   auto const *remote_src{ std::get_if<pkg_cfg::remote_source>(&cfg.source) };
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity, source_key(*remote_src)) };
+  auto cache_result{ p->cache_ptr->ensure_spec(
+      cfg.identity,
+      source_key(*remote_src),
+      tui_actions::lock_wait_spinner(p->tui_section, cfg.identity, cfg.identity)) };
 
   if (cache_result.lock) {
     tui::debug("spec: source %s", remote_src->url.c_str());
@@ -359,7 +363,10 @@ spec_fetch_result fetch_remote_source(pkg_cfg const &cfg, pkg *p) {
 
 spec_fetch_result fetch_git_source(pkg_cfg const &cfg, pkg *p) {
   auto const *git_src{ std::get_if<pkg_cfg::git_source>(&cfg.source) };
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity, source_key(*git_src)) };
+  auto cache_result{ p->cache_ptr->ensure_spec(
+      cfg.identity,
+      source_key(*git_src),
+      tui_actions::lock_wait_spinner(p->tui_section, cfg.identity, cfg.identity)) };
 
   if (cache_result.lock) {
     tui::debug("spec: from git %s @ %s", git_src->url.c_str(), git_src->ref.c_str());
@@ -412,8 +419,10 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
                              cfg.identity);
   }
 
-  auto cache_result{ p->cache_ptr->ensure_spec(cfg.identity,
-                                               custom_fetch_source_key(cfg)) };
+  auto cache_result{ p->cache_ptr->ensure_spec(
+      cfg.identity,
+      custom_fetch_source_key(cfg),
+      tui_actions::lock_wait_spinner(p->tui_section, cfg.identity, cfg.identity)) };
 
   if (cache_result.lock) {
     tui::debug("spec: custom fetch function");
@@ -1195,7 +1204,10 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
       },
       bundle_src->fetch_source) };
 
-  auto cache_result{ p->cache_ptr->ensure_spec(bundle_id, bundle_source_key) };
+  auto cache_result{ p->cache_ptr->ensure_spec(
+      bundle_id,
+      bundle_source_key,
+      tui_actions::lock_wait_spinner(p->tui_section, bundle_id, bundle_id)) };
   p->was_cache_hit = cache_result.lock == nullptr;
 
   if (cache_result.lock) {

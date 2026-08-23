@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import time
 import unittest
 from pathlib import Path
 from typing import List, Optional
@@ -1202,6 +1203,77 @@ SETUP = {{{{
             log.read_text().count("install"),
             1,
             "double-check lock must ensure exactly one INSTALL",
+        )
+
+    def test_waiting_on_another_process_says_so(self):
+        """Blocking on a lock another envy holds is an unbounded wait, so it draws.
+
+        The holder is started first and sleeps well past the waiter's startup, so the
+        second run is guaranteed to block rather than win the race.
+        """
+        sleep_cmd = (
+            "Start-Sleep -Seconds 4" if sys.platform == "win32" else "sleep 4"
+        )
+        # CHECK gates on a marker so the waiter, once it finally gets the lock, re-checks
+        # and stops there instead of sleeping through the whole install a second time.
+        spec = f"""IDENTITY = "local.lock_wait@v1"
+USER_MANAGED = true
+
+SETUP = {{{{
+  main = {{{{
+    CHECK = function(pkg_dir, options)
+      local f = io.open("lock_wait_marker.txt", "r")
+      if f then f:close(); return true end
+      return false
+    end,
+    INSTALL = function(pkg_dir, options)
+      envy.run("{sleep_cmd}", {{{{ quiet = true }}}})
+      local m = io.open("lock_wait_marker.txt", "w")
+      m:write("done")
+      m:close()
+    end,
+  }}}},
+}}}}
+"""
+        spec_path = self.write_spec("lock_wait", spec)
+        manifest = self.create_manifest(
+            f'PACKAGES = {{ {{ spec = "local.lock_wait@v1", source = "{spec_path}", '
+            f'setup = {{ "main" }} }} }}'
+        )
+
+        cmd = [
+            str(self.envy),
+            "--cache-root",
+            str(self.cache_root),
+            "install",
+            "--manifest",
+            str(manifest),
+        ]
+        env = test_config.get_test_env()
+        env["TERM"] = "dumb"
+        env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+
+        holder = test_config.popen(
+            cmd,
+            cwd=self.test_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        try:
+            time.sleep(1.5)  # let the holder take the pair lock and start sleeping
+            waiter = test_config.run(
+                cmd, cwd=self.test_dir, capture_output=True, text=True, env=env
+            )
+        finally:
+            holder.communicate(timeout=60)
+
+        self.assertEqual(0, holder.returncode, "holder run failed")
+        self.assertEqual(0, waiter.returncode, f"stderr: {waiter.stderr}")
+        self.assertIn(
+            "waiting for another envy to release setup:main",
+            waiter.stderr,
+            f"blocked run drew no waiting row: {waiter.stderr}",
         )
 
 

@@ -124,21 +124,46 @@ class EnvyExtractTests(unittest.TestCase):
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def _run_envy(
-        self, *args: str, cwd: str | None = None
+        self,
+        *args: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.assertTrue(
             self._envy_binary.exists(), f"Expected envy binary at {self._envy_binary}"
         )
-        env = os.environ.copy()
         return test_config.run(
             [str(self._envy_binary), *args],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=env if env is not None else os.environ.copy(),
             cwd=cwd,
         )
+
+    def test_extract_reports_progress_and_finishes_on_a_full_bar(self) -> None:
+        """Unpacking is a wait, so it draws: a lone archive has no pre-scanned total, so
+        the row spins on running counts and lands on a full bar when the archive is out."""
+        env = os.environ.copy()
+        env["TERM"] = "dumb"
+        env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract", str(self._archives_dir / "test.tar"), tmpdir, env=env
+            )
+            self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+
+            rows = [ln.strip() for ln in result.stderr.splitlines() if "[extract]" in ln]
+            self.assertTrue(rows, f"extract drew no progress row: {result.stderr}")
+            self.assertTrue(
+                rows[-1].endswith(": 100.0%"),
+                f"extract did not finish on a full bar: {rows}",
+            )
+            self.assertIn(
+                "files", rows[-1], f"progress row carries no file count: {rows[-1]}"
+            )
 
     def _verify_extracted_structure(self, extract_dir: Path) -> None:
         """Verify the expected directory structure and file contents after extraction."""

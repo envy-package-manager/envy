@@ -9,6 +9,7 @@
 #include "CLI11.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -115,7 +116,24 @@ void cmd_cache::execute() {
     if (e.name != "packages" && e.name != "envy") { add(other, e.name, root / e.name); }
   }
 
-  auto const sizes{ platform::dir_sizes(scan_roots) };
+  // Seconds on a populated cache, and no total is knowable until the walk ends: the row
+  // spins on what has been counted so far.
+  auto const scan_section{ tui::section_create() };
+  auto const scan_start{ std::chrono::steady_clock::now() };
+  auto const sizes{ platform::dir_sizes(
+      scan_roots,
+      0,
+      [&](platform::dir_size const &running) {
+        tui::section_set_content(
+            scan_section,
+            tui::section_frame{ .label = "[cache]",
+                                .content = tui::spinner_data{
+                                    .text = "scanning, " + std::to_string(running.files) +
+                                            " files, " + util_format_bytes(running.bytes) +
+                                            " counted",
+                                    .start_time = scan_start } });
+      }) };
+  tui::section_delete(scan_section);  // the report below is the answer
 
   std::uint64_t total{ 0 };
   std::size_t label_width{ 5 };  // "TOTAL"

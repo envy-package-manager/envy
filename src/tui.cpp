@@ -572,8 +572,12 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
 
   // Clear remaining old lines if shrinking
   if (cur_frame_line_count < last_line_count) {
-    std::fprintf(stderr, "\n%s", kAnsiClearToEos);
-    ++cur_frame_line_count;  // Account for the newline we just printed
+    if (cur_frame_line_count == 0) {  // cursor already parked on the first stale line
+      std::fprintf(stderr, "%s", kAnsiClearToEos);
+    } else {
+      std::fprintf(stderr, "\n%s", kAnsiClearToEos);
+      ++cur_frame_line_count;  // Account for the newline we just printed
+    }
   }
 
   std::fprintf(stderr, "%s", kAnsiEnableWrap);
@@ -606,7 +610,8 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
     std::string const output{ render_section_frame_fallback(sec.cached_frame, now) };
 
     auto const elapsed{ now - sec.last_fallback_print_time };
-    if (output != sec.last_fallback_output && elapsed >= kFallbackThrottle) {
+    bool const due{ sec.cached_frame.terminal || elapsed >= kFallbackThrottle };
+    if (output != sec.last_fallback_output && due) {
       std::fprintf(stderr, "%s", output.c_str());
       updates.push_back(update_info{ .handle = sec.handle, .output = output });
     }
@@ -1090,12 +1095,17 @@ void print_stdout(char const *fmt, ...) {
 
 void pause_rendering() {
   std::lock_guard lock{ s_tui.mutex };
-  if (is_ansi_supported() && s_progress.last_line_count > 0) {
-    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count);
-    std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
-    s_progress.last_line_count = 0;
-    std::fflush(stderr);
+  if (!is_ansi_supported() || s_progress.last_line_count == 0) { return; }
+
+  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
+  // one *less* than the row count. The full count erases a line the region never owned.
+  std::fprintf(stderr, "\r");
+  if (s_progress.last_line_count > 1) {
+    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
   }
+  std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
+  s_progress.last_line_count = 0;
+  std::fflush(stderr);
 }
 
 void resume_rendering() {
@@ -1145,6 +1155,13 @@ void section_set_complete(section_handle h) {
       it != s_progress.sections.end()) {
     it->complete = true;
   }
+}
+
+void sections_clear() {
+  if (!s_progress.enabled) { return; }
+
+  std::lock_guard lock{ s_tui.mutex };
+  s_progress.sections.clear();
 }
 
 void section_delete(section_handle h) {
