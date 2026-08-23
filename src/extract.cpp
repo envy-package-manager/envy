@@ -354,17 +354,17 @@ struct extract_tui_state {
 
   void update_progress(bool terminal = false) {
     bool const known{ totals.files > 0 || totals.bytes > 0 };
-    double const percent{ [&] {
+    // Clamped by hand, not std::min: archive.h drags in windows.h without NOMINMAX (this
+    // file does not include platform.h, which is where that is set), so `min` is a macro.
+    double const percent{ [&]() -> double {
       if (terminal) { return 100.0; }
+      double raw{ 0.0 };
       if (totals.files > 0) {
-        return std::min(100.0,
-                        (files_processed / static_cast<double>(totals.files)) * 100.0);
+        raw = (files_processed / static_cast<double>(totals.files)) * 100.0;
+      } else if (totals.bytes > 0) {
+        raw = (bytes_processed / static_cast<double>(totals.bytes)) * 100.0;
       }
-      if (totals.bytes > 0) {
-        return std::min(100.0,
-                        (bytes_processed / static_cast<double>(totals.bytes)) * 100.0);
-      }
-      return 0.0;
+      return raw > 100.0 ? 100.0 : raw;
     }() };
 
     std::ostringstream status;
