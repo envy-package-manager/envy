@@ -101,7 +101,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
                     MAXDWORD,
                     MAXDWORD,
                     &probe)) {
-    if (on_contended) { on_contended(); }
+    // Only a held lock is contention; a bad handle or an I/O error is not, and the
+    // blocking call below reports it for what it is.
+    if (::GetLastError() == ERROR_LOCK_VIOLATION && on_contended) { on_contended(); }
 
     OVERLAPPED ovlp{};
     if (!::LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ovlp)) {

@@ -130,27 +130,13 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     std::filesystem::absolute(path).lexically_normal().string()
   };
 
-  bool announced{ false };
-  auto const announce{ [&] {
-    if (!announced && on_contended) { on_contended(); }
-    announced = true;
-  } };
-
   // Acquire in-process mutex for this lock path, ensure one thread per cache entry
-  std::unique_lock<std::mutex> path_lock{
-    *[&]() {
-      std::lock_guard<std::mutex> lock(impl::s_lock_map_mutex);
-      auto &mutex_ptr{ impl::s_lock_mutexes[canonical_key] };
-      if (!mutex_ptr) { mutex_ptr = std::make_unique<std::mutex>(); }
-      return mutex_ptr.get();
-    }(),
-    std::defer_lock
-  };
-
-  if (!path_lock.try_lock()) {  // another thread here owns it; say so before blocking
-    announce();
-    path_lock.lock();
-  }
+  std::unique_lock<std::mutex> path_lock{ [&]() {
+    std::lock_guard<std::mutex> lock(impl::s_lock_map_mutex);
+    auto &mutex_ptr{ impl::s_lock_mutexes[canonical_key] };
+    if (!mutex_ptr) { mutex_ptr = std::make_unique<std::mutex>(); }
+    return std::unique_lock<std::mutex>{ *mutex_ptr };
+  }() };
 
   int fd{ -1 };
   for (;;) {
@@ -169,9 +155,11 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     fl.l_whence = SEEK_SET;
 
     // Probe before committing to the blocking call: a refusal means another process
-    // holds the entry, so the wait is open-ended — the only kind worth announcing.
+    // holds the entry, so the wait is open-ended — the only kind worth announcing. The
+    // in-process mutex above is deliberately not announced: it serializes threads of
+    // this run, which the engine already keys apart, and "another envy" would be a lie.
     if (::fcntl(fd, F_SETLK, &fl) == -1) {
-      if (errno == EAGAIN || errno == EACCES) { announce(); }
+      if ((errno == EAGAIN || errno == EACCES) && on_contended) { on_contended(); }
 
       if (::fcntl(fd, F_SETLKW, &fl) == -1) {
         int const err{ errno };

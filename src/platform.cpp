@@ -93,23 +93,32 @@ class scan_pool : unmovable {
       total.files.fetch_add(acc.files);
       total.dirs.fetch_add(acc.dirs);
 
-      std::lock_guard<std::mutex> lock{ mutex_ };
-      running_.bytes += acc.bytes;
-      running_.files += acc.files;
-      running_.dirs += acc.dirs;
-      // Under the queue lock, which every worker takes once per directory anyway: the
-      // report is a few microseconds and the interval keeps it off the hot path.
-      if (progress_) {
-        if (auto const now{ std::chrono::steady_clock::now() };
-            now - last_report_ >= kProgressInterval) {
-          last_report_ = now;
-          progress_(running_);
+      // Snapshot under the lock, report outside it: the callback is arbitrary work (a
+      // TUI update), and every other worker needs this mutex once per directory.
+      dir_size snapshot{};
+      bool report{ false };
+      {
+        std::lock_guard<std::mutex> lock{ mutex_ };
+        running_.bytes += acc.bytes;
+        running_.files += acc.files;
+        running_.dirs += acc.dirs;
+
+        if (progress_) {
+          if (auto const now{ std::chrono::steady_clock::now() };
+              now - last_report_ >= kProgressInterval) {
+            last_report_ = now;
+            snapshot = running_;
+            report = true;
+          }
+        }
+
+        if (!--pending_) {
+          done_ = true;
+          cv_.notify_all();
         }
       }
-      if (!--pending_) {
-        done_ = true;
-        cv_.notify_all();
-      }
+
+      if (report) { progress_(snapshot); }
     }
   }
 
