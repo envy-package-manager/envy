@@ -66,6 +66,13 @@ EVENT_REGISTRY = {
     "download_start": ["url:str", "destination:str"],
     "download_complete": ["url:str", "bytes:i64", "duration_ms:i64"],
     "download_failed": ["url:str", "error:str"],
+    "download_retry": [
+        "url:str",
+        "attempt:i64",
+        "delay_ms:i64",
+        "reason:str",
+        "error:str",
+    ],
     "download_skipped": ["url:str", "reason:str"],
     "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
     "extract_start": ["archive:str", "destination:str", "strip_components:i64"],

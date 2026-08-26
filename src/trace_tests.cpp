@@ -58,7 +58,7 @@ void check_all(std::index_sequence<Is...>) {
 }  // namespace
 
 TEST_CASE("trace_record_to_json emits valid JSON for every event type") {
-  static_assert(envy::kTraceEventCount == 27,
+  static_assert(envy::kTraceEventCount == 28,
                 "trace_event_t changed: confirm the new/removed event serializes and "
                 "update this count");
   check_all(std::make_index_sequence<envy::kTraceEventCount>{});

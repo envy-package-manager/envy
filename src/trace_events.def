@@ -125,6 +125,13 @@ ENVY_TRACE_EVENT(download_failed,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(error))
 
+ENVY_TRACE_EVENT(download_retry,
+                 ENVY_TRACE_FIELD_STR(url)
+                 ENVY_TRACE_FIELD_I64(attempt)     // 1-based; the attempt that failed
+                 ENVY_TRACE_FIELD_I64(delay_ms)
+                 ENVY_TRACE_FIELD_STR(reason)      // fetch_error_kind_name
+                 ENVY_TRACE_FIELD_STR(error))
+
 ENVY_TRACE_EVENT(download_skipped,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(reason))

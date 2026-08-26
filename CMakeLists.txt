@@ -316,6 +316,7 @@ set(ENVY_BASE_SOURCES
     $<$<NOT:$<PLATFORM_ID:Windows>>:src/sha256_mbedtls.cpp>
     $<$<PLATFORM_ID:Darwin>:src/ssl_certs_macos.mm>
     src/fetch.cpp
+    src/fetch_error.cpp
     $<$<PLATFORM_ID:Windows>:src/fetch_http_win32.cpp>
     $<$<NOT:$<PLATFORM_ID:Windows>>:src/fetch_http_curl.cpp>
     src/platform.cpp
@@ -507,6 +508,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/engine_weak_resolution_tests.cpp
     src/task_engine_tests.cpp
     src/fetch_tests.cpp
+    src/fetch_error_tests.cpp
     src/lua_error_formatter_tests.cpp
     src/lua_shell_tests.cpp
     src/manifest_tests.cpp
