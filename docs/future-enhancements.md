@@ -377,6 +377,14 @@ Higher-level abstraction for platform-specific variants within a single spec ide
 if (!selectors.empty() && archive_count == 1) { /* extract() validates; totals stay {0,0} */ }
 ```
 
+## Range Resume for Interrupted Downloads
+
+Retry restarts from byte zero, so a transport failure at 88% of a 1GB toolchain re-downloads 880MB. Resume from a `.part` sidecar via `Range:`, verifying sha256 on the assembled file; the traps are servers that answer 200 instead of 206 (append onto a partial and the file doubles) and per-request mirrors that redirect to different bytes, which `If-Range:` guards.
+
+```cpp
+setopt(CURLOPT_RESUME_FROM_LARGE, partial_bytes);  // 206 -> append; 200 -> truncate, restart
+```
+
 ## Trace Coverage for Bootstrap/Bundle/AWS
 
 Machinery trace events (`src/trace_events.def`) cover the scheduler, cache/lock, fetch, git-resolve, depot, and deploy paths but not `bootstrap.cpp`, `bundle.cpp`, or `aws_util.cpp`. Add events there if those subsystems need production diagnostics (e.g., `bundle_parsed`, `s3_request`).
