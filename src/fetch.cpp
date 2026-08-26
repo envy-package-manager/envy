@@ -343,10 +343,8 @@ int env_int(char const *name, int fallback, int lo, int hi) {
 retry_policy const &fetch_retry_policy() {
   static retry_policy const policy{
     .attempts = env_int("ENVY_FETCH_ATTEMPTS", 3, 1, 10),
-    .base_delay = std::chrono::milliseconds{ env_int("ENVY_FETCH_RETRY_BASE_MS",
-                                                     1000,
-                                                     0,
-                                                     60000) }
+    .base_delay =
+        std::chrono::milliseconds{ env_int("ENVY_FETCH_RETRY_BASE_MS", 1000, 0, 60000) }
   };
   return policy;
 }
@@ -362,9 +360,8 @@ std::chrono::milliseconds retry_delay(int attempt, std::chrono::milliseconds bas
 
   static thread_local std::mt19937 rng{ std::random_device{}() };
   std::uniform_real_distribution<double> jitter{ 0.5, 1.5 };
-  return std::chrono::milliseconds{
-    static_cast<std::chrono::milliseconds::rep>(static_cast<double>(scaled) * jitter(rng))
-  };
+  return std::chrono::milliseconds{ static_cast<std::chrono::milliseconds::rep>(
+      static_cast<double>(scaled) * jitter(rng)) };
 }
 
 // The single retry seam for every scheme. Retrying here rather than inside a backend
@@ -419,12 +416,12 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
                                            requests[i]) };
       bool const tracing{ tui::trace_enabled() };
       if (tracing) {
-        ENVY_TRACE(download_start,
-                   trace_spec,
-                   .url = source,
-                   .destination = std::visit(
-                       [](auto const &r) { return r.destination.string(); },
-                       requests[i]));
+        ENVY_TRACE(
+            download_start,
+            trace_spec,
+            .url = source,
+            .destination = std::visit([](auto const &r) { return r.destination.string(); },
+                                      requests[i]));
       }
       auto const start{ std::chrono::steady_clock::now() };
 

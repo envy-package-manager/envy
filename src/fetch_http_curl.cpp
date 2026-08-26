@@ -26,9 +26,9 @@ void ensure_curl_initialized() {
   std::call_once(once, [] {
     CURLcode const code{ curl_global_init(CURL_GLOBAL_DEFAULT) };
     if (code != CURLE_OK) {
-      throw fetch_error(fetch_error_kind::LOCAL,
-                        std::string("curl_global_init failed: ") +
-                            curl_easy_strerror(code));
+      throw fetch_error(
+          fetch_error_kind::LOCAL,
+          std::string("curl_global_init failed: ") + curl_easy_strerror(code));
     }
   });
 }
@@ -87,8 +87,9 @@ std::string from_effective_url(CURL *handle) {
 
 // " after 2201600 of 12600000 bytes" -- separates "never started" from "stalled at 17%".
 std::string transfer_position(CURL *handle) {
-  auto const downloaded{ get_info<curl_off_t>(handle, CURLINFO_SIZE_DOWNLOAD_T)
-                             .value_or(0) };
+  auto const downloaded{
+    get_info<curl_off_t>(handle, CURLINFO_SIZE_DOWNLOAD_T).value_or(0)
+  };
   auto const announced{
     get_info<curl_off_t>(handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T).value_or(-1)
   };
@@ -117,14 +118,13 @@ std::string transfer_position(CURL *handle) {
   if (kind == fetch_error_kind::HTTP_STATUS) {
     auto const status{ get_info<long>(handle, CURLINFO_RESPONSE_CODE).value_or(0) };
     throw fetch_error(kind,
-                      "HTTP error " + std::to_string(status) +
-                          from_effective_url(handle),
+                      "HTTP error " + std::to_string(status) + from_effective_url(handle),
                       static_cast<int>(status));
   }
 
-  throw fetch_error(kind,
-                    curl_easy_strerror(code) + transfer_position(handle) +
-                        from_effective_url(handle));
+  throw fetch_error(
+      kind,
+      curl_easy_strerror(code) + transfer_position(handle) + from_effective_url(handle));
 }
 
 }  // namespace
@@ -172,8 +172,7 @@ std::filesystem::path fetch_http_download(std::string_view url,
   auto const setopt{ [handle = handle.get()](auto option, auto value) {
     if (CURLcode const rc{ curl_easy_setopt(handle, option, value) }; rc != CURLE_OK) {
       throw fetch_error(fetch_error_kind::LOCAL,
-                        std::string("curl_easy_setopt failed: ") +
-                            curl_easy_strerror(rc));
+                        std::string("curl_easy_setopt failed: ") + curl_easy_strerror(rc));
     }
   } };
 

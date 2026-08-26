@@ -161,7 +161,9 @@ HINTERNET ensure_session() {
                               nullptr,
                               nullptr,
                               0);
-    if (!g_session) { throw_wininet_error("InternetOpen failed", fetch_error_kind::LOCAL); }
+    if (!g_session) {
+      throw_wininet_error("InternetOpen failed", fetch_error_kind::LOCAL);
+    }
 
     // Handles derived from the session inherit these, which is the only way to bound
     // InternetOpenUrl -- it connects and reads before handing back a request handle.
@@ -197,7 +199,7 @@ std::string query_effective_url(HINTERNET request) {
   char buf[2048]{};
   DWORD len{ sizeof(buf) - 1 };
   return InternetQueryOptionA(request, INTERNET_OPTION_URL, buf, &len) ? std::string{ buf }
-                                                                      : std::string{};
+                                                                       : std::string{};
 }
 
 // " after 2201600 of 12600000 bytes from https://mirror.example/..." -- the byte count
@@ -259,10 +261,9 @@ void read_response_to_file(HINTERNET request,
   for (;;) {
     DWORD bytes_read{ 0 };
     if (!InternetReadFile(request, buffer, sizeof(buffer), &bytes_read)) {
-      throw_wininet_error("read failed" + transfer_position(request,
-                                                            bytes_read_total,
-                                                            content_length),
-                          fetch_error_kind::TRANSFER);
+      throw_wininet_error(
+          "read failed" + transfer_position(request, bytes_read_total, content_length),
+          fetch_error_kind::TRANSFER);
     }
     if (bytes_read == 0) { break; }
 
