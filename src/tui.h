@@ -75,6 +75,11 @@ struct log_ctx_scope {
   std::string previous_;
 };
 
+// This thread's ambient log context, empty when unset. The context is thread-local, so
+// code that fans work out to its own threads has to read it on the spawning thread and
+// reopen a log_ctx_scope inside each worker or those lines lose their attribution.
+std::string const &log_ctx();
+
 // Section progress API
 using section_handle = unsigned;
 inline constexpr section_handle kInvalidSection = 0;

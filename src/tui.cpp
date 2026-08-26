@@ -1248,6 +1248,8 @@ log_ctx_scope::log_ctx_scope(std::string identity) : previous_{ s_log_ctx } {
 
 log_ctx_scope::~log_ctx_scope() { s_log_ctx = std::move(previous_); }
 
+std::string const &log_ctx() { return s_log_ctx; }
+
 #ifdef ENVY_UNIT_TEST
 namespace test {
 std::string render_section_frame(section_frame const &frame) {

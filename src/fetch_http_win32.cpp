@@ -181,7 +181,18 @@ struct internet_handle_deleter {
 };
 using internet_handle = std::unique_ptr<void, internet_handle_deleter>;
 
+// A WinINet query that *succeeds* clears the thread's last-error along the way, so a
+// failure diagnosed after one reads back as "the operation completed successfully" --
+// the very "GetLastError returned 0" report this file exists to stop emitting. Every
+// handle-inspection helper below puts the code back before returning.
+struct last_error_guard {
+  DWORD const err{ GetLastError() };
+  ~last_error_guard() { SetLastError(err); }
+};
+
 std::optional<std::uint64_t> query_content_length(HINTERNET request) {
+  last_error_guard const preserve_error{};
+
   char buf[32]{};
   DWORD buf_len{ sizeof(buf) };
   DWORD header_index{ 0 };
@@ -196,6 +207,8 @@ std::optional<std::uint64_t> query_content_length(HINTERNET request) {
 // The post-redirect URL. SourceForge and friends hand out a per-request mirror, so the
 // requested URL names nobody who can be blamed for the failure.
 std::string query_effective_url(HINTERNET request) {
+  last_error_guard const preserve_error{};
+
   char buf[2048]{};
   DWORD len{ sizeof(buf) - 1 };
   return InternetQueryOptionA(request, INTERNET_OPTION_URL, buf, &len) ? std::string{ buf }

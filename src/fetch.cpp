@@ -364,11 +364,13 @@ std::chrono::milliseconds retry_delay(int attempt, std::chrono::milliseconds bas
       static_cast<double>(scaled) * jitter(rng)) };
 }
 
-// The single retry seam for every scheme. Retrying here rather than inside a backend
-// means http, ftp, s3 and git all get one policy, and each attempt re-runs the
-// backend's own setup -- including the destination wipe that a partial left behind.
-// Safe because fetches are idempotent GETs and payloads are sha256-verified by the
-// caller after transport, so a replay can never launder bad bytes.
+// The single retry seam. Retrying here rather than inside a backend gives http, ftp
+// and git one policy, and each attempt re-runs the backend's own setup -- including
+// the destination wipe that a partial left behind. s3 is deliberately absent: the AWS
+// SDK's TransferManager already retries internally, so it throws plain runtime_error
+// and never reaches the catch below. Safe because fetches are idempotent GETs and
+// payloads are sha256-verified by the caller after transport, so a replay can never
+// launder bad bytes.
 fetch_result fetch_with_retry(fetch_request const &request,
                               std::string const &trace_spec,
                               std::string const &url) {
@@ -408,8 +410,14 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
   std::vector<std::thread> workers;
   workers.reserve(requests.size());
 
+  // Read on the calling thread: the engine's per-package context is thread-local, so
+  // every worker below has to reopen it or its log lines come out unattributed.
+  std::string const log_ctx{ tui::log_ctx() };
+
   for (size_t i = 0; i < requests.size(); ++i) {
-    workers.emplace_back([i, &requests, &results, &trace_spec]() {
+    workers.emplace_back([i, &requests, &results, &trace_spec, &log_ctx]() {
+      tui::log_ctx_scope const worker_log_ctx{ log_ctx };
+
       // The source URL names the retry target, so it is always needed; the rest is
       // trace-only work gated on trace_enabled so a disabled stream costs nothing here.
       std::string const source{ std::visit([](auto const &r) { return r.source; },

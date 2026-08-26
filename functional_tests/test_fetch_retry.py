@@ -193,6 +193,34 @@ class FetchRetryTest(EnvyTestCase):
         self.assertIn(f" of {len(PAYLOAD)} bytes from ", run.stderr)
         self.assertIn(f"{self.base_url}/truncate/99/pkg.bin", run.stderr)
 
+    def test_retry_log_line_is_attributed_to_its_package(self) -> None:
+        """fetch() retries on threads it spawns itself, and the engine's log context is
+        thread-local -- an unpropagated one leaves parallel installs with anonymous
+        `fetch: attempt 1 of 3 failed` lines."""
+        spec = self.write_spec(
+            "attributed.lua",
+            'IDENTITY = "local.attributed@v1"\n'
+            f'FETCH = "{self.base_url}/transient/1/attributed.bin"\n',
+        )
+        manifest = test_config.write_spec_manifest(
+            self.work, [("local.attributed@v1", spec)]
+        )
+
+        env = test_config.get_test_env()
+        env["ENVY_FETCH_ATTEMPTS"] = "3"
+        env["ENVY_FETCH_RETRY_BASE_MS"] = RETRY_BASE_MS
+        run = self.run_envy(
+            "--verbose", "install", "--manifest", str(manifest), env=env
+        )
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+        self.assertEqual(1, len(self.retries(run)))
+
+        retry_lines = [ln for ln in run.stderr.splitlines() if "attempt 1 of 3" in ln]
+        self.assertTrue(retry_lines, f"no retry log line: {run.stderr}")
+        for line in retry_lines:
+            self.assertIn("[local.attributed@v1]", line)
+
     def test_concurrent_retries_do_not_run_in_lockstep(self) -> None:
         """fetch() runs a thread per request. Unjittered backoff would march every
         one of them back onto the same bad mirror at the same instant."""
