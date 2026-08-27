@@ -743,21 +743,22 @@ TEST_CASE("cli_parse: global --project") {
   }
 
   SUBCASE("reaches every manifest-loading command") {
-    auto const anchor_of{ [](std::vector<std::string> args)
-                              -> std::optional<std::filesystem::path> {
-      auto argv{ make_argv(args) };
-      auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
-      REQUIRE(parsed.cmd_cfg.has_value());
-      return std::visit(
-          [](auto const &c) -> std::optional<std::filesystem::path> {
-            if constexpr (std::derived_from<std::decay_t<decltype(c)>,
-                                            envy::cmd_project_anchor>) {
-              return c.project_dir;
-            }
-            return std::nullopt;
-          },
-          *parsed.cmd_cfg);
-    } };
+    auto const anchor_of{
+      [](std::vector<std::string> args) -> std::optional<std::filesystem::path> {
+        auto argv{ make_argv(args) };
+        auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+        REQUIRE(parsed.cmd_cfg.has_value());
+        return std::visit(
+            [](auto const &c) -> std::optional<std::filesystem::path> {
+              if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                              envy::cmd_project_anchor>) {
+                return c.project_dir;
+              }
+              return std::nullopt;
+            },
+            *parsed.cmd_cfg);
+      }
+    };
 
     CHECK(anchor_of({ "envy", "--project", ".", "install" }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "sync" }).has_value());
@@ -772,8 +773,8 @@ TEST_CASE("cli_parse: global --project") {
 
   SUBCASE("a repeat wins, so an injected anchor can be overridden") {
     // The bin dir launcher injects --project ahead of the caller's argv.
-    std::vector<std::string> args{ "envy",    "--project", "..",   "--project",
-                                   ".",       "product",   "tool" };
+    std::vector<std::string> args{ "envy", "--project", "..",  "--project",
+                                   ".",    "product",   "tool" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -786,9 +787,8 @@ TEST_CASE("cli_parse: global --project") {
   }
 
   SUBCASE("coexists with --manifest, which outranks it") {
-    std::vector<std::string> args{ "envy",       "--project", ".",
-                                   "product",    "tool",      "--manifest",
-                                   "/tmp/envy.lua" };
+    std::vector<std::string> args{ "envy",       "--project",    ".", "product", "tool",
+                                   "--manifest", "/tmp/envy.lua" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };

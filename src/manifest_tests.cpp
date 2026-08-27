@@ -168,9 +168,9 @@ TEST_CASE("manifest::find_manifest_path prefers an explicit manifest over the an
   auto const explicit_path{ test_data_root() / "cache_directive" / "envy.lua" };
   REQUIRE(fs::exists(explicit_path));
 
-  auto const found{ envy::manifest::find_manifest_path(explicit_path,
-                                                       false,
-                                                       test_data_root() / "repo") };
+  auto const found{
+    envy::manifest::find_manifest_path(explicit_path, false, test_data_root() / "repo")
+  };
   CHECK(found == fs::absolute(explicit_path));
 }
 

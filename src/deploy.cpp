@@ -102,10 +102,11 @@ void deploy_verify_bin_dir(fs::path const &bin_dir,
   // so a nested deploy writes exactly what a standalone one does -- which is what lets a
   // superproject checkout restamp a submodule's committed bin dir in place.
   if (meta.root.has_value() && !*meta.root) {
-    tui::debug("deploy: %s declares '@envy root \"false\"'; its scripts resolve whichever "
-               "project encloses %s",
-               manifest_path.filename().string().c_str(),
-               bin_dir.string().c_str());
+    tui::debug(
+        "deploy: %s declares '@envy root \"false\"'; its scripts resolve whichever "
+        "project encloses %s",
+        manifest_path.filename().string().c_str(),
+        bin_dir.string().c_str());
     return;
   }
 
@@ -123,15 +124,17 @@ void deploy_verify_bin_dir(fs::path const &bin_dir,
   // placement changes it. Finding nothing at all is inert too: those scripts fail loudly,
   // naming the anchor. Either way a warning, not a refusal.
   if (owner.filename() != "envy.lua") {
-    tui::warn("deploy: %s; a manifest not named envy.lua is invisible to the upward walk "
-              "those scripts do, so they answer for whatever they find instead",
-              mismatch.c_str());
+    tui::warn(
+        "deploy: %s; a manifest not named envy.lua is invisible to the upward walk "
+        "those scripts do, so they answer for whatever they find instead",
+        mismatch.c_str());
     return;
   }
   if (!found) {
-    tui::warn("deploy: %s; they cannot resolve this project until the bin directory sits "
-              "under a discoverable envy.lua",
-              mismatch.c_str());
+    tui::warn(
+        "deploy: %s; they cannot resolve this project until the bin directory sits "
+        "under a discoverable envy.lua",
+        mismatch.c_str());
     return;
   }
 
@@ -184,9 +187,9 @@ void deploy_product_scripts(fs::path const &bin_dir,
         continue;
       }
 
-      std::string const new_content{ deploy_stamp_product_script(product.product_name,
-                                                                 plat,
-                                                                 project_root_rel) };
+      std::string const new_content{
+        deploy_stamp_product_script(product.product_name, plat, project_root_rel)
+      };
       std::string const existing_content{ read_file_content(script_path) };
       if (new_content == existing_content) {
         ++unchanged;
@@ -299,13 +302,14 @@ void deploy_finalize(std::filesystem::path const &bin_dir,
   // where re-exec is skipped: a dev build, or ENVY_NO_REEXEC.
   if (meta.version && *meta.version != reexec_self_version()) {
     // No 'envy use <self>' suggestion: self is a dev build in the case that reaches here.
-    tui::warn("deploy: bin scripts stamped from envy %s, but %s pins %s -- './bin/envy' "
-              "execs %s, which can reject options these scripts pass. Retarget the pin "
-              "with 'envy use', or restamp by syncing as the pinned release",
-              std::string{ reexec_self_version() }.c_str(),
-              manifest_path.filename().string().c_str(),
-              meta.version->c_str(),
-              meta.version->c_str());
+    tui::warn(
+        "deploy: bin scripts stamped from envy %s, but %s pins %s -- './bin/envy' "
+        "execs %s, which can reject options these scripts pass. Retarget the pin "
+        "with 'envy use', or restamp by syncing as the pinned release",
+        std::string{ reexec_self_version() }.c_str(),
+        manifest_path.filename().string().c_str(),
+        meta.version->c_str(),
+        meta.version->c_str());
   }
 
   for (auto const plat : platforms) {

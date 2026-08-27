@@ -46,13 +46,12 @@ cmd_deploy::cmd_deploy(cfg cfg, std::optional<std::filesystem::path> const &cli_
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_deploy::execute() {
-  auto const [m, c]{
-    cmd_startup_load("deploy",
-                     cfg_.manifest_path,
-                     cli_cache_root_,
-                     cfg_.subproject,
-                     subproject_anchor(cfg_.subproject, cfg_.project_dir))
-  };
+  auto const [m,
+              c]{ cmd_startup_load("deploy",
+                                   cfg_.manifest_path,
+                                   cli_cache_root_,
+                                   cfg_.subproject,
+                                   subproject_anchor(cfg_.subproject, cfg_.project_dir)) };
 
   if (!m->meta.bin) {
     throw std::runtime_error(
@@ -86,12 +85,7 @@ void cmd_deploy::execute() {
 
   // Check deploy directive: absent or false means deployment disabled
 
-  deploy_finalize(bin_dir,
-                  products,
-                  platforms,
-                  cfg_.strict,
-                  m->manifest_path,
-                  m->meta);
+  deploy_finalize(bin_dir, products, platforms, cfg_.strict, m->manifest_path, m->meta);
 }
 
 }  // namespace envy
