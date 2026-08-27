@@ -442,6 +442,79 @@ class TestNestedSubprojectScripts(_AnchorTestBase):
         self.assertPathContains(result.stdout, f"ROOT={b}")
 
 
+@unittest.skipIf(sys.platform == "win32", "creating symlinks needs elevation on Windows")
+class TestSymlinkedPaths(_AnchorTestBase):
+    """Anchors are canonicalized, so a symlink and its target are one project.
+
+    The POSIX product script resolves its own location physically (`cd -P`/`pwd -P`), so
+    the deploy-time round-trip check has to walk from the physical bin dir too -- or it
+    would bless a layout the scripts then fail on, or refuse one that works.
+    """
+
+    def test_a_symlinked_bin_dir_inside_the_tree_deploys_and_runs(self):
+        payload = self.tree / "payload.sh"
+        payload.write_text(
+            '#!/usr/bin/env bash\necho "ROOT=$ENVY_PROJECT_ROOT"\n', encoding="utf-8"
+        )
+        payload.chmod(payload.stat().st_mode | stat.S_IXUSR)
+        env = self.seed_launcher_binary()
+
+        b = self.project("b", f'{{ tool = "{self.lua_path(payload)}" }}',
+                         bin_value="real-bin")
+        (b / "bin").symlink_to("real-bin")
+        # The manifest names the symlink, not the target.
+        (b / "envy.lua").write_text(
+            (b / "envy.lua").read_text(encoding="utf-8").replace(
+                '-- @envy bin "real-bin"', '-- @envy bin "bin"'
+            ),
+            encoding="utf-8",
+        )
+
+        run = self.sync(b / "envy.lua", cwd=b, env=env)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue((b / "real-bin" / "tool").exists())
+
+        result = test_config.run(
+            [str(b / "bin" / "tool")], cwd=self.outside, env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertPathContains(result.stdout, f"ROOT={b}")
+
+    def test_a_symlinked_path_and_its_target_resolve_the_same_project(self):
+        physical = self.tree / "physical"
+        physical.mkdir()
+        b = self.project("b", '{ tool = "B-tool" }', root=physical / "proj")
+        (self.tree / "via-link").symlink_to(physical)
+
+        through_link = self.run_envy(
+            "--project", self.tree / "via-link" / "proj" / "tools",
+            "product", "tool", cwd=self.outside,
+        )
+        direct = self.run_envy(
+            "--project", b / "tools", "product", "tool", cwd=self.outside
+        )
+        self.assertEqual(0, through_link.returncode, through_link.stderr)
+        self.assertEqual(0, direct.returncode, direct.stderr)
+        self.assertEqual(self.resolved(direct), self.resolved(through_link))
+
+    def test_a_bin_dir_symlinked_out_of_the_tree_is_caught(self):
+        """The check walks physically, so it sees what the scripts will see."""
+        outside_bin = self.tree / "outside-bin"
+        outside_bin.mkdir()
+        b = self.project("b", '{ tool = "B-tool" }')
+        (b / "tools").rmdir()
+        (b / "tools").symlink_to(outside_bin)
+
+        run = self.sync(b / "envy.lua", cwd=b)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertIn("no manifest", run.stderr)
+
+        # Not a false alarm: that anchor really does resolve nothing.
+        probe = self.run_envy("--project", outside_bin, "product", "tool", cwd=b)
+        self.assertNotEqual(0, probe.returncode)
+
+
 class TestStampedVersionSkew(_AnchorTestBase):
     """The launcher passes options only its own generation accepts.
 
