@@ -75,12 +75,12 @@ struct manifest : unmovable {
 
   manifest() = default;
 
-  // Find manifest path: use provided path if given, otherwise discover from current
-  // directory. When nearest=true, return the first envy.lua found (subproject mode).
-  // Returns absolute path or throws if not found
+  // Anchor precedence: explicit_path (this file, no walk), then project_dir, then the
+  // CWD. nearest=true stops at the first envy.lua. Absolute path, or throws.
   static std::filesystem::path find_manifest_path(
       std::optional<std::filesystem::path> const &explicit_path,
-      bool nearest);
+      bool nearest,
+      std::optional<std::filesystem::path> const &project_dir = std::nullopt);
 
   // A manifest found on disk: its bytes, read once, and the '@envy' directives parsed out
   // of them. A caller that goes on to execute the manifest passes `content` to load()
@@ -96,10 +96,23 @@ struct manifest : unmovable {
   static std::optional<discovery> discover(bool nearest,
                                            std::filesystem::path const &start_dir);
 
-  // Discover + load. Uses explicit_path if given, otherwise discovers from CWD.
+  // Where the upward walk starts: project_dir canonicalized, else the CWD.
+  static std::filesystem::path discovery_start_dir(
+      std::optional<std::filesystem::path> const &project_dir);
+
+  // Which project a command settled on, and what anchored it. A caller that walks with
+  // discover() itself reports here; discover() also probes (deploy's bin-dir round trip),
+  // and a probe must not claim to be the command's answer.
+  static void trace_resolved(std::filesystem::path const &path,
+                             std::filesystem::path const &anchor,
+                             char const *mode,
+                             bool nearest);
+
+  // Discover + load, with find_manifest_path's anchor precedence.
   static std::unique_ptr<manifest> find_and_load(
       std::optional<std::filesystem::path> const &explicit_path,
-      bool nearest = false);
+      bool nearest = false,
+      std::optional<std::filesystem::path> const &project_dir = std::nullopt);
 
   static std::unique_ptr<manifest> load(std::filesystem::path const &manifest_path);
   static std::unique_ptr<manifest> load(std::vector<unsigned char> const &content,

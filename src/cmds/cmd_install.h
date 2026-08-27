@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_install : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_install> {
+  struct cfg : cmd_cfg<cmd_install>, cmd_project_anchor {
     std::vector<std::string> queries;  // Optional: if empty, install all manifest packages
     std::optional<std::filesystem::path> manifest_path;
     bool ignore_depot = false;

@@ -12,7 +12,7 @@ namespace envy {
 
 class cmd_import : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_import> {
+  struct cfg : cmd_cfg<cmd_import>, cmd_project_anchor {
     std::filesystem::path archive_path;
     std::optional<std::filesystem::path> dir;
     std::optional<std::filesystem::path> manifest_path;

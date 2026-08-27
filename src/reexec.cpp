@@ -123,6 +123,8 @@ int reexec_exec(reexec_request const &request, char **argv) {
   return platform::exec_process(request.binary, child_argv.data(), build_child_env());
 }
 
+std::string_view reexec_self_version() { return get_self_version(); }
+
 reexec_decision reexec_should(std::string_view self_version,
                               std::optional<std::string> const &requested_version,
                               bool reexec_env_set,

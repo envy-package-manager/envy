@@ -233,6 +233,14 @@ std::filesystem::path util_absolute_path(std::filesystem::path const &relative,
   return (anchor / relative).lexically_normal();
 }
 
+std::filesystem::path util_canonical_path(std::filesystem::path const &path) {
+  namespace fs = std::filesystem;
+  fs::path const abs{ fs::absolute(path) };
+  std::error_code ec;
+  fs::path const canonical{ fs::weakly_canonical(abs, ec) };
+  return ec ? abs : canonical;
+}
+
 std::string util_flatten_script_with_semicolons(std::string_view script) {
   if (script.empty()) { return {}; }
 

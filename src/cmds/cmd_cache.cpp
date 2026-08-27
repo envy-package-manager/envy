@@ -67,9 +67,9 @@ void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected
   sub->callback([on_selected = std::move(on_selected)] { on_selected(cfg{}); });
 }
 
-cmd_cache::cmd_cache(cmd_cache::cfg /*cfg*/,
+cmd_cache::cmd_cache(cmd_cache::cfg cfg,
                      std::optional<std::filesystem::path> const &cli_cache_root)
-    : cli_cache_root_{ cli_cache_root } {}
+    : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_cache::execute() {
   // The report is about the project's cache, so an '@envy cache-*' directive counts here
@@ -80,9 +80,14 @@ void cmd_cache::execute() {
   std::optional<std::string> manifest_cache;
   std::filesystem::path manifest_dir;
   if (!cli_cache_root_) {
-    if (auto const found{ manifest::discover(false, std::filesystem::current_path()) }) {
+    auto const start{ manifest::discovery_start_dir(cfg_.project_dir) };
+    if (auto const found{ manifest::discover(false, start) }) {
       manifest_cache = found->meta.cache_for_platform();
       manifest_dir = found->path.parent_path();
+      manifest::trace_resolved(found->path,
+                               start,
+                               cfg_.project_dir ? "project" : "cwd",
+                               false);
     }
   }
 

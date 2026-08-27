@@ -21,7 +21,7 @@ std::string use_rewrite_header(std::string_view content,
 
 class cmd_use : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_use> {
+  struct cfg : cmd_cfg<cmd_use>, cmd_project_anchor {
     std::string version;
     std::optional<std::filesystem::path> manifest_path;
     std::optional<std::string> mirror;

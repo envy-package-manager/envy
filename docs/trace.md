@@ -37,6 +37,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `phase_unblocked` | unblocked_at_phase:phase, dependency:str |
 | `target_extended` | old_target:phase, new_target:phase |
 | `pkg_outcome` | outcome:str, duration_ms:i64 |
+| `manifest_resolved` | path:str, anchor:str, mode:str (explicit\|project\|cwd), nearest:bool |
 | `cache_hit` | cache_key:str, pkg_path:str, fast_path:bool |
 | `cache_miss` | cache_key:str |
 | `lock_acquired` | lock_path:str, wait_duration_ms:i64 |

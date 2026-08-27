@@ -79,17 +79,25 @@ void cmd_run::execute() {
     exec_command = std::move(cfg_.command);
   }
 
+  // --project outranks both inferences above: the caller named the project outright, so
+  // there is nothing left to guess from a script path or the CWD.
+  if (cfg_.project_dir) { start_dir = manifest::discovery_start_dir(cfg_.project_dir); }
+
   auto const discovered{ manifest::discover(false, start_dir) };
   if (!discovered) {
     std::string msg{ "run: manifest not found (discovery from " + start_dir.string() +
                      ")" };
-    if (exec_command.size() > 1) {
+    if (!cfg_.project_dir && exec_command.size() > 1) {
       msg += "\nhint: use '--' to specify script location for manifest discovery";
     }
     throw std::runtime_error(msg);
   }
   auto const &manifest_path{ discovered->path };
   auto const &meta{ discovered->meta };  // discovery parsed the directives already
+  // No manifest_resolved event here: trace records are queued for the tui worker, and
+  // execvp below replaces this image before it drains. It would surface only on Windows,
+  // which waits on a child instead -- a trace that exists on one platform is worse than
+  // none. What `run` resolved is observable in the PATH the child inherits.
 
   reexec_if_needed(meta, cli_cache_root_, manifest_path.parent_path());
 

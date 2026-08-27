@@ -208,8 +208,13 @@ case "$(uname -m)" in
     *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
+# --project, injected ahead of the caller's argv: this script belongs to one project, and
+# the binary must not rediscover a different one from whatever CWD invoked it. take_last on
+# the option side means a hand-typed --project still wins.
+ENVY_ARGS=(--project "$(resolve_script_dir)")
+
 ENVY_BIN="$CACHE/envy/$VERSION/envy"
-[[ -x "$ENVY_BIN" ]] && exec "$ENVY_BIN" "$@"
+[[ -x "$ENVY_BIN" ]] && exec "$ENVY_BIN" "${ENVY_ARGS[@]}" "$@"
 
 echo "Downloading envy $VERSION..." >&2
 # mktemp, not $$: a predictable name in a sticky /tmp lets another user pre-create the
@@ -252,4 +257,4 @@ tar -xzf "$T/$ARCHIVE" -C "$T" || die "Failed to extract envy from $URL"
 # confusing "no such file" from exec.
 [[ -f "$T/envy" ]] || die "archive from $URL contained no envy binary"
 [[ $PLATFORM == darwin ]] && xattr -d com.apple.quarantine "$T/envy" 2>/dev/null || true
-chmod +x "$T/envy" && exec "$T/envy" "$@"
+chmod +x "$T/envy" && exec "$T/envy" "${ENVY_ARGS[@]}" "$@"

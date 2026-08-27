@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_run : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_run> {
+  struct cfg : cmd_cfg<cmd_run>, cmd_project_anchor {
     std::vector<std::string> command;
   };
 
