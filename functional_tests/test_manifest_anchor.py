@@ -96,6 +96,30 @@ class _AnchorTestBase(EnvyTestCase):
         """Manifest paths this run resolved, newest last."""
         return [e.raw["path"] for e in run.events("manifest_resolved")]
 
+    # -- deployed script names ----------------------------------------------
+    #
+    # A plain `sync` deploys the host platform only, so a test that names 'tool' finds
+    # nothing on Windows, where deploy writes 'tool.bat'.
+
+    @staticmethod
+    def product_name(name: str) -> str:
+        return f"{name}.bat" if sys.platform == "win32" else name
+
+    @staticmethod
+    def launcher_name() -> str:
+        return "envy.bat" if sys.platform == "win32" else "envy"
+
+    def product(self, bin_dir: Path, name: str) -> Path:
+        return bin_dir / self.product_name(name)
+
+    def launcher(self, bin_dir: Path) -> Path:
+        return bin_dir / self.launcher_name()
+
+    def hop_assignment(self, value: str) -> str:
+        """How the stamped project-root hop reads in this platform's dialect."""
+        return (f'set "ENVY_PROJECT_ROOT_HOP={value}"' if sys.platform == "win32"
+                else f'ENVY_PROJECT_ROOT_HOP="{value}"')
+
 
 class TestAnchorPrecedence(_AnchorTestBase):
     """Two projects, each providing `tool`, plus a directory in neither."""
@@ -202,8 +226,8 @@ class TestAnchoredCommands(_AnchorTestBase):
 
     def test_deploy_anchors_on_project(self):
         self.assert_anchored("--project", self.b, "deploy", expect=self.b)
-        self.assertTrue((self.b / "tools" / "tool").exists())
-        self.assertFalse((self.a / "tools" / "tool").exists())
+        self.assertTrue(self.product(self.b / "tools", "tool").exists())
+        self.assertFalse(self.product(self.a / "tools", "tool").exists())
 
     def test_package_anchors_on_project(self):
         # Resolves B, then refuses: a user-managed package has no cache directory to name.
@@ -225,7 +249,7 @@ class TestAnchoredCommands(_AnchorTestBase):
         (b / "envy.lua").write_text(
             '-- @envy bin "tools"\n'
             '-- @envy cache-posix "local-cache"\n'
-            '-- @envy cache-windows "local-cache"\n'
+            '-- @envy cache-win "local-cache"\n'
             "PACKAGES = {}\n",
             encoding="utf-8",
         )
@@ -303,12 +327,6 @@ class TestDeployedScripts(_AnchorTestBase):
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
 
-    def _launcher(self, project: Path) -> Path:
-        return project / "tools" / ("envy.bat" if sys.platform == "win32" else "envy")
-
-    def _product(self, project: Path, name: str) -> Path:
-        return project / "tools" / (f"{name}.bat" if sys.platform == "win32" else name)
-
     def test_deployed_script_resolves_its_own_project(self):
         inner = self._payload("inner", "echo INNER-OK")
         # `outer` shells out to sibling product `inner` by bare name and reports the
@@ -329,7 +347,7 @@ class TestDeployedScripts(_AnchorTestBase):
         self.assertEqual(0, run.returncode, run.stderr)
 
         result = test_config.run(
-            [str(self._product(b, "outer"))],
+            [str(self.product(b / "tools", "outer"))],
             cwd=self.a, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
@@ -343,7 +361,7 @@ class TestDeployedScripts(_AnchorTestBase):
         self.assertEqual(0, run.returncode, run.stderr)
 
         result = test_config.run(
-            [str(self._launcher(b)), "product", "tool"],
+            [str(self.launcher(b / "tools")), "product", "tool"],
             cwd=self.a, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
@@ -356,7 +374,7 @@ class TestDeployedScripts(_AnchorTestBase):
         self.assertEqual(0, self.sync(self.a / "envy.lua", cwd=self.a, env=env).returncode)
 
         result = test_config.run(
-            [str(self._launcher(b)), "--project", str(self.a), "product", "tool"],
+            [str(self.launcher(b / "tools")), "--project", str(self.a), "product", "tool"],
             cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
@@ -681,7 +699,7 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         # --subproject excludes --manifest, so this anchors on the CWD by design.
         run = self.run_envy("sync", "--subproject", cwd=sub)
         self.assertEqual(0, run.returncode, run.stderr)
-        self.assertTrue((sub / "tools" / "tool").exists())
+        self.assertTrue(self.product(sub / "tools", "tool").exists())
         # It resolved the nested manifest, not the enclosing one.
         self.assertPathEndsWith(self.resolved(run)[0], "root/sub/envy.lua")
         self.assertTrue(run.events("manifest_resolved")[0].raw["nearest"])
@@ -706,7 +724,7 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         (nested / ".git").write_text("gitdir: x\n", encoding="utf-8")
         self.assertEqual(0, self.run_envy("sync", "--subproject", cwd=nested).returncode)
 
-        for name in ("tool", "envy"):
+        for name in (self.product_name("tool"), self.launcher_name()):
             self.assertEqual(
                 (standalone / "tools" / name).read_bytes(),
                 (nested / "tools" / name).read_bytes(),
@@ -766,9 +784,9 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         p = self.project("flat", '{ tool = "FLAT-tool" }', bin_value=".")
         run = self.sync(p / "envy.lua", cwd=p)
         self.assertEqual(0, run.returncode, run.stderr)
-        script = (p / "tool").read_text(encoding="utf-8")
+        script = self.product(p, "tool").read_text(encoding="utf-8")
         self.assertNotIn("@@PROJECT_ROOT_REL@@", script)
-        self.assertIn('ENVY_PROJECT_ROOT_HOP="."', script)
+        self.assertIn(self.hop_assignment("."), script)
 
     def test_an_ordinary_layout_is_silent(self):
         p = self.project("plain", '{ tool = "PLAIN-tool" }', bin_value="build/tools")
@@ -777,8 +795,8 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         self.assertNotIn("would resolve", run.stderr)
         self.assertNotIn("no manifest", run.stderr)
         # The stamped hop has to climb out of a nested bin dir, not assume one level.
-        script = (p / "build" / "tools" / "tool").read_text(encoding="utf-8")
-        self.assertIn("../..", script)
+        script = self.product(p / "build" / "tools", "tool").read_text(encoding="utf-8")
+        self.assertIn(self.hop_assignment("../.."), script)
 
 
 class TestAnchoredExecutionEnvironment(_AnchorTestBase):
