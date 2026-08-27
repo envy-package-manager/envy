@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_sync : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_sync> {
+  struct cfg : cmd_cfg<cmd_sync>, cmd_project_anchor {
     std::vector<std::string> queries;  // Package filter (install all if empty)
     std::optional<std::filesystem::path> manifest_path;
     bool strict = false;  // If true, error on non-envy-managed product script conflicts

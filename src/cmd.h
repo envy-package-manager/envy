@@ -24,10 +24,22 @@ struct cmd_startup {
   std::unique_ptr<cache> c;
 };
 
-cmd_startup cmd_startup_load(std::string_view cmd_name,
-                             std::optional<std::filesystem::path> const &manifest_path,
-                             std::optional<std::filesystem::path> const &cli_cache_root,
-                             bool subproject = false);
+// Anchor precedence: manifest_path, then project_dir (the global --project, which a bin
+// dir's launcher injects so its own project outranks the caller's CWD), then the CWD.
+cmd_startup cmd_startup_load(
+    std::string_view cmd_name,
+    std::optional<std::filesystem::path> const &manifest_path,
+    std::optional<std::filesystem::path> const &cli_cache_root,
+    bool subproject = false,
+    std::optional<std::filesystem::path> const &project_dir = std::nullopt);
+
+// --subproject means "the manifest nearest to where I stand", so it anchors on the CWD
+// even under an injected --project -- a launcher's bin dir is the wrong "here".
+inline std::optional<std::filesystem::path> subproject_anchor(
+    bool subproject,
+    std::optional<std::filesystem::path> const &project_dir) {
+  return subproject ? std::nullopt : project_dir;
+}
 
 class cmd : unmovable {
  public:
@@ -48,6 +60,12 @@ class cmd : unmovable {
 template <typename command>
 struct cmd_cfg {
   using cmd_t = command;
+};
+
+// Opt-in for the global --project: cli_parse writes the anchor into every config deriving
+// from this. Explicit, so cmd_init's unrelated project-dir is not mistaken for one.
+struct cmd_project_anchor {
+  std::optional<std::filesystem::path> project_dir;
 };
 
 template <typename config>

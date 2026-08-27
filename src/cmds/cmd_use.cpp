@@ -169,7 +169,10 @@ void cmd_use::execute() {
   // Deliberately not cmd_startup_load: re-execing into the version the manifest names is
   // the one state this repairs, and reading the header leaves broken Lua below it no
   // obstacle.
-  auto const path{ manifest::find_manifest_path(cfg_.manifest_path, cfg_.subproject) };
+  auto const path{ manifest::find_manifest_path(cfg_.manifest_path,
+                                                cfg_.subproject,
+                                                subproject_anchor(cfg_.subproject,
+                                                                  cfg_.project_dir)) };
   auto const bytes{ util_load_file(path) };
   std::string_view const content{ reinterpret_cast<char const *>(bytes.data()),
                                   bytes.size() };

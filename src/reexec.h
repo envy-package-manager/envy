@@ -42,6 +42,10 @@ std::vector<char *> reexec_child_argv(reexec_request const &request, char **argv
 // strings. The filtering reexec_exec applies, exposed for its own sake.
 std::vector<char *> reexec_argv_without(char **argv, std::string_view option);
 
+// The version this build reports, ENVY_TEST_SELF_VERSION included. What the scripts a
+// deploy stamps are stamped from, which has to match the version the manifest pins.
+std::string_view reexec_self_version();
+
 enum class reexec_decision { PROCEED, REEXEC };
 
 reexec_decision reexec_should(std::string_view self_version,

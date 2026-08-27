@@ -46,6 +46,18 @@ ENVY_TRACE_EVENT(pkg_outcome,
                  ENVY_TRACE_FIELD_STR(outcome)
                  ENVY_TRACE_FIELD_I64(duration_ms))
 
+// --- manifest resolution ---
+
+// Which project a command decided it was operating on, and what anchored that choice.
+// mode: explicit (--manifest) | project (--project) | cwd. anchor is the directory the
+// upward walk started from, empty for an explicit path. `run` emits nothing: execvp beats
+// the trace drain, so it is observable only in the PATH its child inherits.
+ENVY_TRACE_EVENT(manifest_resolved,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_STR(anchor)
+                 ENVY_TRACE_FIELD_STR(mode)
+                 ENVY_TRACE_FIELD_BOOL(nearest))
+
 // --- cache / locking ---
 
 ENVY_TRACE_EVENT(cache_hit,

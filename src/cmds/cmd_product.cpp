@@ -101,7 +101,13 @@ void print_products_aligned(std::vector<product_info> const &products) {
 }  // namespace
 
 void cmd_product::execute() {
-  auto const [m, c]{ cmd_startup_load("product", cfg_.manifest_path, cli_cache_root_) };
+  auto const [m, c]{
+    cmd_startup_load("product",
+                     cfg_.manifest_path,
+                     cli_cache_root_,
+                     false,
+                     cfg_.project_dir)
+  };
   engine eng{ *c, m.get() };
 
   eng.resolve_graph({ m->packages.begin(), m->packages.end() });

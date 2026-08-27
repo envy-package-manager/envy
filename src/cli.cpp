@@ -4,9 +4,11 @@
 #include "CLI11.hpp"
 
 #include <filesystem>
+#include <concepts>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -31,6 +33,16 @@ cli_args cli_parse(int argc, char **argv) {
   std::optional<std::filesystem::path> cache_root;
   app.add_option("--cache-root", cache_root, "Cache root directory (overrides default)")
       ->envname("ENVY_CACHE_ROOT");
+
+  // take_last, not the default reject-duplicates: a bin dir's launcher injects this ahead
+  // of the user's own argv, so a hand-typed --project has to be able to override it.
+  std::optional<std::filesystem::path> project_dir;
+  app.add_option("--project",
+                 project_dir,
+                 "Operate on the project containing DIR (walks up from DIR for envy.lua) "
+                 "instead of the one containing the current directory")
+      ->check(CLI::ExistingDirectory)
+      ->take_last();
 
   std::string trace_spec;
   auto *trace_option{ app.add_option("--trace",
@@ -163,6 +175,18 @@ cli_args cli_parse(int argc, char **argv) {
 
   if (cmd_cfg) {
     args.cmd_cfg = *cmd_cfg;
+    // One global option, distributed to whichever config was selected; a command that
+    // never loads a manifest does not derive from the anchor base and is skipped.
+    if (project_dir) {
+      std::visit(
+          [&](auto &c) {
+            if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                            cmd_project_anchor>) {
+              c.project_dir = project_dir;
+            }
+          },
+          *args.cmd_cfg);
+    }
   } else if (args.cli_output.empty()) {
     args.cli_output = app.help();
   }

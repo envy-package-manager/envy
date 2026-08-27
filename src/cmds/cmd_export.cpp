@@ -43,7 +43,10 @@ cmd_export::cmd_export(cfg cfg, std::optional<std::filesystem::path> const &cli_
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_export::execute() {
-  auto const [m, c]{ cmd_startup_load("export", cfg_.manifest_path, cli_cache_root_) };
+  auto const [m, c]{
+    cmd_startup_load("export", cfg_.manifest_path, cli_cache_root_, false,
+                     cfg_.project_dir)
+  };
 
   // Collect target packages: all if no queries, matched subset otherwise
   auto const targets{ [&] {

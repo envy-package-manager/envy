@@ -1371,3 +1371,32 @@ TEST_CASE("util_ascii_is_alpha/alnum are locale-independent ASCII only") {
   CHECK_FALSE(envy::util_ascii_is_alpha(static_cast<char>(0xc3)));  // UTF-8 lead byte
   CHECK_FALSE(envy::util_ascii_is_alnum(static_cast<char>(0xe9)));
 }
+
+TEST_CASE("util_canonical_path makes a relative path absolute") {
+  namespace fs = std::filesystem;
+  auto const abs{ envy::util_canonical_path(fs::path{ "." }) };
+  CHECK(abs.is_absolute());
+  CHECK(abs == fs::current_path());
+}
+
+TEST_CASE("util_canonical_path normalizes dot segments away") {
+  namespace fs = std::filesystem;
+  // discover() walks upward with parent_path(); a surviving "." or ".." would make it
+  // revisit the same directory or skip one. The '.' shape is what envy.bat's "%~dp0."
+  // hands in.
+  auto const cwd{ fs::current_path() };
+  REQUIRE(fs::exists(cwd / "test_data"));
+  CHECK(envy::util_canonical_path(cwd / ".") == cwd);
+  CHECK(envy::util_canonical_path(cwd / "test_data" / "..") == cwd);
+}
+
+TEST_CASE("util_canonical_path keeps a path whose tail does not exist") {
+  namespace fs = std::filesystem;
+  auto const missing{ fs::current_path() / "no-such-dir-9d3f" / "deeper" };
+  CHECK(envy::util_canonical_path(missing) == missing);
+}
+
+TEST_CASE("util_canonical_path is idempotent") {
+  auto const once{ envy::util_canonical_path(std::filesystem::path{ "." }) };
+  CHECK(envy::util_canonical_path(once) == once);
+}

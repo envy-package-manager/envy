@@ -12,7 +12,7 @@ namespace envy {
 
 class cmd_cache : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_cache> {};
+  struct cfg : cmd_cfg<cmd_cache>, cmd_project_anchor {};
 
   static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
 
@@ -21,6 +21,7 @@ class cmd_cache : public cmd {
   void execute() override;
 
  private:
+  cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;
 };
 

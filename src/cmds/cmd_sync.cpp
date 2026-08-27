@@ -54,7 +54,11 @@ cmd_sync::cmd_sync(cfg cfg, std::optional<std::filesystem::path> const &cli_cach
 
 void cmd_sync::execute() {
   auto const [m, c]{
-    cmd_startup_load("sync", cfg_.manifest_path, cli_cache_root_, cfg_.subproject)
+    cmd_startup_load("sync",
+                     cfg_.manifest_path,
+                     cli_cache_root_,
+                     cfg_.subproject,
+                     subproject_anchor(cfg_.subproject, cfg_.project_dir))
   };
 
   if (!m->meta.bin) {
@@ -113,13 +117,13 @@ void cmd_sync::execute() {
 
   // Deploy product scripts
   auto const products{ eng.collect_all_products() };
-  bool const deploy_enabled{ m->meta.deploy.has_value() && *m->meta.deploy };
+
   deploy_finalize(bin_dir,
                   products,
                   platforms,
                   cfg_.strict,
-                  deploy_enabled,
-                  m->manifest_path);
+                  m->manifest_path,
+                  m->meta);
 }
 
 }  // namespace envy

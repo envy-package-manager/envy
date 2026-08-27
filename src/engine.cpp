@@ -1137,9 +1137,12 @@ void engine::resolve_default_shell_fn() {
                                                                   pkg_phase::spec_fetch };
   }
 
+  // The manifest's directory, not the CWD: DEFAULT_SHELL belongs to the project, and a
+  // command anchored elsewhere (--project, --manifest) would otherwise run it in the
+  // caller's tree -- the same cwd SETUP verbs get from compute_project_root.
   phase_context ctx{ .eng = this,
                      .p = default_shell_consumer_.get(),
-                     .run_dir = std::nullopt,
+                     .run_dir = manifest_->manifest_path.parent_path(),
                      .lock = nullptr };
   default_shell_ = manifest_->run_default_shell_fn(&ctx);
 }

@@ -12,8 +12,9 @@ namespace envy {
 cmd_startup cmd_startup_load(std::string_view cmd_name,
                              std::optional<std::filesystem::path> const &manifest_path,
                              std::optional<std::filesystem::path> const &cli_cache_root,
-                             bool subproject) {
-  auto m{ manifest::find_and_load(manifest_path, subproject) };
+                             bool subproject,
+                             std::optional<std::filesystem::path> const &project_dir) {
+  auto m{ manifest::find_and_load(manifest_path, subproject, project_dir) };
   if (!m) {
     throw std::runtime_error(std::string{ cmd_name } + ": could not load manifest");
   }

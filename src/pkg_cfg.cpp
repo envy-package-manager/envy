@@ -532,10 +532,7 @@ std::filesystem::path pkg_cfg::compute_project_root(pkg_cfg const *cfg) {
   while (cfg && cfg->parent) { cfg = cfg->parent; }
 
   if (cfg && !cfg->declaring_file_path.empty()) {
-    std::filesystem::path const abs{ std::filesystem::absolute(cfg->declaring_file_path) };
-    std::error_code ec;
-    std::filesystem::path const canonical{ std::filesystem::weakly_canonical(abs, ec) };
-    return (ec ? abs : canonical).parent_path();
+    return util_canonical_path(cfg->declaring_file_path).parent_path();
   }
 
   return std::filesystem::current_path();

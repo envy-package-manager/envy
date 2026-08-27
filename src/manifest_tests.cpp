@@ -122,6 +122,58 @@ TEST_CASE("manifest::discover returns nullopt when no envy.lua found") {
   fs::remove_all(temp_root);
 }
 
+TEST_CASE("manifest::discovery_start_dir resolves a relative anchor") {
+  // discover() walks up with parent_path() and stops once it stops changing, which a
+  // relative anchor reaches at its own first segment -- above the tree it named.
+  auto const relative{ fs::relative(test_data_root() / "repo", fs::current_path()) };
+  REQUIRE(relative.is_relative());
+
+  auto const start{ envy::manifest::discovery_start_dir(relative) };
+  CHECK(start.is_absolute());
+
+  auto const result{ envy::manifest::discover(false, start) };
+  REQUIRE(result.has_value());
+  CHECK(result->path == fs::weakly_canonical(test_data_root() / "repo" / "envy.lua"));
+}
+
+TEST_CASE("manifest::find_manifest_path anchors discovery on the from directory") {
+  auto const nested{ test_data_root() / "repo" / "sibling" };
+  REQUIRE(fs::exists(nested));
+
+  auto const found{ envy::manifest::find_manifest_path(std::nullopt, false, nested) };
+  CHECK(found == fs::weakly_canonical(test_data_root() / "repo" / "envy.lua"));
+}
+
+TEST_CASE("manifest::find_manifest_path anchors nearest mode on the same directory") {
+  // nearest and root mode differ only under '@envy root "false"'; both have to start
+  // where the anchor says, or --subproject and --project disagree about "here".
+  auto const nested{ test_data_root() / "non_git_dir" / "deeply" / "nested" / "path" };
+  REQUIRE(fs::exists(nested));
+
+  auto const found{ envy::manifest::find_manifest_path(std::nullopt, true, nested) };
+  CHECK(found == fs::weakly_canonical(test_data_root() / "non_git_dir" / "envy.lua"));
+}
+
+TEST_CASE("manifest::find_manifest_path walks through a submodule's .git file") {
+  // The boundary is a .git *directory*; a bin dir inside a submodule still resolves the
+  // superproject that deployed it, which is what deploy_verify_bin_dir relies on.
+  auto const nested{ test_data_root() / "repo" / "submodule" / "nested" };
+  REQUIRE(fs::exists(nested));
+
+  auto const found{ envy::manifest::find_manifest_path(std::nullopt, false, nested) };
+  CHECK(found == fs::weakly_canonical(test_data_root() / "repo" / "envy.lua"));
+}
+
+TEST_CASE("manifest::find_manifest_path prefers an explicit manifest over the anchor") {
+  auto const explicit_path{ test_data_root() / "cache_directive" / "envy.lua" };
+  REQUIRE(fs::exists(explicit_path));
+
+  auto const found{ envy::manifest::find_manifest_path(explicit_path,
+                                                       false,
+                                                       test_data_root() / "repo") };
+  CHECK(found == fs::absolute(explicit_path));
+}
+
 TEST_CASE("manifest::discover carries the manifest's bytes and directives") {
   auto const test_root{ test_data_root() };
 
