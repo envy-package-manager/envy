@@ -797,6 +797,11 @@ class BootstrapIntegrationTest(EnvyTestCase):
         recognizing the forms it rejects would need the very parser this change deleted --
         so it anchors, misses, and the binary it execs produces the error. That the error
         arrives at all is the contract; which layer authored it is not.
+
+        Driven through `cache --root`, a command that resolves the project's cache. A
+        manifest-free command like `version` deliberately does *not* fail here: main()'s
+        pre-dispatch root resolution is best-effort precisely so an unrelated bad directive
+        cannot break commands that never needed the manifest.
         """
         project_dir = self._temp_dir / "project"
         bin_dir = project_dir / "tools"
@@ -824,7 +829,9 @@ class BootstrapIntegrationTest(EnvyTestCase):
         if sys.platform != "win32":
             cached_binary.chmod(cached_binary.stat().st_mode | stat.S_IXUSR)
 
-        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+        result = self._run_bootstrap(
+            bootstrap, ["cache", "--root"], set_cache_root=False
+        )
 
         self.assertNotEqual(0, result.returncode, f"stdout: {result.stdout}")
         self.assertIn("cache-local", result.stderr)
@@ -852,7 +859,9 @@ class BootstrapIntegrationTest(EnvyTestCase):
         dest = self._write_project_with_cache_local("0.1.9")
         bootstrap = self._stamp_bootstrap(dest, "0.1.9", min_directive_version="0.2.0")
 
-        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+        result = self._run_bootstrap(
+            bootstrap, ["cache", "--root"], set_cache_root=False
+        )
 
         self.assertNotEqual(0, result.returncode, f"stdout: {result.stdout}")
         self.assertIn("cache-local", result.stderr)

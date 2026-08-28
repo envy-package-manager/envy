@@ -49,33 +49,46 @@ int main(int argc, char *argv[]) {
     // Commands with no manifest (init, version) discover nothing and land on the default,
     // as before.
     envy::self_deploy::ensure([&] {
-      envy::envy_meta meta;
-      std::filesystem::path manifest_dir;
-      // Skipped under an override, which already decides the root: discovery and directive
-      // parsing both throw, so reading a manifest that cannot change the answer would let
-      // any broken envy.lua in an ancestor break every command run with --cache-root.
-      if (!args.cache_root) {
-        // The same anchor the command itself will use, pulled off whichever config was
-        // selected: resolving this pre-step from the CWD while the command resolved from
-        // its bin dir would deploy envy into one tree and its packages into another.
-        std::optional<std::filesystem::path> project_dir;
-        std::visit(
-            [&](auto const &c) {
-              if constexpr (std::derived_from<std::decay_t<decltype(c)>,
-                                              envy::cmd_project_anchor>) {
-                project_dir = c.project_dir;
-              }
-            },
-            *args.cmd_cfg);
-        if (auto const found{ envy::manifest::discover(
-                false,
-                envy::manifest::discovery_start_dir(project_dir)) }) {
-          meta = found->meta;
-          manifest_dir = found->path.parent_path();
+      // Best-effort, and deliberately silent on failure. Both halves throw: discovery parses
+      // directives, and resolution rejects states such as both override markers existing at
+      // once. This step runs for *every* command, including ones that never load a manifest,
+      // so letting either escape meant `envy --version` and `envy init` failed before doing
+      // anything when run anywhere inside a project with a bad directive -- precisely what a
+      // migration leaves behind -- and that `envy cache --local`, the command best placed to
+      // repair a bad marker pair, was blocked by the very state it fixes. A command that
+      // needs the manifest re-resolves and reports the error properly; the rest land on the
+      // default root, exactly as they did before this step became manifest-aware.
+      try {
+        envy::envy_meta meta;
+        std::filesystem::path manifest_dir;
+        // Skipped under an override, which already decides the root: discovery and directive
+        // parsing both throw, so reading a manifest that cannot change the answer would let
+        // any broken envy.lua in an ancestor break every command run with --cache-root.
+        if (!args.cache_root) {
+          // The same anchor the command itself will use, pulled off whichever config was
+          // selected: resolving this pre-step from the CWD while the command resolved from
+          // its bin dir would deploy envy into one tree and its packages into another.
+          std::optional<std::filesystem::path> project_dir;
+          std::visit(
+              [&](auto const &c) {
+                if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                                envy::cmd_project_anchor>) {
+                  project_dir = c.project_dir;
+                }
+              },
+              *args.cmd_cfg);
+          if (auto const found{ envy::manifest::discover(
+                  false,
+                  envy::manifest::discovery_start_dir(project_dir)) }) {
+            meta = found->meta;
+            manifest_dir = found->path.parent_path();
+          }
         }
+        return envy::resolve_cache_root(meta.cache_request(args.cache_root, manifest_dir))
+            .root;
+      } catch (std::exception const &) {
+        return envy::resolve_cache_root(envy::cache_root_request{}).root;
       }
-      return envy::resolve_cache_root(meta.cache_request(args.cache_root, manifest_dir))
-          .root;
     }());
 
     auto cmd{ std::visit(

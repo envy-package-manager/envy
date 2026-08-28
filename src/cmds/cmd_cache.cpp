@@ -101,7 +101,16 @@ void cmd_cache::set_mode(envy_meta const &meta,
   }
 
   auto const state{ resolve_state_dir(meta.state_dir, manifest_dir) };
-  auto const before{ resolve_cache_root(meta.cache_request(std::nullopt, manifest_dir)) };
+
+  // Only to report what the root *was*, so a failure to determine it must not stop the
+  // write. Both markers present is exactly that case: it throws, and this command -- the one
+  // that owns the markers -- is the one best placed to normalize it, so it must not be the
+  // one blocked by it. `--root` and the report still surface the error.
+  auto const before{ [&]() -> std::optional<std::filesystem::path> {
+    try {
+      return resolve_cache_root(meta.cache_request(std::nullopt, manifest_dir)).root;
+    } catch (std::exception const &) { return std::nullopt; }
+  }() };
 
   // What the project itself asks for, markers ignored. Matching it means the user is
   // clearing an override rather than setting one.
@@ -130,11 +139,11 @@ void cmd_cache::set_mode(envy_meta const &meta,
                     after.root.string().c_str(),
                     cache_root_tier_name(after.tier));
 
-  if (after.root != before.root) {
+  if (before && *before != after.root) {
     // Named, not moved: relocating a multi-GB tree across filesystems is slow and races
     // any other envy process holding a cache lock. Deleting it is the user's call.
     tui::print_stdout("Previous: %s (no longer used; remove it when convenient)\n",
-                      before.root.string().c_str());
+                      before->string().c_str());
   }
 }
 

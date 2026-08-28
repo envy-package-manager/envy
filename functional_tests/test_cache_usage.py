@@ -206,6 +206,48 @@ class TestCacheUsage(EnvyTestCase):
                 self.assertNotIn("cache-posix", result.stderr)
                 self.assertNotIn("directive removed", result.stderr)
 
+    def test_shell_only_warns_when_the_hook_is_somewhere_unusual(self):
+        """The warning is about losing hooks, so it must key on the root, not the tier.
+
+        `@envy cache-mode "shared"` reports a non-default tier while resolving to the plain
+        platform default; warning that *that* cache is easily deleted is just wrong.
+        """
+        project = self.make_temp_dir("shellproj")
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        home = project / "home"
+        home.mkdir()
+        env = test_config.get_test_env()
+        env.pop("ENVY_CACHE_ROOT", None)
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        env["XDG_CACHE_HOME"] = str(home / "cache")
+        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+
+        def run_shell() -> str:
+            result = test_config.run(
+                [str(self.envy), "shell", "zsh"],
+                cwd=project,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            return result.stdout + result.stderr
+
+        # Declares where --local would go, but defaults to the user-wide cache.
+        (project / "envy.lua").write_bytes(
+            b'-- @envy bin "bin"\n'
+            b'-- @envy cache-local "out/.envy"\n'
+            b'-- @envy cache-mode "shared"\n'
+            b"PACKAGES = {}\n"
+        )
+        self.assertNotIn("Moving or deleting", run_shell())
+
+        # Actually local: the hooks really are inside a tree an rm -rf will take.
+        (project / "envy.lua").write_bytes(
+            b'-- @envy bin "bin"\n-- @envy cache-local "out/.envy"\nPACKAGES = {}\n'
+        )
+        self.assertIn("Moving or deleting", run_shell())
+
     def test_non_package_directories_are_reported(self):
         specs = self.cache_root / "specs"
         specs.mkdir(parents=True)

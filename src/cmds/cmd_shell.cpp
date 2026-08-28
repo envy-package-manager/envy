@@ -43,11 +43,15 @@ shell_info const *find_shell(std::string const &name) {
   return nullptr;
 }
 
-// Any root that is not the user-wide default: a project-local tree counts, and is in fact
-// the case that most needs the warning, since `rm -rf` on the build root takes the hooks
-// with it. Keying on the CLI flag alone missed exactly that.
+// Is the hook somewhere other than the user-wide cache? A project-local tree is the case
+// that most needs the warning, since `rm -rf` on the build root takes the hooks with it.
+//
+// Keyed on the resolved root, not on which tier decided: `@envy cache-mode "shared"` and a
+// `--shared` marker both resolve to the plain platform default while reporting a non-DEFAULT
+// tier, and warning that *that* cache is easily lost is just wrong.
 bool is_custom_cache(cache_root_resolution const &resolved) {
-  return resolved.tier != cache_root_tier::DEFAULT || resolved.mode == cache_mode::LOCAL;
+  return resolved.mode == cache_mode::LOCAL ||
+         resolved.tier == cache_root_tier::CLI_OVERRIDE;
 }
 
 // Same resolution every other command performs, so `envy shell` names the tree that

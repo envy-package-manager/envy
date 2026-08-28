@@ -261,8 +261,13 @@ set "USES_NEW_DIRECTIVES="
 if defined CACHE_LOCAL set "USES_NEW_DIRECTIVES=1"
 if defined CACHE_MODE set "USES_NEW_DIRECTIVES=1"
 if defined STATE_DIR_REL set "USES_NEW_DIRECTIVES=1"
-if defined USES_NEW_DIRECTIVES if not "!VERSION!"=="0.0.0" call :guard_directive_version
-if errorlevel 1 exit /b 1
+REM The errorlevel test lives inside the guard: left outside it, it ran on every path --
+REM including every project using none of these directives, where the ERRORLEVEL it read was
+REM whatever the preceding `set`/`if` left behind rather than the guard's own.
+if defined USES_NEW_DIRECTIVES if not "!VERSION!"=="0.0.0" (
+    call :guard_directive_version
+    if errorlevel 1 exit /b 1
+)
 
 set "ENVY_BIN=!CACHE!\envy\!VERSION!\envy.exe"
 if exist "!ENVY_BIN!" goto :run

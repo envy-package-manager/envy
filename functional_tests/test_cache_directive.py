@@ -599,5 +599,52 @@ PACKAGES = {}
         self.assertNotIn("caching packages", result.stdout)
 
 
+    # ---- regressions -----------------------------------------------------------------
+
+    def test_a_bad_directive_does_not_break_manifest_free_commands(self):
+        """`envy --version` must work inside a project it cannot parse.
+
+        main() resolves a cache root before dispatch, for every command including ones that
+        never load a manifest. When that step started reading manifests it also started
+        throwing, so a single stale directive anywhere above the cwd failed commands that
+        had nothing to do with it -- exactly the state migrating off cache-posix leaves.
+        """
+        self.create_manifest('-- @envy cache-posix "/opt/whatever"\nPACKAGES = {}\n')
+        sub = self.test_dir / "sub"
+        sub.mkdir(exist_ok=True)
+
+        for args in (["--version"], ["version"]):
+            with self.subTest(args=args):
+                result = test_config.run(
+                    [str(self.envy), *args],
+                    cwd=sub,
+                    capture_output=True,
+                    text=True,
+                    env=self._sandbox_env(),
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertNotIn("cache-posix", result.stderr)
+
+    def test_setting_a_mode_repairs_the_both_markers_state(self):
+        """The command that owns the markers must not be blocked by a bad marker pair.
+
+        Resolution treats both-markers as an error, and `envy cache --local` is the tool
+        best placed to normalize it, so it has to survive reading that state.
+        """
+        self.create_manifest("PACKAGES = {}\n")
+        (self.test_dir / ".envy-cache-local").write_bytes(b"")
+        (self.test_dir / ".envy-cache-shared").write_bytes(b"")
+
+        env = self._sandbox_env()
+        result = self._run_cache(["--local"], dict(env))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue((self.test_dir / ".envy-cache-local").exists())
+        self.assertFalse((self.test_dir / ".envy-cache-shared").exists())
+
+        # The read-only paths still report it rather than guessing.
+        (self.test_dir / ".envy-cache-shared").write_bytes(b"")
+        self.assertNotEqual(0, self._run_cache(["--root"], dict(env)).returncode)
+
+
 if __name__ == "__main__":
     unittest.main()
