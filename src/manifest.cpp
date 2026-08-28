@@ -7,6 +7,7 @@
 #include "lua_shell.h"
 #include "shell.h"
 #include "sol_util.h"
+#include "trace.h"
 #include "tui.h"
 #include "util.h"
 
@@ -530,31 +531,59 @@ std::optional<manifest::discovery> manifest::discover(
   }
 }
 
+void manifest::trace_resolved(std::filesystem::path const &path,
+                              std::filesystem::path const &anchor,
+                              char const *mode,
+                              bool nearest) {
+  ENVY_TRACE(manifest_resolved,
+             "",
+             .path = path.string(),
+             .anchor = anchor.string(),
+             .mode = mode,
+             .nearest = nearest);
+}
+
+std::filesystem::path manifest::discovery_start_dir(
+    std::optional<std::filesystem::path> const &project_dir) {
+  return project_dir ? util_canonical_path(*project_dir) : std::filesystem::current_path();
+}
+
 std::filesystem::path manifest::find_manifest_path(
     std::optional<std::filesystem::path> const &explicit_path,
-    bool nearest) {
+    bool nearest,
+    std::optional<std::filesystem::path> const &project_dir) {
   if (explicit_path) {
     auto const path{ std::filesystem::absolute(*explicit_path) };
     if (!std::filesystem::exists(path)) {
       throw std::runtime_error("manifest not found: " + path.string());
     }
+    trace_resolved(path, {}, "explicit", nearest);
     return path;
   } else {
-    if (auto const discovered{ discover(nearest, std::filesystem::current_path()) }) {
+    auto const start{ discovery_start_dir(project_dir) };
+    if (auto const discovered{ discover(nearest, start) }) {
+      trace_resolved(discovered->path, start, project_dir ? "project" : "cwd", nearest);
       return discovered->path;
     }
-    throw std::runtime_error("manifest not found (discovery failed)");
+    throw std::runtime_error("manifest not found (discovery from " + start.string() + ")");
   }
 }
 
 std::unique_ptr<manifest> manifest::find_and_load(
     std::optional<std::filesystem::path> const &explicit_path,
-    bool nearest) {
-  if (explicit_path) { return load(find_manifest_path(explicit_path, nearest)); }
+    bool nearest,
+    std::optional<std::filesystem::path> const &project_dir) {
+  if (explicit_path) {
+    return load(find_manifest_path(explicit_path, nearest, project_dir));
+  }
 
-  auto const found{ discover(nearest, std::filesystem::current_path()) };
-  if (!found) { throw std::runtime_error("manifest not found (discovery failed)"); }
+  auto const start{ discovery_start_dir(project_dir) };
+  auto const found{ discover(nearest, start) };
+  if (!found) {
+    throw std::runtime_error("manifest not found (discovery from " + start.string() + ")");
+  }
 
+  trace_resolved(found->path, start, project_dir ? "project" : "cwd", nearest);
   return load(found->content, found->path);  // discovery already read the file
 }
 

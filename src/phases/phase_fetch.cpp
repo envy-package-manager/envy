@@ -415,6 +415,12 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
 
   auto const results{ fetch(requests, key) };
 
+  std::vector<bool> ok(results.size());
+  for (size_t i{ 0 }; i < results.size(); ++i) {
+    ok[i] = std::holds_alternative<fetch_result>(results[i]);
+  }
+  tracker.finish(ok);
+
   std::vector<std::string> errors;
   for (size_t i = 0; i < results.size(); ++i) {
     auto const spec_idx{ to_download_indices[i] };
@@ -427,7 +433,11 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
         try {
           auto const *result{ std::get_if<fetch_result>(&results[i]) };
           if (!result) { throw std::runtime_error("Unexpected result type"); }
-          sha256_verify(specs[spec_idx].sha256, sha256(result->resolved_destination));
+          sha256_verify(specs[spec_idx].sha256,
+                        tui_actions::sha256_tracked(result->resolved_destination,
+                                                    section,
+                                                    key,
+                                                    "verifying"));
           tui::debug("fetch: %s sha256 verified",
                      result->resolved_destination.filename().string().c_str());
         } catch (std::exception const &e) {

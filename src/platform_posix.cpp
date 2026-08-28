@@ -123,7 +123,7 @@ void env_var_unset(char const *name) {
   ::unsetenv(name);
 }
 
-file_lock::file_lock(std::filesystem::path const &path) {
+file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_contended) {
   // Canonicalize path to ensure different representations of same path use same mutex
   std::string const canonical_key{
     std::filesystem::absolute(path).lexically_normal().string()
@@ -153,12 +153,19 @@ file_lock::file_lock(std::filesystem::path const &path) {
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
 
-    if (::fcntl(fd, F_SETLKW, &fl) == -1) {
-      int const err{ errno };
-      ::close(fd);
-      throw std::system_error(err,
-                              std::system_category(),
-                              "Failed to acquire exclusive lock: " + path.string());
+    // Probe first: a refusal means another process holds the entry, so the wait below is
+    // open-ended — the only kind worth announcing. The mutex above serializes threads of
+    // this run, which the engine already keys apart, so it stays silent.
+    if (::fcntl(fd, F_SETLK, &fl) == -1) {
+      if ((errno == EAGAIN || errno == EACCES) && on_contended) { on_contended(); }
+
+      if (::fcntl(fd, F_SETLKW, &fl) == -1) {
+        int const err{ errno };
+        ::close(fd);
+        throw std::system_error(err,
+                                std::system_category(),
+                                "Failed to acquire exclusive lock: " + path.string());
+      }
     }
 
     // A previous holder may have unlinked (or unlinked+recreated) the path while we

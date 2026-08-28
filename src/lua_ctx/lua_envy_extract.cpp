@@ -69,7 +69,9 @@ void lua_envy_extract_install(sol::table &envy_table) {
 
     if (tracker) { opts.progress = std::ref(*tracker); }
 
-    return static_cast<int>(extract(archive_path, dest_dir, opts));
+    auto const count{ extract(archive_path, dest_dir, opts) };
+    if (tracker) { tracker->finish(); }
+    return static_cast<int>(count);
   };
 
   // envy.extract_all(src_dir, dest_dir, opts?) - Extract all archives in directory

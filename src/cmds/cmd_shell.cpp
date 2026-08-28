@@ -53,10 +53,12 @@ bool is_custom_cache(cache_root_resolution const &resolved) {
 // Same resolution every other command performs, so `envy shell` names the tree that
 // self-deploy actually wrote its hooks into. Built manifest-blind, this reported the
 // platform default and then failed to find a hook that was sitting in the local tree.
-cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache_root) {
+cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache_root,
+                                        std::optional<fs::path> const &project_dir) {
   envy_meta meta;
   fs::path manifest_dir;
-  if (auto const found{ manifest::discover(false, fs::current_path()) }) {
+  if (auto const found{ manifest::discover(
+          false, manifest::discovery_start_dir(project_dir)) }) {
     meta = found->meta;
     manifest_dir = found->path.parent_path();
   }
@@ -86,7 +88,7 @@ void cmd_shell::execute() {
                              "'. Use: bash, zsh, fish, powershell");
   }
 
-  auto const resolved{ resolve_for_shell(cli_cache_root_) };
+  auto const resolved{ resolve_for_shell(cli_cache_root_, cfg_.project_dir) };
   auto c{ std::make_unique<cache>(resolved.root) };
 
   fs::path const hook_path{ c->root() / "shell" / ("hook." + std::string{ si->ext }) };

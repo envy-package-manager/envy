@@ -1,16 +1,21 @@
 #include "fetch.h"
 
 #include "aws_util.h"
+#include "fetch_error.h"
 #include "fetch_http.h"
 #include "libgit2_util.h"
 #include "trace.h"
+#include "tui.h"
 #include "util.h"
 
 #include "git2.h"
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -135,6 +140,25 @@ git_repository *try_git_clone(std::string const &url,
   return repo_raw;
 }
 
+// libgit2 reports the failing subsystem in git_error::klass, the only signal that
+// separates "the network dropped" from "that ref does not exist". `context` ends in
+// ": " so the library's own message reads as the tail of the sentence.
+[[noreturn]] void throw_git_error(std::string const &context) {
+  git_error const *err{ git_error_last() };
+
+  auto const kind{ [klass = err ? err->klass : GIT_ERROR_NONE] {
+    switch (klass) {
+      case GIT_ERROR_NET:
+      case GIT_ERROR_HTTP:
+      case GIT_ERROR_INDEXER: return fetch_error_kind::TRANSFER;
+      case GIT_ERROR_REFERENCE: return fetch_error_kind::PROTOCOL;
+      default: return fetch_error_kind::OTHER;
+    }
+  }() };
+
+  throw fetch_error(kind, err ? context + err->message : context);
+}
+
 // Try to resolve ref in repo. Returns nullptr on failure (no throw).
 git_object *try_resolve_ref(git_repository *repo, std::string const &ref) {
   if (git_object *obj{ nullptr }; !git_revparse_single(&obj, repo, ref.c_str())) {
@@ -150,6 +174,11 @@ fetch_result fetch_git_repo(std::string const &url,
                             uri_scheme scheme) {
   if (scheme == uri_scheme::GIT_HTTPS) { libgit2_require_ssl_certs(); }
   auto const dest{ prepare_destination(destination) };
+
+  // git_clone rejects a non-empty target, and a failed clone leaves its partial work
+  // behind, so every attempt -- first or retry -- starts from a clean slate.
+  std::error_code ec;
+  std::filesystem::remove_all(dest, ec);
 
   // Try shallow clone first; fall back to full clone if shallow fails or ref not found.
   // Some servers (e.g., googlesource.com) have libgit2 shallow clone issues.
@@ -169,25 +198,21 @@ fetch_result fetch_git_repo(std::string const &url,
   }
 
   if (need_full_clone) {
-    std::error_code ec;
     std::filesystem::remove_all(dest, ec);
     std::filesystem::create_directories(dest, ec);
 
     repo_raw = try_git_clone(url, dest, progress, 0);
-    if (!repo_raw) {
-      git_error const *git_err{ git_error_last() };
-      std::string msg{ "fetch_git: clone failed: " };
-      if (git_err) { msg += git_err->message; }
-      throw std::runtime_error(msg);
-    }
+    if (!repo_raw) { throw_git_error("fetch_git: clone failed: "); }
 
     target_obj = try_resolve_ref(repo_raw, ref);
     if (!target_obj) {
+      // The clone succeeded, so whatever git_error_last() holds is stale: a ref the
+      // remote does not publish is a fact about the request, never a transport fault.
       git_repository_free(repo_raw);
       git_error const *git_err{ git_error_last() };
-      std::string msg{ "fetch_git: failed to resolve ref '" + ref + "': " };
-      if (git_err) { msg += git_err->message; }
-      throw std::runtime_error(msg);
+      throw fetch_error(fetch_error_kind::PROTOCOL,
+                        "fetch_git: failed to resolve ref '" + ref +
+                            "': " + (git_err ? git_err->message : ""));
     }
   }
 
@@ -294,6 +319,90 @@ fetch_result fetch_single(fetch_request const &request) {
       request);
 }
 
+namespace {
+
+struct retry_policy {
+  int attempts;
+  std::chrono::milliseconds base_delay;
+};
+
+// A retry that waits longer than the transfer it is retrying helps nobody.
+constexpr std::chrono::milliseconds kMaxRetryDelay{ 60000 };
+
+int env_int(char const *name, int fallback, int lo, int hi) {
+  char const *val{ std::getenv(name) };
+  if (!val || !*val) { return fallback; }
+  char *end{ nullptr };
+  long const parsed{ std::strtol(val, &end, 10) };
+  return (*end == '\0' && parsed >= lo && parsed <= hi) ? static_cast<int>(parsed)
+                                                        : fallback;
+}
+
+// Read once: the knobs exist for CI and for tests that cannot afford real backoff,
+// and re-reading the environment per attempt would only invite it to change mid-fetch.
+retry_policy const &fetch_retry_policy() {
+  static retry_policy const policy{
+    .attempts = env_int("ENVY_FETCH_ATTEMPTS", 3, 1, 10),
+    .base_delay =
+        std::chrono::milliseconds{ env_int("ENVY_FETCH_RETRY_BASE_MS", 1000, 0, 60000) }
+  };
+  return policy;
+}
+
+// Exponential (1x, 4x, 16x base) and jittered over +/-50%. fetch() runs a thread per
+// request, so without the jitter a batch that all failed against the same bad mirror
+// would march back onto it in lockstep.
+std::chrono::milliseconds retry_delay(int attempt, std::chrono::milliseconds base) {
+  if (base.count() <= 0) { return std::chrono::milliseconds::zero(); }
+
+  auto const scaled{ std::min(base.count() << std::min(2 * (attempt - 1), 20),
+                              kMaxRetryDelay.count()) };
+
+  static thread_local std::mt19937 rng{ std::random_device{}() };
+  std::uniform_real_distribution<double> jitter{ 0.5, 1.5 };
+  return std::chrono::milliseconds{ static_cast<std::chrono::milliseconds::rep>(
+      static_cast<double>(scaled) * jitter(rng)) };
+}
+
+// The single retry seam. Retrying here rather than inside a backend gives http, ftp
+// and git one policy, and each attempt re-runs the backend's own setup -- including
+// the destination wipe that a partial left behind. s3 is deliberately absent: the AWS
+// SDK's TransferManager already retries internally, so it throws plain runtime_error
+// and never reaches the catch below. Safe because fetches are idempotent GETs and
+// payloads are sha256-verified by the caller after transport, so a replay can never
+// launder bad bytes.
+fetch_result fetch_with_retry(fetch_request const &request,
+                              std::string const &trace_spec,
+                              std::string const &url) {
+  auto const &policy{ fetch_retry_policy() };
+
+  for (int attempt{ 1 };; ++attempt) {
+    try {
+      return fetch_single(request);
+    } catch (fetch_error const &e) {
+      if (attempt >= policy.attempts || !fetch_error_retryable(e)) { throw; }
+
+      auto const delay{ retry_delay(attempt, policy.base_delay) };
+      tui::debug("fetch: attempt %d of %d failed (%s), retrying in %lldms: %s",
+                 attempt,
+                 policy.attempts,
+                 fetch_error_kind_name(e.kind()),
+                 static_cast<long long>(delay.count()),
+                 e.what());
+      ENVY_TRACE(download_retry,
+                 trace_spec,
+                 .url = url,
+                 .attempt = attempt,
+                 .delay_ms = static_cast<std::int64_t>(delay.count()),
+                 .reason = fetch_error_kind_name(e.kind()),
+                 .error = e.what());
+      std::this_thread::sleep_for(delay);
+    }
+  }
+}
+
+}  // namespace
+
 std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
                                   std::string trace_spec) {
   std::vector<fetch_result_t> results(requests.size());
@@ -301,25 +410,31 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
   std::vector<std::thread> workers;
   workers.reserve(requests.size());
 
+  // Read on the calling thread: the engine's per-package context is thread-local, so
+  // every worker below has to reopen it or its log lines come out unattributed.
+  std::string const log_ctx{ tui::log_ctx() };
+
   for (size_t i = 0; i < requests.size(); ++i) {
-    workers.emplace_back([i, &requests, &results, &trace_spec]() {
-      // Trace-only work (variant visit, path->string, file_size) is gated on
-      // trace_enabled so a disabled trace stream costs nothing here.
+    workers.emplace_back([i, &requests, &results, &trace_spec, &log_ctx]() {
+      tui::log_ctx_scope const worker_log_ctx{ log_ctx };
+
+      // The source URL names the retry target, so it is always needed; the rest is
+      // trace-only work gated on trace_enabled so a disabled stream costs nothing here.
+      std::string const source{ std::visit([](auto const &r) { return r.source; },
+                                           requests[i]) };
       bool const tracing{ tui::trace_enabled() };
-      std::string source, destination;
       if (tracing) {
-        std::visit(
-            [&](auto const &r) {
-              source = r.source;
-              destination = r.destination.string();
-            },
-            requests[i]);
-        ENVY_TRACE(download_start, trace_spec, .url = source, .destination = destination);
+        ENVY_TRACE(
+            download_start,
+            trace_spec,
+            .url = source,
+            .destination = std::visit([](auto const &r) { return r.destination.string(); },
+                                      requests[i]));
       }
       auto const start{ std::chrono::steady_clock::now() };
 
       try {
-        results[i] = fetch_single(requests[i]);
+        results[i] = fetch_with_retry(requests[i], trace_spec, source);
 
         if (tracing) {
           auto const &res{ std::get<fetch_result>(results[i]) };

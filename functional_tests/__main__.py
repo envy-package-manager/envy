@@ -63,6 +63,17 @@ def _thread_excepthook(args):
 threading.excepthook = _thread_excepthook
 
 
+def _disable_fetch_retry_by_default() -> None:
+    """Fetches fail fast unless a test asks otherwise.
+
+    Plenty of cases point envy at a dead port on purpose. Production retries a refused
+    connection three times with seconds of backoff between, which would push every one
+    of them past the watchdog for no coverage. test_fetch_retry.py, which is the file
+    that actually tests the policy, sets ENVY_FETCH_ATTEMPTS back up for itself.
+    """
+    os.environ.setdefault("ENVY_FETCH_ATTEMPTS", "1")
+
+
 def _setup_sanitizer_env() -> None:
     """Set up sanitizer environment variables and print configuration for debugging."""
     # Sanitizers not supported on Windows
@@ -278,6 +289,7 @@ def _run_parallel(
 
 def main() -> None:
     _setup_sanitizer_env()
+    _disable_fetch_retry_by_default()
 
     # Determine number of jobs for parallel execution
     jobs_env = os.environ.get("ENVY_TEST_JOBS")

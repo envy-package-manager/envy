@@ -13,7 +13,7 @@ namespace envy {
 
 class cmd_package : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_package> {
+  struct cfg : cmd_cfg<cmd_package>, cmd_project_anchor {
     std::string identity;  // Required: "namespace.name@version"
     std::optional<std::filesystem::path> manifest_path;
     bool ignore_depot = false;

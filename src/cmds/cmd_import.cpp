@@ -9,6 +9,7 @@
 #include "reexec.h"
 #include "self_deploy.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include "CLI11.hpp"
@@ -17,6 +18,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -31,14 +34,16 @@ namespace {
 // `import` has two shapes: the depot path goes through cmd_startup_load, which resolves
 // the cache for it, while a bare archive has no manifest and must resolve for itself.
 cache_root_request cmd_import_cache_request(
-    std::optional<std::filesystem::path> const &cli_cache_root) {
+    std::optional<std::filesystem::path> const &cli_cache_root,
+    std::optional<std::filesystem::path> const &project_dir) {
   envy_meta meta;
   std::filesystem::path manifest_dir;
   // Skipped under an override, which already decides the root: discover() parses directives
   // and throws, so reading a manifest that cannot change the answer would let a bad
   // directive anywhere above the cwd fail an import that named its cache explicitly.
   if (!cli_cache_root) {
-    if (auto const found{ manifest::discover(false, std::filesystem::current_path()) }) {
+    if (auto const found{ manifest::discover(
+            false, manifest::discovery_start_dir(project_dir)) }) {
       meta = found->meta;
       manifest_dir = found->path.parent_path();
     }
@@ -89,9 +94,12 @@ import_result import_one_archive(cache &c,
 
   std::string const label{ "[" + parsed->identity + "]" };
 
-  auto result{
-    c.ensure_pkg(parsed->identity, parsed->platform, parsed->arch, parsed->hash_prefix)
-  };
+  auto result{ c.ensure_pkg(
+      parsed->identity,
+      parsed->platform,
+      parsed->arch,
+      parsed->hash_prefix,
+      tui_actions::lock_wait_spinner(section, parsed->identity, parsed->identity)) };
 
   if (!result.lock) {
     if (section) {
@@ -104,41 +112,17 @@ import_result import_one_archive(cache &c,
     return { parsed->identity, result.pkg_path, true, false };
   }
 
-  // Compute archive size for progress reporting
-  std::uint64_t const archive_bytes{ std::filesystem::file_size(archive_path) };
-
+  // No pre-scan for a lone archive, so no total: the tracker spins on the running counts
+  // and lands on a full bar once the archive is out.
+  std::optional<tui_actions::extract_progress_tracker> tracker;
   if (section) {
-    tui::section_set_content(
-        section,
-        tui::section_frame{ .label = label,
-                            .content = tui::spinner_data{
-                                .text = "extracting...",
-                                .start_time = std::chrono::steady_clock::now() } });
+    tracker.emplace(section, parsed->identity, archive_path.filename().string());
   }
 
   extract_options opts;
-  if (section) {
-    opts.progress = [&](extract_progress const &ep) -> bool {
-      double percent{ 0.0 };
-      if (archive_bytes > 0) {
-        percent =
-            std::min(100.0,
-                     (ep.bytes_processed / static_cast<double>(archive_bytes)) * 100.0);
-      }
-
-      std::ostringstream status;
-      status << ep.files_processed << " files";
-      if (archive_bytes > 0) { status << " " << util_format_bytes(ep.bytes_processed); }
-
-      tui::section_set_content(
-          section,
-          tui::section_frame{ .label = label,
-                              .content = tui::progress_data{ .percent = percent,
-                                                             .status = status.str() } });
-      return true;
-    };
-  }
+  if (tracker) { opts.progress = std::ref(*tracker); }
   extract(archive_path, result.entry_path, opts);
+  if (tracker) { tracker->finish(); }
 
   if (directory_has_entries(result.lock->install_dir())) {
     result.lock->mark_install_complete();
@@ -263,7 +247,11 @@ void cmd_import::execute() {
 
     if (ext == ".txt") {
       // Depot manifest import — build index from file, let engine handle everything
-      auto const [m, c]{ cmd_startup_load("import", cfg_.manifest_path, cli_cache_root_) };
+      auto const [m, c]{ cmd_startup_load("import",
+                                          cfg_.manifest_path,
+                                          cli_cache_root_,
+                                          false,
+                                          cfg_.project_dir) };
 
       auto const data{ util_load_file(cfg_.archive_path) };
       std::string contents(reinterpret_cast<char const *>(data.data()), data.size());
@@ -286,7 +274,9 @@ void cmd_import::execute() {
       // Manifest-aware like every other path into the cache: built from the CLI override
       // alone, a single-archive import landed in the user-wide tree while the rest of the
       // project used its own.
-      cache c{ resolve_cache_root(cmd_import_cache_request(cli_cache_root_)).root };
+      cache c{ resolve_cache_root(
+          cmd_import_cache_request(cli_cache_root_, cfg_.project_dir))
+                   .root };
       auto const section{ tui::section_create() };
       auto result{ import_one_archive(c, cfg_.archive_path, section) };
       if (result.is_fetch_only) {
@@ -303,7 +293,11 @@ void cmd_import::execute() {
   }
 
   // Directory import — build depot index from directory, let engine handle everything
-  auto const [m, c]{ cmd_startup_load("import", cfg_.manifest_path, cli_cache_root_) };
+  auto const [m, c]{ cmd_startup_load("import",
+                                      cfg_.manifest_path,
+                                      cli_cache_root_,
+                                      false,
+                                      cfg_.project_dir) };
 
   package_depot_index depot;
   if (cfg_.checksums_path) {

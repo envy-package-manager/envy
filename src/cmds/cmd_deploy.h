@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_deploy : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_deploy> {
+  struct cfg : cmd_cfg<cmd_deploy>, cmd_project_anchor {
     std::vector<std::string> identities;  // If empty, deploy all manifest packages
     std::optional<std::filesystem::path> manifest_path;
     bool strict = false;  // If true, error on non-envy-managed product script conflicts

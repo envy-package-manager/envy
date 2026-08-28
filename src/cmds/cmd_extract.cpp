@@ -2,10 +2,12 @@
 
 #include "extract.h"
 #include "tui.h"
+#include "tui_actions.h"
 
 #include "CLI11.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -63,9 +65,18 @@ void cmd_extract::execute() {
             cfg_.archive_path.filename().string().c_str(),
             destination.string().c_str());
 
-  auto const file_count{
-    extract(cfg_.archive_path, destination, { .selectors = cfg_.only })
-  };
+  // No pre-scan, so no total: the row spins on running counts, then lands on a full bar.
+  // It outlives the call as the command's record of the work.
+  auto const section{ tui::section_create() };
+  tui_actions::extract_progress_tracker tracker{ section,
+                                                 "extract",
+                                                 cfg_.archive_path.filename().string() };
+
+  auto const file_count{ extract(
+      cfg_.archive_path,
+      destination,
+      { .selectors = cfg_.only, .progress = std::ref(tracker) }) };
+  tracker.finish();
   tui::info("Extracted %llu files", static_cast<unsigned long long>(file_count));
 }
 

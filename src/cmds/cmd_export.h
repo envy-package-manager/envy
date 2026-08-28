@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_export : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_export> {
+  struct cfg : cmd_cfg<cmd_export>, cmd_project_anchor {
     std::vector<std::string> queries;  // Optional: if empty, export all manifest packages
     std::optional<std::filesystem::path> output_dir;
     std::optional<std::filesystem::path> manifest_path;

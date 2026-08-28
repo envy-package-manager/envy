@@ -37,6 +37,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `phase_unblocked` | unblocked_at_phase:phase, dependency:str |
 | `target_extended` | old_target:phase, new_target:phase |
 | `pkg_outcome` | outcome:str, duration_ms:i64 |
+| `manifest_resolved` | path:str, anchor:str, mode:str (explicit\|project\|cwd), nearest:bool |
 | `cache_hit` | cache_key:str, pkg_path:str, fast_path:bool |
 | `cache_miss` | cache_key:str |
 | `lock_acquired` | lock_path:str, wait_duration_ms:i64 |
@@ -51,6 +52,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `download_start` | url:str, destination:str |
 | `download_complete` | url:str, bytes:i64, duration_ms:i64 |
 | `download_failed` | url:str, error:str |
+| `download_retry` | url:str, attempt:i64, delay_ms:i64, reason:str (connect\|transfer\|timeout\|http_status), error:str |
 | `download_skipped` | url:str, reason:str |
 | `git_resolve` | url:str, ref:str, sha:str, method:str (sha\|ls-remote) |
 | `extract_start` | archive:str, destination:str, strip_components:i64 |

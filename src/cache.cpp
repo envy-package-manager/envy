@@ -251,11 +251,13 @@ void remove_all_noexcept(path const &target) {
   std::filesystem::remove_all(target, ec);
 }
 
-envy::cache::ensure_result ensure_entry(envy::cache_impl &impl,
-                                        path const &entry_dir,
-                                        path const &lock_path,
-                                        std::string_view pkg_identity,
-                                        std::string_view cache_key) {
+envy::cache::ensure_result ensure_entry(
+    envy::cache_impl &impl,
+    path const &entry_dir,
+    path const &lock_path,
+    std::string_view pkg_identity,
+    std::string_view cache_key,
+    envy::platform::file_lock::contended_cb_t const &on_lock_contended) {
   envy::cache::ensure_result result{ entry_dir, entry_dir / "pkg", nullptr };
 
   if (envy::cache::is_entry_complete(entry_dir)) {
@@ -271,7 +273,7 @@ envy::cache::ensure_result ensure_entry(envy::cache_impl &impl,
   std::filesystem::create_directories(entry_dir);
 
   auto const lock_wait_start{ std::chrono::steady_clock::now() };
-  envy::platform::file_lock lock{ lock_path };
+  envy::platform::file_lock lock{ lock_path, on_lock_contended };
   auto const lock_acquired_at{ std::chrono::steady_clock::now() };
   auto const wait_duration_ms{ std::chrono::duration_cast<std::chrono::milliseconds>(
                                    lock_acquired_at - lock_wait_start)
@@ -476,10 +478,12 @@ path cache::compute_pkg_path(std::string_view identity,
   return m->packages_dir() / std::string(identity) / oss.str() / "pkg";
 }
 
-cache::ensure_result cache::ensure_pkg(std::string_view identity,
-                                       std::string_view platform,
-                                       std::string_view arch,
-                                       std::string_view hash_prefix) {
+cache::ensure_result cache::ensure_pkg(
+    std::string_view identity,
+    std::string_view platform,
+    std::string_view arch,
+    std::string_view hash_prefix,
+    envy::platform::file_lock::contended_cb_t on_lock_contended) {
   if (!util_is_safe_path_component(identity)) {
     throw std::runtime_error("cache: invalid package identity: '" +
                              std::string{ identity } + "'");
@@ -492,11 +496,18 @@ cache::ensure_result cache::ensure_pkg(std::string_view identity,
   lock_oss << "packages." << k << ".lock";
   std::string const lock_name{ lock_oss.str() };
 
-  return ensure_entry(*m, entry_dir, m->locks_dir() / lock_name, identity, k);
+  return ensure_entry(*m,
+                      entry_dir,
+                      m->locks_dir() / lock_name,
+                      identity,
+                      k,
+                      on_lock_contended);
 }
 
-cache::ensure_result cache::ensure_spec(std::string_view identity,
-                                        std::string_view source_key) {
+cache::ensure_result cache::ensure_spec(
+    std::string_view identity,
+    std::string_view source_key,
+    envy::platform::file_lock::contended_cb_t on_lock_contended) {
   if (!util_is_safe_path_component(identity)) {
     throw std::runtime_error("cache: invalid spec identity: '" + std::string{ identity } +
                              "'");
@@ -508,7 +519,8 @@ cache::ensure_result cache::ensure_spec(std::string_view identity,
                       m->specs_dir() / id / source_slug,
                       m->locks_dir() / ("spec." + id + "." + source_slug + ".lock"),
                       identity,
-                      id + "-" + source_slug);
+                      id + "-" + source_slug,
+                      on_lock_contended);
 }
 
 cache::envy_ensure_result cache::ensure_envy(std::string_view version) {

@@ -130,6 +130,11 @@ using product_map_t = std::vector<std::pair<std::string, std::string>>;
 std::filesystem::path util_absolute_path(std::filesystem::path const &relative,
                                          std::filesystem::path const &anchor);
 
+// Absolute, symlink-resolved form of `path`; plain absolute when canonicalization fails
+// (a component that does not exist yet). Anchors have to be canonical before an upward
+// walk: parent_path() on a relative path bottoms out at its own first segment.
+std::filesystem::path util_canonical_path(std::filesystem::path const &path);
+
 // Simplify cache paths in command string for display.
 // First tries to match tokens against product paths (suffix matching).
 // Falls back to cache_root prefix detection with filename extraction.

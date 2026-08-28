@@ -9,6 +9,7 @@
 #include "tui.h"
 
 #include <clocale>
+#include <concepts>
 #include <cstdlib>
 #include <variant>
 
@@ -53,8 +54,20 @@ int main(int argc, char *argv[]) {
       // parsing both throw, so reading a manifest that cannot change the answer would let
       // any broken envy.lua in an ancestor break every command run with --cache-root.
       if (!args.cache_root) {
+        // The same anchor the command itself will use, pulled off whichever config was
+        // selected: resolving this pre-step from the CWD while the command resolved from
+        // its bin dir would deploy envy into one tree and its packages into another.
+        std::optional<std::filesystem::path> project_dir;
+        std::visit(
+            [&](auto const &c) {
+              if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                              envy::cmd_project_anchor>) {
+                project_dir = c.project_dir;
+              }
+            },
+            *args.cmd_cfg);
         if (auto const found{ envy::manifest::discover(
-                false, std::filesystem::current_path()) }) {
+                false, envy::manifest::discovery_start_dir(project_dir)) }) {
           meta = found->meta;
           manifest_dir = found->path.parent_path();
         }

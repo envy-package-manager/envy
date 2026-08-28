@@ -1371,3 +1371,46 @@ TEST_CASE("util_ascii_is_alpha/alnum are locale-independent ASCII only") {
   CHECK_FALSE(envy::util_ascii_is_alpha(static_cast<char>(0xc3)));  // UTF-8 lead byte
   CHECK_FALSE(envy::util_ascii_is_alnum(static_cast<char>(0xe9)));
 }
+
+namespace {
+
+// The CWD as util_canonical_path would render it. current_path() is the raw spelling the
+// process was started with -- Windows keeps a symlink or junction in it, and comparing a
+// resolved result against an unresolved expectation fails on such a checkout.
+std::filesystem::path canonical_cwd() {
+  std::error_code ec;
+  auto const resolved{ std::filesystem::weakly_canonical(std::filesystem::current_path(),
+                                                         ec) };
+  return ec ? std::filesystem::current_path() : resolved;
+}
+
+}  // namespace
+
+TEST_CASE("util_canonical_path makes a relative path absolute") {
+  auto const abs{ envy::util_canonical_path(std::filesystem::path{ "." }) };
+  CHECK(abs.is_absolute());
+  CHECK(abs == canonical_cwd());
+}
+
+TEST_CASE("util_canonical_path normalizes dot segments away") {
+  namespace fs = std::filesystem;
+  // discover() walks upward with parent_path(); a surviving "." or ".." would make it
+  // revisit the same directory or skip one. The '.' shape is what envy.bat's "%~dp0."
+  // hands in.
+  auto const cwd{ canonical_cwd() };
+  REQUIRE(fs::exists(cwd / "test_data"));
+  CHECK(envy::util_canonical_path(cwd / ".") == cwd);
+  CHECK(envy::util_canonical_path(cwd / "test_data" / "..") == cwd);
+}
+
+TEST_CASE("util_canonical_path keeps a path whose tail does not exist") {
+  // weakly_canonical resolves the existing prefix and leaves the rest alone, so the
+  // expectation has to start from the resolved CWD too.
+  auto const missing{ canonical_cwd() / "no-such-dir-9d3f" / "deeper" };
+  CHECK(envy::util_canonical_path(missing) == missing);
+}
+
+TEST_CASE("util_canonical_path is idempotent") {
+  auto const once{ envy::util_canonical_path(std::filesystem::path{ "." }) };
+  CHECK(envy::util_canonical_path(once) == once);
+}

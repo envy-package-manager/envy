@@ -75,6 +75,11 @@ struct log_ctx_scope {
   std::string previous_;
 };
 
+// This thread's ambient log context, empty when unset. The context is thread-local, so
+// code that fans work out to its own threads has to read it on the spawning thread and
+// reopen a log_ctx_scope inside each worker or those lines lose their attribution.
+std::string const &log_ctx();
+
 // Section progress API
 using section_handle = unsigned;
 inline constexpr section_handle kInvalidSection = 0;
@@ -106,6 +111,9 @@ struct section_frame {
   std::variant<progress_data, text_stream_data, spinner_data, static_text_data> content;
   std::vector<section_frame> children;  // Optional grouped children (indented render)
   std::string phase_label;              // Optional phase suffix for grouped parents
+  // This row's last word. Off a TTY it prints as soon as it is set instead of waiting out
+  // the throttle window, so a finished bar is not the frame that gets swallowed.
+  bool terminal{ false };
 };
 
 // Helper for providers/tests that need the rendered label width for alignment.
@@ -116,6 +124,10 @@ void section_set_content(section_handle h, section_frame const &frame);
 void section_set_complete(section_handle h);
 void section_delete(section_handle h);
 bool section_has_content(section_handle h);
+
+// Drop every row, for handing the terminal to someone else: nothing may be painted back
+// over output that is no longer ours. Pair with interactive_mode_guard to erase the area.
+void sections_clear();
 
 // Interactive mode API
 void acquire_interactive_mode();

@@ -12,6 +12,32 @@ Logging is per-package narrative. Default (INFO) prints one outcome line per pac
 **`-v`, `--version`** — Print version information (alias for `envy version`).
 **`-h`, `--help`, `help`** — Print top-level help summarizing available subcommands. Subcommands also support `--help` for detailed usage.
 
+## Manifest Discovery
+
+Commands that load a manifest walk upward looking for `envy.lua`, honoring `@envy root "false"` and stopping at a `.git` boundary. Anchor precedence, most specific first:
+
+**`--manifest <path>`** — this file, no walk. Per-subcommand.
+**`--project <dir>`** — global: walk up from `<dir>` instead of the CWD. Repeatable, last wins.
+**`--subproject`** — anchors on the CWD by definition ("nearest manifest to where I stand"), so it overrides `--project`. Per-subcommand.
+**CWD** — the default.
+
+Every command that loads a manifest honors `--project`, and it goes before the subcommand: `envy --project ~/proj sync`. Which project won is a trace event — `manifest_resolved{path, anchor, mode, nearest}` — not a log line.
+
+The launcher `sync`/`deploy` writes into `@envy bin` injects `--project` with its own directory ahead of your argv. That is what makes a project's tools work from any working directory: the bin dir decides the project, not the CWD. A hand-typed `--project` still wins, because the option takes the last value.
+
+```bash
+cd ~/other-project
+../../some-envy-project/tools/uv run ./local_script.py   # uv, PATH and ENVY_PROJECT_ROOT from some-envy-project
+```
+
+Product scripts also prepend their own bin dir to `PATH`, so a tool that shells out to a sibling product finds it. They export `ENVY_PROJECT_ROOT` too — stamped as a path relative to the bin dir, so a re-cloned or moved tree still resolves — but only for a root manifest: under `@envy root "false"` the project depends on where the tree is nested, no deploy-time constant is right in every checkout, and the caller's value stands instead.
+
+Because those scripts resolve their project by walking up from the bin dir, `deploy` refuses a *root* manifest whose bin dir walks up to a **different** `envy.lua` — `@envy bin "../shared"`, or a `--manifest` outside the bin dir's tree — since every script written there would hand out another project's tools. It warns instead when the walk finds nothing (a `.git` in between) or when the manifest is not named `envy.lua` (a variant build, invisible to the walk by construction).
+
+`@envy root "false"` opts out of that check: it *declares* that the walk continues past this manifest, so its bin dir resolving the enclosing project is the design. Nothing deployed into a non-root bin dir names its own tree — no absolute paths, and no project-root stamp — so a superproject checkout can restamp a nested submodule's committed bin dir in place, byte-for-byte identically to a standalone clone. `--subproject` is what targets it (nearest manifest, `@envy root` ignored).
+
+`envy run` also infers the anchor from the script it is given (`--` sentinel, or a first argument that names an existing file); `--project` outranks both.
+
 ## Subcommands
 
 ### Meta

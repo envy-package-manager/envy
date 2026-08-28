@@ -78,7 +78,7 @@ void env_var_unset(char const *name) {
   }
 }
 
-file_lock::file_lock(std::filesystem::path const &path) {
+file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_contended) {
   HANDLE const h{ ::CreateFileW(path.c_str(),
                                 GENERIC_READ | GENERIC_WRITE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -92,13 +92,26 @@ file_lock::file_lock(std::filesystem::path const &path) {
                             "Failed to open lock file: " + path.string());
   }
 
-  OVERLAPPED ovlp{};
-  if (!::LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ovlp)) {
-    DWORD const err{ ::GetLastError() };
-    ::CloseHandle(h);
-    throw std::system_error(err,
-                            std::system_category(),
-                            "Failed to acquire file lock: " + path.string());
+  // Probe first: a refusal means someone else holds the entry, so the wait below is
+  // open-ended — the only kind worth announcing.
+  OVERLAPPED probe{};
+  if (!::LockFileEx(h,
+                    LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                    0,
+                    MAXDWORD,
+                    MAXDWORD,
+                    &probe)) {
+    // A held lock is contention; a bad handle is not, and the call below reports it.
+    if (::GetLastError() == ERROR_LOCK_VIOLATION && on_contended) { on_contended(); }
+
+    OVERLAPPED ovlp{};
+    if (!::LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ovlp)) {
+      DWORD const err{ ::GetLastError() };
+      ::CloseHandle(h);
+      throw std::system_error(err,
+                              std::system_category(),
+                              "Failed to acquire file lock: " + path.string());
+    }
   }
 
   impl_ = std::make_unique<impl>();

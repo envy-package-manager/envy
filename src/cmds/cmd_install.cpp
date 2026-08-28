@@ -39,7 +39,11 @@ cmd_install::cmd_install(cfg cfg, std::optional<fs::path> const &cli_cache_root)
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_install::execute() {
-  auto const [m, c]{ cmd_startup_load("install", cfg_.manifest_path, cli_cache_root_) };
+  auto const [m, c]{ cmd_startup_load("install",
+                                      cfg_.manifest_path,
+                                      cli_cache_root_,
+                                      false,
+                                      cfg_.project_dir) };
 
   auto const targets{ [&] {
     std::vector<pkg_cfg const *> t;

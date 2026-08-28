@@ -496,6 +496,10 @@ if "!HASH_OUT:~63,1!"=="" set "HASH_OUT="
 if defined HASH_OUT if not "!HASH_OUT:~64!"=="" set "HASH_OUT="
 exit /b 0
 
+REM --project, injected ahead of the caller's argv: this script belongs to one project, and
+REM the binary must not rediscover a different one from whatever CWD invoked it. take_last
+REM on the option side means a hand-typed --project still wins. The trailing dot keeps
+REM %~dp0's own backslash off the closing quote.
 REM envy sync may rewrite this script; single line ensures cmd.exe never reads past here.
 :run
-"!ENVY_BIN!" %* & exit /b !ERRORLEVEL!
+"!ENVY_BIN!" --project "%~dp0." %* & exit /b !ERRORLEVEL!

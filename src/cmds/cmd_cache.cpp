@@ -9,6 +9,7 @@
 #include "CLI11.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -94,7 +95,7 @@ void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected
 
 cmd_cache::cmd_cache(cmd_cache::cfg cfg,
                      std::optional<std::filesystem::path> const &cli_cache_root)
-    : cfg_{ cfg }, cli_cache_root_{ cli_cache_root } {}
+    : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_cache::set_mode(envy_meta const &meta,
                          std::filesystem::path const &manifest_dir,
@@ -155,9 +156,16 @@ void cmd_cache::execute() {
   envy_meta meta;
   std::filesystem::path manifest_dir;
   if (writes_marker || !cli_cache_root_) {
-    if (auto const found{ manifest::discover(false, std::filesystem::current_path()) }) {
+    // The bin dir that invoked us decides the project, not the cwd -- so
+    // `B/bin/envy cache --local` records B's choice even when standing in A.
+    auto const start{ manifest::discovery_start_dir(cfg_.project_dir) };
+    if (auto const found{ manifest::discover(false, start) }) {
       meta = found->meta;
       manifest_dir = found->path.parent_path();
+      manifest::trace_resolved(found->path,
+                               start,
+                               cfg_.project_dir ? "project" : "cwd",
+                               false);
     }
   }
 
@@ -204,7 +212,24 @@ void cmd_cache::execute() {
     if (e.name != "packages" && e.name != "envy") { add(other, e.name, root / e.name); }
   }
 
-  auto const sizes{ platform::dir_sizes(scan_roots) };
+  // Seconds on a populated cache, and no total is knowable until the walk ends: the row
+  // spins on what has been counted so far.
+  auto const scan_section{ tui::section_create() };
+  auto const scan_start{ std::chrono::steady_clock::now() };
+  auto const sizes{ platform::dir_sizes(
+      scan_roots,
+      0,
+      [&](platform::dir_size const &running) {
+        tui::section_set_content(
+            scan_section,
+            tui::section_frame{ .label = "[cache]",
+                                .content = tui::spinner_data{
+                                    .text = "scanning, " + std::to_string(running.files) +
+                                            " files, " + util_format_bytes(running.bytes) +
+                                            " counted",
+                                    .start_time = scan_start } });
+      }) };
+  tui::section_delete(scan_section);  // the report below is the answer
 
   std::uint64_t total{ 0 };
   std::size_t label_width{ 5 };  // "TOTAL"

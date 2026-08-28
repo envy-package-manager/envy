@@ -14,7 +14,7 @@ namespace envy {
 
 class cmd_cache : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_cache> {
+  struct cfg : cmd_cfg<cmd_cache>, cmd_project_anchor {
     // REPORT is the usage table; PRINT_ROOT is the resolved root alone, with no scan, so
     // tests can compare it against what a launcher computed without paying for a walk.
     enum class action { REPORT, PRINT_ROOT, SET_LOCAL, SET_SHARED };
@@ -34,6 +34,7 @@ class cmd_cache : public cmd {
   void set_mode(envy_meta const &meta,
                 std::filesystem::path const &manifest_dir,
                 cache_mode requested);
+
 
   cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;

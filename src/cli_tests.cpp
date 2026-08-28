@@ -24,8 +24,10 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <concepts>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <variant>
@@ -799,6 +801,155 @@ TEST_CASE("cli_parse: cmd_product") {
     CHECK(cfg->product_name == "tool");
     CHECK(cfg->json);
   }
+}
+
+TEST_CASE("cli_parse: global --project") {
+  SUBCASE("lands in the selected command's config") {
+    std::vector<std::string> args{ "envy", "--project", ".", "product", "tool" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_product::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->product_name == "tool");
+    REQUIRE(cfg->project_dir.has_value());
+    CHECK(*cfg->project_dir == std::filesystem::path("."));
+  }
+
+  SUBCASE("reaches every manifest-loading command") {
+    auto const anchor_of{
+      [](std::vector<std::string> args) -> std::optional<std::filesystem::path> {
+        auto argv{ make_argv(args) };
+        auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+        REQUIRE(parsed.cmd_cfg.has_value());
+        return std::visit(
+            [](auto const &c) -> std::optional<std::filesystem::path> {
+              if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                              envy::cmd_project_anchor>) {
+                return c.project_dir;
+              }
+              return std::nullopt;
+            },
+            *parsed.cmd_cfg);
+      }
+    };
+
+    CHECK(anchor_of({ "envy", "--project", ".", "install" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "sync" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "deploy" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "package", "a.b@v1" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "export" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "import", "--dir", "." }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "cache" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "use", "1.2.3" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "run", "ls" }).has_value());
+  }
+
+  SUBCASE("a repeat wins, so an injected anchor can be overridden") {
+    // The bin dir launcher injects --project ahead of the caller's argv.
+    std::vector<std::string> args{ "envy", "--project", "..",  "--project",
+                                   ".",    "product",   "tool" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_product::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    REQUIRE(cfg->project_dir.has_value());
+    CHECK(*cfg->project_dir == std::filesystem::path("."));
+  }
+
+  SUBCASE("coexists with --manifest, which outranks it") {
+    std::vector<std::string> args{ "envy",       "--project",    ".", "product", "tool",
+                                   "--manifest", "/tmp/envy.lua" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_product::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    REQUIRE(cfg->manifest_path.has_value());
+    REQUIRE(cfg->project_dir.has_value());
+  }
+
+  SUBCASE("rejects a non-directory") {
+    std::vector<std::string> args{ "envy", "--project", "no/such/dir", "product" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("absent leaves the anchor unset") {
+    std::vector<std::string> args{ "envy", "product", "tool" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_product::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK_FALSE(cfg->project_dir.has_value());
+  }
+
+  SUBCASE("a command that never loads a manifest ignores it") {
+    // The visit is over every alternative, including ones with no anchor to write.
+    std::vector<std::string> args{ "envy", "--project", ".", "hash", "a" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    CHECK(std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) != nullptr);
+  }
+
+  SUBCASE("survives the --version early return") {
+    std::vector<std::string> args{ "envy", "--project", ".", "--version" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    CHECK(std::get_if<envy::cmd_version::cfg>(&*parsed.cmd_cfg) != nullptr);
+  }
+
+  SUBCASE("with no subcommand prints help rather than crashing") {
+    std::vector<std::string> args{ "envy", "--project", "." };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("behind a prefix_command subcommand it belongs to the child") {
+    std::vector<std::string> args{ "envy", "run", "rsync", "--project", "." };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_run::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK_FALSE(cfg->project_dir.has_value());
+    REQUIRE(cfg->command.size() == 3);
+    CHECK(cfg->command[0] == "rsync");
+    CHECK(cfg->command[1] == "--project");
+  }
+}
+
+TEST_CASE("subproject_anchor: --subproject means nearest to the CWD") {
+  std::optional<std::filesystem::path> const anchor{ std::filesystem::path{ "/bin/dir" } };
+  CHECK(envy::subproject_anchor(false, anchor) == anchor);
+  CHECK_FALSE(envy::subproject_anchor(true, anchor).has_value());
+  CHECK_FALSE(envy::subproject_anchor(false, std::nullopt).has_value());
 }
 
 TEST_CASE("cli_parse: verbose flag") {

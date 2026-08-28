@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -113,8 +114,16 @@ std::vector<char *> reexec_child_argv(reexec_request const &request, char **argv
 int reexec_exec(reexec_request const &request, char **argv) {
   auto child_argv{ reexec_child_argv(request, argv) };  // not const: exec wants char **
   tui::info("reexec: switching to envy at %s", request.binary.string().c_str());
+
+  // The child owns the terminal from here: POSIX replaces this process, Windows waits. The
+  // rows come down first so its output starts clean and no final render paints them back.
+  tui::sections_clear();
+  tui::interactive_mode_guard const terminal_handoff;
+
   return platform::exec_process(request.binary, child_argv.data(), build_child_env());
 }
+
+std::string_view reexec_self_version() { return get_self_version(); }
 
 reexec_decision reexec_should(std::string_view self_version,
                               std::optional<std::string> const &requested_version,
@@ -232,15 +241,30 @@ void reexec_if_needed(envy_meta const &meta,
 
   // Verify before extract: an unattested archive is never unpacked, so a hostile mirror
   // gets no chance to write paths of its choosing under the temp dir.
+  auto const section{ tui::section_create() };
+
   if (meta.sha256sums) {
     auto const sums_text{ envy_release_load_sums(sums_path, meta.sha256sums, "reexec") };
-    envy_release_verify_artifact(archive_path, archive_name, sums_text, "reexec");
+    envy_release_verify_artifact(archive_path,
+                                 archive_name,
+                                 sums_text,
+                                 "reexec",
+                                 tui_actions::byte_progress_bar(section,
+                                                                "envy " + version,
+                                                                "verifying",
+                                                                archive_name));
     tui::debug("attested %s against the pinned %s",
                archive_name.c_str(),
                std::string{ kEnvyReleaseSumsFile }.c_str());
   }
 
-  extract(archive_path, tmp_dir);
+  {
+    tui_actions::extract_progress_tracker tracker{ section,
+                                                   "envy " + version,
+                                                   archive_name };
+    extract(archive_path, tmp_dir, { .progress = std::ref(tracker) });
+    tracker.finish();
+  }
 
   std::error_code ec;
   std::filesystem::remove(archive_path, ec);

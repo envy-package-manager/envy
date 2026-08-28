@@ -25,6 +25,31 @@ class TestHash(unittest.TestCase):
 
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    def test_hash_draws_a_progress_bar(self):
+        """Hashing a large file is a wait; its length is known, so it is a bar."""
+        import os
+
+        test_file = Path(self.tmpdir) / "big.bin"
+        test_file.write_bytes(os.urandom(8 * 1024 * 1024))
+
+        env = test_config.get_test_env()
+        env["TERM"] = "dumb"
+        env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+        result = test_config.run(
+            [str(self.envy), "hash", str(test_file)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        rows = [ln.strip() for ln in result.stderr.splitlines() if "[hash]" in ln]
+        self.assertTrue(rows, f"hash drew no progress row: {result.stderr}")
+        self.assertTrue(
+            rows[-1].endswith(": 100.0%"), f"hash did not finish on a full bar: {rows}"
+        )
+        self.assertIn("hashing", rows[-1], f"row does not name the work: {rows[-1]}")
+
     def test_hash_binary_file_matches_external_tool(self):
         """Verify envy hash matches external SHA256 computation (ground truth)."""
         # Write test PNG to temp file

@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .trace_parser import TraceParser
 
 _OS_NAME = (
     "windows"
@@ -625,6 +626,66 @@ class BootstrapIntegrationTest(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         # envy version outputs to stderr
         self.assertIn("envy version", result.stderr)
+
+    # A loadable project: the anchor tests below run a real subcommand, so the manifest has
+    # to carry '@envy bin' the way every other fixture here deliberately does not.
+    _ANCHORED_MANIFEST = '-- @envy version "1.2.3"\n-- @envy bin "tools"\nPACKAGES = {}\n'
+
+    def _anchored_project(self, name: str) -> Path:
+        """A second project the launcher must not resolve, and its directory."""
+        root = self._temp_dir / name
+        (root / "tools").mkdir(parents=True)
+        self._write_verbatim(root / "envy.lua", self._ANCHORED_MANIFEST)
+        return root
+
+    def _resolved_manifest(self, result, trace: Path) -> str:
+        """The manifest path the re-exec'd binary settled on, per its own trace.
+
+        Asserting on the trace rather than stdout because the bootstrap's whole job is to
+        hand off: what the binary decided after the exec is the only thing under test.
+        """
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertTrue(trace.exists(), f"no trace written; stderr: {result.stderr}")
+        events = [e for e in TraceParser(trace).parse() if e.event == "manifest_resolved"]
+        self.assertTrue(events, f"no manifest_resolved event; stderr: {result.stderr}")
+        return events[0].raw["path"]
+
+    def test_bootstrap_anchors_the_binary_on_its_own_directory(self) -> None:
+        """The launcher's project must survive the exec, whatever CWD invoked it.
+
+        Runs the download tier deliberately: the cached-binary tier and this one exec
+        separately, and only one of them carried the injected --project at first.
+        """
+        bootstrap = self._setup_test_project("simple.lua")
+        self._write_verbatim(
+            bootstrap.parent.parent / "envy.lua", self._ANCHORED_MANIFEST
+        )
+        elsewhere = self._anchored_project("elsewhere")
+
+        trace = self._temp_dir / "anchor.jsonl"
+        result = self._run_bootstrap(
+            bootstrap, [f"--trace=file:{trace}", "product"], cwd=elsewhere
+        )
+
+        self.assertPathEndsWith(self._resolved_manifest(result, trace), "project/envy.lua")
+
+    def test_bootstrap_anchor_yields_to_a_typed_one(self) -> None:
+        """The injection is a default: it leads, so the caller's own --project wins."""
+        bootstrap = self._setup_test_project("simple.lua")
+        self._write_verbatim(
+            bootstrap.parent.parent / "envy.lua", self._ANCHORED_MANIFEST
+        )
+        elsewhere = self._anchored_project("elsewhere")
+
+        trace = self._temp_dir / "anchor-typed.jsonl"
+        result = self._run_bootstrap(
+            bootstrap,
+            [f"--trace=file:{trace}", "--project", str(elsewhere), "product"],
+        )
+
+        self.assertPathEndsWith(
+            self._resolved_manifest(result, trace), "elsewhere/envy.lua"
+        )
 
     @unittest.skipUnless(
         sys.platform == "win32",

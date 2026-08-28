@@ -6,6 +6,7 @@
 #include "sha256.h"
 #include "trace.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include <algorithm>
@@ -119,17 +120,10 @@ void run_export_phase(pkg *p, engine &eng) {
           return true;
         });
 
-    // Hash the archive
-    if (p->tui_section) {
-      tui::section_set_content(
-          p->tui_section,
-          tui::section_frame{ .label = label,
-                              .content = tui::spinner_data{
-                                  .text = "hashing...",
-                                  .start_time = std::chrono::steady_clock::now() } });
-    }
-
-    auto const hash{ sha256(output_path) };
+    // Hash the archive. Its size is known, so this is a bar, not a spinner.
+    auto const hash{ tui_actions::sha256_tracked(output_path,
+                                                 p->tui_section,
+                                                 std::string(p->key.identity())) };
     auto const hex{ util_bytes_to_hex(hash.data(), hash.size()) };
 
     std::string const path_part{ ecfg->depot_prefix ? (*ecfg->depot_prefix + filename)
