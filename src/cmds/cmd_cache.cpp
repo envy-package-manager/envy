@@ -114,10 +114,10 @@ void cmd_cache::set_mode(envy_meta const &meta,
   auto const local_marker{ *state / kCacheLocalMarker };
   auto const shared_marker{ *state / kCacheSharedMarker };
 
-  // Throwing overload: it already returns false rather than throwing for a file that is not
-  // there, so the only thing it reports is a real failure. Swallowing that left the old
-  // marker in place while the command claimed the new mode -- and clearing one of the two
-  // but not the other produces the both-markers state envy treats as an error.
+  // Throwing overload: it already returns false rather than throwing for a file that is
+  // not there, so the only thing it reports is a real failure. Swallowing that left the
+  // old marker in place while the command claimed the new mode -- and clearing one of the
+  // two but not the other produces the both-markers state envy treats as an error.
   std::filesystem::remove(local_marker);
   std::filesystem::remove(shared_marker);
 
