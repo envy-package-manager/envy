@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cache.h"
 #include "package_depot.h"
 #include "pkg_cfg.h"
 #include "shell.h"
@@ -19,17 +20,24 @@ namespace envy {
 
 // @envy metadata parsed from comment headers in manifest
 struct envy_meta {
-  int schema{ 0 };                         // @envy schema "N" (0 = absent)
-  std::optional<std::string> version;      // @envy version "x.y.z"
-  std::optional<std::string> cache_posix;  // @envy cache-posix (always parsed)
-  std::optional<std::string> cache_win;    // @envy cache-win (always parsed)
-  std::optional<std::string> mirror;       // @envy mirror "https://..."
-  std::optional<std::string> sha256sums;   // @envy sha256sums "<64 hex of SHA256SUMS>"
-  std::optional<std::string> bin;          // @envy bin "relative/path/to/bin"
-  std::optional<bool> deploy;              // @envy deploy "true"/"false"
-  std::optional<bool> root;                // @envy root "true"/"false"
+  int schema{ 0 };                     // @envy schema "N" (0 = absent)
+  std::optional<std::string> version;  // @envy version "x.y.z"
+  // Relative literals, both anchored to the manifest's directory. No expansion: `~`,
+  // `$VAR` and `%VAR%` are rejected, which is what lets both launchers and both binary
+  // paths implement one resolution rule identically.
+  std::optional<std::string> cache_local;         // @envy cache-local "out/.envy"
+  std::optional<std::string> state_dir;           // @envy state-dir "out/.envy"
+  std::optional<cache_mode> declared_cache_mode;  // @envy cache-mode "local"/"shared"
+  std::optional<std::string> mirror;              // @envy mirror "https://..."
+  std::optional<std::string> sha256sums;  // @envy sha256sums "<64 hex of SHA256SUMS>"
+  std::optional<std::string> bin;         // @envy bin "relative/path/to/bin"
+  std::optional<bool> deploy;             // @envy deploy "true"/"false"
+  std::optional<bool> root;               // @envy root "true"/"false"
 
-  std::optional<std::string> const &cache_for_platform() const;
+  // Gathers the cache-root tiers this manifest contributes, so callers resolve once
+  // instead of picking fields apart at each site.
+  cache_root_request cache_request(std::optional<std::filesystem::path> cli_override,
+                                   std::filesystem::path const &manifest_dir) const;
 };
 
 // Parse @envy metadata from manifest content. Directives are header comments, so the scan

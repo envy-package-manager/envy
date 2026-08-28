@@ -6,6 +6,7 @@ DEFAULT_MIRROR="https://github.com/envy-package-manager/envy/releases/download"
 LATEST_URL="https://github.com/envy-package-manager/envy/releases/latest"
 ENV_MIRROR="${ENVY_MIRROR:-}"
 FALLBACK_VERSION="0.0.17"
+MIN_DIRECTIVE_VERSION="0.2.0"
 
 resolve_script_dir() {
     local src="${BASH_SOURCE[0]}"
@@ -17,21 +18,41 @@ resolve_script_dir() {
     cd -P "$(dirname "$src")" && pwd -P
 }
 
+# Directives from a manifest's header: blank lines and comments, stopping at the first line
+# of code. A directive below that line is not one -- parse_envy_meta in src/manifest.cpp
+# stops there too, and a launcher that read further would resolve a version or mirror the
+# re-exec'd binary ignores. No line cap, deliberately: the header ends where the code
+# starts, wherever that is, so a long preamble can never silently drop a pin. `q` bounds the
+# read to the header, so file size is irrelevant.
+manifest_directives() {
+    sed -nE '
+        /^[[:space:]]*$/d
+        /^[[:space:]]*--/!q
+        s/^[[:space:]]*--[[:space:]]*@envy[[:space:]]+(version|cache-local|cache-mode|state-dir|mirror|sha256sums|root)[[:space:]]+"(([^"\\]|\\.)*)".*/\1 \2/p
+    ' "$1"
+}
+
 find_manifest() {
     local d; d="$(resolve_script_dir)"
     local candidates=()
     while [[ "$d" != / ]]; do
         if [[ -f "$d/envy.lua" ]]; then
-            local is_root="true"
-            if head -20 "$d/envy.lua" | grep -qE '^--[[:space:]]*@envy[[:space:]]+root[[:space:]]+"false"'; then
-                is_root="false"
-            fi
+            # `if`, not `&&`: a failed test as the loop body's last command is a nonzero
+            # body status, and `set -e` would take the whole script down on it.
+            local is_root="true" key val
+            while read -r key val || [[ -n "$key$val" ]]; do
+                if [[ "$key" == "root" && "$val" == "false" ]]; then is_root="false"; fi
+            done < <(manifest_directives "$d/envy.lua")
             if [[ "$is_root" == "true" ]]; then
                 echo "$d/envy.lua" && return
             else
                 candidates+=("$d/envy.lua")
             fi
         fi
+        # A repository is a hard boundary, matching discover() in src/manifest.cpp. Without
+        # it a `root "false"` project inside a checkout kept walking into the parent tree,
+        # and the launcher and the binary picked different manifests -- so different caches.
+        if [[ -d "$d/.git" ]]; then break; fi
         d="${d%/*}"; d="${d:-/}"
     done
     [[ ${#candidates[@]} -gt 0 ]] && echo "${candidates[${#candidates[@]}-1]}" && return
@@ -40,24 +61,19 @@ find_manifest() {
 
 MANIFEST=$(find_manifest) || { echo "ERROR: envy.lua not found" >&2; exit 1; }
 
-parse_directives() {
-    head -20 "$MANIFEST" | sed -nE '
-        s/^--[[:space:]]*@envy[[:space:]]+version[[:space:]]+"(([^"\\]|\\.)*)".*/version \1/p
-        s/^--[[:space:]]*@envy[[:space:]]+cache-posix[[:space:]]+"(([^"\\]|\\.)*)".*/cache \1/p
-        s/^--[[:space:]]*@envy[[:space:]]+mirror[[:space:]]+"(([^"\\]|\\.)*)".*/mirror \1/p
-        s/^--[[:space:]]*@envy[[:space:]]+sha256sums[[:space:]]+"(([^"\\]|\\.)*)".*/sums \1/p
-    '
-}
-
-VERSION="" MANIFEST_CACHE="" MANIFEST_MIRROR="" SUMS_PIN=""
-while read -r key val; do
+VERSION="" CACHE_LOCAL="" CACHE_MODE="" STATE_DIR_REL="" MANIFEST_MIRROR="" SUMS_PIN=""
+# `|| [[ -n ... ]]`: sed reproduces a manifest's missing final newline, and a bare `read`
+# returns nonzero on that unterminated last line -- dropping the directive on it. A manifest
+# whose last line is `-- @envy sha256sums "..."` would then bootstrap with no pin at all.
+while read -r key val || [[ -n "$key$val" ]]; do
     val="${val//\\\"/\"}"
     val="${val//\\\\/\\}"
     case "$key" in
-        version) VERSION="$val" ;; cache) MANIFEST_CACHE="$val" ;;
-        mirror) MANIFEST_MIRROR="$val" ;; sums) SUMS_PIN="$val" ;;
+        version) VERSION="$val" ;; cache-local) CACHE_LOCAL="$val" ;;
+        cache-mode) CACHE_MODE="$val" ;; state-dir) STATE_DIR_REL="$val" ;;
+        mirror) MANIFEST_MIRROR="$val" ;; sha256sums) SUMS_PIN="$val" ;;
     esac
-done < <(parse_directives)
+done < <(manifest_directives "$MANIFEST")
 # A sums pin names one release's checksum file, so it is meaningless against a resolved or
 # stamped-fallback version. Captured before the resolution chain overwrites VERSION.
 PINNED_VERSION="$VERSION"
@@ -136,19 +152,47 @@ keep_valid_version() {
     fi
 }
 
-if [[ -n "${ENVY_CACHE_ROOT:-}" ]]; then CACHE="$ENVY_CACHE_ROOT"
-elif [[ -n "$MANIFEST_CACHE" ]]; then
-    CACHE="$MANIFEST_CACHE"
-    [[ "$CACHE" == "~/"* ]] && CACHE="$HOME${CACHE:1}"
-    [[ "$CACHE" == "~" ]] && CACHE="$HOME"
-    while [[ "$CACHE" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
-        var="${BASH_REMATCH[1]}"; CACHE="${CACHE/\$\{$var\}/${!var}}"
-    done
-    while [[ "$CACHE" =~ \$([A-Za-z_][A-Za-z0-9_]*) ]]; do
-        var="${BASH_REMATCH[1]}"; CACHE="${CACHE/\$$var/${!var}}"
-    done
-elif [[ $(uname) == Darwin ]]; then CACHE="$HOME/Library/Caches/envy"
-else CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/envy"; fi
+MANIFEST_DIR="${MANIFEST%/*}"; MANIFEST_DIR="${MANIFEST_DIR:-/}"
+
+# Tiers, in order, matching resolve_cache_root() in src/cache.cpp. No expansion of any kind:
+# every value here is either a literal from the manifest or a path this script joins, so
+# there is no grammar for this script and the binary to disagree about.
+if [[ -n "${ENVY_CACHE_ROOT:-}" ]]; then
+    CACHE="$ENVY_CACHE_ROOT"
+    # Rejected rather than absolutized: the binary used to anchor a relative value to its
+    # own cwd while this script took it verbatim, so one invocation named two trees.
+    if [[ "$CACHE" != /* ]]; then
+        echo "ERROR: ENVY_CACHE_ROOT must be an absolute path: $CACHE" >&2
+        exit 1
+    fi
+else
+    # @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside
+    # the default local tree `.envy/cache` and would let a cache wipe erase the marker.
+    if [[ -n "$STATE_DIR_REL" ]]; then STATE_DIR="$MANIFEST_DIR/$STATE_DIR_REL"
+    else STATE_DIR="$MANIFEST_DIR"; fi
+
+    # Existence is the whole signal, so there is no file content for this script, cmd.exe
+    # and C++ to read three different ways.
+    if [[ -f "$STATE_DIR/.envy-cache-local" && -f "$STATE_DIR/.envy-cache-shared" ]]; then
+        echo "ERROR: both .envy-cache-local and .envy-cache-shared exist in $STATE_DIR;" \
+             "envy never writes both. Delete one." >&2
+        exit 1
+    fi
+
+    if [[ -f "$STATE_DIR/.envy-cache-local" ]]; then MODE=local
+    elif [[ -f "$STATE_DIR/.envy-cache-shared" ]]; then MODE=shared
+    elif [[ -n "$CACHE_MODE" ]]; then MODE="$CACHE_MODE"
+    elif [[ -n "$CACHE_LOCAL" ]]; then MODE=local   # naming a tree is asking for it
+    else MODE=shared; fi
+
+    if [[ "$MODE" == local ]]; then
+        # Anchored to the manifest's directory, never the caller's cwd: one manifest names
+        # one tree from every working directory, or an invocation from a subdirectory
+        # refetches the whole package set into a tree of its own.
+        CACHE="$MANIFEST_DIR/${CACHE_LOCAL:-.envy/cache}"
+    elif [[ $(uname) == Darwin ]]; then CACHE="$HOME/Library/Caches/envy"
+    else CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/envy"; fi
+fi
 
 if [[ -z "$VERSION" ]]; then
     if [[ -f "$CACHE/envy/latest" ]]; then
@@ -180,6 +224,33 @@ if [[ -z "$VERSION" ]]; then
     if [[ -z "$VERSION" ]]; then
         VERSION="$FALLBACK_VERSION"
     fi
+fi
+
+# An older envy silently ignores the cache directives below and would resolve the *shared*
+# cache for a manifest asking for a hermetic tree, then exit 0. Refuse before downloading it.
+version_lt() {  # $1 < $2, both MAJOR.MINOR.PATCH
+    local IFS=. a b i
+    read -r -a a <<< "$1"
+    read -r -a b <<< "$2"
+    for i in 0 1 2; do
+        if (( ${a[i]:-0} < ${b[i]:-0} )); then return 0; fi
+        if (( ${a[i]:-0} > ${b[i]:-0} )); then return 1; fi
+    done
+    return 1
+}
+
+# 0.0.0 is a dev build, which reexec_should() in src/reexec.cpp also lets through: it is
+# built from a working tree, so its directive support cannot be inferred from its version.
+# The MIN_DIRECTIVE_VERSION shape test matters too -- an unstamped template would otherwise
+# reach bash arithmetic with '0.2.0' and die under set -e.
+if [[ -n "$CACHE_LOCAL$CACHE_MODE$STATE_DIR_REL" \
+      && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$VERSION" != 0.0.0 \
+      && "$MIN_DIRECTIVE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+   && version_lt "$VERSION" "$MIN_DIRECTIVE_VERSION"; then
+    echo "ERROR: $MANIFEST uses '@envy cache-local'/'cache-mode'/'state-dir', added in envy" \
+         "$MIN_DIRECTIVE_VERSION, but resolves envy $VERSION. That envy ignores them and" \
+         "would silently use the shared cache. Raise or remove the '@envy version' pin." >&2
+    exit 1
 fi
 
 case "$(uname -s)" in

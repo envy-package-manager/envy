@@ -360,12 +360,17 @@ default_shell_value default_shell_from_lua(sol::object const &obj, char const *c
 
 }  // namespace
 
-std::optional<std::string> const &envy_meta::cache_for_platform() const {
-#ifdef _WIN32
-  return cache_win;
-#else
-  return cache_posix;
-#endif
+// One field for every platform: cache-local names a path relative to the manifest, and a
+// relative project path is the same string everywhere. The cache-posix/cache-win split
+// existed only because those directives held absolute paths.
+cache_root_request envy_meta::cache_request(
+    std::optional<std::filesystem::path> cli_override,
+    std::filesystem::path const &manifest_dir) const {
+  return { .cli_override = std::move(cli_override),
+           .cache_local = cache_local,
+           .declared_mode = declared_cache_mode,
+           .state_dir = state_dir,
+           .manifest_dir = manifest_dir };
 }
 
 envy_meta parse_envy_meta(std::string_view content) {
@@ -378,10 +383,35 @@ envy_meta parse_envy_meta(std::string_view content) {
                 envy_directive_span const &) {
         if (key == "version") {
           result.version = value;
-        } else if (key == "cache-posix") {
-          result.cache_posix = value;
-        } else if (key == "cache-win") {
-          result.cache_win = value;
+        } else if (key == "cache-local") {
+          if (auto const bad{ validate_project_relative_path(value) }) {
+            throw std::runtime_error("'@envy cache-local' " + *bad + ": '" + value + "'");
+          }
+          result.cache_local = value;
+        } else if (key == "state-dir") {
+          if (auto const bad{ validate_project_relative_path(value) }) {
+            throw std::runtime_error("'@envy state-dir' " + *bad + ": '" + value + "'");
+          }
+          result.state_dir = value;
+        } else if (key == "cache-mode") {
+          if (value == "local") {
+            result.declared_cache_mode = cache_mode::LOCAL;
+          } else if (value == "shared") {
+            result.declared_cache_mode = cache_mode::SHARED;
+          } else {
+            throw std::runtime_error("'@envy cache-mode' must be \"local\" or \"shared\", "
+                                     "got: '" +
+                                     value + "'");
+          }
+        } else if (key == "cache-posix" || key == "cache-win") {
+          // Removed, not merely renamed. Unknown keys fall off this chain silently, so a
+          // bare rename would drop the directive and hand the project the shared cache
+          // without a word -- worse than the divergence this change exists to fix.
+          throw std::runtime_error(
+              "'@envy " + std::string{ key } +
+              "' directive removed; use '@envy cache-local' with a path relative to the "
+              "manifest, which makes a project-local cache the default. For an absolute "
+              "cache root, set ENVY_CACHE_ROOT instead.");
         } else if (key == "mirror") {
           result.mirror = value;
         } else if (key == "sha256sums") {

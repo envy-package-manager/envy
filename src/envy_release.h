@@ -31,6 +31,15 @@ inline constexpr std::string_view kEnvyReleaseLatestUrl{ ENVY_UPSTREAM_REPO_URL
 // every translation unit that includes this header.
 #undef ENVY_UPSTREAM_REPO_URL
 
+// First release that understands '@envy cache-local', 'cache-mode' and 'state-dir'.
+//
+// Load-bearing, not informational. An older envy drops unknown directive keys silently, so
+// a manifest that pins one and also names a local cache would have it resolve the *shared*
+// cache and exit 0 -- the project asks for a hermetic tree and gets packages in the user's
+// home instead. Both launchers are stamped with this and refuse to hand a manifest using
+// the new directives to a binary below it, and reexec refuses the same downgrade.
+inline constexpr std::string_view kEnvyMinDirectiveVersion{ "0.2.0" };
+
 // Checksum manifest published beside the archives of every release, one line per artifact
 // in `sha256sum` output format. Bootstrap and re-exec attest a download against it, and a
 // manifest's `@envy sha256sums` pins this file's own hash -- one pin covering all six
@@ -60,6 +69,11 @@ inline constexpr std::array<envy_release_target, 6> kEnvyReleaseTargets{ {
 // A version becomes the envy/<version> cache path component, so reject anything that could
 // escape it or confuse a shell.
 bool envy_release_version_is_valid(std::string_view version);
+
+// True when `a` names an earlier release than `b`. Both must parse as MAJOR.MINOR.PATCH;
+// anything that does not is reported as *not* less, so a nonstandard version string never
+// trips a version gate on the strength of a parse failure alone.
+bool envy_release_version_less(std::string_view a, std::string_view b);
 
 // A mirror gets written verbatim into a quoted `-- @envy mirror "..."` manifest directive,
 // which both bootstrap scripts then parse back out into a shell/batch variable. Characters

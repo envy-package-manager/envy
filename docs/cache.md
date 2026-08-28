@@ -1,7 +1,12 @@
 # Cache Design
 
 ## Overview
-- Single cache root (default `~/.cache/envy/`) holds specs and assets; entries become immutable once marked complete so readers never lock.
+- Single cache root holds specs and assets; entries become immutable once marked complete so
+  readers never lock. The root is either the user-wide default (`~/Library/Caches/envy`,
+  `$XDG_CACHE_HOME/envy`, `%LOCALAPPDATA%\envy`) or a project-local tree named by
+  `@envy cache-local`; see "Override Precedence" in docs/envy-init.md. Package entries carry no
+  project component, so a shared root dedups heavyweight packages across every project and git
+  worktree that points at it.
 - Scene-aware locking: exclusive while building, lock-free after `envy-complete` appears; install directories live beside final paths for atomic rename.
 - Project-local (`local.*`) specs stay in the repo tree and bypass the shared cache.
 

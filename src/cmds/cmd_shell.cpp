@@ -1,5 +1,7 @@
 #include "cmd_shell.h"
 
+#include "manifest.h"
+
 #include "cache.h"
 #include "cmd_init.h"
 #include "tui.h"
@@ -41,8 +43,24 @@ shell_info const *find_shell(std::string const &name) {
   return nullptr;
 }
 
-bool is_custom_cache(std::optional<fs::path> const &cli_cache_root) {
-  return cli_cache_root.has_value();
+// Any root that is not the user-wide default: a project-local tree counts, and is in fact
+// the case that most needs the warning, since `rm -rf` on the build root takes the hooks
+// with it. Keying on the CLI flag alone missed exactly that.
+bool is_custom_cache(cache_root_resolution const &resolved) {
+  return resolved.tier != cache_root_tier::DEFAULT || resolved.mode == cache_mode::LOCAL;
+}
+
+// Same resolution every other command performs, so `envy shell` names the tree that
+// self-deploy actually wrote its hooks into. Built manifest-blind, this reported the
+// platform default and then failed to find a hook that was sitting in the local tree.
+cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache_root) {
+  envy_meta meta;
+  fs::path manifest_dir;
+  if (auto const found{ manifest::discover(false, fs::current_path()) }) {
+    meta = found->meta;
+    manifest_dir = found->path.parent_path();
+  }
+  return resolve_cache_root(meta.cache_request(cli_cache_root, manifest_dir));
 }
 
 }  // namespace
@@ -68,7 +86,8 @@ void cmd_shell::execute() {
                              "'. Use: bash, zsh, fish, powershell");
   }
 
-  auto c{ std::make_unique<cache>(cli_cache_root_) };
+  auto const resolved{ resolve_for_shell(cli_cache_root_) };
+  auto c{ std::make_unique<cache>(resolved.root) };
 
   fs::path const hook_path{ c->root() / "shell" / ("hook." + std::string{ si->ext }) };
   if (!fs::exists(hook_path)) {
@@ -105,7 +124,7 @@ void cmd_shell::execute() {
   tui::info("  %s", source_line.c_str());
   tui::info("");
 
-  if (is_custom_cache(cli_cache_root_)) {
+  if (is_custom_cache(resolved)) {
     tui::warn("Hook files are stored in cache at %s", c->root().string().c_str());
     tui::warn("Moving or deleting this cache will break shell integration.");
   }

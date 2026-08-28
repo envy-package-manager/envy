@@ -19,7 +19,10 @@ def parse_report(stdout: str) -> tuple[str, dict[str, list[tuple[str, str]]], st
 
     for line in stdout.splitlines():
         if line.startswith("Cache: "):
-            root = line[len("Cache: ") :]
+            # The report names the tier that decided, e.g. "Cache: /x  (@envy cache-local)".
+            # Every reader-vs-reader bug in this area was two things silently disagreeing,
+            # so the resolved root now says why it is what it is.
+            root = line[len("Cache: ") :].split("  (")[0]
         elif line.endswith(":") and not line.startswith(" "):
             current = sections.setdefault(line[:-1], [])
         elif line.startswith("  ") and line.strip() != "(none)":
@@ -107,9 +110,8 @@ class TestCacheUsage(EnvyTestCase):
         """
         project = self.make_temp_dir("project")
         self.addCleanup(shutil.rmtree, project, ignore_errors=True)
-        directive = "cache-win" if sys.platform == "win32" else "cache-posix"
         (project / "envy.lua").write_bytes(
-            f'-- @envy {directive} "relcache"\n\nPACKAGES = {{}}\n'.encode()
+            b'-- @envy cache-local "relcache"\n\nPACKAGES = {}\n'
         )
         sub = project / "sub"
         sub.mkdir()
@@ -167,6 +169,41 @@ class TestCacheUsage(EnvyTestCase):
         self.assertEqual(result.returncode, 0, f"cache failed: {result.stderr}")
         root, _, _ = parse_report(result.stdout)
         self.assertEqual(root, str(self.cache_root))
+
+    def test_override_skips_manifest_discovery_for_every_cache_consumer(self):
+        """Not just `envy cache`: every path into the cache must honor the override alone.
+
+        Three separate call sites resolved the cache root by discovering a manifest even when
+        `--cache-root` already decided it, and `discover()` parses directives and throws --
+        so one stale directive anywhere above the cwd broke commands that named their cache
+        explicitly. `import` was the last of them.
+        """
+        project = self.make_temp_dir("project")
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        # A removed directive: parse_envy_meta throws on it by design.
+        (project / "envy.lua").write_bytes(
+            b'-- @envy cache-posix "/opt/whatever"\n\nPACKAGES = {}\n'
+        )
+
+        env = test_config.get_test_env()
+        env.pop("ENVY_CACHE_ROOT", None)
+
+        for args in (
+            ["cache"],
+            ["cache", "--root"],
+            ["import", str(project / "missing.zst")],
+        ):
+            with self.subTest(args=args):
+                result = test_config.run(
+                    [str(self.envy), "--cache-root", str(self.cache_root), *args],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                # It may still fail on its own arguments; it must not fail on the manifest.
+                self.assertNotIn("cache-posix", result.stderr)
+                self.assertNotIn("directive removed", result.stderr)
 
     def test_non_package_directories_are_reported(self):
         specs = self.cache_root / "specs"

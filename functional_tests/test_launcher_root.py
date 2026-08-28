@@ -495,3 +495,254 @@ class TestBatchLauncherRootDiscovery(EnvyTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------------------
+# Cache-root parity
+#
+# The load-bearing test of the whole cache-root design. The launcher resolves the cache root
+# before any envy binary exists, and the binary resolves it again -- and for a long time
+# they disagreed: three expansion grammars across four readers, none of them the documented
+# one. A launcher that resolves a different root bootstraps envy into one tree while the
+# binary it execs installs packages into another, and the binary then prints the right
+# answer *after* the wrong one was already used, which is what made the class of bug
+# invisible.
+#
+# Both harnesses graft a print onto the real shipped launcher, exactly as the root-discovery
+# tests above do, and cut it off before any network access.
+
+
+def _get_bash_cache_root_script() -> str:
+    """The shipped bash launcher, told where to start, cut short after CACHE is resolved.
+
+    Truncated at the version-resolution chain: everything the cache tiers need is above it,
+    and nothing below runs, so no download can happen. The cache block itself calls no
+    function defined later in the file.
+    """
+    src = (_LAUNCHER_DIR / "envy").read_text(encoding="utf-8")
+    # resolve_script_dir takes no arguments, so the start directory arrives in a global.
+    src = _splice(
+        src,
+        "resolve_script_dir() {",
+        'START_DIR="${1:-}"\nresolve_script_dir() { echo "$START_DIR"; return; }\n'
+        "_unused_resolve_script_dir() {",
+    )
+    anchor = 'if [[ -z "$VERSION" ]]; then'
+    if anchor not in src:
+        raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
+    return src.split(anchor)[0] + 'echo "$CACHE"\n'
+
+
+def _get_batch_cache_root_script() -> str:
+    """The shipped envy.bat, told where to start, printing CACHE before it resolves a version.
+
+    Spliced rather than sliced: the cache tiers `call :quoted_value` and `:require_absolute`,
+    which live with the other subroutines at the end of the file.
+    """
+    src = (_LAUNCHER_DIR / "envy.bat").read_text(encoding="utf-8")
+    src = _splice(
+        src,
+        'set "DIR=%~dp0"\nif "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"',
+        'if "%~1"=="" (\n'
+        '    set "DIR=%~dp0"\n'
+        '    if "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"\n'
+        ") else (\n"
+        '    set "DIR=%~1"\n'
+        ")",
+    )
+    return _splice(
+        src,
+        '\nif "!VERSION!"=="" (\n',
+        '\necho !CACHE!\nexit /b 0\nif "!VERSION!"=="" (\n',
+    )
+
+
+# Each case is (name, manifest directives, markers to create under the state dir).
+_PARITY_CASES: list[tuple[str, str, tuple[str, ...]]] = [
+    ("no directives at all", "", ()),
+    ("cache-local implies local", '-- @envy cache-local "out/.envy"\n', ()),
+    ("cache-local with a deeper path", '-- @envy cache-local "a/b/c"\n', ()),
+    ("cache-mode local, no cache-local", '-- @envy cache-mode "local"\n', ()),
+    (
+        "cache-mode shared overrides the implication",
+        '-- @envy cache-local "out/.envy"\n-- @envy cache-mode "shared"\n',
+        (),
+    ),
+    ("local marker on a shared-default project", "", (".envy-cache-local",)),
+    (
+        "shared marker on a local-default project",
+        '-- @envy cache-local "out/.envy"\n',
+        (".envy-cache-shared",),
+    ),
+    (
+        "local marker agreeing with the default",
+        '-- @envy cache-local "out/.envy"\n',
+        (".envy-cache-local",),
+    ),
+    (
+        "a relocated state dir",
+        '-- @envy cache-local "out/.envy"\n-- @envy state-dir "out/state"\n',
+        (),
+    ),
+    # The marker has to be found in the relocated directory, not beside the manifest.
+    (
+        "a marker in a relocated state dir",
+        '-- @envy state-dir "st"\n',
+        ("st/.envy-cache-local",),
+    ),
+    # A trailing comment on a directive line: envy.bat used to fold it into the value.
+    (
+        "a directive with a trailing comment",
+        '-- @envy cache-local "out/.envy"   -- where the tree goes\n',
+        (),
+    ),
+]
+
+
+class _CacheRootParityMixin:
+    """Asserts launcher-computed CACHE == `envy cache --root` for every tier.
+
+    A mixin rather than a TestCase subclass: as a base it would be collected and run on its
+    own, with no _launcher_root to call.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
+        self._envy = test_config.get_envy_executable()
+
+    def tearDown(self) -> None:
+        if hasattr(self, "_temp_dir") and self._temp_dir.exists():
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    def _make_project(self, name: str, directives: str, markers: tuple[str, ...]) -> Path:
+        project = self._temp_dir / name
+        project.mkdir(parents=True)
+        (project / "envy.lua").write_text(
+            '-- @envy bin "tools"\n' + directives + "PACKAGES = {}\n"
+        )
+        for m in markers:
+            target = project / m
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"")
+        return project
+
+    def _sandbox_env(self, project: Path) -> dict:
+        """Point every platform-default cache variable into the temp tree.
+
+        Both readers must agree on the shared root too, and the real one belongs to the
+        developer running the suite.
+        """
+        env = test_config.get_test_env()
+        env.pop("ENVY_CACHE_ROOT", None)
+        home = project / "home"
+        home.mkdir(exist_ok=True)
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        env["XDG_CACHE_HOME"] = str(home / "cache")
+        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+        return env
+
+    def _binary_root(self, project: Path, env: dict) -> Path:
+        result = test_config.run(
+            [str(self._envy), "cache", "--root"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(0, result.returncode, f"envy cache --root: {result.stderr}")
+        return Path(result.stdout.strip())
+
+    def _check_case(self, name: str, directives: str, markers: tuple[str, ...]) -> None:
+        slug = name.replace(" ", "-").replace(",", "")
+        project = self._make_project(slug, directives, markers)
+        env = self._sandbox_env(project)
+
+        launcher = self._launcher_root(project, env)
+        binary = self._binary_root(project, env)
+
+        # Path objects, not strings: operator/ leaves 'C:\\p' / 'out/.envy' with a mixed
+        # separator while envy.bat's %~fI normalizes, and that difference is not a bug.
+        self.assertEqual(
+            binary.resolve(),
+            launcher.resolve(),
+            f"{name}: launcher said {launcher}, binary said {binary}",
+        )
+
+    def test_parity_across_every_tier(self) -> None:
+        for name, directives, markers in _PARITY_CASES:
+            with self.subTest(case=name):
+                self._check_case(name, directives, markers)
+
+    def test_parity_under_an_env_override(self) -> None:
+        project = self._make_project("env-override", '-- @envy cache-local "out/.envy"\n', ())
+        env = self._sandbox_env(project)
+        override = self._temp_dir / "explicit-cache"
+        env["ENVY_CACHE_ROOT"] = str(override)
+
+        self.assertEqual(
+            self._binary_root(project, env).resolve(),
+            self._launcher_root(project, env).resolve(),
+        )
+
+    def test_parity_when_a_git_boundary_ends_the_walk(self) -> None:
+        """discover() stops at a .git directory; the launchers used to walk straight past it.
+
+        A `root "false"` project inside a checkout then resolved against the *parent* tree's
+        manifest in the launcher and its own in the binary -- two different caches for one
+        invocation, and the tier matrix above cannot reach it.
+        """
+        outer = self._temp_dir / "outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        (outer / "envy.lua").write_text('-- @envy bin "tools"\nPACKAGES = {}\n')
+        (inner / ".git").mkdir()
+        (inner / "envy.lua").write_text(
+            '-- @envy bin "tools"\n'
+            '-- @envy root "false"\n'
+            '-- @envy cache-local "out/.envy"\n'
+            "PACKAGES = {}\n"
+        )
+
+        env = self._sandbox_env(inner)
+        self.assertEqual(
+            self._binary_root(inner, env).resolve(),
+            self._launcher_root(inner, env).resolve(),
+        )
+
+
+@unittest.skipIf(sys.platform == "win32", "Bash tests skipped on Windows")
+class TestBashCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._script = self._temp_dir / "cache_root.sh"
+        self._script.write_text(_get_bash_cache_root_script())
+        self._script.chmod(0o755)
+
+    def _launcher_root(self, project: Path, env: dict) -> Path:
+        result = test_config.run(
+            [str(self._script), str(project)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(0, result.returncode, f"launcher: {result.stderr}")
+        return Path(result.stdout.strip())
+
+
+@unittest.skipUnless(sys.platform == "win32", "Batch tests require Windows")
+class TestBatchCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._script = self._temp_dir / "cache_root.bat"
+        self._script.write_text(_get_batch_cache_root_script())
+
+    def _launcher_root(self, project: Path, env: dict) -> Path:
+        result = test_config.run(
+            ["cmd", "/c", str(self._script), str(project)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(0, result.returncode, f"launcher: {result.stderr}")
+        return Path(result.stdout.strip())

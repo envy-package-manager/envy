@@ -24,9 +24,10 @@ struct reexec_request {
 // If version mismatch: downloads the correct envy, then throws reexec_request.
 // Returns normally if: no @envy version, version matches, dev build (0.0.0),
 // ENVY_REEXEC set, or ENVY_NO_REEXEC set.
-// `manifest_dir` anchors a relative '@envy cache-*' directive.
+// `cache_root` is the already-resolved root, used to look for the requested version
+// already in cache before downloading it.
 void reexec_if_needed(envy_meta const &meta,
-                      std::optional<std::filesystem::path> const &cli_cache_root,
+                      std::filesystem::path const &cache_root,
                       std::filesystem::path const &manifest_dir,
                       std::vector<std::string> drop_options = {});
 

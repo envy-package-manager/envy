@@ -3,6 +3,8 @@
 #include "sha256.h"
 #include "util.h"
 
+#include "semver.hpp"
+
 #include <sstream>
 #include <stdexcept>
 
@@ -35,6 +37,12 @@ bool envy_release_version_is_valid(std::string_view version) {
     if (!util_ascii_is_alnum(c) && c != '.' && c != '-' && c != '_') { return false; }
   }
   return true;
+}
+
+bool envy_release_version_less(std::string_view a, std::string_view b) {
+  semver::version<> va, vb;
+  if (!semver::parse(a, va) || !semver::parse(b, vb)) { return false; }
+  return va < vb;
 }
 
 void envy_release_validate_mirror(std::string_view mirror, std::string_view op) {

@@ -74,9 +74,14 @@ All values are quoted. Escaping is supported:
 
 | Directive | Required | Description |
 |-----------|----------|-------------|
+| `schema` | Optional | Reserved; parsed and currently unused |
 | `version` | Yes* | Pinned envy version (semver) |
-| `cache-posix` | Optional | Override cache location (macOS/Linux) |
-| `cache-win` | Optional | Override cache location (Windows) |
+| `root` | Optional | `"false"` keeps the upward walk going past this manifest |
+| `bin` / `bin-dir` | Optional | Directory holding the bootstrap launchers |
+| `deploy` | Optional | `"false"` suppresses deployment |
+| `cache-local` | Optional | Project-local cache tree, **relative to the manifest**. Declaring it makes local the project's default |
+| `cache-mode` | Optional | `"local"` or `"shared"`; only needed to override what `cache-local` implies |
+| `state-dir` | Optional | Where the override markers live, relative to the manifest. Default: the manifest's own directory |
 | `mirror` | Optional | Override download mirror: `https://…` or `s3://bucket/prefix` |
 | `sha256sums` | Optional | 64 hex digits: sha256 of the release's `SHA256SUMS`. Attests every downloaded archive; requires `version` |
 
@@ -88,7 +93,7 @@ The scripts carry **no project configuration**—only envy's own upstream URLs a
 
 **`s3://` mirrors** require AWS CLI v2 on `PATH`—the bootstrap shells out to `aws s3 cp`, because curl cannot sign requests and no envy binary exists yet. Region and credentials resolve from the environment/profile exactly as for every other AWS tool; run `aws sso login` first for a credential-gated bucket. Note a stale exported `AWS_ACCESS_KEY_ID` silently beats a fresh SSO session. Prefer `https://` for public distribution to keep bootstrap dependency-free. Bucket names must use hyphens, not underscores.
 
-**Platform-specific cache:** Use `cache-posix` for Unix-style paths (`~/...`, `$HOME/...`) and `cache-win` for Windows paths (`%LOCALAPPDATA%\...`). Each platform's bootstrap script and envy binary only parse their respective directive.
+**Platform-specific cache:** removed. `cache-local` is one relative literal for every platform; see the precedence section below. `~`, `$VAR` and `%VAR%` are rejected, not expanded—an absolute cache root is `ENVY_CACHE_ROOT`'s job.
 
 ### Parsing Regex
 
@@ -118,8 +123,7 @@ The parsing logic is intentionally simple—a per-line regex—so bash, batch, t
 ```lua
 -- envy.lua - Project manifest
 -- @envy version "1.2.3"
--- @envy cache-posix "/opt/shared-envy-cache"
--- @envy cache-win "D:\envy-cache"
+-- @envy cache-local "out/.envy"
 -- @envy mirror "https://internal.corp/envy-releases"
 
 PACKAGES = {
@@ -155,12 +159,25 @@ PACKAGES = {
 
 ### Override Precedence (highest to lowest)
 
-1. `--cache-root` command-line argument
-2. `ENVY_CACHE_ROOT` environment variable
-3. `@envy cache-posix` / `@envy cache-win` directive in manifest
-4. Platform default
+1. `--cache-root` / `ENVY_CACHE_ROOT` — one tier; **must be absolute**
+2. Mode, first match wins:
+   1. `<state-dir>/.envy-cache-local` or `.envy-cache-shared` — the user's own choice
+   2. `@envy cache-mode`
+   3. `@envy cache-local` present ⇒ local
+   4. otherwise ⇒ shared
+3. local ⇒ `<manifest dir>/<cache-local>` (default `.envy/cache`); shared ⇒ platform default
 
-Every tier resolves to an absolute path. A relative directive anchors to the **manifest's directory**; a relative flag or env value anchors to the cwd that supplied it. Bootstrap scripts and runtime agree, so `-- @envy cache-posix "out/.envy"` names `<manifest dir>/out/.envy` from any working directory—otherwise each subdirectory would refetch the whole package set into a tree of its own, and the relative root would leak into `envy product` output and into phase `stage_dir`/`install_dir`.
+Every tier resolves to an absolute, normalized path. `cache-local` and `state-dir` anchor to the **manifest's directory**, never the cwd, so one manifest names one tree from every working directory—otherwise each subdirectory would refetch the whole package set into a tree of its own, and the relative root would leak into `envy product` output and into phase `stage_dir`/`install_dir`.
+
+**No variable expansion anywhere.** `cache-local` and `state-dir` accept one or more non-empty path components, none of them `.` or `..`, with no drive letter, leading separator, `~`, `$`, or `%`. Anything else is an error naming `ENVY_CACHE_ROOT` as the alternative. This is what lets the two bootstrap launchers and both binary paths implement one rule identically; three different expansion grammars across four readers is what this replaced. An absolute override is rejected rather than absolutized, because the binary used to anchor a relative one to its own cwd while both launchers took it verbatim—one invocation, two trees.
+
+**Overriding per project.** `envy cache --local` / `--shared` records the choice as a zero-byte marker under the state dir. Existence is the whole signal—no contents to read, so `[[ -f ]]`, `if exist` and `fs::exists` cannot disagree over CRLF, trailing whitespace or an empty file. A marker exists only when the effective mode *differs* from what the manifest declares, so `--local` on a project that already defaults local removes both markers instead of writing a redundant one. Both markers present is an error: envy never writes that state.
+
+`state-dir` defaults to the manifest's directory rather than `.envy`, because the default local tree is `.envy/cache`—a `.envy` state dir would put a "use the shared cache" marker *inside* the tree the user just opted out of, and `rm -rf .envy` would silently revert them and refetch everything. Pointing `state-dir` and `cache-local` at the same directory is how a project asks for teardown to erase cache and settings together; nesting them is rejected.
+
+**Adopting these directives requires envy 0.2.0 or newer.** An older envy drops unknown directive keys silently, so it would resolve the *shared* cache for a manifest asking for a hermetic tree and exit 0. Both launchers and `reexec` refuse the downgrade rather than hand a manifest to a binary that cannot read it. Raise or remove `@envy version` when adopting them.
+
+**Platform-specific caches are gone.** `cache-posix`/`cache-win` were split only because they held absolute paths, which genuinely differ per platform. A relative project path is the same string everywhere, so one `cache-local` serves both—forward slashes included. The cost: a checkout used from both WSL and native Windows can no longer keep separate trees; use `ENVY_CACHE_ROOT` there.
 
 ### Cache Structure
 
@@ -422,7 +439,7 @@ For CI with shared cache or custom paths:
 ```lua
 -- envy.lua
 -- @envy version "1.2.3"
--- @envy cache-posix "/opt/envy-cache"
+-- @envy cache-local "out/.envy"
 ```
 
 Or via environment:
@@ -623,8 +640,8 @@ function STAGE(fetch_dir, stage_dir, tmp_dir) end
 
 1. **Bootstrap script executes**
 2. **Parse `@envy version`** from `envy.lua`'s header—blank lines and comments up to the first line of code—and unescape
-3. **Parse `@envy cache-posix`/`cache-win`** (optional, platform-specific)
-4. **Resolve cache dir** (env > manifest > default)
+3. **Parse `@envy cache-local` / `cache-mode` / `state-dir`** (all optional, all relative literals)
+4. **Resolve cache dir** (override > markers > directives > platform default)
 5. **Check cache** → `$CACHE/envy/1.2.3/envy` exists
 6. **exec** → replace shell with envy binary, pass all args
 7. **envy sync runs** → normal package synchronization
@@ -679,7 +696,7 @@ Phase 1 delivers complete `@envy` directive parsing in both bootstrap scripts an
 
 **Runtime directive parsing:**
 - [x] Add `@envy` directive parsing to manifest loader (manual string parsing, no regex)
-- [x] Parse `@envy version`, `@envy cache-posix`/`cache-win`, `@envy mirror` with escape handling
+- [x] Parse `@envy version`, cache directives, `@envy mirror` with escape handling
 - [x] Implement unescape logic (`\"` → `"`, `\\` → `\`)
 - [x] Expose parsed directives via `manifest` struct (version, cache, mirror fields)
 - [ ] Detect missing `@envy version` and restore it (using running envy's version)
@@ -836,7 +853,7 @@ This works because `%%L` loop variables expand raw content when delayed expansio
 
 **Status:** Deferred. The edge case is rare enough (version strings, paths, and URLs don't typically contain `!`) that we accept the limitation for now. Revisit if users report issues.
 
-### `@envy cache-posix`/`cache-win` Directive — Partial Fix Complete
+### `@envy cache-posix`/`cache-win` Directive — Removed (historical)
 
 **Bug discovered 2024-12:** The `@envy cache` directive (now `cache-posix`/`cache-win`) was parsed but not used by the C++ runtime. Additionally, tilde (`~`) expansion was broken in both bootstrap script and C++ paths.
 
@@ -846,15 +863,13 @@ This works because `%%L` loop variables expand raw content when delayed expansio
 
 ~~The manifest's cache directive is parsed into `manifest::meta.cache` but never consulted.~~ **Fixed:** Commands now call `cache::ensure(cli_cache_root, m->meta.cache)` which uses `resolve_cache_root()` with full precedence chain.
 
-Current precedence (fully implemented):
-1. `--cache-root` CLI flag
-2. `ENVY_CACHE_ROOT` env var
-3. `@envy cache-posix`/`cache-win` directive ← **Now works**
-4. Platform default
+~~Current precedence:~~ **Superseded** — `cache-posix`/`cache-win` were removed in favor of
+`cache-local`/`cache-mode`/`state-dir` plus the override markers. See "Override Precedence"
+above for the live chain.
 
 #### Problem 2: No Tilde Expansion — FIXED
 
-~~Even if the directive were used, `~` paths would fail.~~ **Fixed:** `expand_path()` uses `wordexp()` on POSIX for full shell-like expansion (~, $VAR, ${VAR}). Bootstrap scripts now also expand `~` and `$VAR`.
+~~Even if the directive were used, `~` paths would fail.~~ ~~**Fixed:** `expand_path()` uses `wordexp()` on POSIX for full shell-like expansion.~~ **Superseded:** expansion is gone entirely. `wordexp()` silently truncated any path containing a space (it split on IFS and returned the first word), accepted undocumented forms like `$((1+2))` and `~otheruser`, and the two launchers implemented two *other* grammars—neither the documented one. `platform::expand_path` was deleted; `cache-local` is a relative literal.
 
 #### Problem 3: No Functional Test Coverage — FIXED
 
@@ -889,7 +904,7 @@ Added a static `ensure()` method to the `cache` class, following the existing `e
 
 ```cpp
 // cache.h - added static method and free functions
-std::filesystem::path expand_path(std::string_view path);  // wordexp on POSIX
+// expand_path removed: cache-local/state-dir are relative literals, no expansion
 std::filesystem::path resolve_cache_root(
     std::optional<std::filesystem::path> const &cli_override,
     std::optional<std::string> const &manifest_cache);
@@ -913,7 +928,7 @@ Removed centralized cache construction and self-deploy. Commands handle their ow
 
 **Phase D: Unit tests in `cache_tests.cpp`** ✓
 
-Added 10 tests for `expand_path()` and `resolve_cache_root()` covering tilde expansion, env var expansion, and precedence chain.
+~~Added 10 tests for `expand_path()` and `resolve_cache_root()`.~~ **Superseded:** those tests were replaced by `resolve_cache_mode`/`validate_project_relative_path` coverage plus the launcher-vs-binary parity matrix in `functional_tests/test_launcher_root.py`.
 
 **Phase E: Bootstrap script path expansion** ✓
 
@@ -943,5 +958,5 @@ Bootstrap path expansion is tested via the existing functional tests which exerc
 7. [x] Update cache-only command (`init`) to use `cache::ensure()`
 8. [x] Fix bootstrap script path expansion (Unix) — tilde + $VAR
 9. [x] Fix bootstrap script path expansion (Windows) — tilde
-10. [x] Add functional tests for `@envy cache-posix`/`cache-win` directive
+10. [x] Add functional tests for the cache directives
 11. [x] Delete `src/runtime.{h,cpp,_tests.cpp}` (superseded by `cache::ensure()`)

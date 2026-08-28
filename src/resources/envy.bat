@@ -7,6 +7,7 @@ set "LATEST_URL=@@LATEST_URL@@"
 set "ENV_MIRROR="
 if defined ENVY_MIRROR set "ENV_MIRROR=%ENVY_MIRROR%"
 set "FALLBACK_VERSION=@@ENVY_VERSION@@"
+set "MIN_DIRECTIVE_VERSION=@@MIN_DIRECTIVE_VERSION@@"
 
 set "MANIFEST="
 set "CANDIDATE="
@@ -22,6 +23,17 @@ if exist "!DIR!\envy.lua" (
         set "CANDIDATE=!DIR!\envy.lua"
     )
 )
+REM A repository is a hard boundary, matching discover() in src/manifest.cpp. Without it a
+REM `root "false"` project inside a checkout kept walking into the parent tree, and this
+REM script and the binary picked different manifests -- so different caches. The trailing
+REM backslash makes `if exist` test for a directory, as discover()'s is_directory does.
+if exist "!DIR!\.git\" (
+    if defined CANDIDATE (
+        set "MANIFEST=!CANDIDATE!"
+        goto :found
+    )
+    echo ERROR: envy.lua not found >&2 & exit /b 1
+)
 for %%I in ("!DIR!\..") do set "PARENT=%%~fI"
 if "!PARENT!"=="!DIR!" (
     if defined CANDIDATE (
@@ -35,7 +47,9 @@ goto :findloop
 :found
 
 set "VERSION="
-set "MANIFEST_CACHE="
+set "CACHE_LOCAL="
+set "CACHE_MODE="
+set "STATE_DIR_REL="
 set "MANIFEST_MIRROR="
 set "SUMS_PIN="
 
@@ -55,15 +69,17 @@ for /f "usebackq tokens=1,2,3,* eol=" %%a in ("!MANIFEST!") do (
     if not "!TOK:~0,2!"=="--" goto :done_parse
     if "%%a"=="--" if "%%b"=="@envy" (
         set "KEY=%%c"
-        set "VAL=%%d"
-        if defined VAL (
-            set "VAL=!VAL:~1,-1!"
-            set "VAL=!VAL:\"="!"
-            set "VAL=!VAL:\\=\!"
-            if "!KEY!"=="version" set "VERSION=!VAL!"
-            if "!KEY!"=="cache-win" set "MANIFEST_CACHE=!VAL!"
-            if "!KEY!"=="mirror" set "MANIFEST_MIRROR=!VAL!"
-            if "!KEY!"=="sha256sums" set "SUMS_PIN=!VAL!"
+        set "RAW=%%d"
+        if defined RAW (
+            call :quoted_value
+            if defined VAL (
+                if "!KEY!"=="version" set "VERSION=!VAL!"
+                if "!KEY!"=="cache-local" set "CACHE_LOCAL=!VAL!"
+                if "!KEY!"=="cache-mode" set "CACHE_MODE=!VAL!"
+                if "!KEY!"=="state-dir" set "STATE_DIR_REL=!VAL!"
+                if "!KEY!"=="mirror" set "MANIFEST_MIRROR=!VAL!"
+                if "!KEY!"=="sha256sums" set "SUMS_PIN=!VAL!"
+            )
         )
     )
 )
@@ -112,15 +128,61 @@ echo        Install AWS CLI v2, or use an https:// mirror. >&2
 exit /b 1
 :mirror_ok
 
-if defined ENVY_CACHE_ROOT (
-    set "CACHE=!ENVY_CACHE_ROOT!"
-) else if defined MANIFEST_CACHE (
-    set "CACHE=!MANIFEST_CACHE!"
-    if "!CACHE:~0,1!"=="~" set "CACHE=!USERPROFILE!!CACHE:~1!"
-    call :anchor_cache_to_manifest
-) else (
-    set "CACHE=!LOCALAPPDATA!\envy"
+set "MANIFEST_DIR="
+for %%I in ("!MANIFEST!") do set "MANIFEST_DIR=%%~dpI"
+if "!MANIFEST_DIR:~-1!"=="\" set "MANIFEST_DIR=!MANIFEST_DIR:~0,-1!"
+
+REM Tiers, in order, matching resolve_cache_root() in src/cache.cpp. No expansion of any
+REM kind: every value is either a literal from the manifest or a path this script joins, so
+REM there is no grammar for this script and the binary to disagree about.
+REM An override short-circuits every project tier, and is rejected rather than absolutized:
+REM the binary used to anchor a relative one to its own cwd while this script took it
+REM verbatim, so one invocation named two different trees. Flat `goto`, not an if/else block,
+REM because every comment below would otherwise sit inside parentheses -- where cmd re-parses
+REM REM lines and a stray `(`, `&` or `>` in prose silently breaks the block.
+if not defined ENVY_CACHE_ROOT goto :resolve_project_cache
+set "CACHE=!ENVY_CACHE_ROOT!"
+call :require_absolute
+if errorlevel 1 exit /b 1
+goto :cache_resolved
+
+:resolve_project_cache
+REM @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside the
+REM default local tree `.envy\cache` and would let a cache wipe erase the marker.
+set "STATE_DIR=!MANIFEST_DIR!"
+if defined STATE_DIR_REL set "STATE_DIR=!MANIFEST_DIR!\!STATE_DIR_REL!"
+
+REM Existence is the whole signal, so there is no file content for this script, bash and C++
+REM to read three different ways. Both markers at once is a state envy never writes.
+if exist "!STATE_DIR!\.envy-cache-local" if exist "!STATE_DIR!\.envy-cache-shared" (
+    echo ERROR: both .envy-cache-local and .envy-cache-shared exist in !STATE_DIR! >&2
+    echo        envy never writes both. Delete one. >&2
+    exit /b 1
 )
+
+REM Naming a tree is asking for it; a cache-local needing a second directive to take effect
+REM would sit in a manifest doing nothing.
+set "MODE="
+if exist "!STATE_DIR!\.envy-cache-local" set "MODE=local"
+if not defined MODE if exist "!STATE_DIR!\.envy-cache-shared" set "MODE=shared"
+if not defined MODE if defined CACHE_MODE set "MODE=!CACHE_MODE!"
+if not defined MODE if defined CACHE_LOCAL set "MODE=local"
+if not defined MODE set "MODE=shared"
+
+if "!MODE!"=="local" goto :cache_local
+set "CACHE=!LOCALAPPDATA!\envy"
+goto :cache_resolved
+
+:cache_local
+REM Anchored to the manifest's directory, never the caller's cwd: one manifest names one tree
+REM from every working directory. %%~fI then normalizes, which is what keeps this equal to the
+REM binary's lexically_normal/make_preferred -- a cache-local of `out/.envy` joins as
+REM `...\out/.envy` until it runs.
+set "CACHE=!MANIFEST_DIR!\.envy\cache"
+if defined CACHE_LOCAL set "CACHE=!MANIFEST_DIR!\!CACHE_LOCAL!"
+for %%I in ("!CACHE!") do set "CACHE=%%~fI"
+
+:cache_resolved
 
 if "!VERSION!"=="" (
     set "LATEST_FILE=!CACHE!\envy\latest"
@@ -188,6 +250,19 @@ call :check_version
 :version_fallback
 if "!VERSION!"=="" set "VERSION=!FALLBACK_VERSION!"
 :version_resolved
+
+REM An older envy silently ignores the cache directives and would resolve the *shared* cache
+REM for a manifest asking for a hermetic tree, then exit 0. Refuse before downloading it.
+REM 0.0.0 is a dev build, which reexec_should() in src/reexec.cpp also lets through: built
+REM from a working tree, so its directive support cannot be read off its version. Both shape
+REM tests matter -- an unstamped template would otherwise reach `if LSS` with
+REM '0.2.0'.
+set "USES_NEW_DIRECTIVES="
+if defined CACHE_LOCAL set "USES_NEW_DIRECTIVES=1"
+if defined CACHE_MODE set "USES_NEW_DIRECTIVES=1"
+if defined STATE_DIR_REL set "USES_NEW_DIRECTIVES=1"
+if defined USES_NEW_DIRECTIVES if not "!VERSION!"=="0.0.0" call :guard_directive_version
+if errorlevel 1 exit /b 1
 
 set "ENVY_BIN=!CACHE!\envy\!VERSION!\envy.exe"
 if exist "!ENVY_BIN!" goto :run
@@ -322,30 +397,58 @@ for /f "usebackq tokens=1,2,3,4 eol=" %%a in ("%~1") do (
 :read_root_done
 exit /b 0
 
-REM :anchor_cache_to_manifest -- CACHE in/out; a relative directive resolves against the
-REM manifest's directory, never the caller's cwd, matching resolve_cache_root() in
-REM src/cache.cpp: one manifest names one cache tree from every working directory, or every
-REM invocation from a subdirectory refetches the whole package set into a tree of its own.
-REM Left alone: `X:\`, `X:/` and a UNC root, the only forms std::filesystem calls absolute
-REM on Windows. Reached only by `call`.
-:anchor_cache_to_manifest
+REM :quoted_value -- RAW in, VAL out. RAW is the `*` remainder of a directive line, so it
+REM starts at the opening quote and may carry a trailing comment. `for /f` skips leading
+REM delimiters, so with `"` as the delimiter the value is token *1*, not token 2, and it ends
+REM at the closing quote either way -- matching parse_directive_line() in src/manifest.cpp.
+REM The old `!VAL:~1,-1!` trimmed one character from each end instead and folded any trailing
+REM comment into the value. A `\"` inside a value still splits early --
+REM already true of this parser before, and documented in docs/envy-init.md, which is why
+REM envy_release_validate_mirror rejects the one directive that could carry one.
+REM Options are caret-escaped and unquoted: `delims="` cannot be written inside quotes.
+REM Reached only by `call`.
+:quoted_value
+set "VAL="
+for /f tokens^=1^ delims^=^" %%v in ("!RAW!") do set "VAL=%%v"
+if defined VAL set "VAL=!VAL:\\=\!"
+exit /b 0
+
+REM :require_absolute -- CACHE in; errorlevel 1 when it is not absolute. Rejected rather
+REM than absolutized: the binary used to anchor a relative override to its own cwd while
+REM this script took it verbatim, so one invocation named two trees. The accepted forms are
+REM the ones std::filesystem calls absolute on Windows. Reached only by `call`.
+:require_absolute
 if "!CACHE:~0,2!"=="\\" exit /b 0
 if "!CACHE:~0,2!"=="//" exit /b 0
 if "!CACHE:~1,2!"==":\" exit /b 0
 if "!CACHE:~1,2!"==":/" exit /b 0
-REM A leading separator is rooted but drive-relative, and is_absolute() is false for it, so
-REM the runtime anchors it too: operator/ keeps the manifest's drive and drops its
-REM directory. Match that -- %%~dI is the drive alone, %%~dpI the drive plus directory with
-REM a trailing backslash. %%~fI then collapses `..` and any doubled separator.
-if "!CACHE:~0,1!"=="\" goto :anchor_cache_to_drive
-if "!CACHE:~0,1!"=="/" goto :anchor_cache_to_drive
-for %%I in ("!MANIFEST!") do set "CACHE=%%~dpI!CACHE!"
-goto :anchor_cache_done
-:anchor_cache_to_drive
-for %%I in ("!MANIFEST!") do set "CACHE=%%~dI!CACHE!"
-:anchor_cache_done
-for %%I in ("!CACHE!") do set "CACHE=%%~fI"
-exit /b 0
+echo ERROR: ENVY_CACHE_ROOT must be an absolute path: !CACHE! >&2
+exit /b 1
+
+REM :guard_directive_version -- VERSION and MIN_DIRECTIVE_VERSION in; errorlevel 1 when the
+REM resolved envy predates the cache directives this manifest uses. Field-wise integer
+REM compare, so 0.10.0 is correctly newer than 0.2.0 where a string compare is not.
+REM Reached only by `call`.
+:guard_directive_version
+echo(!MIN_DIRECTIVE_VERSION!|findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul 2>&1
+if errorlevel 1 exit /b 0
+echo(!VERSION!|findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul 2>&1
+if errorlevel 1 exit /b 0
+for /f "tokens=1-3 delims=." %%x in ("!VERSION!") do (
+    set "_A1=%%x" & set "_A2=%%y" & set "_A3=%%z"
+)
+for /f "tokens=1-3 delims=." %%x in ("!MIN_DIRECTIVE_VERSION!") do (
+    set "_B1=%%x" & set "_B2=%%y" & set "_B3=%%z"
+)
+set "_OLD="
+if !_A1! LSS !_B1! set "_OLD=1"
+if not defined _OLD if !_A1! EQU !_B1! if !_A2! LSS !_B2! set "_OLD=1"
+if not defined _OLD if !_A1! EQU !_B1! if !_A2! EQU !_B2! if !_A3! LSS !_B3! set "_OLD=1"
+if not defined _OLD exit /b 0
+echo ERROR: !MANIFEST! uses '@envy cache-local'/'cache-mode'/'state-dir', added in envy >&2
+echo        !MIN_DIRECTIVE_VERSION!, but resolves envy !VERSION!. That envy ignores them >&2
+echo        and would silently use the shared cache. Raise or remove the '@envy version' pin. >&2
+exit /b 1
 
 REM :check_version -- VERSION and VERSION_SRC in; clears VERSION unless it is numbered
 REM MAJOR.MINOR.PATCH, the only shape an envy release takes. Clearing defers to the next

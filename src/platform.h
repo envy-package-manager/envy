@@ -109,7 +109,6 @@ std::optional<std::filesystem::path> get_default_cache_root();
 char const *get_default_cache_root_env_vars();
 
 std::filesystem::path get_exe_path();
-std::filesystem::path expand_path(std::string_view path);
 
 void env_var_set(char const *name, char const *value);
 void env_var_unset(char const *name);

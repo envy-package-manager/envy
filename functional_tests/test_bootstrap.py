@@ -49,36 +49,35 @@ PACKAGES = {
 }
 """,
     "missing_version.lua": """-- This manifest has no @envy version directive
--- @envy cache-posix "/custom/cache"
+-- @envy cache-local "custom/cache"
 
 PACKAGES = {
     "local.example@v1",
 }
 """,
     "with_escapes.lua": """-- @envy version "1.2.3-\\"beta\\""
--- @envy cache-posix "/path/with\\\\backslash"
+-- @envy state-dir "path/with\\\\backslash"
 
 PACKAGES = {
     "local.example@v1",
 }
 """,
     "whitespace_variants.lua": """--   @envy   version   "1.0.0"
---\t@envy\tcache-posix\t"/tab/separated"
+--\t@envy\tcache-local\t"tab/separated"
 
 PACKAGES = {
     "local.example@v1",
 }
 """,
     "relative_cache.lua": """-- @envy version "1.2.3"
--- @envy cache-posix "relcache"
--- @envy cache-win "relcache"
+-- @envy cache-local "relcache"
 
 PACKAGES = {
     "local.example@v1",
 }
 """,
     "all_directives.lua": """-- @envy version "2.0.0"
--- @envy cache-posix "/opt/envy-cache"
+-- @envy cache-local "out/.envy"
 -- @envy mirror "https://internal.corp/envy-releases"
 
 PACKAGES = {
@@ -513,6 +512,7 @@ class BootstrapIntegrationTest(EnvyTestCase):
         dest: Path,
         fallback_version: str = "1.2.3",
         latest_url: str | None = None,
+        min_directive_version: str | None = None,
     ) -> Path:
         """Write the bootstrap script with every placeholder `envy init` fills in.
 
@@ -530,6 +530,13 @@ class BootstrapIntegrationTest(EnvyTestCase):
         content = content.replace(
             "@@DOWNLOAD_URL@@", self._github.url_for("/upstream-not-a-mirror")
         )
+        # Left unstamped by default. The guard's own shape test then skips it, which is the
+        # behavior an unstamped template must have -- reaching shell arithmetic with
+        # '@@MIN_DIRECTIVE_VERSION@@' would abort under `set -e`.
+        if min_directive_version is not None:
+            content = content.replace(
+                "@@MIN_DIRECTIVE_VERSION@@", min_directive_version
+            )
         self._write_verbatim(dest, content)
         if sys.platform != "win32":
             dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -721,31 +728,33 @@ class BootstrapIntegrationTest(EnvyTestCase):
             "cache tree was anchored to the cwd",
         )
 
-    def test_bootstrap_absolute_cache_directive_is_used_as_written(self) -> None:
-        """An absolute cache directive is taken verbatim -- anchoring applies to neither.
+    def test_bootstrap_rejects_an_absolute_cache_local(self) -> None:
+        """An absolute '@envy cache-local' is an error, not a path taken verbatim.
 
-        The other half of the contract the relative test covers: the manifest names one
-        tree either way. Written inline rather than as a fixture because the path is only
-        known at run time.
+        cache-local names a project-local tree, so it is a relative literal by definition;
+        an absolute cache root is ENVY_CACHE_ROOT's job. The launcher does not validate --
+        recognizing the forms it rejects would need the very parser this change deleted --
+        so it anchors, misses, and the binary it execs produces the error. That the error
+        arrives at all is the contract; which layer authored it is not.
         """
         project_dir = self._temp_dir / "project"
         bin_dir = project_dir / "tools"
         bin_dir.mkdir(parents=True)
 
         cache = self._temp_dir / "absolute-cache"
-        directive = "cache-win" if sys.platform == "win32" else "cache-posix"
-        # A Windows path's backslashes are escaped: both parsers unescape '\\' to '\'.
         value = str(cache).replace("\\", "\\\\")
         self._write_verbatim(
             project_dir / "envy.lua",
             f'-- @envy version "1.2.3"\n'
-            f'-- @envy {directive} "{value}"\n'
+            f'-- @envy cache-local "{value}"\n'
             f"\nPACKAGES = {{}}\n",
         )
         bootstrap = self._stamp_bootstrap(
             bin_dir / ("envy.bat" if sys.platform == "win32" else "envy"), "1.2.3"
         )
 
+        # Seed the binary where an absolute directive would have put it, so the test fails
+        # loudly if the value is ever honored again instead of rejected.
         cached_binary = (
             cache / "envy" / "1.2.3" / ("envy.exe" if sys.platform == "win32" else "envy")
         )
@@ -754,22 +763,69 @@ class BootstrapIntegrationTest(EnvyTestCase):
         if sys.platform != "win32":
             cached_binary.chmod(cached_binary.stat().st_mode | stat.S_IXUSR)
 
-        elsewhere = self._temp_dir / "elsewhere"
-        elsewhere.mkdir()
-        result = self._run_bootstrap(
-            bootstrap, ["version"], set_cache_root=False, cwd=elsewhere
+        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+
+        self.assertNotEqual(0, result.returncode, f"stdout: {result.stdout}")
+        self.assertIn("cache-local", result.stderr)
+
+    def _write_project_with_cache_local(self, version: str) -> Path:
+        project_dir = self._temp_dir / "project"
+        bin_dir = project_dir / "tools"
+        bin_dir.mkdir(parents=True)
+        self._write_verbatim(
+            project_dir / "envy.lua",
+            f'-- @envy version "{version}"\n'
+            f'-- @envy cache-local "out/.envy"\n'
+            f"\nPACKAGES = {{}}\n",
         )
+        return bin_dir / ("envy.bat" if sys.platform == "win32" else "envy")
+
+    def test_bootstrap_refuses_an_envy_that_predates_the_cache_directives(self) -> None:
+        """An older envy ignores cache-local and would silently use the shared cache.
+
+        The worst failure mode in this area: the project asks for a hermetic tree, the old
+        binary drops the unknown directive, installs everything into the user's home, and
+        exits 0. This is a regression guard, since cache-posix *was* understood by old
+        binaries -- so the launcher has to refuse before it downloads anything.
+        """
+        dest = self._write_project_with_cache_local("0.1.9")
+        bootstrap = self._stamp_bootstrap(dest, "0.1.9", min_directive_version="0.2.0")
+
+        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+
+        self.assertNotEqual(0, result.returncode, f"stdout: {result.stdout}")
+        self.assertIn("cache-local", result.stderr)
+        self.assertNotIn("Downloading", result.stderr)
+
+    def test_bootstrap_allows_an_envy_at_the_minimum_version(self) -> None:
+        """The guard is 'older than', not 'other than'."""
+        dest = self._write_project_with_cache_local("0.2.0")
+        bootstrap = self._stamp_bootstrap(dest, "0.2.0", min_directive_version="0.2.0")
+
+        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
 
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-        self.assertIn("envy version", result.stderr)
-        # Anchoring an absolute directive would miss the seeded binary and download.
-        self.assertNotIn("Downloading", result.stderr)
-        # Nor did anything land under the manifest. Asserted by listing the project rather
-        # than by predicting the anchored path: joining a manifest directory with an
-        # absolute one takes a different shape on each platform.
-        self.assertEqual(
-            ["envy.lua", "tools"], sorted(p.name for p in project_dir.iterdir())
-        )
+
+    def test_bootstrap_compares_version_fields_numerically(self) -> None:
+        """0.10.0 is newer than 0.2.0; a string compare says otherwise."""
+        dest = self._write_project_with_cache_local("0.10.0")
+        bootstrap = self._stamp_bootstrap(dest, "0.10.0", min_directive_version="0.2.0")
+
+        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+
+    def test_bootstrap_lets_a_dev_build_through_the_version_guard(self) -> None:
+        """0.0.0 is built from a working tree, so its support cannot be read off a number.
+
+        reexec_should() in src/reexec.cpp lets a 0.0.0 self through for the same reason.
+        """
+        dest = self._write_project_with_cache_local("0.0.0")
+        bootstrap = self._stamp_bootstrap(dest, "0.0.0", min_directive_version="0.2.0")
+
+        result = self._run_bootstrap(bootstrap, ["version"], set_cache_root=False)
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
 
     def test_bootstrap_uses_fallback_when_version_missing(self) -> None:
         """Test that bootstrap resolves a version when @envy version is missing.

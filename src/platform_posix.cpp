@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <wordexp.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -376,32 +375,6 @@ std::error_code remove_all_with_retry(std::filesystem::path const &target) {
   std::error_code ec;
   std::filesystem::remove_all(target, ec);
   return ec;
-}
-
-std::filesystem::path expand_path(std::string_view p) {
-  if (p.empty()) { return {}; }
-
-  wordexp_t we{};
-  std::string const path_str{ p };
-  int const flags{ WRDE_NOCMD | WRDE_UNDEF };  // no $(cmd), fail on undefined $VAR
-
-  int const rc{ wordexp(path_str.c_str(), &we, flags) };
-
-  if (rc == 0) {
-    if (we.we_wordc == 0) {
-      wordfree(&we);
-      throw std::runtime_error("path expansion produced no results: " + path_str);
-    }
-    std::filesystem::path result{ we.we_wordv[0] };
-    wordfree(&we);
-    return result;
-  }
-
-  // POSIX: wordfree() must only be called after successful wordexp()
-  if (rc == WRDE_BADVAL) {
-    throw std::runtime_error("undefined variable in path: " + path_str);
-  }
-  throw std::runtime_error("path expansion failed: " + path_str);
 }
 
 int get_process_id() { return static_cast<int>(getpid()); }

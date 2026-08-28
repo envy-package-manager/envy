@@ -582,10 +582,14 @@ class TestReexecCachePath(_ReexecTestBase):
     """Tests for cache path resolution during re-exec."""
 
     def test_manifest_cache_directive_used_for_fast_path(self) -> None:
-        """@envy cache-posix in manifest should be used for fast-path cache lookup."""
+        """@envy cache-local selects the tree the re-exec fast path looks in.
+
+        Relative and anchored to the manifest, which is all cache-local can be now; an
+        absolute cache root is ENVY_CACHE_ROOT's job.
+        """
         version = "1.2.3"
-        custom_cache = self._temp_dir / "custom-cache"
-        custom_cache.mkdir()
+        custom_cache = self._project / "out" / ".envy"
+        custom_cache.mkdir(parents=True)
 
         # Pre-populate the custom cache with the test binary
         cached_dir = custom_cache / "envy" / version
@@ -600,11 +604,10 @@ class TestReexecCachePath(_ReexecTestBase):
                 | stat.S_IXOTH
             )
 
-        # Manifest points cache to custom dir; delete releases so download would fail
-        cache_key = "cache-win" if sys.platform == "win32" else "cache-posix"
+        # Manifest points cache into the project; delete releases so a download would fail
         manifest = f'-- @envy version "{version}"\n'
         manifest += f'-- @envy mirror "file://{self._releases_dir}"\n'
-        manifest += f'-- @envy {cache_key} "{custom_cache}"\n'
+        manifest += '-- @envy cache-local "out/.envy"\n'
         manifest += '-- @envy bin "tools"\n'
         manifest += "PACKAGES = {}\n"
         (self._project / "envy.lua").write_text(manifest)
@@ -636,12 +639,10 @@ class TestReexecCachePath(_ReexecTestBase):
                 | stat.S_IXOTH
             )
 
-        # Manifest points cache to a DIFFERENT dir (which doesn't have the binary)
-        bad_cache = self._temp_dir / "bad-cache"
-        cache_key = "cache-win" if sys.platform == "win32" else "cache-posix"
+        # Manifest points cache at a DIFFERENT tree, which does not have the binary
         manifest = f'-- @envy version "{version}"\n'
         manifest += f'-- @envy mirror "file:///nonexistent"\n'
-        manifest += f'-- @envy {cache_key} "{bad_cache}"\n'
+        manifest += '-- @envy cache-local "out/bad-cache"\n'
         manifest += '-- @envy bin "tools"\n'
         manifest += "PACKAGES = {}\n"
         (self._project / "envy.lua").write_text(manifest)

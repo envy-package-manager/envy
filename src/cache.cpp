@@ -16,25 +16,193 @@ using path = std::filesystem::path;
 
 namespace envy {
 
-path resolve_cache_root(std::optional<path> const &cli_override,
-                        std::optional<std::string> const &manifest_cache,
-                        path const &manifest_dir) {
-  // Every tier resolves to an absolute path: the cache root prefixes every path envy
-  // computes, prints, or hands to a Lua phase, so a relative one would silently name a
-  // different tree per working directory.  A CLI flag or ENVY_CACHE_ROOT anchors to the
-  // cwd that supplied it; a manifest directive anchors to the manifest's directory, the
-  // one location that reads the same from every cwd.
-  if (cli_override) { return std::filesystem::absolute(*cli_override); }
-  if (manifest_cache) {
-    auto expanded{ platform::expand_path(*manifest_cache) };
-    if (expanded.is_absolute()) { return expanded; }
-    if (manifest_dir.empty()) {
-      throw std::runtime_error("cache: relative cache directive '" + *manifest_cache +
-                               "' has no manifest directory to anchor to");
-    }
-    return manifest_dir / expanded;
+namespace {
+
+// Absolute, separator-consistent, and free of '.'/'..' segments. Callers compare these
+// paths and print them; `operator/` alone leaves `C:\proj` / `out/.envy` mixed.
+path normalized(path p) { return p.lexically_normal().make_preferred(); }
+
+bool strictly_inside(path const &inner, path const &outer) {
+  auto const rel{ inner.lexically_relative(outer) };
+  return !rel.empty() && rel != "." && *rel.begin() != "..";
+}
+
+}  // namespace
+
+std::optional<std::string> validate_project_relative_path(std::string_view value) {
+  if (value.empty()) { return "must not be empty"; }
+
+  if (value.find('~') != std::string_view::npos) {
+    return "must not contain '~'; tilde expansion was removed";
   }
-  if (auto def{ platform::get_default_cache_root() }) { return *def; }
+  if (value.find('$') != std::string_view::npos ||
+      value.find('%') != std::string_view::npos) {
+    return "must not contain '$' or '%'; variable expansion was removed";
+  }
+  if (value[0] == '/' || value[0] == '\\') {
+    return "must be relative, with no leading separator";
+  }
+  if (value.size() >= 2 && value[1] == ':') { return "must not name a drive"; }
+
+  // Split on both separators: the value is authored once and read on every platform, so a
+  // backslash is a separator here even when std::filesystem would not treat it as one.
+  for (size_t pos{ 0 }; pos <= value.size();) {
+    auto const end{ value.find_first_of("/\\", pos) };
+    auto const component{ value.substr(pos, end == std::string_view::npos
+                                               ? std::string_view::npos
+                                               : end - pos) };
+    if (component.empty()) { return "must not contain an empty path component"; }
+    if (component == "." || component == "..") {
+      return "must not contain a '.' or '..' component";
+    }
+    if (end == std::string_view::npos) { break; }
+    pos = end + 1;
+  }
+
+  return std::nullopt;
+}
+
+cache_mode resolve_cache_mode(bool local_marker,
+                              bool shared_marker,
+                              std::optional<cache_mode> declared,
+                              bool has_cache_local) {
+  if (local_marker && shared_marker) {
+    throw std::runtime_error(std::string{ "cache: both '" } + kCacheLocalMarker +
+                             "' and '" + kCacheSharedMarker +
+                             "' exist; envy never writes both. Delete one.");
+  }
+  if (local_marker) { return cache_mode::LOCAL; }
+  if (shared_marker) { return cache_mode::SHARED; }
+  if (declared) { return *declared; }
+  // Naming a local tree is the declaration: a cache-local that took a second directive to
+  // activate would sit in a manifest doing nothing, which is the worse trap.
+  return has_cache_local ? cache_mode::LOCAL : cache_mode::SHARED;
+}
+
+std::optional<path> resolve_state_dir(std::optional<std::string> const &state_dir,
+                                      path const &manifest_dir) {
+  if (manifest_dir.empty()) { return std::nullopt; }
+  if (!state_dir) { return normalized(manifest_dir); }
+
+  if (auto const bad{ validate_project_relative_path(*state_dir) }) {
+    throw std::runtime_error("'@envy state-dir' " + *bad + ": '" + *state_dir + "'");
+  }
+  return normalized(manifest_dir / *state_dir);
+}
+
+char const *cache_root_tier_name(cache_root_tier tier) {
+  switch (tier) {
+    case cache_root_tier::CLI_OVERRIDE: return "--cache-root/ENVY_CACHE_ROOT";
+    case cache_root_tier::MARKER: return "recorded by 'envy cache'";
+    case cache_root_tier::DIRECTIVE: return "@envy cache-mode";
+    case cache_root_tier::IMPLIED_LOCAL: return "@envy cache-local";
+    case cache_root_tier::DEFAULT: return "default";
+  }
+  return "default";
+}
+
+void cache_announce_root_once(cache_root_resolution const &resolved,
+                              std::optional<std::string> const &bin_dir) {
+  // Keyed on packages/, not on the root: the pre-dispatch self-deploy in main.cpp creates
+  // <root>/envy/<version>/ before any command runs, so a root-existence test would be false
+  // by the time anything could report it. packages/ is created by the first cache entry, so
+  // its absence is exactly "no packages have landed here yet" -- and it comes back after a
+  // teardown or a mode switch, which is when the notice is useful again.
+  if (std::filesystem::exists(resolved.root / "packages")) { return; }
+
+  // Native name and separator, as cmd_init's "Next steps" already does: the launcher is
+  // envy.bat on Windows, and `./tools/envy` is not something cmd.exe can run.
+  auto const launcher{ [&] {
+    std::filesystem::path p{ "." };
+    p /= bin_dir ? *bin_dir : std::string{ "bin" };
+    p /= (platform::native() == platform_id::WINDOWS) ? "envy.bat" : "envy";
+    return p.make_preferred().string();
+  }() };
+  bool const shared{ resolved.mode == cache_mode::SHARED };
+
+  // tui::info, not print_stdout: log lines go to stderr (see the drain in tui.cpp), which
+  // keeps `envy cache --root` parseable, and `-q` correctly silences a courtesy notice.
+  tui::info("caching packages in %s", resolved.root.string().c_str());
+  tui::info(shared ? "  shared with your other envy projects; deleting this project will "
+                     "not remove them"
+                   : "  inside this project, so deleting it removes them");
+  tui::info("  %s instead: %s cache --%s",
+            shared ? "keep them in this project" : "share one cache across projects",
+            launcher.c_str(),
+            shared ? "local" : "shared");
+}
+
+cache_root_resolution resolve_cache_root(cache_root_request const &req) {
+  // An override names one tree outright, so it short-circuits every project-scoped tier.
+  // It must already be absolute: the binary used to absolutize it against its own cwd
+  // while both launchers took it verbatim, so a relative value named two different trees
+  // in one invocation.
+  if (req.cli_override) {
+    if (!req.cli_override->is_absolute()) {
+      throw std::runtime_error("cache root override must be an absolute path: '" +
+                               req.cli_override->string() + "'");
+    }
+    return { normalized(*req.cli_override),
+             cache_mode::SHARED,
+             cache_root_tier::CLI_OVERRIDE };
+  }
+
+  if (req.cache_local) {
+    if (auto const bad{ validate_project_relative_path(*req.cache_local) }) {
+      throw std::runtime_error("'@envy cache-local' " + *bad + ": '" + *req.cache_local +
+                               "'");
+    }
+  }
+
+  auto const state{ resolve_state_dir(req.state_dir, req.manifest_dir) };
+  auto const local_tree{
+    req.manifest_dir.empty()
+        ? path{}
+        : normalized(req.manifest_dir /
+                     (req.cache_local ? *req.cache_local : kDefaultCacheLocal))
+  };
+
+  // Equal is the co-located teardown a project asks for by pointing both directives at one
+  // tree. Strict nesting is the accident: markers under the cache root vanish with a cache
+  // wipe, and a cache root under the state dir makes `state-dir` mean something else.
+  if (req.state_dir && state && !local_tree.empty() && *state != local_tree) {
+    if (strictly_inside(*state, local_tree) || strictly_inside(local_tree, *state)) {
+      throw std::runtime_error(
+          "'@envy state-dir' and '@envy cache-local' must not nest: '" + state->string() +
+          "' vs '" + local_tree.string() + "'. Point them at the same directory to keep "
+          "the override markers with the cache tree.");
+    }
+  }
+
+  bool local_marker{ false }, shared_marker{ false };
+  if (state) {
+    local_marker = platform::file_exists(*state / kCacheLocalMarker);
+    shared_marker = platform::file_exists(*state / kCacheSharedMarker);
+  }
+
+  auto const mode{ resolve_cache_mode(local_marker,
+                                      shared_marker,
+                                      req.declared_mode,
+                                      req.cache_local.has_value()) };
+
+  auto const tier{ [&] {
+    if (local_marker || shared_marker) { return cache_root_tier::MARKER; }
+    if (req.declared_mode) { return cache_root_tier::DIRECTIVE; }
+    if (req.cache_local) { return cache_root_tier::IMPLIED_LOCAL; }
+    return cache_root_tier::DEFAULT;
+  }() };
+
+  if (mode == cache_mode::LOCAL) {
+    if (local_tree.empty()) {
+      throw std::runtime_error(
+          "cache: local mode needs a manifest directory to anchor to, and none was found");
+    }
+    return { local_tree, mode, tier };
+  }
+
+  if (auto def{ platform::get_default_cache_root() }) {
+    return { normalized(*def), mode, tier };
+  }
 
   throw std::runtime_error("cannot determine cache root");
 }

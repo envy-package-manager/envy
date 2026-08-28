@@ -1,5 +1,7 @@
 #include "luarc.h"
 
+#include "cache.h"
+
 #include "embedded_init_resources.h"
 #include "envy_release.h"
 #include "tui.h"
@@ -108,22 +110,25 @@ std::vector<std::string> compute_canonical_luarc_paths(envy_meta const &meta) {
   std::vector<std::string> paths;
   std::string const ver{ ENVY_VERSION_STR };
 
-  if (meta.cache_posix) {  // Single posix entry from override
-    std::string p{ *meta.cache_posix };
-    std::replace(p.begin(), p.end(), '\\', '/');
-    paths.push_back(p + "/envy/" + ver);
-  } else {  // macOS + Linux defaults
-    paths.push_back("~/Library/Caches/envy/envy/" + ver);
-    paths.push_back("~/.cache/envy/envy/" + ver);
-  }
-
-  if (meta.cache_win) {
-    std::string p{ *meta.cache_win };
+  // A union, not a choice. `.luarc.json` is committed, so it has to resolve on every
+  // developer's machine, and the cache root is now per-user state: the same manifest is
+  // local for whoever ran `envy cache --local` and shared for everyone else. Listing both
+  // costs a dead entry lua-language-server ignores; listing one breaks half the team.
+  if (meta.cache_local) {
+    // Relative, deliberately: an absolute path would name the machine that generated the
+    // file. lua-language-server resolves workspace.library against the workspace root, and
+    // is_envy_semver_path's "/envy/" search is position-independent.
+    std::string p{ *meta.cache_local };
     std::replace(p.begin(), p.end(), '\\', '/');
     paths.push_back(p + "/envy/" + ver);
   } else {
-    paths.push_back("${env:USERPROFILE}/AppData/Local/envy/envy/" + ver);
+    paths.push_back(std::string{ kDefaultCacheLocal } + "/envy/" + ver);
   }
+
+  // Platform defaults for whoever is on the shared tree.
+  paths.push_back("~/Library/Caches/envy/envy/" + ver);
+  paths.push_back("~/.cache/envy/envy/" + ver);
+  paths.push_back("${env:USERPROFILE}/AppData/Local/envy/envy/" + ver);
 
   return paths;
 }

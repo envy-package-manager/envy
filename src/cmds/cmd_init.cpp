@@ -16,10 +16,12 @@
 
 #include "CLI11.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef ENVY_VERSION_STR
 #error "ENVY_VERSION_STR must be defined by the build system"
@@ -149,6 +151,77 @@ std::string stamp_manifest_placeholders(std::string_view content,
   return result;
 }
 
+// Adds envy's project-local state to .gitignore, creating the file when absent. Init-only:
+// later commands never touch a tracked file the user owns.
+//
+// Deliberately more careful than write_manifest/write_luarc, which simply refuse to touch
+// an existing file. Appending has failure modes they do not: a .gitignore whose last line
+// lacks a newline would fuse with the appended entry into one broken rule that silently
+// stops ignoring two things, and `.envy/` is only one of several spellings git treats as
+// equivalent.
+void ensure_gitignore_entries(fs::path const &project_dir) {
+  // Only inside a repo: `envy init` into a plain directory has no business creating one,
+  // and into a subdirectory of a repo a nested .gitignore is a surprise.
+  if (!fs::exists(project_dir / ".git")) { return; }
+
+  fs::path const path{ project_dir / ".gitignore" };
+  static constexpr std::string_view kWanted[]{ ".envy/", ".envy-cache-*" };
+
+  std::string content;
+  if (fs::exists(path)) {
+    auto const bytes{ util_load_file(path) };
+    content.assign(bytes.begin(), bytes.end());
+  }
+
+  // Every spelling git honors for the same path, so re-running init cannot duplicate an
+  // entry the user already wrote in a different but equivalent form. A '!' negation counts
+  // as handled too: they un-ignored it deliberately, and appending would fight them.
+  auto const already_ignored{ [&content](std::string_view entry) {
+    std::string base{ entry };
+    if (!base.empty() && base.back() == '/') { base.pop_back(); }
+
+    std::vector<std::string> accepted;
+    for (std::string_view const prefix : { "", "/", "**/", "!", "!/" }) {
+      for (std::string_view const suffix : { "", "/" }) {
+        accepted.push_back(std::string{ prefix } + base + std::string{ suffix });
+      }
+    }
+
+    for (size_t pos{ 0 }; pos <= content.size();) {
+      auto const nl{ content.find('\n', pos) };
+      auto line{ std::string_view{ content }.substr(
+          pos, nl == std::string::npos ? std::string::npos : nl - pos) };
+      while (!line.empty() &&
+             (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+        line.remove_suffix(1);
+      }
+      while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.remove_prefix(1);
+      }
+      if (std::find(accepted.begin(), accepted.end(), line) != accepted.end()) {
+        return true;
+      }
+      if (nl == std::string::npos) { break; }
+      pos = nl + 1;
+    }
+    return false;
+  } };
+
+  std::string additions;
+  for (auto const entry : kWanted) {
+    if (!already_ignored(entry)) { additions += std::string{ entry } + "\n"; }
+  }
+  if (additions.empty()) { return; }
+
+  // A missing final newline is the corruption case: without this, `out/` + `.envy/` become
+  // the single rule `out/.envy/`.
+  if (!content.empty() && content.back() != '\n') { content += '\n'; }
+  content += additions;
+
+  util_write_file(path, content);
+  tui::info("Updated %s", path.string().c_str());
+}
+
 void write_manifest(fs::path const &project_dir,
                     fs::path const &bin_dir,
                     std::optional<std::string> const &mirror,
@@ -198,8 +271,11 @@ void cmd_init::execute() {
     }
     // The child inherits this process's argv, so the flag itself must not travel: it is a
     // parent-side instruction, and every release predating it rejects the unknown option.
-    reexec_if_needed(envy_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror },
-                     cli_cache_root_,
+    // No manifest exists yet, so there are no cache directives to honor: the root is the
+    // override or the platform default, and the empty manifest dir says as much.
+    envy_meta const req_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror };
+    reexec_if_needed(req_meta,
+                     resolve_cache_root(req_meta.cache_request(cli_cache_root_, {})).root,
                      cfg_.project_dir,
                      { "--envy-version" });
     if (*cfg_.envy_version != ENVY_VERSION_STR) {  // no re-exec, or it landed elsewhere
@@ -250,6 +326,7 @@ void cmd_init::execute() {
                  sums_pin);
   extract_lua_ls_types(c->root());
   write_luarc(cfg_.project_dir, envy_meta{});
+  ensure_gitignore_entries(cfg_.project_dir);
 
   tui::info("");
   tui::info("Initialized envy project.");

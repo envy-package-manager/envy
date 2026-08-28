@@ -25,6 +25,29 @@
 #include <vector>
 
 namespace envy {
+
+namespace {
+
+// `import` has two shapes: the depot path goes through cmd_startup_load, which resolves
+// the cache for it, while a bare archive has no manifest and must resolve for itself.
+cache_root_request cmd_import_cache_request(
+    std::optional<std::filesystem::path> const &cli_cache_root) {
+  envy_meta meta;
+  std::filesystem::path manifest_dir;
+  // Skipped under an override, which already decides the root: discover() parses directives
+  // and throws, so reading a manifest that cannot change the answer would let a bad
+  // directive anywhere above the cwd fail an import that named its cache explicitly.
+  if (!cli_cache_root) {
+    if (auto const found{ manifest::discover(false, std::filesystem::current_path()) }) {
+      meta = found->meta;
+      manifest_dir = found->path.parent_path();
+    }
+  }
+  return meta.cache_request(cli_cache_root, manifest_dir);
+}
+
+}  // namespace
+
 namespace {
 
 bool is_hex_char(char c) {
@@ -260,7 +283,10 @@ void cmd_import::execute() {
 
     if (ext == ".zst") {
       // Single archive import
-      cache c{ cli_cache_root_ };
+      // Manifest-aware like every other path into the cache: built from the CLI override
+      // alone, a single-archive import landed in the user-wide tree while the rest of the
+      // project used its own.
+      cache c{ resolve_cache_root(cmd_import_cache_request(cli_cache_root_)).root };
       auto const section{ tui::section_create() };
       auto result{ import_one_archive(c, cfg_.archive_path, section) };
       if (result.is_fetch_only) {

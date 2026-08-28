@@ -91,7 +91,11 @@ void cmd_run::execute() {
   auto const &manifest_path{ discovered->path };
   auto const &meta{ discovered->meta };  // discovery parsed the directives already
 
-  reexec_if_needed(meta, cli_cache_root_, manifest_path.parent_path());
+  reexec_if_needed(meta,
+                   resolve_cache_root(meta.cache_request(cli_cache_root_,
+                                                         manifest_path.parent_path()))
+                       .root,
+                   manifest_path.parent_path());
 
   if (!meta.bin) {
     throw std::runtime_error("run: manifest has no @envy bin directive: " +

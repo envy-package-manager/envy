@@ -1,6 +1,7 @@
 #include "aws_util.h"
 #include "cli.h"
 #include "libgit2_util.h"
+#include "manifest.h"
 #include "reexec.h"
 #include "self_deploy.h"
 #include "shell.h"
@@ -37,13 +38,35 @@ int main(int argc, char *argv[]) {
 
   if (!args.cmd_cfg.has_value()) { return EXIT_FAILURE; }
 
-  envy::self_deploy::ensure(args.cache_root, std::nullopt, {});
-
-  auto cmd{ std::visit(
-      [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },
-      *args.cmd_cfg) };
-
+  // Inside the try: this reads and parses a manifest, so a bad directive throws here, and
+  // outside it that surfaced as `libc++abi: terminating due to uncaught exception` instead
+  // of envy's own error line.
   try {
+    // Manifest-aware, like every other path into the cache. Built from the override alone,
+    // this deployed envy into the user-wide tree while the command it was about to run used
+    // the project's own -- two copies, and `envy shell` pointing at the wrong one. Commands
+    // with no manifest (init, version) discover nothing and land on the default, as before.
+    envy::self_deploy::ensure([&] {
+      envy::envy_meta meta;
+      std::filesystem::path manifest_dir;
+      // Skipped under an override, which already decides the root: discovery and directive
+      // parsing both throw, so reading a manifest that cannot change the answer would let
+      // any broken envy.lua in an ancestor break every command run with --cache-root.
+      if (!args.cache_root) {
+        if (auto const found{ envy::manifest::discover(
+                false, std::filesystem::current_path()) }) {
+          meta = found->meta;
+          manifest_dir = found->path.parent_path();
+        }
+      }
+      return envy::resolve_cache_root(meta.cache_request(args.cache_root, manifest_dir))
+          .root;
+    }());
+
+    auto cmd{ std::visit(
+        [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },
+        *args.cmd_cfg) };
+
     cmd->execute();
   } catch (envy::reexec_request const &rr) {
     // argv belongs to this frame, so this is where a re-exec can happen at all.

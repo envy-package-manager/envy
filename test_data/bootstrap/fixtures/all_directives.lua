@@ -1,5 +1,5 @@
 -- @envy version "2.0.0"
--- @envy cache-posix "/opt/envy-cache"
+-- @envy cache-local "out/.envy"
 -- @envy mirror "https://internal.corp/envy-releases"
 
 PACKAGES = {

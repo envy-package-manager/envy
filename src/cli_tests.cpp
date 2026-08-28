@@ -383,6 +383,82 @@ TEST_CASE("cli_parse: cmd_cache") {
     CHECK_FALSE(parsed.cmd_cfg.has_value());
     CHECK_FALSE(parsed.cli_output.empty());
   }
+
+  SUBCASE("bare subcommand reports") {
+    std::vector<std::string> args{ "envy", "cache" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    auto const *cfg{ std::get_if<envy::cmd_cache::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->act == envy::cmd_cache::cfg::action::REPORT);
+  }
+
+  SUBCASE("--root selects PRINT_ROOT") {
+    std::vector<std::string> args{ "envy", "cache", "--root" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    auto const *cfg{ std::get_if<envy::cmd_cache::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->act == envy::cmd_cache::cfg::action::PRINT_ROOT);
+  }
+
+  SUBCASE("--local selects SET_LOCAL") {
+    std::vector<std::string> args{ "envy", "cache", "--local" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    auto const *cfg{ std::get_if<envy::cmd_cache::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->act == envy::cmd_cache::cfg::action::SET_LOCAL);
+  }
+
+  SUBCASE("--shared selects SET_SHARED") {
+    std::vector<std::string> args{ "envy", "cache", "--shared" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    auto const *cfg{ std::get_if<envy::cmd_cache::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->act == envy::cmd_cache::cfg::action::SET_SHARED);
+  }
+
+  // One action per invocation: combining a report with a mutation would have to pick an
+  // order, and there is no sensible one.
+  SUBCASE("--local and --shared are mutually exclusive") {
+    std::vector<std::string> args{ "envy", "cache", "--local", "--shared" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("--root excludes --local") {
+    std::vector<std::string> args{ "envy", "cache", "--root", "--local" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("--root excludes --shared") {
+    std::vector<std::string> args{ "envy", "cache", "--root", "--shared" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
 }
 
 TEST_CASE("cli_parse: cmd_hash") {

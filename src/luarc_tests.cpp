@@ -287,50 +287,44 @@ TEST_CASE("rewrite_luarc_types_path") {
 }
 
 TEST_CASE("compute_canonical_luarc_paths") {
-  SUBCASE("default meta produces 3 entries") {
+  SUBCASE("default meta lists the default local tree plus every platform default") {
+    // A union, not a choice: .luarc.json is committed, and the same manifest is local for
+    // whoever ran `envy cache --local` and shared for everyone else.
     envy::envy_meta meta;
     auto paths{ envy::compute_canonical_luarc_paths(meta) };
-    REQUIRE(paths.size() == 3);
-    CHECK(paths[0].find("~/Library/Caches/envy/envy/") == 0);
-    CHECK(paths[1].find("~/.cache/envy/envy/") == 0);
-    CHECK(paths[2].find("${env:USERPROFILE}/AppData/Local/envy/envy/") == 0);
+    REQUIRE(paths.size() == 4);
+    CHECK(paths[0].find(".envy/cache/envy/") == 0);
+    CHECK(paths[1].find("~/Library/Caches/envy/envy/") == 0);
+    CHECK(paths[2].find("~/.cache/envy/envy/") == 0);
+    CHECK(paths[3].find("${env:USERPROFILE}/AppData/Local/envy/envy/") == 0);
   }
 
-  SUBCASE("cache_posix override produces 2 entries") {
+  SUBCASE("cache_local replaces the local entry and keeps the shared ones") {
     envy::envy_meta meta;
-    meta.cache_posix = "/custom/posix/cache";
+    meta.cache_local = "out/.envy";
     auto paths{ envy::compute_canonical_luarc_paths(meta) };
-    REQUIRE(paths.size() == 2);
-    CHECK(paths[0].find("/custom/posix/cache/envy/") == 0);
-    CHECK(paths[1].find("${env:USERPROFILE}/AppData/Local/envy/envy/") == 0);
+    REQUIRE(paths.size() == 4);
+    CHECK(paths[0].find("out/.envy/envy/") == 0);
+    CHECK(paths[1].find("~/Library/Caches/envy/envy/") == 0);
+    CHECK(paths[2].find("~/.cache/envy/envy/") == 0);
+    CHECK(paths[3].find("${env:USERPROFILE}/AppData/Local/envy/envy/") == 0);
   }
 
-  SUBCASE("cache_win override produces 3 entries") {
+  SUBCASE("the local entry stays relative so a committed .luarc.json travels") {
+    // An absolute path would name the machine that generated the file.
     envy::envy_meta meta;
-    meta.cache_win = "D:/envy-cache";
+    meta.cache_local = "out/.envy";
     auto paths{ envy::compute_canonical_luarc_paths(meta) };
-    REQUIRE(paths.size() == 3);
-    CHECK(paths[0].find("~/Library/Caches/envy/envy/") == 0);
-    CHECK(paths[1].find("~/.cache/envy/envy/") == 0);
-    CHECK(paths[2].find("D:/envy-cache/envy/") == 0);
+    CHECK(paths[0][0] != '/');
+    CHECK(paths[0].find(':') == std::string::npos);
   }
 
-  SUBCASE("both overrides produces 2 entries") {
+  SUBCASE("cache_local backslashes normalized to forward slashes") {
     envy::envy_meta meta;
-    meta.cache_posix = "/custom/posix";
-    meta.cache_win = "D:/custom/win";
+    meta.cache_local = "out\\.envy";
     auto paths{ envy::compute_canonical_luarc_paths(meta) };
-    REQUIRE(paths.size() == 2);
-    CHECK(paths[0].find("/custom/posix/envy/") == 0);
-    CHECK(paths[1].find("D:/custom/win/envy/") == 0);
-  }
-
-  SUBCASE("cache_win backslashes normalized to forward slashes") {
-    envy::envy_meta meta;
-    meta.cache_win = "D:\\envy\\cache";
-    auto paths{ envy::compute_canonical_luarc_paths(meta) };
-    REQUIRE(paths.size() == 3);
-    CHECK(paths[2].find("D:/envy/cache/envy/") == 0);
-    CHECK(paths[2].find('\\') == std::string::npos);
+    REQUIRE(paths.size() == 4);
+    CHECK(paths[0].find("out/.envy/envy/") == 0);
+    CHECK(paths[0].find('\\') == std::string::npos);
   }
 }

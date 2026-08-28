@@ -627,62 +627,191 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   CHECK_FALSE(std::filesystem::exists(fetch_file));
 }
 
-// Tests for resolve_cache_root()
+// Tests for cache-root resolution
+//
+// resolve_cache_mode and validate_project_relative_path are pure by construction, so the
+// whole mode matrix is covered without touching the filesystem, which CLAUDE.md requires
+// of unit tests. resolve_cache_root's tests stay on the tiers that need no marker files.
 
-TEST_CASE("resolve_cache_root CLI override takes precedence") {
-  std::optional<std::filesystem::path> cli{ kAbsRoot / "cli" / "override" / "path" };
-  std::optional<std::string> manifest{ "~/manifest/path" };
+using envy::cache_mode;
+using envy::cache_root_request;
+using envy::cache_root_tier;
 
-  auto result{ envy::resolve_cache_root(cli, manifest, kAbsRoot / "repo") };
-  CHECK(result == kAbsRoot / "cli" / "override" / "path");
+TEST_CASE("resolve_cache_mode: markers outrank the manifest") {
+  // A marker is the user's own decision, so it wins over whatever the project declares.
+  CHECK(envy::resolve_cache_mode(true, false, cache_mode::SHARED, false) ==
+        cache_mode::LOCAL);
+  CHECK(envy::resolve_cache_mode(false, true, cache_mode::LOCAL, true) ==
+        cache_mode::SHARED);
 }
 
-TEST_CASE("resolve_cache_root relative CLI override anchors to cwd") {
-  // A flag or ENVY_CACHE_ROOT is typed in a shell, so the cwd is its frame of reference —
-  // but the result still leaves the resolver absolute.
-  std::optional<std::filesystem::path> cli{ "rel-cache" };
-
-  auto result{ envy::resolve_cache_root(cli, std::nullopt, kAbsRoot / "repo") };
-  CHECK(result == std::filesystem::current_path() / "rel-cache");
+TEST_CASE("resolve_cache_mode: both markers is an error, never a silent pick") {
+  CHECK_THROWS_AS(envy::resolve_cache_mode(true, true, std::nullopt, false),
+                  std::runtime_error);
 }
 
-TEST_CASE("resolve_cache_root manifest used when no CLI override") {
-  // This test uses expand_path internally, so test with a plain path
-  std::optional<std::filesystem::path> cli{ std::nullopt };
-  std::optional<std::string> manifest{ (kAbsRoot / "manifest" / "path").string() };
-
-  auto result{ envy::resolve_cache_root(cli, manifest, kAbsRoot / "repo") };
-  CHECK(result == kAbsRoot / "manifest" / "path");
+TEST_CASE("resolve_cache_mode: cache-mode directive decides when no marker exists") {
+  CHECK(envy::resolve_cache_mode(false, false, cache_mode::LOCAL, false) ==
+        cache_mode::LOCAL);
+  // Declaring shared while also naming a local tree is the "here is where --local would
+  // put it, but default to shared" case.
+  CHECK(envy::resolve_cache_mode(false, false, cache_mode::SHARED, true) ==
+        cache_mode::SHARED);
 }
 
-TEST_CASE("resolve_cache_root relative manifest directive anchors to manifest dir") {
-  std::optional<std::filesystem::path> cli{ std::nullopt };
-  std::optional<std::string> manifest{ "out/.envy" };
-
-  // Not the cwd: the same manifest must name one cache tree from every directory.
-  auto result{ envy::resolve_cache_root(cli, manifest, kAbsRoot / "repo") };
-  CHECK(result == kAbsRoot / "repo" / "out" / ".envy");
+TEST_CASE("resolve_cache_mode: naming a local tree implies wanting it") {
+  // Otherwise a cache-local would sit in a manifest doing nothing at all.
+  CHECK(envy::resolve_cache_mode(false, false, std::nullopt, true) == cache_mode::LOCAL);
 }
 
-TEST_CASE("resolve_cache_root relative manifest directive without a manifest dir throws") {
-  std::optional<std::filesystem::path> cli{ std::nullopt };
-  std::optional<std::string> manifest{ "out/.envy" };
-
-  CHECK_THROWS_AS(envy::resolve_cache_root(cli, manifest, {}), std::runtime_error);
+TEST_CASE("resolve_cache_mode: nothing declared means shared") {
+  // Today's behavior for every existing manifest: the user-wide cache they already filled.
+  CHECK(envy::resolve_cache_mode(false, false, std::nullopt, false) == cache_mode::SHARED);
 }
 
-#ifndef _WIN32
-TEST_CASE("resolve_cache_root manifest with tilde is expanded") {
-  char const *home{ std::getenv("HOME") };
-  REQUIRE(home != nullptr);
-
-  std::optional<std::filesystem::path> cli{ std::nullopt };
-  std::optional<std::string> manifest{ "~/.my-envy-cache" };
-
-  auto result{ envy::resolve_cache_root(cli, manifest, kAbsRoot / "repo") };
-  CHECK(result == std::filesystem::path{ home } / ".my-envy-cache");
+TEST_CASE("validate_project_relative_path accepts plain relative paths") {
+  CHECK_FALSE(envy::validate_project_relative_path("out/.envy").has_value());
+  CHECK_FALSE(envy::validate_project_relative_path(".envy/cache").has_value());
+  CHECK_FALSE(envy::validate_project_relative_path("a/b/c/d").has_value());
+  CHECK_FALSE(envy::validate_project_relative_path("one").has_value());
+  // Authored once, read on every platform, so a backslash is a separator here too.
+  CHECK_FALSE(envy::validate_project_relative_path("out\\.envy").has_value());
 }
-#endif
+
+TEST_CASE("validate_project_relative_path rejects the removed expansion forms") {
+  // Everything wordexp() used to accept, now rejected with a reason rather than expanded.
+  CHECK(envy::validate_project_relative_path("~").has_value());
+  CHECK(envy::validate_project_relative_path("~/cache").has_value());
+  CHECK(envy::validate_project_relative_path("$HOME/cache").has_value());
+  CHECK(envy::validate_project_relative_path("${HOME}/cache").has_value());
+  CHECK(envy::validate_project_relative_path("${FOO:-out/.envy}").has_value());
+  CHECK(envy::validate_project_relative_path("%LOCALAPPDATA%/envy").has_value());
+}
+
+TEST_CASE("validate_project_relative_path rejects absolute and escaping paths") {
+  CHECK(envy::validate_project_relative_path("/opt/cache").has_value());
+  CHECK(envy::validate_project_relative_path("\\opt\\cache").has_value());
+  CHECK(envy::validate_project_relative_path("C:\\cache").has_value());
+  CHECK(envy::validate_project_relative_path("C:/cache").has_value());
+  // '' and '.' would put packages/ and locks/ in the project root; '..' escapes it, and
+  // defeats "delete the build root, all traces gone" outright.
+  CHECK(envy::validate_project_relative_path("").has_value());
+  CHECK(envy::validate_project_relative_path(".").has_value());
+  CHECK(envy::validate_project_relative_path("..").has_value());
+  CHECK(envy::validate_project_relative_path("../sibling").has_value());
+  CHECK(envy::validate_project_relative_path("out/../..").has_value());
+  CHECK(envy::validate_project_relative_path("out//envy").has_value());
+}
+
+TEST_CASE("resolve_cache_root: override outranks every project tier") {
+  cache_root_request req{ .cli_override = kAbsRoot / "cli" / "override",
+                          .cache_local = "out/.envy",
+                          .manifest_dir = kAbsRoot / "repo" };
+  auto const r{ envy::resolve_cache_root(req) };
+  CHECK(r.root == kAbsRoot / "cli" / "override");
+  CHECK(r.tier == cache_root_tier::CLI_OVERRIDE);
+}
+
+TEST_CASE("resolve_cache_root: a relative override is rejected, not absolutized") {
+  // The binary used to anchor it to its own cwd while both launchers took it verbatim, so
+  // one invocation named two different trees.
+  cache_root_request req{ .cli_override = std::filesystem::path{ "rel-cache" },
+                          .manifest_dir = kAbsRoot / "repo" };
+  CHECK_THROWS_AS(envy::resolve_cache_root(req), std::runtime_error);
+}
+
+TEST_CASE("resolve_cache_root: cache-local anchors to the manifest dir") {
+  // Not the cwd: the same manifest must name one tree from every directory, or every
+  // invocation from a subdirectory refetches the whole package set.
+  cache_root_request req{ .cache_local = "out/.envy",
+                          .manifest_dir = kAbsRoot / "repo" };
+  auto const r{ envy::resolve_cache_root(req) };
+  CHECK(r.root == kAbsRoot / "repo" / "out" / ".envy");
+  CHECK(r.mode == cache_mode::LOCAL);
+  CHECK(r.tier == cache_root_tier::IMPLIED_LOCAL);
+}
+
+TEST_CASE("resolve_cache_root: the joined local path is normalized") {
+  // operator/ leaves 'C:\repo' / 'out/.envy' as 'C:\repo\out/.envy', which no launcher
+  // would ever print -- envy.bat's %~fI collapses it. Comparing against a path built with
+  // operator/ asserts both sides agree after normalization.
+  cache_root_request req{ .cache_local = "out/.envy",
+                          .manifest_dir = kAbsRoot / "repo" };
+  auto const r{ envy::resolve_cache_root(req) };
+  CHECK(r.root == r.root.lexically_normal());
+  auto expected{ kAbsRoot / "repo" / "out" / ".envy" };
+  CHECK(r.root.string() == expected.make_preferred().string());
+}
+
+TEST_CASE("resolve_cache_root: cache-mode local without cache-local uses the default") {
+  cache_root_request req{ .declared_mode = cache_mode::LOCAL,
+                          .manifest_dir = kAbsRoot / "repo" };
+  auto const r{ envy::resolve_cache_root(req) };
+  CHECK(r.root == (kAbsRoot / "repo" / envy::kDefaultCacheLocal).lexically_normal());
+  CHECK(r.tier == cache_root_tier::DIRECTIVE);
+}
+
+TEST_CASE("resolve_cache_root: cache-mode shared beats an implied local") {
+  cache_root_request req{ .cache_local = "out/.envy",
+                          .declared_mode = cache_mode::SHARED,
+                          .manifest_dir = kAbsRoot / "repo" };
+  auto const r{ envy::resolve_cache_root(req) };
+  CHECK(r.mode == cache_mode::SHARED);
+  CHECK(r.root != kAbsRoot / "repo" / "out" / ".envy");
+}
+
+TEST_CASE("resolve_cache_root: an invalid cache-local throws") {
+  cache_root_request req{ .cache_local = "~/cache", .manifest_dir = kAbsRoot / "repo" };
+  CHECK_THROWS_AS(envy::resolve_cache_root(req), std::runtime_error);
+}
+
+TEST_CASE("resolve_cache_root: local mode with no manifest dir throws") {
+  // Nothing to anchor to, and a cwd-relative guess would name a different tree per shell.
+  cache_root_request req{ .declared_mode = cache_mode::LOCAL };
+  CHECK_THROWS_AS(envy::resolve_cache_root(req), std::runtime_error);
+}
+
+TEST_CASE("resolve_cache_root: nesting state-dir and cache-local is rejected") {
+  // Markers under the cache root vanish with a cache wipe, taking a user's --shared choice
+  // with them. Equal is allowed: that is a project asking for co-located teardown.
+  CHECK_THROWS_AS(envy::resolve_cache_root(cache_root_request{
+                      .cache_local = "out/.envy",
+                      .state_dir = "out/.envy/state",
+                      .manifest_dir = kAbsRoot / "repo" }),
+                  std::runtime_error);
+  CHECK_THROWS_AS(envy::resolve_cache_root(cache_root_request{
+                      .cache_local = "out/.envy/cache",
+                      .state_dir = "out/.envy",
+                      .manifest_dir = kAbsRoot / "repo" }),
+                  std::runtime_error);
+  CHECK_NOTHROW(envy::resolve_cache_root(cache_root_request{
+      .cache_local = "out/.envy",
+      .state_dir = "out/.envy",
+      .manifest_dir = kAbsRoot / "repo" }));
+  // Siblings are fine.
+  CHECK_NOTHROW(envy::resolve_cache_root(cache_root_request{
+      .cache_local = "out/.envy",
+      .state_dir = "out/state",
+      .manifest_dir = kAbsRoot / "repo" }));
+}
+
+TEST_CASE("resolve_state_dir defaults to the manifest dir, not .envy") {
+  // .envy would sit above the default local tree .envy/cache, so a cache wipe would erase
+  // the marker and silently revert the user.
+  auto const d{ envy::resolve_state_dir(std::nullopt, kAbsRoot / "repo") };
+  REQUIRE(d.has_value());
+  CHECK(*d == (kAbsRoot / "repo").lexically_normal());
+}
+
+TEST_CASE("resolve_state_dir honors a relocation and rejects a bad one") {
+  auto const d{ envy::resolve_state_dir(std::string{ "out/.envy" }, kAbsRoot / "repo" ) };
+  REQUIRE(d.has_value());
+  CHECK(*d == (kAbsRoot / "repo" / "out" / ".envy").lexically_normal());
+
+  CHECK_THROWS_AS(envy::resolve_state_dir(std::string{ "../escape" }, kAbsRoot / "repo"),
+                  std::runtime_error);
+  CHECK_FALSE(envy::resolve_state_dir(std::nullopt, {}).has_value());
+}
 
 // Tests for ensure_envy()
 
