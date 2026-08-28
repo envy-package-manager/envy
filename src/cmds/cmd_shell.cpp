@@ -57,10 +57,15 @@ cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache
                                         std::optional<fs::path> const &project_dir) {
   envy_meta meta;
   fs::path manifest_dir;
-  if (auto const found{
-          manifest::discover(false, manifest::discovery_start_dir(project_dir)) }) {
-    meta = found->meta;
-    manifest_dir = found->path.parent_path();
+  // Skipped under an override, which already decides the root: discover() parses directives
+  // and throws, so reading a manifest that cannot change the answer would let a bad
+  // directive above the cwd break `envy shell --cache-root ...`.
+  if (!cli_cache_root) {
+    if (auto const found{
+            manifest::discover(false, manifest::discovery_start_dir(project_dir)) }) {
+      meta = found->meta;
+      manifest_dir = found->path.parent_path();
+    }
   }
   return resolve_cache_root(meta.cache_request(cli_cache_root, manifest_dir));
 }

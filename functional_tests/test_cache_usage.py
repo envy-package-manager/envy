@@ -176,7 +176,7 @@ class TestCacheUsage(EnvyTestCase):
         Three separate call sites resolved the cache root by discovering a manifest even when
         `--cache-root` already decided it, and `discover()` parses directives and throws --
         so one stale directive anywhere above the cwd broke commands that named their cache
-        explicitly. `import` was the last of them.
+        explicitly.
         """
         project = self.make_temp_dir("project")
         self.addCleanup(shutil.rmtree, project, ignore_errors=True)
@@ -192,6 +192,7 @@ class TestCacheUsage(EnvyTestCase):
             ["cache"],
             ["cache", "--root"],
             ["import", str(project / "missing.zst")],
+            ["shell", "zsh"],
         ):
             with self.subTest(args=args):
                 result = test_config.run(
