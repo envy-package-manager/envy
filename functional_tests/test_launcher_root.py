@@ -112,12 +112,12 @@ def _get_bash_find_manifest_script() -> str:
     real script's first use of the result onward is dropped, so nothing downloads.
     """
     src = (_LAUNCHER_DIR / "envy").read_text(encoding="utf-8")
-    anchor = "MANIFEST=$(find_manifest)"
+    anchor = "ENVY_MANIFEST=$(find_manifest)"
     if anchor not in src:
         raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
     # resolve_script_dir takes no arguments, so the start directory arrives in a global.
     return src.split(anchor)[0] + (
-        'START_DIR="$1"\nresolve_script_dir() { echo "$START_DIR"; }\nfind_manifest\n'
+        'ENVY_START_DIR="$1"\nresolve_script_dir() { echo "$ENVY_START_DIR"; }\nfind_manifest\n'
     )
 
 
@@ -337,17 +337,17 @@ class TestBatchLauncherRootDiscovery(EnvyTestCase):
         src = (_LAUNCHER_DIR / "envy.bat").read_text(encoding="utf-8")
         src = _splice(
             src,
-            'set "DIR=%~dp0"\nif "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"',
+            'set "ENVY_DIR=%~dp0"\nif "!ENVY_DIR:~-1!"=="\\" set "ENVY_DIR=!ENVY_DIR:~0,-1!"',
             'if "%~1"=="" (\n'
-            '    set "DIR=%~dp0"\n'
-            '    if "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"\n'
+            '    set "ENVY_DIR=%~dp0"\n'
+            '    if "!ENVY_DIR:~-1!"=="\\" set "ENVY_DIR=!ENVY_DIR:~0,-1!"\n'
             ') else (\n'
-            '    set "DIR=%~1"\n'
+            '    set "ENVY_DIR=%~1"\n'
             ')',
         )
         # Anchored on the label at line start, not on `:found` anywhere: the `goto :found`
         # lines above it would otherwise take the splice and leave the label itself bare.
-        return _splice(src, "\n:found\n", "\n:found\necho !MANIFEST!\nexit /b 0\n")
+        return _splice(src, "\n:found\n", "\n:found\necho !ENVY_MANIFEST!\nexit /b 0\n")
 
     def _write_manifest(self, directory: Path, root_value: str | None) -> None:
         """Write a manifest to the given directory."""
@@ -524,13 +524,14 @@ def _get_bash_cache_root_script() -> str:
     src = _splice(
         src,
         "resolve_script_dir() {",
-        'START_DIR="${1:-}"\nresolve_script_dir() { echo "$START_DIR"; return; }\n'
+        'ENVY_START_DIR="${1:-}"\n'
+        'resolve_script_dir() { echo "$ENVY_START_DIR"; return; }\n'
         "_unused_resolve_script_dir() {",
     )
-    anchor = 'if [[ -z "$VERSION" ]]; then'
+    anchor = 'if [[ -z "$ENVY_VERSION" ]]; then'
     if anchor not in src:
         raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
-    return src.split(anchor)[0] + 'echo "$CACHE"\n'
+    return src.split(anchor)[0] + 'echo "$ENVY_CACHE"\n'
 
 
 def _get_batch_cache_root_script() -> str:
@@ -542,18 +543,18 @@ def _get_batch_cache_root_script() -> str:
     src = (_LAUNCHER_DIR / "envy.bat").read_text(encoding="utf-8")
     src = _splice(
         src,
-        'set "DIR=%~dp0"\nif "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"',
+        'set "ENVY_DIR=%~dp0"\nif "!ENVY_DIR:~-1!"=="\\" set "ENVY_DIR=!ENVY_DIR:~0,-1!"',
         'if "%~1"=="" (\n'
-        '    set "DIR=%~dp0"\n'
-        '    if "!DIR:~-1!"=="\\" set "DIR=!DIR:~0,-1!"\n'
+        '    set "ENVY_DIR=%~dp0"\n'
+        '    if "!ENVY_DIR:~-1!"=="\\" set "ENVY_DIR=!ENVY_DIR:~0,-1!"\n'
         ") else (\n"
-        '    set "DIR=%~1"\n'
+        '    set "ENVY_DIR=%~1"\n'
         ")",
     )
     return _splice(
         src,
-        '\nif "!VERSION!"=="" (\n',
-        '\necho !CACHE!\nexit /b 0\nif "!VERSION!"=="" (\n',
+        '\nif "!ENVY_VERSION!"=="" (\n',
+        '\necho !ENVY_CACHE!\nexit /b 0\nif "!ENVY_VERSION!"=="" (\n',
     )
 
 
