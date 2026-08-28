@@ -49,21 +49,23 @@ int main(int argc, char *argv[]) {
     // Commands with no manifest (init, version) discover nothing and land on the default,
     // as before.
     envy::self_deploy::ensure([&] {
-      // Best-effort, and deliberately silent on failure. Both halves throw: discovery parses
-      // directives, and resolution rejects states such as both override markers existing at
-      // once. This step runs for *every* command, including ones that never load a manifest,
-      // so letting either escape meant `envy --version` and `envy init` failed before doing
-      // anything when run anywhere inside a project with a bad directive -- precisely what a
-      // migration leaves behind -- and that `envy cache --local`, the command best placed to
-      // repair a bad marker pair, was blocked by the very state it fixes. A command that
-      // needs the manifest re-resolves and reports the error properly; the rest land on the
-      // default root, exactly as they did before this step became manifest-aware.
+      // Best-effort, and deliberately silent on failure. Both halves throw: discovery
+      // parses directives, and resolution rejects states such as both override markers
+      // existing at once. This step runs for *every* command, including ones that never
+      // load a manifest, so letting either escape meant `envy --version` and `envy init`
+      // failed before doing anything when run anywhere inside a project with a bad
+      // directive -- precisely what a migration leaves behind -- and that `envy cache
+      // --local`, the command best placed to repair a bad marker pair, was blocked by the
+      // very state it fixes. A command that needs the manifest re-resolves and reports the
+      // error properly; the rest land on the default root, exactly as they did before this
+      // step became manifest-aware.
       try {
         envy::envy_meta meta;
         std::filesystem::path manifest_dir;
-        // Skipped under an override, which already decides the root: discovery and directive
-        // parsing both throw, so reading a manifest that cannot change the answer would let
-        // any broken envy.lua in an ancestor break every command run with --cache-root.
+        // Skipped under an override, which already decides the root: discovery and
+        // directive parsing both throw, so reading a manifest that cannot change the
+        // answer would let any broken envy.lua in an ancestor break every command run with
+        // --cache-root.
         if (!args.cache_root) {
           // The same anchor the command itself will use, pulled off whichever config was
           // selected: resolving this pre-step from the CWD while the command resolved from

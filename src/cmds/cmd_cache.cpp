@@ -103,9 +103,9 @@ void cmd_cache::set_mode(envy_meta const &meta,
   auto const state{ resolve_state_dir(meta.state_dir, manifest_dir) };
 
   // Only to report what the root *was*, so a failure to determine it must not stop the
-  // write. Both markers present is exactly that case: it throws, and this command -- the one
-  // that owns the markers -- is the one best placed to normalize it, so it must not be the
-  // one blocked by it. `--root` and the report still surface the error.
+  // write. Both markers present is exactly that case: it throws, and this command -- the
+  // one that owns the markers -- is the one best placed to normalize it, so it must not be
+  // the one blocked by it. `--root` and the report still surface the error.
   auto const before{ [&]() -> std::optional<std::filesystem::path> {
     try {
       return resolve_cache_root(meta.cache_request(std::nullopt, manifest_dir)).root;

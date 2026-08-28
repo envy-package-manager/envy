@@ -47,8 +47,8 @@ shell_info const *find_shell(std::string const &name) {
 // that most needs the warning, since `rm -rf` on the build root takes the hooks with it.
 //
 // Keyed on the resolved root, not on which tier decided: `@envy cache-mode "shared"` and a
-// `--shared` marker both resolve to the plain platform default while reporting a non-DEFAULT
-// tier, and warning that *that* cache is easily lost is just wrong.
+// `--shared` marker both resolve to the plain platform default while reporting a
+// non-DEFAULT tier, and warning that *that* cache is easily lost is just wrong.
 bool is_custom_cache(cache_root_resolution const &resolved) {
   return resolved.mode == cache_mode::LOCAL ||
          resolved.tier == cache_root_tier::CLI_OVERRIDE;
