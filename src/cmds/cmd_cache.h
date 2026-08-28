@@ -35,7 +35,6 @@ class cmd_cache : public cmd {
                 std::filesystem::path const &manifest_dir,
                 cache_mode requested);
 
-
   cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;
 };

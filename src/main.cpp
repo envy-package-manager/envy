@@ -44,9 +44,10 @@ int main(int argc, char *argv[]) {
   // of envy's own error line.
   try {
     // Manifest-aware, like every other path into the cache. Built from the override alone,
-    // this deployed envy into the user-wide tree while the command it was about to run used
-    // the project's own -- two copies, and `envy shell` pointing at the wrong one. Commands
-    // with no manifest (init, version) discover nothing and land on the default, as before.
+    // this deployed envy into the user-wide tree while the command it was about to run
+    // used the project's own -- two copies, and `envy shell` pointing at the wrong one.
+    // Commands with no manifest (init, version) discover nothing and land on the default,
+    // as before.
     envy::self_deploy::ensure([&] {
       envy::envy_meta meta;
       std::filesystem::path manifest_dir;
@@ -67,7 +68,8 @@ int main(int argc, char *argv[]) {
             },
             *args.cmd_cfg);
         if (auto const found{ envy::manifest::discover(
-                false, envy::manifest::discovery_start_dir(project_dir)) }) {
+                false,
+                envy::manifest::discovery_start_dir(project_dir)) }) {
           meta = found->meta;
           manifest_dir = found->path.parent_path();
         }

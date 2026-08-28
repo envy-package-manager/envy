@@ -400,9 +400,10 @@ envy_meta parse_envy_meta(std::string_view content) {
           } else if (value == "shared") {
             result.declared_cache_mode = cache_mode::SHARED;
           } else {
-            throw std::runtime_error("'@envy cache-mode' must be \"local\" or \"shared\", "
-                                     "got: '" +
-                                     value + "'");
+            throw std::runtime_error(
+                "'@envy cache-mode' must be \"local\" or \"shared\", "
+                "got: '" +
+                value + "'");
           }
         } else if (key == "cache-posix" || key == "cache-win") {
           // Removed, not merely renamed. Unknown keys fall off this chain silently, so a

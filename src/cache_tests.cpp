@@ -723,8 +723,7 @@ TEST_CASE("resolve_cache_root: a relative override is rejected, not absolutized"
 TEST_CASE("resolve_cache_root: cache-local anchors to the manifest dir") {
   // Not the cwd: the same manifest must name one tree from every directory, or every
   // invocation from a subdirectory refetches the whole package set.
-  cache_root_request req{ .cache_local = "out/.envy",
-                          .manifest_dir = kAbsRoot / "repo" };
+  cache_root_request req{ .cache_local = "out/.envy", .manifest_dir = kAbsRoot / "repo" };
   auto const r{ envy::resolve_cache_root(req) };
   CHECK(r.root == kAbsRoot / "repo" / "out" / ".envy");
   CHECK(r.mode == cache_mode::LOCAL);
@@ -735,8 +734,7 @@ TEST_CASE("resolve_cache_root: the joined local path is normalized") {
   // operator/ leaves 'C:\repo' / 'out/.envy' as 'C:\repo\out/.envy', which no launcher
   // would ever print -- envy.bat's %~fI collapses it. Comparing against a path built with
   // operator/ asserts both sides agree after normalization.
-  cache_root_request req{ .cache_local = "out/.envy",
-                          .manifest_dir = kAbsRoot / "repo" };
+  cache_root_request req{ .cache_local = "out/.envy", .manifest_dir = kAbsRoot / "repo" };
   auto const r{ envy::resolve_cache_root(req) };
   CHECK(r.root == r.root.lexically_normal());
   auto expected{ kAbsRoot / "repo" / "out" / ".envy" };
@@ -774,25 +772,25 @@ TEST_CASE("resolve_cache_root: local mode with no manifest dir throws") {
 TEST_CASE("resolve_cache_root: nesting state-dir and cache-local is rejected") {
   // Markers under the cache root vanish with a cache wipe, taking a user's --shared choice
   // with them. Equal is allowed: that is a project asking for co-located teardown.
-  CHECK_THROWS_AS(envy::resolve_cache_root(cache_root_request{
-                      .cache_local = "out/.envy",
-                      .state_dir = "out/.envy/state",
-                      .manifest_dir = kAbsRoot / "repo" }),
-                  std::runtime_error);
-  CHECK_THROWS_AS(envy::resolve_cache_root(cache_root_request{
-                      .cache_local = "out/.envy/cache",
-                      .state_dir = "out/.envy",
-                      .manifest_dir = kAbsRoot / "repo" }),
-                  std::runtime_error);
-  CHECK_NOTHROW(envy::resolve_cache_root(cache_root_request{
-      .cache_local = "out/.envy",
-      .state_dir = "out/.envy",
-      .manifest_dir = kAbsRoot / "repo" }));
+  CHECK_THROWS_AS(
+      envy::resolve_cache_root(cache_root_request{ .cache_local = "out/.envy",
+                                                   .state_dir = "out/.envy/state",
+                                                   .manifest_dir = kAbsRoot / "repo" }),
+      std::runtime_error);
+  CHECK_THROWS_AS(
+      envy::resolve_cache_root(cache_root_request{ .cache_local = "out/.envy/cache",
+                                                   .state_dir = "out/.envy",
+                                                   .manifest_dir = kAbsRoot / "repo" }),
+      std::runtime_error);
+  CHECK_NOTHROW(
+      envy::resolve_cache_root(cache_root_request{ .cache_local = "out/.envy",
+                                                   .state_dir = "out/.envy",
+                                                   .manifest_dir = kAbsRoot / "repo" }));
   // Siblings are fine.
-  CHECK_NOTHROW(envy::resolve_cache_root(cache_root_request{
-      .cache_local = "out/.envy",
-      .state_dir = "out/state",
-      .manifest_dir = kAbsRoot / "repo" }));
+  CHECK_NOTHROW(
+      envy::resolve_cache_root(cache_root_request{ .cache_local = "out/.envy",
+                                                   .state_dir = "out/state",
+                                                   .manifest_dir = kAbsRoot / "repo" }));
 }
 
 TEST_CASE("resolve_state_dir defaults to the manifest dir, not .envy") {
@@ -804,7 +802,7 @@ TEST_CASE("resolve_state_dir defaults to the manifest dir, not .envy") {
 }
 
 TEST_CASE("resolve_state_dir honors a relocation and rejects a bad one") {
-  auto const d{ envy::resolve_state_dir(std::string{ "out/.envy" }, kAbsRoot / "repo" ) };
+  auto const d{ envy::resolve_state_dir(std::string{ "out/.envy" }, kAbsRoot / "repo") };
   REQUIRE(d.has_value());
   CHECK(*d == (kAbsRoot / "repo" / "out" / ".envy").lexically_normal());
 

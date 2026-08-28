@@ -71,26 +71,22 @@ void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected
   auto cfg_ptr{ std::make_shared<cfg>() };
   auto *root_flag{ sub->add_flag("--root",
                                  "Print the resolved cache root and nothing else") };
-  auto *local_flag{ sub->add_flag(
-      "--local", "Use this project's own cache tree from now on") };
-  auto *shared_flag{ sub->add_flag(
-      "--shared", "Use the user-wide cache from now on") };
+  auto *local_flag{ sub->add_flag("--local",
+                                  "Use this project's own cache tree from now on") };
+  auto *shared_flag{ sub->add_flag("--shared", "Use the user-wide cache from now on") };
 
   // One action per invocation: --root reports, --local/--shared mutate. Combining them
   // would have to pick an order, and there is no sensible one.
   root_flag->excludes(local_flag)->excludes(shared_flag);
   local_flag->excludes(shared_flag);
 
-  sub->callback([on_selected = std::move(on_selected),
-                 cfg_ptr,
-                 root_flag,
-                 local_flag,
-                 shared_flag] {
-    if (*root_flag) { cfg_ptr->act = cfg::action::PRINT_ROOT; }
-    if (*local_flag) { cfg_ptr->act = cfg::action::SET_LOCAL; }
-    if (*shared_flag) { cfg_ptr->act = cfg::action::SET_SHARED; }
-    on_selected(*cfg_ptr);
-  });
+  sub->callback(
+      [on_selected = std::move(on_selected), cfg_ptr, root_flag, local_flag, shared_flag] {
+        if (*root_flag) { cfg_ptr->act = cfg::action::PRINT_ROOT; }
+        if (*local_flag) { cfg_ptr->act = cfg::action::SET_LOCAL; }
+        if (*shared_flag) { cfg_ptr->act = cfg::action::SET_SHARED; }
+        on_selected(*cfg_ptr);
+      });
 }
 
 cmd_cache::cmd_cache(cmd_cache::cfg cfg,
@@ -170,8 +166,9 @@ void cmd_cache::execute() {
   }
 
   if (writes_marker) {
-    set_mode(meta, manifest_dir, cfg_.act == cfg::action::SET_LOCAL ? cache_mode::LOCAL
-                                                                   : cache_mode::SHARED);
+    set_mode(meta,
+             manifest_dir,
+             cfg_.act == cfg::action::SET_LOCAL ? cache_mode::LOCAL : cache_mode::SHARED);
     return;
   }
 

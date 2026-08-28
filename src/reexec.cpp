@@ -165,8 +165,7 @@ void reexec_if_needed(envy_meta const &meta,
   // 0.0.0 is a dev build, let through for the same reason reexec_should() lets a 0.0.0
   // self through: built from a working tree, so its support cannot be read off a version.
   if ((meta.cache_local || meta.declared_cache_mode || meta.state_dir) &&
-      version != "0.0.0" &&
-      envy_release_version_less(version, kEnvyMinDirectiveVersion)) {
+      version != "0.0.0" && envy_release_version_less(version, kEnvyMinDirectiveVersion)) {
     throw std::runtime_error(
         "manifest pins '@envy version \"" + version +
         "\"', which predates '@envy cache-local'/'cache-mode'/'state-dir' (added in " +

@@ -48,9 +48,9 @@ std::optional<std::string> validate_project_relative_path(std::string_view value
   // backslash is a separator here even when std::filesystem would not treat it as one.
   for (size_t pos{ 0 }; pos <= value.size();) {
     auto const end{ value.find_first_of("/\\", pos) };
-    auto const component{ value.substr(pos, end == std::string_view::npos
-                                               ? std::string_view::npos
-                                               : end - pos) };
+    auto const component{
+      value.substr(pos, end == std::string_view::npos ? std::string_view::npos : end - pos)
+    };
     if (component.empty()) { return "must not contain an empty path component"; }
     if (component == "." || component == "..") {
       return "must not contain a '.' or '..' component";
@@ -104,10 +104,10 @@ char const *cache_root_tier_name(cache_root_tier tier) {
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir) {
   // Keyed on packages/, not on the root: the pre-dispatch self-deploy in main.cpp creates
-  // <root>/envy/<version>/ before any command runs, so a root-existence test would be false
-  // by the time anything could report it. packages/ is created by the first cache entry, so
-  // its absence is exactly "no packages have landed here yet" -- and it comes back after a
-  // teardown or a mode switch, which is when the notice is useful again.
+  // <root>/envy/<version>/ before any command runs, so a root-existence test would be
+  // false by the time anything could report it. packages/ is created by the first cache
+  // entry, so its absence is exactly "no packages have landed here yet" -- and it comes
+  // back after a teardown or a mode switch, which is when the notice is useful again.
   if (std::filesystem::exists(resolved.root / "packages")) { return; }
 
   // Native name and separator, as cmd_init's "Next steps" already does: the launcher is
@@ -155,12 +155,11 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
   }
 
   auto const state{ resolve_state_dir(req.state_dir, req.manifest_dir) };
-  auto const local_tree{
-    req.manifest_dir.empty()
-        ? path{}
-        : normalized(req.manifest_dir /
-                     (req.cache_local ? *req.cache_local : kDefaultCacheLocal))
-  };
+  auto const local_tree{ req.manifest_dir.empty()
+                             ? path{}
+                             : normalized(req.manifest_dir / (req.cache_local
+                                                                  ? *req.cache_local
+                                                                  : kDefaultCacheLocal)) };
 
   // Equal is the co-located teardown a project asks for by pointing both directives at one
   // tree. Strict nesting is the accident: markers under the cache root vanish with a cache
@@ -169,7 +168,8 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
     if (strictly_inside(*state, local_tree) || strictly_inside(local_tree, *state)) {
       throw std::runtime_error(
           "'@envy state-dir' and '@envy cache-local' must not nest: '" + state->string() +
-          "' vs '" + local_tree.string() + "'. Point them at the same directory to keep "
+          "' vs '" + local_tree.string() +
+          "'. Point them at the same directory to keep "
           "the override markers with the cache tree.");
     }
   }

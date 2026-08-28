@@ -190,7 +190,8 @@ void ensure_gitignore_entries(fs::path const &project_dir) {
     for (size_t pos{ 0 }; pos <= content.size();) {
       auto const nl{ content.find('\n', pos) };
       auto line{ std::string_view{ content }.substr(
-          pos, nl == std::string::npos ? std::string::npos : nl - pos) };
+          pos,
+          nl == std::string::npos ? std::string::npos : nl - pos) };
       while (!line.empty() &&
              (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
         line.remove_suffix(1);

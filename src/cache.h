@@ -86,9 +86,9 @@ char const *cache_root_tier_name(cache_root_tier tier);
 // so a user learns before gigabytes arrive rather than after. Goes to stderr, keeping
 // `envy cache --root` machine-readable, and is never a prompt: a prompt would hang CI and
 // non-TTY stdin. No state records that it was shown; the absence of the cache's packages/
-// directory is the trigger, which makes it self-limiting and correctly brings it back after
-// a teardown or a mode switch.
-// `bin_dir` is '@envy bin', so the suggested command matches the project's own layout.
+// directory is the trigger, which makes it self-limiting and correctly brings it back
+// after a teardown or a mode switch. `bin_dir` is '@envy bin', so the suggested command
+// matches the project's own layout.
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir);
 

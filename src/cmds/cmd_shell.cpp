@@ -57,8 +57,8 @@ cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache
                                         std::optional<fs::path> const &project_dir) {
   envy_meta meta;
   fs::path manifest_dir;
-  if (auto const found{ manifest::discover(
-          false, manifest::discovery_start_dir(project_dir)) }) {
+  if (auto const found{
+          manifest::discover(false, manifest::discovery_start_dir(project_dir)) }) {
     meta = found->meta;
     manifest_dir = found->path.parent_path();
   }

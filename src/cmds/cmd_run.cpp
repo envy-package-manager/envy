@@ -99,11 +99,11 @@ void cmd_run::execute() {
   // which waits on a child instead -- a trace that exists on one platform is worse than
   // none. What `run` resolved is observable in the PATH the child inherits.
 
-  reexec_if_needed(meta,
-                   resolve_cache_root(meta.cache_request(cli_cache_root_,
-                                                         manifest_path.parent_path()))
-                       .root,
-                   manifest_path.parent_path());
+  reexec_if_needed(
+      meta,
+      resolve_cache_root(meta.cache_request(cli_cache_root_, manifest_path.parent_path()))
+          .root,
+      manifest_path.parent_path());
 
   if (!meta.bin) {
     throw std::runtime_error("run: manifest has no @envy bin directive: " +
