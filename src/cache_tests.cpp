@@ -823,15 +823,15 @@ TEST_CASE("resolve_user_wide_cache_root: an override is the user's root") {
 }
 
 TEST_CASE("resolve_user_wide_cache_root: a relative override is rejected") {
-  CHECK_THROWS_AS(
-      envy::resolve_user_wide_cache_root(std::filesystem::path{ "rel-cache" }),
-      std::runtime_error);
+  CHECK_THROWS_AS(envy::resolve_user_wide_cache_root(std::filesystem::path{ "rel-cache" }),
+                  std::runtime_error);
 }
 
 namespace {
 
-envy::cache_root_resolution local_at(std::filesystem::path root,
-                                     cache_root_tier tier = cache_root_tier::IMPLIED_LOCAL) {
+envy::cache_root_resolution local_at(
+    std::filesystem::path root,
+    cache_root_tier tier = cache_root_tier::IMPLIED_LOCAL) {
   return { std::move(root), cache_mode::LOCAL, tier };
 }
 

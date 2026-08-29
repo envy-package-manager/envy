@@ -153,8 +153,9 @@ project_trees resolve_project_trees(cache_root_request const &req) {
   auto state{ resolve_state_dir(req.state_dir, req.manifest_dir) };
   auto local{ req.manifest_dir.empty()
                   ? path{}
-                  : normalized(req.manifest_dir / (req.cache_local ? *req.cache_local
-                                                                   : kDefaultCacheLocal)) };
+                  : normalized(req.manifest_dir / (req.cache_local
+                                                       ? *req.cache_local
+                                                       : kDefaultCacheLocal)) };
 
   // Equal is the co-located teardown a project asks for by pointing both directives at one
   // tree. Strict nesting is the accident: markers under the cache root vanish with a cache
@@ -233,8 +234,7 @@ path cache_root_for_mode(cache_root_request const &req, cache_mode mode) {
   return root_in_mode(resolve_project_trees(req).local, mode);
 }
 
-std::optional<path> resolve_user_wide_cache_root(
-    std::optional<path> const &cli_override) {
+std::optional<path> resolve_user_wide_cache_root(std::optional<path> const &cli_override) {
   // Same absoluteness rule and the same normalization as every other tier, from the same
   // function: an override rejected here but accepted there would be two answers again.
   if (auto ovr{ checked_override({ .cli_override = cli_override }) }) { return ovr; }

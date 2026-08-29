@@ -43,9 +43,9 @@ bool copy_binary(path const &src, path const &dst) {
   // its envy.lua asks for a deploy whose source is already the destination. The rename
   // would then overwrite a running image -- which fails outright on Windows, where the
   // launcher spawns rather than execs and the file stays locked. The early return on
-  // failure would skip writing the very types this deploy exists to restore, so the warning
-  // repeats forever. equivalent() reports false (and sets ec) when dst is absent, which is
-  // the ordinary case.
+  // failure would skip writing the very types this deploy exists to restore, so the
+  // warning repeats forever. equivalent() reports false (and sets ec) when dst is absent,
+  // which is the ordinary case.
   if (std::filesystem::equivalent(src, dst, ec)) { return true; }
   ec.clear();
 

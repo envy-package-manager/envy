@@ -107,14 +107,16 @@ void cmd_shell::execute() {
   if (project && project_is_local && fs::exists(project->root / "shell")) {
     tui::warn("Ignoring stale shell hooks under %s",
               (project->root / "shell").string().c_str());
-    tui::warn("An older envy wrote them there. Source the path below instead, then "
-              "delete that directory.");
+    tui::warn(
+        "An older envy wrote them there. Source the path below instead, then "
+        "delete that directory.");
   }
 
   fs::path const hook_path{ *hook_root / "shell" / ("hook." + std::string{ si->ext }) };
   if (!fs::exists(hook_path)) {
     // "Run any envy command" is exactly the advice a local-cache-only user cannot act on:
-    // every command they run skips hooks by design, so say what would actually populate it.
+    // every command they run skips hooks by design, so say what would actually populate
+    // it.
     throw std::runtime_error(
         "shell: hook file not found at " + hook_path.string() + ". " +
         (project_is_local
