@@ -132,6 +132,15 @@ set "ENVY_MANIFEST_DIR="
 for %%I in ("!ENVY_MANIFEST!") do set "ENVY_MANIFEST_DIR=%%~dpI"
 if "!ENVY_MANIFEST_DIR:~-1!"=="\" set "ENVY_MANIFEST_DIR=!ENVY_MANIFEST_DIR:~0,-1!"
 
+REM Cleared ahead of the tiers, not inside :resolve_project_cache, which the override path
+REM below skips outright. setlocal copies the parent environment, so an exported ENVY_MODE
+REM would otherwise reach the candidate selection with a value this script never chose --
+REM and `ENVY_MODE=local` plus ENVY_CACHE_ROOT would make an explicit root borrow a binary
+REM from somewhere else.
+set "ENVY_MODE="
+set "ENVY_SHARED_CACHE="
+set "ENVY_MODE_FROM_MARKER="
+
 REM Tiers, in order, matching resolve_cache_root() in src/cache.cpp. No expansion of any
 REM kind: every value is either a literal from the manifest or a path this script joins, so
 REM there is no grammar for this script and the binary to disagree about.
@@ -147,6 +156,19 @@ if errorlevel 1 exit /b 1
 goto :cache_resolved
 
 :resolve_project_cache
+REM The user's own cache root. Shared mode *is* this path, and a local tree borrows an envy
+REM binary from it rather than downloading a second copy of one already on disk. Read-only --
+REM nothing is written here on a local project's behalf. Left empty under ENVY_CACHE_ROOT,
+REM which never reaches this label: an explicit root names exactly one tree.
+REM
+REM The USERPROFILE tier matches platform_win.cpp; without it this script and the binary name
+REM different user-wide roots on a box with no LOCALAPPDATA (a service account, a stripped
+REM container profile). Guarded, because an unguarded join yields "\envy" -- which is
+REM *defined*, so `if exist` treats the drive root as a real cache, and the stock C:\ ACL lets
+REM any authenticated user create it. Empty means there is no such root.
+if defined LOCALAPPDATA set "ENVY_SHARED_CACHE=!LOCALAPPDATA!\envy"
+if not defined ENVY_SHARED_CACHE if defined USERPROFILE set "ENVY_SHARED_CACHE=!USERPROFILE!\AppData\Local\envy"
+
 REM @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside the
 REM default local tree `.envy\cache` and would let a cache wipe erase the marker.
 set "ENVY_STATE_DIR=!ENVY_MANIFEST_DIR!"
@@ -162,15 +184,26 @@ if exist "!ENVY_STATE_DIR!\.envy-cache-local" if exist "!ENVY_STATE_DIR!\.envy-c
 
 REM Naming a tree is asking for it; a cache-local needing a second directive to take effect
 REM would sit in a manifest doing nothing.
-set "ENVY_MODE="
+REM A marker is recorded, not declared, so it leaves no directive in the manifest -- and
+REM an envy that predates the markers cannot see it either. Remembered here so the version
+REM guard below can refuse that downgrade the same way it refuses a directive's.
 if exist "!ENVY_STATE_DIR!\.envy-cache-local" set "ENVY_MODE=local"
 if not defined ENVY_MODE if exist "!ENVY_STATE_DIR!\.envy-cache-shared" set "ENVY_MODE=shared"
+if defined ENVY_MODE set "ENVY_MODE_FROM_MARKER=1"
 if not defined ENVY_MODE if defined ENVY_CACHE_MODE set "ENVY_MODE=!ENVY_CACHE_MODE!"
 if not defined ENVY_MODE if defined ENVY_CACHE_LOCAL set "ENVY_MODE=local"
 if not defined ENVY_MODE set "ENVY_MODE=shared"
 
 if "!ENVY_MODE!"=="local" goto :cache_local
-set "ENVY_CACHE=!LOCALAPPDATA!\envy"
+REM Said rather than inferred: the platform default is what shared mode *is*, so with no
+REM LOCALAPPDATA and no USERPROFILE there is no root to use. The bare join this replaces
+REM produced "\envy" and carried on against the drive root.
+if not defined ENVY_SHARED_CACHE (
+    echo ERROR: cannot determine a cache root: neither LOCALAPPDATA nor USERPROFILE is set. >&2
+    echo        Set ENVY_CACHE_ROOT, or give the project a local cache. >&2
+    exit /b 1
+)
+set "ENVY_CACHE=!ENVY_SHARED_CACHE!"
 goto :cache_resolved
 
 :cache_local
@@ -261,6 +294,9 @@ set "ENVY_USES_NEW_DIRECTIVES="
 if defined ENVY_CACHE_LOCAL set "ENVY_USES_NEW_DIRECTIVES=1"
 if defined ENVY_CACHE_MODE set "ENVY_USES_NEW_DIRECTIVES=1"
 if defined ENVY_STATE_DIR_REL set "ENVY_USES_NEW_DIRECTIVES=1"
+REM A recorded mode counts as much as a declared one: `envy cache --local` leaves nothing
+REM in the manifest, and a pre-marker envy resolves the shared cache and exits 0.
+if defined ENVY_MODE_FROM_MARKER set "ENVY_USES_NEW_DIRECTIVES=1"
 REM The errorlevel test lives inside the guard: left outside it, it ran on every path --
 REM including every project using none of these directives, where the ERRORLEVEL it read was
 REM whatever the preceding `set`/`if` left behind rather than the guard's own.
@@ -270,7 +306,33 @@ if defined ENVY_USES_NEW_DIRECTIVES if not "!ENVY_VERSION!"=="0.0.0" (
 )
 
 set "ENVY_BIN=!ENVY_CACHE!\envy\!ENVY_VERSION!\envy.exe"
-if exist "!ENVY_BIN!" goto :run
+set "ENVY_CHECK_PATH=!ENVY_BIN!"
+call :usable_envy
+if defined ENVY_BIN_OK goto :run
+
+REM A local tree may borrow the user's own copy of this exact version rather than download a
+REM second one. Read-only: nothing is written there, and the binary that ends up running
+REM still self-deploys into *this* project's cache, so the tree stays self-contained.
+REM
+REM Above the "Downloading envy" banner, not below it: a probe placed with the download
+REM block would announce a download it then does not perform. Skipped with a sums pin,
+REM because the cache fast path never re-hashes and a pinned project must not run bytes it
+REM never attested out of a tree every other project writes. ENVY_MODE is empty under
+REM ENVY_CACHE_ROOT, so an explicit root still names exactly one tree. Never the other
+REM direction: a clone shipping its own envy\<ver>\envy.exe would be arbitrary code
+REM execution on the first run of this script.
+REM Into its own variable, since the download block below reuses ENVY_BIN.
+if not "!ENVY_MODE!"=="local" goto :no_shared_probe
+if defined ENVY_SUMS_PIN goto :no_shared_probe
+if not defined ENVY_SHARED_CACHE goto :no_shared_probe
+REM `if exist X set ... & goto` would take the goto unconditionally: cmd parses `&` as a
+REM statement separator, not as part of the `if` body.
+set "ENVY_CHECK_PATH=!ENVY_SHARED_CACHE!\envy\!ENVY_VERSION!\envy.exe"
+call :usable_envy
+if not defined ENVY_BIN_OK goto :no_shared_probe
+set "ENVY_BIN=!ENVY_CHECK_PATH!"
+goto :run
+:no_shared_probe
 
 set "ENVY_ARCH=x86_64"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PROCESSOR_ARCHITECTURE 2>nul | findstr /i "ARM64" >nul 2>&1 && set "ENVY_ARCH=arm64"
@@ -416,6 +478,21 @@ REM Reached only by `call`.
 set "ENVY_VAL="
 for /f tokens^=1^ delims^=^" %%v in ("!ENVY_RAW!") do set "ENVY_VAL=%%v"
 if defined ENVY_VAL set "ENVY_VAL=!ENVY_VAL:\\=\!"
+exit /b 0
+
+REM :usable_envy -- ENVY_CHECK_PATH in, ENVY_BIN_OK out. `if exist` alone is true for a
+REM directory, and for a file truncated to zero that kept its name; both then fail at
+REM execution instead of falling through to the next candidate. The trailing backslash is
+REM cmd's directory test, the same idiom the .git boundary above uses. The size is staged
+REM through a variable defaulting to 0 because %%~zI on a vanished path expands to nothing,
+REM which would leave `if` comparing an empty token. Reached only by `call`.
+:usable_envy
+set "ENVY_BIN_OK="
+if not exist "!ENVY_CHECK_PATH!" exit /b 0
+if exist "!ENVY_CHECK_PATH!\" exit /b 0
+set "ENVY_CHECK_SIZE=0"
+for %%I in ("!ENVY_CHECK_PATH!") do set "ENVY_CHECK_SIZE=%%~zI"
+if not "!ENVY_CHECK_SIZE!"=="0" set "ENVY_BIN_OK=1"
 exit /b 0
 
 REM :require_absolute -- ENVY_CACHE in; errorlevel 1 when it is not absolute. Rejected rather

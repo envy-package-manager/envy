@@ -531,7 +531,10 @@ def _get_bash_cache_root_script() -> str:
     anchor = 'if [[ -z "$ENVY_VERSION" ]]; then'
     if anchor not in src:
         raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
-    return src.split(anchor)[0] + 'echo "$ENVY_CACHE"\n'
+    # Both roots: ENVY_SHARED_CACHE is the second root this launcher computes, and a second
+    # root resolved twice with nothing comparing the two answers is how this area went
+    # wrong the first time. Empty line 2 means "no user-wide root", which is meaningful.
+    return src.split(anchor)[0] + 'echo "$ENVY_CACHE"\necho "$ENVY_SHARED_CACHE"\n'
 
 
 def _get_batch_cache_root_script() -> str:
@@ -551,10 +554,13 @@ def _get_batch_cache_root_script() -> str:
         '    set "ENVY_DIR=%~1"\n'
         ")",
     )
+    # `echo.` rather than `echo` for the second line: an empty ENVY_SHARED_CACHE would
+    # otherwise make cmd print "ECHO is on." instead of a blank line.
     return _splice(
         src,
         '\nif "!ENVY_VERSION!"=="" (\n',
-        '\necho !ENVY_CACHE!\nexit /b 0\nif "!ENVY_VERSION!"=="" (\n',
+        '\necho !ENVY_CACHE!\necho.!ENVY_SHARED_CACHE!\nexit /b 0\n'
+        'if "!ENVY_VERSION!"=="" (\n',
     )
 
 
@@ -633,15 +639,7 @@ class _CacheRootParityMixin:
         Both readers must agree on the shared root too, and the real one belongs to the
         developer running the suite.
         """
-        env = test_config.get_test_env()
-        env.pop("ENVY_CACHE_ROOT", None)
-        home = project / "home"
-        home.mkdir(exist_ok=True)
-        env["HOME"] = str(home)
-        env["USERPROFILE"] = str(home)
-        env["XDG_CACHE_HOME"] = str(home / "cache")
-        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
-        return env
+        return test_config.sandbox_home_env(project / "home")
 
     def _binary_root(self, project: Path, env: dict) -> Path:
         result = test_config.run(
@@ -654,12 +652,25 @@ class _CacheRootParityMixin:
         self.assertEqual(0, result.returncode, f"envy cache --root: {result.stderr}")
         return Path(result.stdout.strip())
 
+    def _binary_user_wide_root(self, project: Path, env: dict) -> Path:
+        result = test_config.run(
+            [str(self._envy), "cache", "--user-wide-root"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(
+            0, result.returncode, f"envy cache --user-wide-root: {result.stderr}"
+        )
+        return Path(result.stdout.strip())
+
     def _check_case(self, name: str, directives: str, markers: tuple[str, ...]) -> None:
         slug = name.replace(" ", "-").replace(",", "")
         project = self._make_project(slug, directives, markers)
         env = self._sandbox_env(project)
 
-        launcher = self._launcher_root(project, env)
+        launcher, launcher_user_wide = self._launcher_roots(project, env)
         binary = self._binary_root(project, env)
 
         # Path objects, not strings: operator/ leaves 'C:\\p' / 'out/.envy' with a mixed
@@ -669,6 +680,19 @@ class _CacheRootParityMixin:
             launcher.resolve(),
             f"{name}: launcher said {launcher}, binary said {binary}",
         )
+
+        # The second root, which decides whether a local tree may borrow an envy binary
+        # instead of downloading one. Nothing compared it until this line existed.
+        binary_user_wide = self._binary_user_wide_root(project, env)
+        self.assertEqual(
+            binary_user_wide.resolve(),
+            Path(launcher_user_wide).resolve(),
+            f"{name}: launcher user-wide {launcher_user_wide!r}, "
+            f"binary {binary_user_wide}",
+        )
+
+    def _launcher_root(self, project: Path, env: dict) -> Path:
+        return self._launcher_roots(project, env)[0]
 
     def test_parity_across_every_tier(self) -> None:
         for name, directives, markers in _PARITY_CASES:
@@ -681,10 +705,29 @@ class _CacheRootParityMixin:
         override = self._temp_dir / "explicit-cache"
         env["ENVY_CACHE_ROOT"] = str(override)
 
-        self.assertEqual(
-            self._binary_root(project, env).resolve(),
-            self._launcher_root(project, env).resolve(),
-        )
+        root, user_wide = self._launcher_roots(project, env)
+        self.assertEqual(self._binary_root(project, env).resolve(), root.resolve())
+
+        # An explicit root names exactly one tree, so the launcher must not carry a
+        # user-wide root at all -- an empty value is what turns the binary borrow off.
+        # (`envy cache --user-wide-root` still answers here; it reports where shell hooks
+        # live, which an override does move. The launcher never consults that.)
+        self.assertEqual("", str(user_wide))
+
+    def test_no_user_wide_root_without_home(self) -> None:
+        """A HOME-less box must still run a project whose cache is inside its own tree.
+
+        `set -u` used to abort the bash launcher here before the project got anywhere,
+        because the platform default was expanded unconditionally.
+        """
+        project = self._make_project("homeless", '-- @envy cache-local "out/.envy"\n', ())
+        env = self._sandbox_env(project)
+        for var in ("HOME", "USERPROFILE", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+            env.pop(var, None)
+
+        root, user_wide = self._launcher_roots(project, env)
+        self.assertEqual((project / "out" / ".envy").resolve(), root.resolve())
+        self.assertEqual("", str(user_wide))
 
     def test_parity_when_a_git_boundary_ends_the_walk(self) -> None:
         """discover() stops at a .git directory; the launchers used to walk straight past it.
@@ -720,7 +763,7 @@ class TestBashCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
         self._script.write_text(_get_bash_cache_root_script())
         self._script.chmod(0o755)
 
-    def _launcher_root(self, project: Path, env: dict) -> Path:
+    def _launcher_roots(self, project: Path, env: dict) -> tuple[Path, str]:
         result = test_config.run(
             [str(self._script), str(project)],
             capture_output=True,
@@ -728,7 +771,9 @@ class TestBashCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
             env=env,
         )
         self.assertEqual(0, result.returncode, f"launcher: {result.stderr}")
-        return Path(result.stdout.strip())
+        # Two lines: the project's cache root, then the user-wide one (blank if none).
+        lines = result.stdout.split("\n")
+        return Path(lines[0].strip()), lines[1].strip() if len(lines) > 1 else ""
 
 
 @unittest.skipUnless(sys.platform == "win32", "Batch tests require Windows")
@@ -738,7 +783,7 @@ class TestBatchCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
         self._script = self._temp_dir / "cache_root.bat"
         self._script.write_text(_get_batch_cache_root_script())
 
-    def _launcher_root(self, project: Path, env: dict) -> Path:
+    def _launcher_roots(self, project: Path, env: dict) -> tuple[Path, str]:
         result = test_config.run(
             ["cmd", "/c", str(self._script), str(project)],
             capture_output=True,
@@ -746,4 +791,6 @@ class TestBatchCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
             env=env,
         )
         self.assertEqual(0, result.returncode, f"launcher: {result.stderr}")
-        return Path(result.stdout.strip())
+        # Two lines: the project's cache root, then the user-wide one (blank if none).
+        lines = result.stdout.splitlines()
+        return Path(lines[0].strip()), lines[1].strip() if len(lines) > 1 else ""

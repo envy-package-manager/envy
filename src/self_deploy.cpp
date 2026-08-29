@@ -37,10 +37,21 @@ void update_latest_if_newer(path const &envy_dir, std::string_view version) {
 }
 
 bool copy_binary(path const &src, path const &dst) {
+  std::error_code ec;
+
+  // Self-copy: ensure_envy gates on binary *and* types, so a version directory that lost
+  // its envy.lua asks for a deploy whose source is already the destination. The rename
+  // would then overwrite a running image -- which fails outright on Windows, where the
+  // launcher spawns rather than execs and the file stays locked. The early return on
+  // failure would skip writing the very types this deploy exists to restore, so the warning
+  // repeats forever. equivalent() reports false (and sets ec) when dst is absent, which is
+  // the ordinary case.
+  if (std::filesystem::equivalent(src, dst, ec)) { return true; }
+  ec.clear();
+
   // Atomic deploy: copy to temp, set permissions, then rename. Avoids ETXTBSY on
   // Linux when another process is executing the destination binary concurrently.
   auto const tmp{ dst.parent_path() / (".envy-tmp-" + dst.filename().string()) };
-  std::error_code ec;
 
   std::filesystem::copy_file(src,
                              tmp,
@@ -76,7 +87,7 @@ bool copy_binary(path const &src, path const &dst) {
 
 }  // namespace
 
-std::unique_ptr<cache> self_deploy::ensure(path const &root) {
+std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
   auto c{ std::make_unique<cache>(root) };
 
   try {
@@ -92,7 +103,14 @@ std::unique_ptr<cache> self_deploy::ensure(path const &root) {
     }
 
     update_latest_if_newer(result.envy_dir.parent_path(), ENVY_VERSION_STR);
-    shell_hooks::ensure(c->root());
+
+    // A project on its own cache tree takes no part in shell integration. The profile
+    // sources the user-wide hook, so a copy here is never read and `rm -rf` on the build
+    // root takes it with it. Redirecting the write to the user-wide tree instead would be
+    // worse: a local cache exists so that running the project touches nothing outside it,
+    // and conjuring ~/Library/Caches/envy to hold a hook breaks exactly that promise. So
+    // neither is written, and `envy shell` says why.
+    if (mode != cache_mode::LOCAL) { shell_hooks::ensure(c->root()); }
   } catch (std::exception const &e) { tui::warn("self-deploy: failed: %s", e.what()); }
 
   return c;

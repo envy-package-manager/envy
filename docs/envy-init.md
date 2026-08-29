@@ -7,10 +7,11 @@ Envy's core promise: **100% project-localized tooling with zero system installat
 The bootstrap scripts (`envy` for Unix, `envy.bat` for Windows) each:
 1. Read the pinned envy version from the manifest (`@envy version`)
 2. If missing, fall back to the version stamped into the script (with warning)
-3. Check if that version exists in the user's cache
-4. Download if missing (over HTTPS from GitHub or configured mirror)
+3. Look for that version in the project's cache, then — for a local tree with no
+   `@envy sha256sums` — in the user-wide one
+4. Download if neither has it (over HTTPS from GitHub or configured mirror)
 5. Attest the archive against `SHA256SUMS`, if the manifest pins one
-6. Execute the cached binary with all arguments
+6. Execute the binary with all arguments
 
 **Version stamping:** `envy init` stamps its own version in two places:
 - The manifest (`-- @envy version "1.2.3"`) — primary source of truth
@@ -22,7 +23,7 @@ The version is the *only* project value a script carries. The mirror and the sum
 
 **Fast path:** If envy is cached, the bootstrap adds ~0ms overhead—it's just `exec`.
 
-**Self-deployment:** Envy handles its own cache installation. The bootstrap script downloads to a temp location and executes from there. On startup, envy checks if the expected cache location exists; if not, it copies itself there and extracts types alongside. This keeps bootstrap scripts simple (no `mkdir`, no knowledge of cache internals) and makes envy the single source of truth for cache structure.
+**Self-deployment:** Envy handles its own cache installation. The bootstrap script execs whichever binary it found — a cached one, or a fresh download in a temp location. On startup, envy checks if the expected cache location exists; if not, it copies itself there and extracts types alongside. This keeps bootstrap scripts simple (no `mkdir`, no knowledge of cache internals) and makes envy the single source of truth for cache structure. A binary borrowed from the user-wide tree is copied into the project's own on the same pass, so the local tree ends up self-contained either way.
 
 **Concurrent installation:** Multiple envy instances may attempt self-deployment simultaneously (e.g., parallel CI jobs, multiple terminals). Envy uses the same cache locking strategy as recipe/asset installation: acquire exclusive lock on `$CACHE/locks/envy.$VERSION.lock`, check if already deployed (another process may have finished), deploy if still missing, release lock. Lock-free fast path: if `$CACHE/envy/$VERSION/envy` exists, skip locking entirely.
 
@@ -167,6 +168,15 @@ PACKAGES = {
    4. otherwise ⇒ shared
 3. local ⇒ `<manifest dir>/<cache-local>` (default `.envy/cache`); shared ⇒ platform default
 
+**A local tree reads the user-wide one; it never writes to it.** The only thing it reads is an
+already-cached envy binary, so a clone does not re-download 20 MB the user already has — see
+"Envy Binaries" in docs/cache.md for the conditions. Everything a local run *writes* — package and
+spec entries, `envy/`, `envy/latest`, `locks/` — lands inside the project's own tree, and shell
+hooks are skipped entirely rather than written somewhere outside it. `envy cache --shared` is the
+one exception, because it is the command that stops the project being local: it deploys into the
+tree the project is about to start using, which is what makes opting out of a fresh clone's local
+cache cost nothing when the user already has that version.
+
 Every tier resolves to an absolute, normalized path. `cache-local` and `state-dir` anchor to the **manifest's directory**, never the cwd, so one manifest names one tree from every working directory—otherwise each subdirectory would refetch the whole package set into a tree of its own, and the relative root would leak into `envy product` output and into phase `stage_dir`/`install_dir`.
 
 **No variable expansion anywhere.** `cache-local` and `state-dir` accept one or more non-empty path components, none of them `.` or `..`, with no drive letter, leading separator, `~`, `$`, or `%`. Anything else is an error naming `ENVY_CACHE_ROOT` as the alternative. This is what lets the two bootstrap launchers and both binary paths implement one rule identically; three different expansion grammars across four readers is what this replaced. An absolute override is rejected rather than absolutized, because the binary used to anchor a relative one to its own cwd while both launchers took it verbatim—one invocation, two trees.
@@ -175,7 +185,7 @@ Every tier resolves to an absolute, normalized path. `cache-local` and `state-di
 
 `state-dir` defaults to the manifest's directory rather than `.envy`, because the default local tree is `.envy/cache`—a `.envy` state dir would put a "use the shared cache" marker *inside* the tree the user just opted out of, and `rm -rf .envy` would silently revert them and refetch everything. Pointing `state-dir` and `cache-local` at the same directory is how a project asks for teardown to erase cache and settings together; nesting them is rejected.
 
-**Adopting these directives requires envy 0.2.0 or newer.** An older envy drops unknown directive keys silently, so it would resolve the *shared* cache for a manifest asking for a hermetic tree and exit 0. Both launchers and `reexec` refuse the downgrade rather than hand a manifest to a binary that cannot read it. Raise or remove `@envy version` when adopting them.
+**Adopting these directives requires envy 0.2.0 or newer.** An older envy drops unknown directive keys silently, so it would resolve the *shared* cache for a manifest asking for a hermetic tree and exit 0. Both launchers and `reexec` refuse the downgrade rather than hand a manifest to a binary that cannot read it. Raise or remove `@envy version` when adopting them. A **marker** counts the same as a directive here: `envy cache --local` leaves nothing in the manifest to show for itself, and an envy that predates the markers cannot see the choice either.
 
 **Platform-specific caches are gone.** `cache-posix`/`cache-win` were split only because they held absolute paths, which genuinely differ per platform. A relative project path is the same string everywhere, so one `cache-local` serves both—forward slashes included. The cost: a checkout used from both WSL and native Windows can no longer keep separate trees; use `ENVY_CACHE_ROOT` there.
 
@@ -192,7 +202,7 @@ $CACHE_ROOT/
 │       └── envy.lua
 ├── specs/
 │   └── ...                         # cached spec files (existing)
-└── assets/
+└── packages/
     └── ...                         # cached package artifacts (existing)
 ```
 
@@ -254,6 +264,7 @@ Optional. Manifest pins the hash of the release's `SHA256SUMS`; that file names 
 - **Fail-closed:** a pin requires `@envy version` (it names one release, so dynamic resolution would describe a different one), and a pinned manifest whose mirror lacks `SHA256SUMS` errors rather than silently downgrading.
 - **Verified before extract** — an unattested archive is never unpacked, so a hostile mirror never chooses paths under the temp dir.
 - **Not covered:** the cache fast path re-`exec`s without re-hashing. Download-time check, not per-invocation; whoever can write your cache can write your `bin/envy`.
+- **A pin turns off the user-wide binary lookup**, and that sentence above is why. It holds for a `cache-local` tree, which sits in the repo under the same permissions as `bin/envy`; it does not hold for `~/Library/Caches/envy`, which every other project on the machine writes. So a pinned local project downloads and attests its own binary rather than borrowing one — one download per (project, version), traded for keeping git the root of trust. Unpinned projects do borrow, and with it lose provenance: a manifest naming `@envy mirror` can end up running same-version bytes some other project pulled from upstream. Pin if that matters; the mirror alone is not a gate, because `mirror-envy` copies release bytes verbatim and gating on it would disable the lookup for exactly the air-gapped users it helps most.
 - **No extra software:** `sha256sum`/`shasum`/`openssl` on POSIX; `certutil` on Windows, with `Get-FileHash` as fallback since certutil is a known LOLBin some environments block.
 
 Future option: code signing for authenticity independent of the manifest.
@@ -642,18 +653,32 @@ function STAGE(fetch_dir, stage_dir, tmp_dir) end
 2. **Parse `@envy version`** from `envy.lua`'s header—blank lines and comments up to the first line of code—and unescape
 3. **Parse `@envy cache-local` / `cache-mode` / `state-dir`** (all optional, all relative literals)
 4. **Resolve cache dir** (override > markers > directives > platform default)
-5. **Check cache** → `$CACHE/envy/1.2.3/envy` exists
+5. **Check candidates** → `$CACHE/envy/1.2.3/envy` is a non-empty executable file
 6. **exec** → replace shell with envy binary, pass all args
 7. **envy sync runs** → normal package synchronization
 
 Total overhead: ~1-2ms (grep + sed unescape + exec)
 
-### `./tools/envy sync` (not cached)
+### `./tools/envy sync` (local tree, binary already in the user's cache)
+
+1. **Bootstrap script executes**
+2. **Parse `@envy version`** → "1.2.3"; no `@envy sha256sums`
+3. **Resolve cache dir** → `<project>/out/.envy` (a `cache-local` tree)
+4. **Check candidates** → not there; `~/Library/Caches/envy/envy/1.2.3/envy` is
+5. **exec** → the user-wide binary, with no download at all
+6. **envy self-deploys** → copies it into `<project>/out/.envy/envy/1.2.3/`, types alongside;
+   shell hooks skipped, because this is a project-local tree
+7. **envy sync runs** → normal package synchronization
+
+The local tree is self-contained from here, so tarring it to a machine with no user-wide cache
+still runs. A `@envy sha256sums` pin skips step 4 and downloads instead.
+
+### `./tools/envy sync` (not cached anywhere)
 
 1. **Bootstrap script executes**
 2. **Parse `@envy version`** → "1.2.3"
 3. **Resolve cache dir** → `~/Library/Caches/envy`
-4. **Check cache** → `$CACHE/envy/1.2.3/envy` not found
+4. **Check candidates** → `$CACHE/envy/1.2.3/envy` not found
 5. **Determine platform** → darwin-arm64
 6. **Download to temp** → `curl https://github.com/.../envy-darwin-arm64` → `/tmp/envy-1.2.3-$$`
 7. **exec** → temp binary (bootstrap's job is done)

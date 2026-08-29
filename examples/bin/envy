@@ -156,6 +156,12 @@ keep_valid_version() {
 
 ENVY_MANIFEST_DIR="${ENVY_MANIFEST%/*}"; ENVY_MANIFEST_DIR="${ENVY_MANIFEST_DIR:-/}"
 
+# Declared ahead of the tiers, not inside the branch that fills them: both are ordinary
+# environment variables, so an exported value would otherwise survive into the override
+# branch that never assigns them, and `set -u` does not catch a variable set to the wrong
+# thing. The suite runs with os.environ.copy(), so this is a developer's shell too.
+ENVY_MODE="" ENVY_SHARED_CACHE="" ENVY_MODE_FROM_MARKER=""
+
 # Tiers, in order, matching resolve_cache_root() in src/cache.cpp. No expansion of any kind:
 # every value here is either a literal from the manifest or a path this script joins, so
 # there is no grammar for this script and the binary to disagree about.
@@ -168,6 +174,21 @@ if [[ -n "${ENVY_CACHE_ROOT:-}" ]]; then
         exit 1
     fi
 else
+    # The user's own cache root. Shared mode *is* this path, and a local tree borrows an
+    # envy binary from it rather than downloading a second copy of one already on disk (see
+    # the candidate selection below). Read-only -- nothing is ever written here on a local
+    # project's behalf. Left empty under ENVY_CACHE_ROOT above, which is what turns the
+    # borrow off: an explicit root names exactly one tree.
+    #
+    # Guarded, and empty when there is none: a box with no HOME is a supported place to run
+    # a project whose cache lives entirely inside its own tree, and an unguarded $HOME here
+    # would abort under `set -u` before that project got anywhere. Empty, never "/envy".
+    if [[ $(uname) == Darwin ]]; then
+        # XDG_CACHE_HOME is not consulted on Darwin, matching platform_posix.cpp.
+        if [[ -n "${HOME:-}" ]]; then ENVY_SHARED_CACHE="$HOME/Library/Caches/envy"; fi
+    elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then ENVY_SHARED_CACHE="$XDG_CACHE_HOME/envy"
+    elif [[ -n "${HOME:-}" ]]; then ENVY_SHARED_CACHE="$HOME/.cache/envy"; fi
+
     # @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside
     # the default local tree `.envy/cache` and would let a cache wipe erase the marker.
     if [[ -n "$ENVY_STATE_DIR_REL" ]]; then ENVY_STATE_DIR="$ENVY_MANIFEST_DIR/$ENVY_STATE_DIR_REL"
@@ -181,8 +202,11 @@ else
         exit 1
     fi
 
-    if [[ -f "$ENVY_STATE_DIR/.envy-cache-local" ]]; then ENVY_MODE=local
-    elif [[ -f "$ENVY_STATE_DIR/.envy-cache-shared" ]]; then ENVY_MODE=shared
+    # A marker is recorded, not declared, so it leaves no directive in the manifest -- and
+    # an envy that predates the markers cannot see it either. Remembered here so the
+    # version guard below can refuse that downgrade the same way it refuses a directive's.
+    if [[ -f "$ENVY_STATE_DIR/.envy-cache-local" ]]; then ENVY_MODE=local; ENVY_MODE_FROM_MARKER=1
+    elif [[ -f "$ENVY_STATE_DIR/.envy-cache-shared" ]]; then ENVY_MODE=shared; ENVY_MODE_FROM_MARKER=1
     elif [[ -n "$ENVY_CACHE_MODE" ]]; then ENVY_MODE="$ENVY_CACHE_MODE"
     elif [[ -n "$ENVY_CACHE_LOCAL" ]]; then ENVY_MODE=local   # naming a tree is asking for it
     else ENVY_MODE=shared; fi
@@ -192,8 +216,16 @@ else
         # one tree from every working directory, or an invocation from a subdirectory
         # refetches the whole package set into a tree of its own.
         ENVY_CACHE="$ENVY_MANIFEST_DIR/${ENVY_CACHE_LOCAL:-.envy/cache}"
-    elif [[ $(uname) == Darwin ]]; then ENVY_CACHE="$HOME/Library/Caches/envy"
-    else ENVY_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/envy"; fi
+    else ENVY_CACHE="$ENVY_SHARED_CACHE"; fi
+
+    # Said rather than inferred: the platform default is what shared mode *is*, so with no
+    # HOME there is no root to use. This used to be a bare "HOME: unbound variable" abort
+    # from `set -u`, which named neither the cause nor the way out.
+    if [[ -z "$ENVY_CACHE" ]]; then
+        echo "ERROR: cannot determine a cache root: neither HOME nor XDG_CACHE_HOME is" \
+             "set. Set ENVY_CACHE_ROOT, or give the project a local cache." >&2
+        exit 1
+    fi
 fi
 
 if [[ -z "$ENVY_VERSION" ]]; then
@@ -245,11 +277,15 @@ version_lt() {  # $1 < $2, both MAJOR.MINOR.PATCH
 # built from a working tree, so its directive support cannot be inferred from its version.
 # The ENVY_MIN_DIRECTIVE_VERSION shape test matters too -- an unstamped template would otherwise
 # reach bash arithmetic with '0.2.0' and die under set -e.
-if [[ -n "$ENVY_CACHE_LOCAL$ENVY_CACHE_MODE$ENVY_STATE_DIR_REL" \
+# ENVY_MODE_FROM_MARKER counts as much as a directive: `envy cache --local` puts a project
+# on its own tree with nothing in the manifest to show for it, and an envy that predates the
+# markers reads the same manifest, resolves the shared cache and exits 0.
+if [[ -n "$ENVY_CACHE_LOCAL$ENVY_CACHE_MODE$ENVY_STATE_DIR_REL$ENVY_MODE_FROM_MARKER" \
       && "$ENVY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$ENVY_VERSION" != 0.0.0 \
       && "$ENVY_MIN_DIRECTIVE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
    && version_lt "$ENVY_VERSION" "$ENVY_MIN_DIRECTIVE_VERSION"; then
-    echo "ERROR: $ENVY_MANIFEST uses '@envy cache-local'/'cache-mode'/'state-dir', added in envy" \
+    echo "ERROR: $ENVY_MANIFEST resolves its cache mode from '@envy cache-local'/'cache-mode'/" \
+         "'state-dir' or an 'envy cache' marker, added in envy" \
          "$ENVY_MIN_DIRECTIVE_VERSION, but resolves envy $ENVY_VERSION. That envy ignores them and" \
          "would silently use the shared cache. Raise or remove the '@envy version' pin." >&2
     exit 1
@@ -271,7 +307,34 @@ esac
 ENVY_ARGS=(--project "$(resolve_script_dir)")
 
 ENVY_BIN="$ENVY_CACHE/envy/$ENVY_VERSION/envy"
-[[ -x "$ENVY_BIN" ]] && exec "$ENVY_BIN" "${ENVY_ARGS[@]}" "$@"
+
+# Candidate selection, then one exec -- not two exec attempts. A second `exec` after the
+# first would be unreachable in precisely the case it exists for: exec replaces the shell,
+# and when it fails it takes the script down with 126 rather than falling through.
+#
+# A local tree may borrow the user's own copy of this exact version rather than download a
+# second one. Read-only: nothing is written there, and the binary that ends up running
+# still self-deploys into *this* project's cache, so the tree stays self-contained.
+#
+# Skipped with a sums pin, because the cache fast path never re-hashes: a pinned project
+# would be running bytes it never attested, out of a tree every other project on the box
+# writes to. Skipped under ENVY_CACHE_ROOT too -- ENVY_MODE is empty there, and an explicit
+# root names exactly one tree. Never the other direction: a clone that shipped its own
+# envy/<ver>/envy would be arbitrary code execution on the first run of this script.
+# -f and -s as well as -x: [[ -x ]] is true for a directory, and for a file truncated to
+# zero that kept the bit -- exec then fails with 126 and takes this script down rather than
+# falling through. A non-empty file that is still not a valid image is beyond any shell
+# test, and was just as fatal before there was a second candidate to fall through to.
+usable_envy() { [[ -f "$1" && -s "$1" && -x "$1" ]]; }
+
+if ! usable_envy "$ENVY_BIN" &&
+   [[ "$ENVY_MODE" == local && -z "$ENVY_SUMS_PIN" && -n "$ENVY_SHARED_CACHE" ]]; then
+    ENVY_BIN="$ENVY_SHARED_CACHE/envy/$ENVY_VERSION/envy"
+fi
+
+if usable_envy "$ENVY_BIN"; then
+    exec "$ENVY_BIN" "${ENVY_ARGS[@]}" "$@"
+fi
 
 echo "Downloading envy $ENVY_VERSION..." >&2
 # mktemp, not $$: a predictable name in a sticky /tmp lets another user pre-create the

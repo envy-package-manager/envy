@@ -119,13 +119,7 @@ class TestCacheUsage(EnvyTestCase):
         # No --cache-root and no ENVY_CACHE_ROOT: the directive is the tier under test.
         # The default-root variables are redirected into the temp tree so main()'s
         # pre-dispatch self-deploy cannot reach the developer's real cache.
-        env = test_config.get_test_env()
-        env.pop("ENVY_CACHE_ROOT", None)
-        sandbox = project / "home"
-        env["HOME"] = str(sandbox)
-        env["USERPROFILE"] = str(sandbox)
-        env["XDG_CACHE_HOME"] = str(sandbox / "cache")
-        env["LOCALAPPDATA"] = str(sandbox / "AppData" / "Local")
+        env = test_config.sandbox_home_env(project / "home")
 
         # From a subdirectory: discovery walks up, and the directive anchors to what it
         # finds, not to the cwd.
@@ -206,32 +200,30 @@ class TestCacheUsage(EnvyTestCase):
                 self.assertNotIn("cache-posix", result.stderr)
                 self.assertNotIn("directive removed", result.stderr)
 
-    def test_shell_only_warns_when_the_hook_is_somewhere_unusual(self):
-        """The warning is about losing hooks, so it must key on the root, not the tier.
+    def test_shell_hooks_are_user_wide_whatever_the_project_resolves_to(self):
+        """Hooks belong to the user, so no project tier moves them or earns the warning.
 
-        `@envy cache-mode "shared"` reports a non-default tier while resolving to the plain
-        platform default; warning that *that* cache is easily deleted is just wrong.
+        A profile sources one path for every directory the shell ever visits, so the hook
+        root is the override or the platform default. A project on its own cache tree does
+        not merely resolve elsewhere -- it never populates hooks at all, which is why the
+        warning about losing them cannot key on the project's mode.
         """
         project = self.make_temp_dir("shellproj")
         self.addCleanup(shutil.rmtree, project, ignore_errors=True)
         home = project / "home"
-        home.mkdir()
-        env = test_config.get_test_env()
-        env.pop("ENVY_CACHE_ROOT", None)
-        env["HOME"] = str(home)
-        env["USERPROFILE"] = str(home)
-        env["XDG_CACHE_HOME"] = str(home / "cache")
-        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+        env = test_config.sandbox_home_env(home)
 
-        def run_shell() -> str:
+        def run_shell(extra_env: dict | None = None) -> str:
             result = test_config.run(
                 [str(self.envy), "shell", "zsh"],
                 cwd=project,
                 capture_output=True,
                 text=True,
-                env=env,
+                env={**env, **(extra_env or {})},
             )
             return result.stdout + result.stderr
+
+        user_wide = test_config.sandbox_user_wide_root(env)
 
         # Declares where --local would go, but defaults to the user-wide cache.
         (project / "envy.lua").write_bytes(
@@ -240,13 +232,28 @@ class TestCacheUsage(EnvyTestCase):
             b'-- @envy cache-mode "shared"\n'
             b"PACKAGES = {}\n"
         )
-        self.assertNotIn("Moving or deleting", run_shell())
+        shared_out = run_shell()
+        self.assertNotIn("Moving or deleting", shared_out)
+        self.assertIn(str(user_wide / "shell" / "hook.zsh").replace(str(home), "$HOME"),
+                      shared_out)
 
-        # Actually local: the hooks really are inside a tree an rm -rf will take.
+        # Local: the hook path does not move with the project, and nothing populates a
+        # project-local shell/ any more, so there is nothing to warn about losing.
         (project / "envy.lua").write_bytes(
             b'-- @envy bin "bin"\n-- @envy cache-local "out/.envy"\nPACKAGES = {}\n'
         )
-        self.assertIn("Moving or deleting", run_shell())
+        local_out = run_shell()
+        self.assertNotIn("Moving or deleting", local_out)
+        self.assertNotIn("out/.envy", local_out)
+        self.assertFalse((project / "out" / ".envy" / "shell").exists())
+
+        # An explicit root is the one case that still earns it: it names a tree the user
+        # chose, and moving that tree does break the line their profile sources.
+        override = project / "explicit-cache"
+        (override / "shell").mkdir(parents=True)
+        (override / "shell" / "hook.zsh").write_bytes(b"# stub\n")
+        self.assertIn("Moving or deleting",
+                      run_shell({"ENVY_CACHE_ROOT": str(override)}))
 
     def test_non_package_directories_are_reported(self):
         specs = self.cache_root / "specs"

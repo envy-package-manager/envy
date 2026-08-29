@@ -793,6 +793,119 @@ TEST_CASE("resolve_cache_root: nesting state-dir and cache-local is rejected") {
                                                    .manifest_dir = kAbsRoot / "repo" }));
 }
 
+TEST_CASE("cache_root_for_mode names the tree a mode would use, not the recorded one") {
+  // `envy cache --local/--shared` self-deploys before its own marker is written, so it has
+  // to name the tree it is about to establish. Resolution here says LOCAL; both answers
+  // must still be available.
+  cache_root_request const req{ .cache_local = "out/.envy",
+                                .manifest_dir = kAbsRoot / "repo" };
+  CHECK(envy::resolve_cache_root(req).mode == cache_mode::LOCAL);
+  CHECK(envy::cache_root_for_mode(req, cache_mode::LOCAL) ==
+        kAbsRoot / "repo" / "out" / ".envy");
+  CHECK(envy::cache_root_for_mode(req, cache_mode::SHARED) !=
+        kAbsRoot / "repo" / "out" / ".envy");
+}
+
+TEST_CASE("cache_root_for_mode still lets an override win") {
+  cache_root_request const req{ .cli_override = kAbsRoot / "cli" / "override",
+                                .cache_local = "out/.envy",
+                                .manifest_dir = kAbsRoot / "repo" };
+  CHECK(envy::cache_root_for_mode(req, cache_mode::LOCAL) ==
+        kAbsRoot / "cli" / "override");
+  CHECK(envy::cache_root_for_mode(req, cache_mode::SHARED) ==
+        kAbsRoot / "cli" / "override");
+}
+
+TEST_CASE("resolve_user_wide_cache_root: an override is the user's root") {
+  auto const r{ envy::resolve_user_wide_cache_root(kAbsRoot / "explicit") };
+  REQUIRE(r.has_value());
+  CHECK(*r == kAbsRoot / "explicit");
+}
+
+TEST_CASE("resolve_user_wide_cache_root: a relative override is rejected") {
+  CHECK_THROWS_AS(
+      envy::resolve_user_wide_cache_root(std::filesystem::path{ "rel-cache" }),
+      std::runtime_error);
+}
+
+namespace {
+
+envy::cache_root_resolution local_at(std::filesystem::path root,
+                                     cache_root_tier tier = cache_root_tier::IMPLIED_LOCAL) {
+  return { std::move(root), cache_mode::LOCAL, tier };
+}
+
+std::filesystem::path envy_bin_under(std::filesystem::path const &root) {
+  return root / "envy" / "1.2.3" / envy::platform::exe_name("envy");
+}
+
+}  // namespace
+
+TEST_CASE("envy_binary_candidates: a local tree may borrow the user's own copy") {
+  auto const project{ kAbsRoot / "repo" / "out" / ".envy" };
+  auto const user{ kAbsRoot / "home" / "cache" / "envy" };
+
+  auto const c{ envy::envy_binary_candidates(local_at(project), user, "1.2.3", false) };
+  REQUIRE(c.size() == 2);
+  CHECK(c[0] == envy_bin_under(project));  // the project's own tree is always tried first
+  CHECK(c[1] == envy_bin_under(user));
+}
+
+TEST_CASE("envy_binary_candidates: a sums pin fails closed") {
+  // The cache fast path never re-hashes, so a pinned project must not run bytes it never
+  // attested out of a tree every other project on the box writes to.
+  auto const c{ envy::envy_binary_candidates(local_at(kAbsRoot / "repo" / "out" / ".envy"),
+                                             kAbsRoot / "home" / "cache" / "envy",
+                                             "1.2.3",
+                                             true) };
+  CHECK(c.size() == 1);
+}
+
+TEST_CASE("envy_binary_candidates: an override names exactly one tree") {
+  // Keyed on the tier, not the mode: resolve_cache_root reports SHARED for an override, so
+  // a mode test would read backwards the day that changes.
+  envy::cache_root_resolution const resolved{ kAbsRoot / "explicit",
+                                              cache_mode::LOCAL,
+                                              cache_root_tier::CLI_OVERRIDE };
+  auto const c{ envy::envy_binary_candidates(resolved,
+                                             kAbsRoot / "home" / "cache" / "envy",
+                                             "1.2.3",
+                                             false) };
+  REQUIRE(c.size() == 1);
+  CHECK(c[0] == envy_bin_under(kAbsRoot / "explicit"));
+}
+
+TEST_CASE("envy_binary_candidates: shared never looks in a project-local tree") {
+  // A clone shipping its own envy/<ver>/envy would be arbitrary code execution on the
+  // first launcher run, so the fallback is one-directional by design.
+  envy::cache_root_resolution const resolved{ kAbsRoot / "home" / "cache" / "envy",
+                                              cache_mode::SHARED,
+                                              cache_root_tier::DEFAULT };
+  auto const c{ envy::envy_binary_candidates(resolved,
+                                             kAbsRoot / "home" / "cache" / "envy",
+                                             "1.2.3",
+                                             false) };
+  CHECK(c.size() == 1);
+}
+
+TEST_CASE("envy_binary_candidates: no user-wide root leaves one candidate") {
+  // A box with no HOME is a supported place to run a project whose cache is entirely
+  // inside its own tree.
+  auto const c{ envy::envy_binary_candidates(local_at(kAbsRoot / "repo" / "out" / ".envy"),
+                                             std::nullopt,
+                                             "1.2.3",
+                                             false) };
+  CHECK(c.size() == 1);
+}
+
+TEST_CASE("envy_binary_candidates: a local tree that is already the user-wide one") {
+  // ENVY_CACHE_ROOT pointed at the platform default, or a cache-local that resolves to it:
+  // the same path twice would stat it twice and say nothing new.
+  auto const same{ kAbsRoot / "home" / "cache" / "envy" };
+  auto const c{ envy::envy_binary_candidates(local_at(same), same, "1.2.3", false) };
+  CHECK(c.size() == 1);
+}
+
 TEST_CASE("resolve_state_dir defaults to the manifest dir, not .envy") {
   // .envy would sit above the default local tree .envy/cache, so a cache wipe would erase
   // the marker and silently revert the user.

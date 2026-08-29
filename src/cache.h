@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace envy {
 
@@ -69,6 +70,37 @@ struct cache_root_resolution {
 // directory.  Normalization is not cosmetic: `operator/` leaves `C:\proj` / `out/.envy` as
 // `C:\proj\out/.envy`, which no launcher would ever print.
 cache_root_resolution resolve_cache_root(cache_root_request const &req);
+
+// The root this project's cache would have in `mode`, with the tiers that *decide* the
+// mode skipped.  An override still wins, since it names one tree outright.  `envy cache
+// --local/--shared` self-deploys before its own marker is written, so it has to name the
+// tree it is about to establish: deploying into the current one drops a binary in the tree
+// the user is abandoning.
+std::filesystem::path cache_root_for_mode(cache_root_request const &req, cache_mode mode);
+
+// The user's own cache root -- the override, else the platform default; nullopt when
+// neither is determinable (no HOME/XDG_CACHE_HOME/LOCALAPPDATA).  A project on a local
+// cache may *read* this tree for an envy binary it can run, but nothing populates it on
+// that project's behalf; see envy_binary_candidates.
+std::optional<std::filesystem::path> resolve_user_wide_cache_root(
+    std::optional<std::filesystem::path> const &cli_override);
+
+// Paths to try, in order, when looking for `version`'s envy binary.  Pure: the caller
+// stats them and takes the first that will actually run, exactly as resolve_cache_mode has
+// its caller stat the two markers -- a signature that stats internally could not be unit
+// tested without touching the filesystem.
+//
+// The second candidate exists only for a LOCAL tree, and only with no '@envy sha256sums'.
+// Reading the user's own tree saves re-downloading a binary they already have; a *pinned*
+// project running bytes it never attested does not, because the cache fast path never
+// re-hashes and that tree is written by every other project on the box.  A SHARED tree
+// never looks in a project-local one: a hostile clone shipping its own envy/<ver>/envy
+// would be arbitrary code execution on the first launcher run.
+std::vector<std::filesystem::path> envy_binary_candidates(
+    cache_root_resolution const &resolved,
+    std::optional<std::filesystem::path> const &user_wide_root,
+    std::string_view version,
+    bool has_sums_pin);
 
 // Absolute path of the state dir holding the override markers, or nullopt when no
 // manifest is in hand.  Defaults to the manifest's own directory rather than to `.envy`:

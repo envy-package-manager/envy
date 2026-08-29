@@ -20,7 +20,9 @@ envy shell fish    # → add to ~/.config/fish/config.fish
 envy shell powershell  # → add to $PROFILE
 ```
 
-Hook files live at `$CACHE/shell/hook.{bash,zsh,fish,ps1}` and are written automatically during self-deploy. `envy shell` just prints the `source` line. If the cache is in a non-default location, envy warns that moving or deleting the cache will break shell integration.
+Hook files live at `<user-wide cache>/shell/hook.{bash,zsh,fish,ps1}` and are written automatically during self-deploy. `envy shell` just prints the `source` line. Under `--cache-root`/`ENVY_CACHE_ROOT` envy warns that moving or deleting that cache will break shell integration.
+
+**Hooks are a user-wide-cache feature.** A profile sources one path for every directory the shell ever visits, so no project tier moves it: the hook root is `--cache-root`/`ENVY_CACHE_ROOT`, else the platform default. A project on its own cache tree (`@envy cache-local`, `envy cache --local`) does not merely resolve elsewhere — it writes **no** hooks at all. A copy inside the project would never be the one the shell loads, and `rm -rf` on the build root would take it; writing to the user-wide tree instead would break the one promise a local cache makes, which is that running the project touches nothing outside it. So a user whose only projects are local has no hooks, and `envy shell` says so rather than suggesting a command that cannot produce them.
 
 ## Behavior
 
@@ -53,6 +55,6 @@ All three are independent—combine as needed.
 
 **Temporarily disable:** `export ENVY_SHELL_HOOK_DISABLE=1` (unset to re-enable).
 
-**Force refresh:** Delete `$CACHE/shell/` and run any envy command.
+**Force refresh:** Delete `<user-wide cache>/shell/` and run any envy command in a project that is *not* on a local cache tree.
 
 **Missing raccoon (Windows/PowerShell):** The icon needs a UTF-8 console; PowerShell defaults to the legacy OEM code page (e.g. 437). Add `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()` *above* the line that dot-sources the hook (`. "..."`) in `$PROFILE`. The hook nudges once per session when the icon is wanted but the console isn't UTF-8—silenced by `ENVY_SHELL_NO_ICON=1`.

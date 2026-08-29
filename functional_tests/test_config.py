@@ -2,7 +2,9 @@
 
 import os
 import shlex
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -251,3 +253,71 @@ def get_test_env() -> dict[str, str]:
         env.setdefault("ASAN_OPTIONS", f"suppressions={asan_supp}")
 
     return env
+
+
+# --- cache-root sandboxing -----------------------------------------------------------
+#
+# Anything that exercises a shared-mode resolution has to redirect the platform-default
+# cache first, or main()'s pre-dispatch self-deploy writes into the developer's real one.
+# Four modules grew their own copy of this pair, each with its own idea of which variables
+# matter; they are one pair now so a new platform tier lands in exactly one place.
+
+
+def sandbox_home_env(home: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+    """`base` (default get_test_env()) with every default-cache variable under `home`.
+
+    Drops ENVY_CACHE_ROOT: an override short-circuits the very tiers a sandbox exists to
+    make observable. Creates `home`, since a caller that forgot left the resolution
+    pointing at a directory that never appeared.
+    """
+    env = dict(base if base is not None else get_test_env())
+    env.pop("ENVY_CACHE_ROOT", None)
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    env["XDG_CACHE_HOME"] = str(home / "cache")
+    env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+    return env
+
+
+def sandbox_user_wide_root(env: dict[str, str]) -> Path:
+    """The user-wide cache root a sandbox_home_env() environment resolves to.
+
+    Computed, not approximated, and per platform_posix.cpp/platform_win.cpp: a sandbox
+    necessarily puts HOME inside the test tree, so "not under the test directory" is not
+    the assertion available -- the exact path is, and only it holds on all three platforms.
+    """
+    if sys.platform == "win32":
+        return Path(env["LOCALAPPDATA"]) / "envy"
+    if sys.platform == "darwin":
+        return Path(env["HOME"]) / "Library" / "Caches" / "envy"
+    return Path(env["XDG_CACHE_HOME"]) / "envy"
+
+
+def seed_cached_envy(cache_root: Path, version: str) -> Path:
+    """Put the shipped binary at <cache_root>/envy/<version>/, as self-deploy would.
+
+    The launchers and reexec look here before downloading, so this is how a test says
+    "the user already has this version" without running a download to create it.
+    """
+    version_dir = cache_root / "envy" / version
+    version_dir.mkdir(parents=True, exist_ok=True)
+    binary = version_dir / ("envy.exe" if sys.platform == "win32" else "envy")
+    shutil.copy2(get_envy_production_executable(), binary)
+    if sys.platform != "win32":
+        binary.chmod(binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return binary
+
+
+def get_envy_version() -> str:
+    """The version baked into the shipped binary."""
+    result = run(
+        [str(get_envy_production_executable()), "version"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    for line in result.stderr.splitlines():
+        if line.startswith("envy version "):
+            return line.split()[2]
+    raise RuntimeError("Could not parse envy version from: " + result.stderr)

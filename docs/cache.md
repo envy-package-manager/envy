@@ -9,6 +9,11 @@
   worktree that points at it.
 - Scene-aware locking: exclusive while building, lock-free after `envy-complete` appears; install directories live beside final paths for atomic rename.
 - Project-local (`local.*`) specs stay in the repo tree and bypass the shared cache.
+- **A local tree reads the user-wide one; it never writes to it.** Borrowing an already-cached
+  envy binary saves a redundant download (see "Envy Binaries"). Populating the user-wide tree —
+  entries, `latest`, shell hooks — never happens on a local project's behalf, which is the whole
+  point of asking for a local tree. `envy cache --shared` is the one exception, and only because
+  it is the command that stops the project being local.
 
 ## Layout
 ```
@@ -25,7 +30,7 @@
 │           ├── fetch/            # Durable fetch cache (persists across failures)
 │           │   └── envy-complete # Marker: all fetches verified
 │           └── work/             # Ephemeral workspace (wiped each attempt)
-├── assets/                       # Asset entries (one per identity/options/platform)
+├── packages/                     # Package entries (one per identity/options/platform)
 │   └── {namespace}.{name}@{version}/
 │       └── {platform}-{arch}-sha256-{hash}/
 │           ├── envy-complete
@@ -36,19 +41,31 @@
 │           ├── install/          # Staging area for asset preparation
 │           └── work/             # Ephemeral workspace (stage/, etc.)
 │               └── stage/        # Build staging tree (wiped before each attempt)
+├── shell/                        # PATH hooks, sourced from the user's profile
+│   └── hook.{bash,zsh,fish,ps1}  # User-wide only -- absent from a project-local tree
 └── locks/
     └── {recipe|asset|envy}.*.lock
 ```
 
 ## Envy Binaries
 
-The `envy/` directory stores envy binaries and their lua_ls type definitions. Bootstrap scripts check this location; if missing, they download to a temp directory and exec from there. The envy binary self-deploys on startup:
+The `envy/` directory stores envy binaries and their lua_ls type definitions. The launchers and `reexec` look here before downloading, in order:
+
+1. `$CACHE/envy/$VERSION/envy` — the project's own tree, always tried first
+2. `$USER_WIDE/envy/$VERSION/envy` — **only** for a local tree with no `@envy sha256sums`
+
+A candidate that is not a regular, non-empty, executable file is skipped rather than run: `[[ -x ]]` and `if exist` both accept a directory and a file truncated to zero, and exec'ing either kills the launcher instead of falling through. If no candidate survives, the download goes to a temp directory and execs from there.
+
+The second candidate exists because a version-pinned envy binary is the same bytes in every project, so re-downloading 20 MB per checkout is pure waste. It is read-only: the binary that ends up running still self-deploys into the project's own tree, which is what keeps a populated local cache runnable after being tarred to a machine with no user-wide cache at all. A **sums pin turns it off** — the fast path never re-hashes, and the user-wide tree is written by every other project on the box, so a pinned project must not run bytes it never attested. A shared tree never looks in a project-local one: a hostile clone shipping its own `envy/<ver>/envy` would be arbitrary code execution on the first launcher run.
+
+The envy binary self-deploys on startup:
 
 1. **Lock-free check:** If `$CACHE/envy/$VERSION/envy` exists, continue immediately
 2. **Acquire lock:** `$CACHE/locks/envy.$VERSION.lock` (exclusive, blocking)
 3. **Re-check:** Another process may have completed deployment while waiting
 4. **Deploy:** Copy self to cache, extract embedded types alongside
 5. **Release lock:** Continue with requested command
+6. **Shell hooks:** written only when the root is *not* a project-local tree
 
 This uses the same locking strategy as recipe/asset installation (see Locking & Workspace Lifecycle below). Multiple concurrent envy instances (parallel CI, multiple terminals) safely coordinate without corruption or duplicate work. Each version is self-contained; deleting `envy/1.2.3/` removes that version completely.
 
@@ -66,7 +83,7 @@ This uses the same locking strategy as recipe/asset installation (see Locking & 
 - Lock files (`locks/...`) exist only while holding the lock—`cache::scoped_entry_lock` destroys them on destruction.
 
 ### Cache-Managed Packages (Standard)
-- Acquisition ensures `assets/{entry}/install/` and `assets/{entry}/work/` exist.
+- Acquisition ensures `packages/{entry}/install/` and `packages/{entry}/work/` exist.
 - Workspace separates `fetch/` (durable, persists across failures) and `work/` (ephemeral, wiped each attempt).
 - Per-file caching: `fetch/` persists across failed attempts. On subsequent runs, each file is verified by SHA256 before re-downloading. Only missing or corrupted files trigger new downloads. Files without SHA256 are always re-downloaded (no cache trust without verification).
 - Specs call `mark_fetch_complete()` once all fetches succeed; this drops `envy-complete` sentinel inside `fetch/`.

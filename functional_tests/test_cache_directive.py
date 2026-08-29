@@ -343,30 +343,9 @@ PACKAGES = {}
 
         Without this a shared-mode assertion would touch the developer's real cache.
         """
-        env = test_config.get_test_env()
-        env.pop("ENVY_CACHE_ROOT", None)
-        home = self.test_dir / "home"
-        home.mkdir(exist_ok=True)
-        env["HOME"] = str(home)
-        env["USERPROFILE"] = str(home)
-        env["XDG_CACHE_HOME"] = str(home / "cache")
-        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
-        return env
+        return test_config.sandbox_home_env(self.test_dir / "home")
 
-    @staticmethod
-    def _expected_shared_root(env: dict) -> Path:
-        """The user-wide default the sandbox above defines, per get_default_cache_root().
-
-        Computed rather than approximated. The sandbox necessarily puts HOME *inside* the
-        test directory, so "the root is not under the test directory" is not the question --
-        the platform default legitimately is. Asserting the exact path is, and it is the only
-        form that holds on all three platforms.
-        """
-        if IS_WINDOWS:
-            return Path(env["LOCALAPPDATA"]) / "envy"
-        if platform.system() == "Darwin":
-            return Path(env["HOME"]) / "Library" / "Caches" / "envy"
-        return Path(env["XDG_CACHE_HOME"]) / "envy"
+    _expected_shared_root = staticmethod(test_config.sandbox_user_wide_root)
 
     def test_no_directives_resolves_shared(self):
         """Today's behavior for every existing manifest: the user-wide cache."""

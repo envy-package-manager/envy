@@ -408,6 +408,17 @@ TEST_CASE("cli_parse: cmd_cache") {
     CHECK(cfg->act == envy::cmd_cache::cfg::action::PRINT_ROOT);
   }
 
+  SUBCASE("--user-wide-root selects PRINT_USER_WIDE_ROOT") {
+    std::vector<std::string> args{ "envy", "cache", "--user-wide-root" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    auto const *cfg{ std::get_if<envy::cmd_cache::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->act == envy::cmd_cache::cfg::action::PRINT_USER_WIDE_ROOT);
+  }
+
   SUBCASE("--local selects SET_LOCAL") {
     std::vector<std::string> args{ "envy", "cache", "--local" };
     auto argv{ make_argv(args) };
@@ -444,6 +455,26 @@ TEST_CASE("cli_parse: cmd_cache") {
 
   SUBCASE("--root excludes --local") {
     std::vector<std::string> args{ "envy", "cache", "--root", "--local" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("--root excludes --user-wide-root") {
+    std::vector<std::string> args{ "envy", "cache", "--root", "--user-wide-root" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
+
+  SUBCASE("--user-wide-root excludes --local") {
+    std::vector<std::string> args{ "envy", "cache", "--user-wide-root", "--local" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
