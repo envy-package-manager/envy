@@ -353,15 +353,30 @@ PACKAGES = {}
         env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
         return env
 
+    @staticmethod
+    def _expected_shared_root(env: dict) -> Path:
+        """The user-wide default the sandbox above defines, per get_default_cache_root().
+
+        Computed rather than approximated. The sandbox necessarily puts HOME *inside* the
+        test directory, so "the root is not under the test directory" is not the question --
+        the platform default legitimately is. Asserting the exact path is, and it is the only
+        form that holds on all three platforms.
+        """
+        if IS_WINDOWS:
+            return Path(env["LOCALAPPDATA"]) / "envy"
+        if platform.system() == "Darwin":
+            return Path(env["HOME"]) / "Library" / "Caches" / "envy"
+        return Path(env["XDG_CACHE_HOME"]) / "envy"
+
     def test_no_directives_resolves_shared(self):
         """Today's behavior for every existing manifest: the user-wide cache."""
         self.create_manifest("PACKAGES = {}\n")
         env = self._sandbox_env()
         root = Path(self._cache_root(self.test_dir, env))
-        self.assertFalse(
-            str(root).startswith(str(self.test_dir.resolve()) + os.sep),
-            f"expected a shared root, got {root}",
-        )
+
+        self.assertEqual(self._expected_shared_root(env).resolve(), root.resolve())
+        # And explicitly not the project-local tree, which is the thing it must not be.
+        self.assertNotEqual((self.test_dir / ".envy" / "cache").resolve(), root.resolve())
 
     def test_cache_local_implies_local_mode(self):
         """Naming a tree is asking for it; a second directive to activate it would be a trap."""
