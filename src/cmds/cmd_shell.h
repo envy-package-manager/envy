@@ -13,7 +13,7 @@ namespace envy {
 
 class cmd_shell : public cmd {
  public:
-  struct cfg : cmd_cfg<cmd_shell> {
+  struct cfg : cmd_cfg<cmd_shell>, cmd_project_anchor {
     std::string shell;  // "bash", "zsh", "fish", "powershell"
   };
 

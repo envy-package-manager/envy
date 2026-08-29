@@ -172,7 +172,9 @@ class TestEnvyInit(EnvyTestCase):
         data = json.loads(luarc.read_text())
 
         library_paths = data["workspace.library"]
-        self.assertEqual(3, len(library_paths))
+        # The project-local tree plus the three platform defaults: a committed .luarc.json
+        # has to resolve whether or not the reader ran `envy cache --local`.
+        self.assertEqual(4, len(library_paths))
         for entry in library_paths:
             self.assertIn("envy", entry)
 
@@ -600,6 +602,95 @@ class TestLatestFileGuarding(EnvyTestCase):
         # Corrupt current -> overwrite with binary's version
         self.assertEqual(self._version, latest.read_text())
 
+
+
+class TestEnvyInitGitignore(EnvyTestCase):
+    """`envy init` keeps envy's project-local state out of git.
+
+    Init-only by design: no later command touches a tracked file the user owns. And more
+    careful than the manifest/.luarc.json writers, which simply refuse to touch an existing
+    file -- appending has failure modes they do not.
+    """
+
+    _ENTRIES = (".envy/", ".envy-cache-*")
+
+    def setUp(self) -> None:
+        self._temp_dir = self.make_temp_dir("_temp_dir")
+        self._project_dir = self._temp_dir / "project"
+        self._project_dir.mkdir(parents=True)
+        # Only inside a repo: init into a plain directory has no business creating one.
+        (self._project_dir / ".git").mkdir()
+        self._envy = test_config.get_envy_production_executable()
+
+    def tearDown(self) -> None:
+        if hasattr(self, "_temp_dir") and self._temp_dir.exists():
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    def _init(self) -> subprocess.CompletedProcess[str]:
+        result = test_config.run(
+            [
+                str(self._envy),
+                "init",
+                str(self._project_dir),
+                str(self._project_dir / "tools"),
+            ],
+            capture_output=True,
+            text=True,
+            env=test_config.get_test_env(),
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        return result
+
+    @property
+    def _gitignore(self) -> Path:
+        return self._project_dir / ".gitignore"
+
+    def test_creates_gitignore_when_absent(self) -> None:
+        self._init()
+        lines = self._gitignore.read_text().splitlines()
+        for entry in self._ENTRIES:
+            self.assertIn(entry, lines)
+
+    def test_appends_to_an_existing_gitignore(self) -> None:
+        self._gitignore.write_text("out/\nbuild/\n")
+        self._init()
+        lines = self._gitignore.read_text().splitlines()
+        self.assertEqual(["out/", "build/", *self._ENTRIES], lines)
+
+    def test_appends_safely_when_the_file_lacks_a_trailing_newline(self) -> None:
+        """The corruption case: 'out/' and '.envy/' would fuse into one broken rule.
+
+        That silently stops ignoring two things, with no error anywhere.
+        """
+        self._gitignore.write_text("out/")
+        self._init()
+        lines = self._gitignore.read_text().splitlines()
+        self.assertEqual(["out/", *self._ENTRIES], lines)
+
+    def test_leaves_the_file_alone_when_already_ignored(self) -> None:
+        original = ".envy/\n.envy-cache-*\nout/\n"
+        self._gitignore.write_text(original)
+        self._init()
+        self.assertEqual(original, self._gitignore.read_text())
+
+    def test_recognizes_equivalent_spellings(self) -> None:
+        """git honors several forms for the same path; none should produce a duplicate."""
+        original = "/.envy/\n**/.envy-cache-*\n"
+        self._gitignore.write_text(original)
+        self._init()
+        self.assertEqual(original, self._gitignore.read_text())
+
+    def test_reinit_does_not_duplicate_entries(self) -> None:
+        self._init()
+        first = self._gitignore.read_text()
+        self._init()
+        self.assertEqual(first, self._gitignore.read_text())
+
+    def test_no_gitignore_outside_a_repo(self) -> None:
+        """init into a plain directory should not conjure a .gitignore."""
+        shutil.rmtree(self._project_dir / ".git")
+        self._init()
+        self.assertFalse(self._gitignore.exists())
 
 if __name__ == "__main__":
     unittest.main()

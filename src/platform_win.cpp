@@ -493,50 +493,6 @@ void mark_not_indexed(std::filesystem::path const &dir) {
   ::SetFileAttributesW(dir.c_str(), attrs | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
 }
 
-std::filesystem::path expand_path(std::string_view p) {
-  if (p.empty()) { return {}; }
-
-  std::string result;
-  size_t i{ 0 };
-
-  // Leading ~ → USERPROFILE
-  if (p[0] == '~' && (p.size() == 1 || p[1] == '/' || p[1] == '\\')) {
-    char const *home{ std::getenv("USERPROFILE") };
-    if (!home) { throw std::runtime_error("USERPROFILE not set for tilde expansion"); }
-    result = home;
-    i = 1;
-  }
-
-  while (i < p.size()) {
-    if (p[i] == '$') {
-      ++i;
-      bool const braced{ i < p.size() && p[i] == '{' };
-      if (braced) { ++i; }
-
-      size_t const start{ i };
-      while (i < p.size() &&
-             (std::isalnum(static_cast<unsigned char>(p[i])) || p[i] == '_')) {
-        ++i;
-      }
-
-      std::string var_name{ p.substr(start, i - start) };
-      if (braced && i < p.size() && p[i] == '}') { ++i; }
-
-      if (char const *val{ std::getenv(var_name.c_str()) }) {
-        result += val;
-      } else if (var_name == "HOME") {
-        // $HOME is common in cross-platform scripts; map to USERPROFILE on Windows
-        if (char const *profile{ std::getenv("USERPROFILE") }) { result += profile; }
-      }
-      // other undefined vars → empty string on Windows
-    } else {
-      result += p[i++];
-    }
-  }
-
-  return result;
-}
-
 int get_process_id() { return static_cast<int>(GetCurrentProcessId()); }
 
 std::vector<std::string> get_environment() {

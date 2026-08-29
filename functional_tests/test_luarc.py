@@ -97,7 +97,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         library = data["workspace.library"]
         envy_entries = _find_envy_entries(library)
         self.assertEqual(
-            3, len(envy_entries), f"Expected 3 canonical entries: {library}"
+            4, len(envy_entries), f"Expected 4 canonical entries: {library}"
         )
         for entry in envy_entries:
             self.assertIn(self._version, entry)
@@ -118,7 +118,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         library = data["workspace.library"]
         envy_entries = _find_envy_entries(library)
         self.assertEqual(
-            3, len(envy_entries), f"Expected 3 canonical entries: {library}"
+            4, len(envy_entries), f"Expected 4 canonical entries: {library}"
         )
         for entry in envy_entries:
             self.assertIn(self._version, entry)
@@ -165,7 +165,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         self.assertIn("/lib/b", library)
         self.assertIn("/lib/c", library)
         envy_entries = _find_envy_entries(library)
-        self.assertEqual(3, len(envy_entries))
+        self.assertEqual(4, len(envy_entries))
 
     # -- file absent --
 
@@ -235,7 +235,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         self.assertIn("/my/custom/lib", library)
         envy_entries = _find_envy_entries(library)
         self.assertEqual(
-            3, len(envy_entries), f"Envy entries should be re-added: {library}"
+            4, len(envy_entries), f"Envy entries should be re-added: {library}"
         )
         for entry in envy_entries:
             self.assertIn(self._version, entry)
@@ -257,7 +257,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         library = data["workspace.library"]
         envy_entries = _find_envy_entries(library)
         self.assertEqual(
-            3, len(envy_entries), f"Envy entries should be re-added: {library}"
+            4, len(envy_entries), f"Envy entries should be re-added: {library}"
         )
 
 

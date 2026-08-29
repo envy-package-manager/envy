@@ -182,8 +182,8 @@ TEST_CASE("manifest::discover carries the manifest's bytes and directives") {
   REQUIRE(result.has_value());
   REQUIRE(result->meta.version.has_value());
   CHECK(*result->meta.version == "1.2.3");
-  REQUIRE(result->meta.cache_for_platform().has_value());
-  CHECK(*result->meta.cache_for_platform() == "relcache");
+  REQUIRE(result->meta.cache_local.has_value());
+  CHECK(*result->meta.cache_local == "relcache");
   // The bytes come back with the directives, so loading them into Lua costs no second
   // read.
   CHECK(result->content == envy::util_load_file(result->path));
@@ -194,13 +194,16 @@ TEST_CASE("manifest::discover carries the manifest's bytes and directives") {
 TEST_CASE("parse_envy_meta ignores directives below the manifest's first code line") {
   auto const meta{ envy::parse_envy_meta(R"(-- @envy version "1.2.3"
 PACKAGES = {}
--- @envy cache-posix "too-late"
--- @envy cache-win "too-late"
+-- @envy cache-local "too-late"
+-- @envy cache-mode "local"
 )") };
 
   REQUIRE(meta.version.has_value());
   CHECK(*meta.version == "1.2.3");
-  CHECK_FALSE(meta.cache_for_platform().has_value());
+  // Below the first code line these are not directives at all -- which is also why the
+  // removed cache-posix/cache-win keys down there do not throw.
+  CHECK_FALSE(meta.cache_local.has_value());
+  CHECK_FALSE(meta.declared_cache_mode.has_value());
 }
 
 // The six cases below fix where the header ends. Each has a twin in
@@ -951,26 +954,30 @@ PACKAGES = {}
 
   REQUIRE(directives.version.has_value());
   CHECK(*directives.version == "1.2.3");
-  CHECK_FALSE(directives.cache_posix.has_value());
-  CHECK_FALSE(directives.cache_win.has_value());
+  CHECK_FALSE(directives.cache_local.has_value());
+  CHECK_FALSE(directives.declared_cache_mode.has_value());
+  CHECK_FALSE(directives.state_dir.has_value());
   CHECK_FALSE(directives.mirror.has_value());
 }
 
 TEST_CASE("parse_envy_meta extracts all directives") {
   auto directives{ envy::parse_envy_meta(R"(
 -- @envy version "2.0.0"
--- @envy cache-posix "/opt/envy-cache"
--- @envy cache-win "C:\opt\envy-cache"
+-- @envy cache-local "out/.envy"
+-- @envy cache-mode "local"
+-- @envy state-dir "out/state"
 -- @envy mirror "https://internal.corp/releases"
 PACKAGES = {}
 )") };
 
   REQUIRE(directives.version.has_value());
   CHECK(*directives.version == "2.0.0");
-  REQUIRE(directives.cache_posix.has_value());
-  CHECK(*directives.cache_posix == "/opt/envy-cache");
-  REQUIRE(directives.cache_win.has_value());
-  CHECK(*directives.cache_win == "C:\\opt\\envy-cache");
+  REQUIRE(directives.cache_local.has_value());
+  CHECK(*directives.cache_local == "out/.envy");
+  REQUIRE(directives.declared_cache_mode.has_value());
+  CHECK(*directives.declared_cache_mode == envy::cache_mode::LOCAL);
+  REQUIRE(directives.state_dir.has_value());
+  CHECK(*directives.state_dir == "out/state");
   REQUIRE(directives.mirror.has_value());
   CHECK(*directives.mirror == "https://internal.corp/releases");
 }
@@ -987,12 +994,12 @@ PACKAGES = {}
 
 TEST_CASE("parse_envy_meta handles escaped backslash") {
   auto directives{ envy::parse_envy_meta(R"(
--- @envy cache-win "C:\\Users\\test\\cache"
+-- @envy state-dir "out\\state"
 -- @envy version "1.0.0-with\\backslash"
 PACKAGES = {}
 )") };
-  REQUIRE(directives.cache_win.has_value());
-  CHECK(*directives.cache_win == "C:\\Users\\test\\cache");
+  REQUIRE(directives.state_dir.has_value());
+  CHECK(*directives.state_dir == "out\\state");
   REQUIRE(directives.version.has_value());
   CHECK(*directives.version == "1.0.0-with\\backslash");
 }
@@ -1014,24 +1021,25 @@ PACKAGES = {}
 )") };
 
   CHECK_FALSE(directives.version.has_value());
-  CHECK_FALSE(directives.cache_posix.has_value());
-  CHECK_FALSE(directives.cache_win.has_value());
+  CHECK_FALSE(directives.cache_local.has_value());
+  CHECK_FALSE(directives.declared_cache_mode.has_value());
+  CHECK_FALSE(directives.state_dir.has_value());
   CHECK_FALSE(directives.mirror.has_value());
 }
 
 TEST_CASE("parse_envy_meta handles whitespace variants") {
   auto directives{ envy::parse_envy_meta(
       "--   @envy   version   \"1.0.0\"\n"
-      "--\t@envy\tcache-win\t\"C:\\path\"\n"
-      "--\t@envy\tcache-posix\t\"/path\"\n"
+      "--\t@envy\tcache-local\t\"out/.envy\"\n"
+      "--\t@envy\tcache-mode\t\"shared\"\n"
       "PACKAGES = {}\n") };
 
   REQUIRE(directives.version.has_value());
   CHECK(*directives.version == "1.0.0");
-  REQUIRE(directives.cache_win.has_value());
-  CHECK(*directives.cache_win == "C:\\path");
-  REQUIRE(directives.cache_posix.has_value());
-  CHECK(*directives.cache_posix == "/path");
+  REQUIRE(directives.cache_local.has_value());
+  CHECK(*directives.cache_local == "out/.envy");
+  REQUIRE(directives.declared_cache_mode.has_value());
+  CHECK(*directives.declared_cache_mode == envy::cache_mode::SHARED);
 }
 
 TEST_CASE("parse_envy_meta finds directives anywhere in file") {
@@ -1063,8 +1071,7 @@ TEST_CASE("manifest::load populates directives field") {
   char const *script{ R"(
 -- @envy version "1.2.3"
 -- @envy bin-dir "tools"
--- @envy cache-posix "/custom/cache"
--- @envy cache-win "C:\custom\cache"
+-- @envy cache-local "out/.envy"
 PACKAGES = {}
 )" };
 
@@ -1074,10 +1081,8 @@ PACKAGES = {}
   CHECK(*m->meta.version == "1.2.3");
   REQUIRE(m->meta.bin.has_value());
   CHECK(*m->meta.bin == "tools");
-  REQUIRE(m->meta.cache_posix.has_value());
-  CHECK(*m->meta.cache_posix == "/custom/cache");
-  REQUIRE(m->meta.cache_win.has_value());
-  CHECK(*m->meta.cache_win == "C:\\custom\\cache");
+  REQUIRE(m->meta.cache_local.has_value());
+  CHECK(*m->meta.cache_local == "out/.envy");
   CHECK_FALSE(m->meta.mirror.has_value());
 }
 

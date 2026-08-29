@@ -2,7 +2,7 @@
 rem envy-managed schema "@@ENVY_PRODUCT_SCRIPT_VERSION@@"
 rem setlocal, not bare sets: a .bat without it mutates the caller's own environment. PATH
 rem would grow a copy of this bin dir per invocation, and a sibling product invoked through
-rem that PATH would inherit this script's PRODUCT_PATH -- passing the guard below and
+rem that PATH would inherit this script's product path -- passing the guard below and
 rem re-running *this* payload, forever. Plain, not EnableDelayedExpansion: a product path
 rem containing '!' must survive.
 setlocal
@@ -17,10 +17,14 @@ if defined ENVY_PROJECT_ROOT_HOP (
 )
 rem The sibling launcher injects --project with this directory, so envy resolves the
 rem project this script was deployed into, not one rediscovered from the caller's CWD.
-for /f "delims=" %%i in ('call "%~dp0envy.bat" product "@@PRODUCT_NAME@@"') do set "PRODUCT_PATH=%%i"
-if not defined PRODUCT_PATH (
+rem Cleared first: `for /f` sets nothing when the command produces no output, so without
+rem this the guard below would pass on a value inherited from an ancestor product script --
+rem children see this scope, setlocal only walls off the caller -- and run that payload.
+set "ENVY_PRODUCT_PATH="
+for /f "delims=" %%i in ('call "%~dp0envy.bat" product "@@PRODUCT_NAME@@"') do set "ENVY_PRODUCT_PATH=%%i"
+if not defined ENVY_PRODUCT_PATH (
     echo envy: failed to resolve product '@@PRODUCT_NAME@@' 1>&2
     exit /b 1
 )
-call "%PRODUCT_PATH%" %*
+call "%ENVY_PRODUCT_PATH%" %*
 exit /b %ERRORLEVEL%

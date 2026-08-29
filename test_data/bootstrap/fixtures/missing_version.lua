@@ -1,5 +1,5 @@
 -- This manifest has no @envy version directive
--- @envy cache-posix "/custom/cache"
+-- @envy cache-local "custom/cache"
 
 PACKAGES = {
     "local.example@v1",

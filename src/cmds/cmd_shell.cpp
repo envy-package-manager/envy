@@ -1,5 +1,7 @@
 #include "cmd_shell.h"
 
+#include "manifest.h"
+
 #include "cache.h"
 #include "cmd_init.h"
 #include "tui.h"
@@ -41,8 +43,35 @@ shell_info const *find_shell(std::string const &name) {
   return nullptr;
 }
 
-bool is_custom_cache(std::optional<fs::path> const &cli_cache_root) {
-  return cli_cache_root.has_value();
+// Is the hook somewhere other than the user-wide cache? A project-local tree is the case
+// that most needs the warning, since `rm -rf` on the build root takes the hooks with it.
+//
+// Keyed on the resolved root, not on which tier decided: `@envy cache-mode "shared"` and a
+// `--shared` marker both resolve to the plain platform default while reporting a
+// non-DEFAULT tier, and warning that *that* cache is easily lost is just wrong.
+bool is_custom_cache(cache_root_resolution const &resolved) {
+  return resolved.mode == cache_mode::LOCAL ||
+         resolved.tier == cache_root_tier::CLI_OVERRIDE;
+}
+
+// Same resolution every other command performs, so `envy shell` names the tree that
+// self-deploy actually wrote its hooks into. Built manifest-blind, this reported the
+// platform default and then failed to find a hook that was sitting in the local tree.
+cache_root_resolution resolve_for_shell(std::optional<fs::path> const &cli_cache_root,
+                                        std::optional<fs::path> const &project_dir) {
+  envy_meta meta;
+  fs::path manifest_dir;
+  // Skipped under an override, which already decides the root: discover() parses
+  // directives and throws, so reading a manifest that cannot change the answer would let a
+  // bad directive above the cwd break `envy shell --cache-root ...`.
+  if (!cli_cache_root) {
+    if (auto const found{
+            manifest::discover(false, manifest::discovery_start_dir(project_dir)) }) {
+      meta = found->meta;
+      manifest_dir = found->path.parent_path();
+    }
+  }
+  return resolve_cache_root(meta.cache_request(cli_cache_root, manifest_dir));
 }
 
 }  // namespace
@@ -68,7 +97,8 @@ void cmd_shell::execute() {
                              "'. Use: bash, zsh, fish, powershell");
   }
 
-  auto c{ std::make_unique<cache>(cli_cache_root_) };
+  auto const resolved{ resolve_for_shell(cli_cache_root_, cfg_.project_dir) };
+  auto c{ std::make_unique<cache>(resolved.root) };
 
   fs::path const hook_path{ c->root() / "shell" / ("hook." + std::string{ si->ext }) };
   if (!fs::exists(hook_path)) {
@@ -105,7 +135,7 @@ void cmd_shell::execute() {
   tui::info("  %s", source_line.c_str());
   tui::info("");
 
-  if (is_custom_cache(cli_cache_root_)) {
+  if (is_custom_cache(resolved)) {
     tui::warn("Hook files are stored in cache at %s", c->root().string().c_str());
     tui::warn("Moving or deleting this cache will break shell integration.");
   }

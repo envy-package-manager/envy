@@ -243,13 +243,12 @@ class TestAnchoredCommands(_AnchorTestBase):
         )
 
     def test_cache_anchors_on_project(self):
-        """`envy cache` reads '@envy cache-*' out of the anchored manifest's text."""
+        """`envy cache` reads the cache directives out of the anchored manifest's text."""
         b = self.tree / "cachey"
         (b / "tools").mkdir(parents=True)
         (b / "envy.lua").write_text(
             '-- @envy bin "tools"\n'
-            '-- @envy cache-posix "local-cache"\n'
-            '-- @envy cache-win "local-cache"\n'
+            '-- @envy cache-local "local-cache"\n'
             "PACKAGES = {}\n",
             encoding="utf-8",
         )
@@ -637,13 +636,16 @@ class TestWindowsProductScript(_AnchorTestBase):
         )
         self.assertIn('set "PATH=%~dp0.;%PATH%"', script)
         self.assertIn('call "%~dp0envy.bat" product "tool"', script)
-        self.assertIn("if not defined PRODUCT_PATH", script)
+        self.assertIn("if not defined ENVY_PRODUCT_PATH", script)
+        # Cleared before the `for /f`, so the guard tests what this invocation resolved
+        # rather than a value inherited from an ancestor product script.
+        self.assertIn('set "ENVY_PRODUCT_PATH="', script)
 
     def test_bat_scopes_its_environment_writes(self):
-        """Without setlocal the PATH and PRODUCT_PATH writes escape into the caller.
+        """Without setlocal the PATH and ENVY_PRODUCT_PATH writes escape into the caller.
 
         PATH would gain a copy of the bin dir per invocation, and a sibling product
-        reached through that PATH would inherit PRODUCT_PATH -- passing the guard and
+        reached through that PATH would inherit ENVY_PRODUCT_PATH -- passing the guard and
         re-running the first script's payload forever.
         """
         p = self.project("winny", '{ tool = "W-tool" }')

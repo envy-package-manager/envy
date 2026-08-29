@@ -1,6 +1,7 @@
 #include "aws_util.h"
 #include "cli.h"
 #include "libgit2_util.h"
+#include "manifest.h"
 #include "reexec.h"
 #include "self_deploy.h"
 #include "shell.h"
@@ -8,6 +9,7 @@
 #include "tui.h"
 
 #include <clocale>
+#include <concepts>
 #include <cstdlib>
 #include <variant>
 
@@ -37,13 +39,64 @@ int main(int argc, char *argv[]) {
 
   if (!args.cmd_cfg.has_value()) { return EXIT_FAILURE; }
 
-  envy::self_deploy::ensure(args.cache_root, std::nullopt, {});
-
-  auto cmd{ std::visit(
-      [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },
-      *args.cmd_cfg) };
-
+  // Inside the try: this reads and parses a manifest, so a bad directive throws here, and
+  // outside it that surfaced as `libc++abi: terminating due to uncaught exception` instead
+  // of envy's own error line.
   try {
+    // Manifest-aware, like every other path into the cache. Built from the override alone,
+    // this deployed envy into the user-wide tree while the command it was about to run
+    // used the project's own -- two copies, and `envy shell` pointing at the wrong one.
+    // Commands with no manifest (init, version) discover nothing and land on the default,
+    // as before.
+    envy::self_deploy::ensure([&] {
+      // Best-effort, and deliberately silent on failure. Both halves throw: discovery
+      // parses directives, and resolution rejects states such as both override markers
+      // existing at once. This step runs for *every* command, including ones that never
+      // load a manifest, so letting either escape meant `envy --version` and `envy init`
+      // failed before doing anything when run anywhere inside a project with a bad
+      // directive -- precisely what a migration leaves behind -- and that `envy cache
+      // --local`, the command best placed to repair a bad marker pair, was blocked by the
+      // very state it fixes. A command that needs the manifest re-resolves and reports the
+      // error properly; the rest land on the default root, exactly as they did before this
+      // step became manifest-aware.
+      try {
+        envy::envy_meta meta;
+        std::filesystem::path manifest_dir;
+        // Skipped under an override, which already decides the root: discovery and
+        // directive parsing both throw, so reading a manifest that cannot change the
+        // answer would let any broken envy.lua in an ancestor break every command run with
+        // --cache-root.
+        if (!args.cache_root) {
+          // The same anchor the command itself will use, pulled off whichever config was
+          // selected: resolving this pre-step from the CWD while the command resolved from
+          // its bin dir would deploy envy into one tree and its packages into another.
+          std::optional<std::filesystem::path> project_dir;
+          std::visit(
+              [&](auto const &c) {
+                if constexpr (std::derived_from<std::decay_t<decltype(c)>,
+                                                envy::cmd_project_anchor>) {
+                  project_dir = c.project_dir;
+                }
+              },
+              *args.cmd_cfg);
+          if (auto const found{ envy::manifest::discover(
+                  false,
+                  envy::manifest::discovery_start_dir(project_dir)) }) {
+            meta = found->meta;
+            manifest_dir = found->path.parent_path();
+          }
+        }
+        return envy::resolve_cache_root(meta.cache_request(args.cache_root, manifest_dir))
+            .root;
+      } catch (std::exception const &) {
+        return envy::resolve_cache_root(envy::cache_root_request{}).root;
+      }
+    }());
+
+    auto cmd{ std::visit(
+        [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },
+        *args.cmd_cfg) };
+
     cmd->execute();
   } catch (envy::reexec_request const &rr) {
     // argv belongs to this frame, so this is where a re-exec can happen at all.

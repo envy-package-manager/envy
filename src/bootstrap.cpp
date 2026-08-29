@@ -55,6 +55,7 @@ std::string stamp_bootstrap(platform_id platform) {
   // in envy_release.h.
   replace_all(result, "@@DOWNLOAD_URL@@", kEnvyReleaseDownloadUrl);
   replace_all(result, "@@LATEST_URL@@", kEnvyReleaseLatestUrl);
+  replace_all(result, "@@MIN_DIRECTIVE_VERSION@@", kEnvyMinDirectiveVersion);
   return result;
 }
 
