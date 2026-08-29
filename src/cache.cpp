@@ -190,21 +190,25 @@ path root_in_mode(path const &local_tree, cache_mode mode) {
 // must already be absolute: the binary used to absolutize it against its own cwd while
 // both launchers took it verbatim, so a relative value named two different trees in one
 // invocation.
-std::optional<path> checked_override(cache_root_request const &req) {
+//
+// SHARED whatever the project declares, because the tree it names is the user's own. Every
+// consumer keyed on the mode has to see that -- shell hooks especially, which a LOCAL mode
+// suppresses. One definition, so no caller can pair an override root with another mode.
+std::optional<cache_root_resolution> override_resolution(cache_root_request const &req) {
   if (!req.cli_override) { return std::nullopt; }
   if (!req.cli_override->is_absolute()) {
     throw std::runtime_error("cache root override must be an absolute path: '" +
                              req.cli_override->string() + "'");
   }
-  return normalized(*req.cli_override);
+  return cache_root_resolution{ normalized(*req.cli_override),
+                                cache_mode::SHARED,
+                                cache_root_tier::CLI_OVERRIDE };
 }
 
 }  // namespace
 
 cache_root_resolution resolve_cache_root(cache_root_request const &req) {
-  if (auto ovr{ checked_override(req) }) {
-    return { std::move(*ovr), cache_mode::SHARED, cache_root_tier::CLI_OVERRIDE };
-  }
+  if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }
 
   auto const trees{ resolve_project_trees(req) };
 
@@ -229,15 +233,24 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
   return { root_in_mode(trees.local, mode), mode, tier };
 }
 
-path cache_root_for_mode(cache_root_request const &req, cache_mode mode) {
-  if (auto ovr{ checked_override(req) }) { return std::move(*ovr); }
-  return root_in_mode(resolve_project_trees(req).local, mode);
+cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode) {
+  // `mode` is what the caller is about to record; an override outranks it and reports
+  // SHARED, exactly as it does for every other resolution.
+  if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }
+
+  // MARKER is the tier this is standing in for: the caller is about to write one, and no
+  // other tier can produce a mode the manifest does not already imply.
+  return { root_in_mode(resolve_project_trees(req).local, mode),
+           mode,
+           cache_root_tier::MARKER };
 }
 
 std::optional<path> resolve_user_wide_cache_root(std::optional<path> const &cli_override) {
   // Same absoluteness rule and the same normalization as every other tier, from the same
   // function: an override rejected here but accepted there would be two answers again.
-  if (auto ovr{ checked_override({ .cli_override = cli_override }) }) { return ovr; }
+  if (auto ovr{ override_resolution({ .cli_override = cli_override }) }) {
+    return std::move(ovr->root);
+  }
 
   // nullopt, not a throw: a HOME-less box is a supported place to run a project whose
   // cache is entirely inside its own tree, and every caller of this treats "no user-wide

@@ -255,6 +255,38 @@ class TestCacheUsage(EnvyTestCase):
         self.assertIn("Moving or deleting",
                       run_shell({"ENVY_CACHE_ROOT": str(override)}))
 
+    def test_cache_local_under_an_override_still_populates_that_override(self):
+        """`envy cache --local` deploys into the mode it is establishing -- unless overridden.
+
+        An override names the user's own tree however the project resolves, so the deploy
+        has to report SHARED there. Pairing the override's root with the *requested* mode
+        would hand self-deploy a LOCAL-mode override root and skip the shell hooks every
+        other command run under the same override writes.
+        """
+        project = self.make_temp_dir("overrideproj")
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        (project / "envy.lua").write_bytes(b'-- @envy bin "bin"\nPACKAGES = {}\n')
+        override = project / "explicit-cache"
+        env = test_config.sandbox_home_env(project / "home")
+        env["ENVY_CACHE_ROOT"] = str(override)
+
+        result = test_config.run(
+            [str(self.envy), "cache", "--local"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertTrue((project / ".envy-cache-local").is_file(), "marker not recorded")
+        self.assertTrue(
+            (override / "shell" / "hook.zsh").is_file(),
+            f"override tree got no hooks: {sorted(override.rglob('*'))}",
+        )
+        # And the user's real platform default is still untouched.
+        self.assertFalse((Path(env["HOME"]) / "Library").exists())
+
     def test_non_package_directories_are_reported(self):
         specs = self.cache_root / "specs"
         specs.mkdir(parents=True)

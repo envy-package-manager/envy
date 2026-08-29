@@ -71,12 +71,17 @@ struct cache_root_resolution {
 // `C:\proj\out/.envy`, which no launcher would ever print.
 cache_root_resolution resolve_cache_root(cache_root_request const &req);
 
-// The root this project's cache would have in `mode`, with the tiers that *decide* the
-// mode skipped.  An override still wins, since it names one tree outright.  `envy cache
-// --local/--shared` self-deploys before its own marker is written, so it has to name the
-// tree it is about to establish: deploying into the current one drops a binary in the tree
-// the user is abandoning.
-std::filesystem::path cache_root_for_mode(cache_root_request const &req, cache_mode mode);
+// Where this project's cache would be in `mode`, with the tiers that *decide* the mode
+// skipped.  `envy cache --local/--shared` self-deploys before its own marker is written,
+// so it has to name the tree it is about to establish: deploying into the current one
+// drops a binary in the tree the user is abandoning.
+//
+// An override still wins, and still reports SHARED/CLI_OVERRIDE rather than `mode` -- it
+// names one tree outright, and that tree is the user's own however this project resolves.
+// Returning the whole resolution rather than a path is what keeps that honest: a caller
+// handed only a path would pair it with the mode it asked for, and a LOCAL-mode override
+// root would then be skipped by everything keyed on the mode, shell hooks included.
+cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode);
 
 // The user's own cache root -- the override, else the platform default; nullopt when
 // neither is determinable (no HOME/XDG_CACHE_HOME/LOCALAPPDATA).  A project on a local

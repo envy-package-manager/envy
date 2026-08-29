@@ -800,20 +800,31 @@ TEST_CASE("cache_root_for_mode names the tree a mode would use, not the recorded
   cache_root_request const req{ .cache_local = "out/.envy",
                                 .manifest_dir = kAbsRoot / "repo" };
   CHECK(envy::resolve_cache_root(req).mode == cache_mode::LOCAL);
-  CHECK(envy::cache_root_for_mode(req, cache_mode::LOCAL) ==
-        kAbsRoot / "repo" / "out" / ".envy");
-  CHECK(envy::cache_root_for_mode(req, cache_mode::SHARED) !=
-        kAbsRoot / "repo" / "out" / ".envy");
+
+  auto const local{ envy::cache_root_for_mode(req, cache_mode::LOCAL) };
+  CHECK(local.root == kAbsRoot / "repo" / "out" / ".envy");
+  CHECK(local.mode == cache_mode::LOCAL);
+
+  auto const shared{ envy::cache_root_for_mode(req, cache_mode::SHARED) };
+  CHECK(shared.root != kAbsRoot / "repo" / "out" / ".envy");
+  CHECK(shared.mode == cache_mode::SHARED);
 }
 
-TEST_CASE("cache_root_for_mode still lets an override win") {
+TEST_CASE("cache_root_for_mode: an override wins, and stays a shared tree") {
+  // The mode must follow the tier, not the request. An override names the user's own tree
+  // however this project resolves, so reporting the *requested* mode there would hand
+  // self-deploy a LOCAL-mode override root and suppress the shell hooks that every other
+  // command run under the same override writes.
   cache_root_request const req{ .cli_override = kAbsRoot / "cli" / "override",
                                 .cache_local = "out/.envy",
                                 .manifest_dir = kAbsRoot / "repo" };
-  CHECK(envy::cache_root_for_mode(req, cache_mode::LOCAL) ==
-        kAbsRoot / "cli" / "override");
-  CHECK(envy::cache_root_for_mode(req, cache_mode::SHARED) ==
-        kAbsRoot / "cli" / "override");
+
+  for (auto const requested : { cache_mode::LOCAL, cache_mode::SHARED }) {
+    auto const r{ envy::cache_root_for_mode(req, requested) };
+    CHECK(r.root == kAbsRoot / "cli" / "override");
+    CHECK(r.mode == cache_mode::SHARED);
+    CHECK(r.tier == cache_root_tier::CLI_OVERRIDE);
+  }
 }
 
 TEST_CASE("resolve_user_wide_cache_root: an override is the user's root") {
