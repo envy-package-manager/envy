@@ -237,6 +237,14 @@ bool file_exists(std::filesystem::path const &path) {
   return std::filesystem::exists(path);
 }
 
+bool can_execute_file(std::filesystem::path const &path) {
+  std::error_code ec;
+  // Size before access(): a zero-length file passes X_OK and then fails at exec.
+  return std::filesystem::is_regular_file(path, ec) &&
+         std::filesystem::file_size(path, ec) > 0 && !ec &&
+         ::access(path.c_str(), X_OK) == 0;
+}
+
 namespace {
 
 dir_scan_string dir_join(dir_scan_string const &dir, char const *name) {

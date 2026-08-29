@@ -190,7 +190,10 @@ void reexec_if_needed(envy_meta const &meta,
                               resolve_user_wide_cache_root(std::nullopt),
                               version,
                               meta.sha256sums.has_value())) {
-    if (std::filesystem::is_regular_file(candidate)) {
+    // The launchers' criteria, not merely exists(): a directory or a file truncated to
+    // zero would satisfy exists() and then fail inside exec_process, which exits rather
+    // than falling through to the download below.
+    if (platform::can_execute_file(candidate)) {
       throw reexec_request{ candidate, std::move(drop_options) };
     }
   }

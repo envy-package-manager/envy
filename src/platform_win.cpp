@@ -243,6 +243,14 @@ bool file_exists(std::filesystem::path const &path) {
   return false;
 }
 
+bool can_execute_file(std::filesystem::path const &path) {
+  // No execute bit on Windows: a regular, non-empty file is as far as a check can go
+  // without launching it. envy.bat's :usable_envy stops at the same place.
+  std::error_code ec;
+  return std::filesystem::is_regular_file(path, ec) &&
+         std::filesystem::file_size(path, ec) > 0 && !ec;
+}
+
 namespace {
 
 constexpr wchar_t kLongPrefix[]{ LR"(\\?\)" };

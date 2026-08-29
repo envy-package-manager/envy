@@ -294,16 +294,18 @@ def sandbox_user_wide_root(env: dict[str, str]) -> Path:
     return Path(env["XDG_CACHE_HOME"]) / "envy"
 
 
-def seed_cached_envy(cache_root: Path, version: str) -> Path:
-    """Put the shipped binary at <cache_root>/envy/<version>/, as self-deploy would.
+def seed_cached_envy(cache_root: Path, version: str, source: Path | None = None) -> Path:
+    """Put an envy binary at <cache_root>/envy/<version>/, as self-deploy would.
 
     The launchers and reexec look here before downloading, so this is how a test says
-    "the user already has this version" without running a download to create it.
+    "the user already has this version" without running a download to create it. `source`
+    defaults to the shipped binary; re-exec tests pass the functional tester instead,
+    because that is the artifact they are re-exec'ing into.
     """
     version_dir = cache_root / "envy" / version
     version_dir.mkdir(parents=True, exist_ok=True)
     binary = version_dir / ("envy.exe" if sys.platform == "win32" else "envy")
-    shutil.copy2(get_envy_production_executable(), binary)
+    shutil.copy2(source or get_envy_production_executable(), binary)
     if sys.platform != "win32":
         binary.chmod(binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return binary
