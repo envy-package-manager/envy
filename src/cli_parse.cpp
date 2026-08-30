@@ -1,7 +1,9 @@
 #include "cli_parse.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <system_error>
 
@@ -82,9 +84,15 @@ bool parse_bool(std::string_view v, bool &out) {
 
 bool parse_int(std::string_view v, int &out) {
   std::string const s{ v };
+  if (s.empty()) { return false; }
+  errno = 0;
   char *end{};
   long const n{ std::strtol(s.c_str(), &end, 10) };
-  if (s.empty() || *end != '\0') { return false; }
+  // strtol widens to long, so out-of-int values would otherwise truncate silently.
+  if (*end != '\0' || errno == ERANGE || n < std::numeric_limits<int>::min() ||
+      n > std::numeric_limits<int>::max()) {
+    return false;
+  }
   out = static_cast<int>(n);
   return true;
 }
@@ -445,8 +453,9 @@ cli_parse_result cli_run(cli_cmd &root, int argc, char **argv) {
     ++i;
   }
 
-  // Everything below walks the chain the argv actually reached: root first, so a global
-  // option's environment default and exclusions are checked exactly once.
+  // Everything below walks the chain the argv actually reached, selected command up to
+  // the root, so a global option's environment default and exclusions are each visited
+  // exactly once. Order is immaterial: every option belongs to exactly one command.
   std::vector<cli_cmd *> chain;
   for (cli_cmd *c{ cur }; c; c = c->parent()) { chain.push_back(c); }
 

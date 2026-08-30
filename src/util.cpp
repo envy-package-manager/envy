@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -188,6 +189,14 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
 }
 
 std::string util_inflate_resource(gz_resource const &res) {
+  // zlib counts in 32-bit uInt. Every caller passes a build-time constant far below that,
+  // so exceeding it means the generator is broken, not that the input is legitimately big.
+  constexpr size_t kZlibMax{ std::numeric_limits<uInt>::max() };
+  if (res.size > kZlibMax || res.inflated_size > kZlibMax) {
+    throw std::runtime_error("util_inflate_resource: resource exceeds zlib's 32-bit "
+                             "limit");
+  }
+
   z_stream strm{};
   strm.next_in = const_cast<Bytef *>(res.data);
   strm.avail_in = static_cast<uInt>(res.size);
@@ -203,8 +212,15 @@ std::string util_inflate_resource(gz_resource const &res) {
   int ret{ Z_OK };
   while (ret != Z_STREAM_END) {
     ret = inflate(&strm, Z_NO_FLUSH);
+    // Z_BUF_ERROR with no room left means "grow me"; with room left it means the stream
+    // ended early, which is corruption and falls through to the throw below.
     if (ret == Z_BUF_ERROR && strm.avail_out == 0) {
       size_t const grown{ out.size() };
+      if (grown > kZlibMax / 2) {
+        inflateEnd(&strm);
+        throw std::runtime_error("util_inflate_resource: inflated size exceeds zlib's "
+                                 "32-bit limit");
+      }
       out.resize(grown * 2);
       strm.next_out = reinterpret_cast<Bytef *>(out.data()) + grown;
       strm.avail_out = static_cast<uInt>(grown);
@@ -214,8 +230,13 @@ std::string util_inflate_resource(gz_resource const &res) {
     }
   }
 
-  out.resize(strm.total_out);
   inflateEnd(&strm);
+  // A declared size that disagrees with the stream means the two halves of the embedding
+  // disagree; surface that rather than silently handing back a truncated resource.
+  if (res.inflated_size && strm.total_out != res.inflated_size) {
+    throw std::runtime_error("util_inflate_resource: inflated size mismatch");
+  }
+  out.resize(strm.total_out);
   return out;
 }
 
