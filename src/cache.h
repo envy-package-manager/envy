@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace envy {
 
@@ -69,6 +70,23 @@ struct cache_root_resolution {
 // directory.  Normalization is not cosmetic: `operator/` leaves `C:\proj` / `out/.envy` as
 // `C:\proj\out/.envy`, which no launcher would ever print.
 cache_root_resolution resolve_cache_root(cache_root_request const &req);
+
+// This project's cache in `mode`, skipping the tiers that decide it: `envy cache --local`
+// self-deploys before its marker exists. An override still wins, and still reports SHARED.
+cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode);
+
+// The override, else the platform default; nullopt when neither is determinable. A local
+// project may *read* this tree for a binary to run, but never writes to it.
+std::optional<std::filesystem::path> resolve_user_wide_cache_root(
+    std::optional<std::filesystem::path> const &cli_override);
+
+// Paths to try, in order, for `version`'s envy binary; pure, so the caller stats them. The
+// second is LOCAL-only and pin-free -- the fast path never re-hashes -- and never inverts.
+std::vector<std::filesystem::path> envy_binary_candidates(
+    cache_root_resolution const &resolved,
+    std::optional<std::filesystem::path> const &user_wide_root,
+    std::string_view version,
+    bool has_sums_pin);
 
 // Absolute path of the state dir holding the override markers, or nullopt when no
 // manifest is in hand.  Defaults to the manifest's own directory rather than to `.envy`:

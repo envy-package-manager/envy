@@ -37,10 +37,16 @@ void update_latest_if_newer(path const &envy_dir, std::string_view version) {
 }
 
 bool copy_binary(path const &src, path const &dst) {
+  std::error_code ec;
+
+  // A version dir that lost its envy.lua asks for a deploy whose source is the
+  // destination; the rename would overwrite a running image, fatal on Windows.
+  if (std::filesystem::equivalent(src, dst, ec)) { return true; }  // false when dst absent
+  ec.clear();
+
   // Atomic deploy: copy to temp, set permissions, then rename. Avoids ETXTBSY on
   // Linux when another process is executing the destination binary concurrently.
   auto const tmp{ dst.parent_path() / (".envy-tmp-" + dst.filename().string()) };
-  std::error_code ec;
 
   std::filesystem::copy_file(src,
                              tmp,
@@ -76,7 +82,7 @@ bool copy_binary(path const &src, path const &dst) {
 
 }  // namespace
 
-std::unique_ptr<cache> self_deploy::ensure(path const &root) {
+std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
   auto c{ std::make_unique<cache>(root) };
 
   try {
@@ -92,7 +98,10 @@ std::unique_ptr<cache> self_deploy::ensure(path const &root) {
     }
 
     update_latest_if_newer(result.envy_dir.parent_path(), ENVY_VERSION_STR);
-    shell_hooks::ensure(c->root());
+
+    // A copy here is never the one the profile sources, and writing the user-wide tree
+    // instead would break the promise a local cache makes. So neither; `envy shell` says.
+    if (mode != cache_mode::LOCAL) { shell_hooks::ensure(c->root()); }
   } catch (std::exception const &e) { tui::warn("self-deploy: failed: %s", e.what()); }
 
   return c;

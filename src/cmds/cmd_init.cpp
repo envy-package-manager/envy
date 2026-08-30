@@ -276,7 +276,7 @@ void cmd_init::execute() {
     // override or the platform default, and the empty manifest dir says as much.
     envy_meta const req_meta{ .version = cfg_.envy_version, .mirror = cfg_.mirror };
     reexec_if_needed(req_meta,
-                     resolve_cache_root(req_meta.cache_request(cli_cache_root_, {})).root,
+                     resolve_cache_root(req_meta.cache_request(cli_cache_root_, {})),
                      cfg_.project_dir,
                      { "--envy-version" });
     if (*cfg_.envy_version != ENVY_VERSION_STR) {  // no re-exec, or it landed elsewhere

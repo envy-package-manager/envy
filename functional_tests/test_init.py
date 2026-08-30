@@ -13,21 +13,6 @@ from . import test_config
 from .env import EnvyTestCase
 
 
-def _get_envy_version() -> str:
-    """Get the baked-in version from the envy binary."""
-    result = subprocess.run(
-        [str(test_config.get_envy_production_executable()), "version"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    # First line: "envy version X.Y.Z (...)"
-    for line in result.stderr.splitlines():
-        if line.startswith("envy version "):
-            return line.split()[2]
-    raise RuntimeError("Could not parse envy version from: " + result.stderr)
-
-
 class TestEnvyInit(EnvyTestCase):
     """Test the envy init command."""
 
@@ -74,7 +59,7 @@ class TestEnvyInit(EnvyTestCase):
         """
         import hashlib
 
-        version = _get_envy_version()
+        version = test_config.get_envy_version()
         mirror = self._temp_dir / "mirror"
         (mirror / f"v{version}").mkdir(parents=True, exist_ok=True)
         if body is None:
@@ -231,7 +216,7 @@ class TestEnvyInit(EnvyTestCase):
         manifest = (self._project_dir / "envy.lua").read_text()
         self.assertIn(f'-- @envy sha256sums "{expected}"', manifest)
         # The pin is meaningless without a pinned version, and the template stamps one.
-        self.assertIn(f'-- @envy version "{_get_envy_version()}"', manifest)
+        self.assertIn(f'-- @envy version "{test_config.get_envy_version()}"', manifest)
 
     def test_init_without_pin_sums_writes_no_directive(self) -> None:
         """Attestation is opt-in, and plain `envy init` must not need the network."""
@@ -553,7 +538,7 @@ class TestLatestFileGuarding(EnvyTestCase):
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
         self._envy = test_config.get_envy_production_executable()
-        self._version = _get_envy_version()
+        self._version = test_config.get_envy_version()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():

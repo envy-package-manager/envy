@@ -230,19 +230,7 @@ class TestReexecDownload(_ReexecTestBase):
     def test_cached_binary_reused_no_redownload(self) -> None:
         """Pre-populated cache should be used without downloading again."""
         self._setup_reexec_project("1.2.3")
-
-        # Pre-populate the cache with the test binary
-        cached_dir = self._cache_dir / "envy" / "1.2.3"
-        cached_dir.mkdir(parents=True)
-        cached_binary = cached_dir / _BINARY_NAME
-        shutil.copy2(self._envy, cached_binary)
-        if sys.platform != "win32":
-            cached_binary.chmod(
-                cached_binary.stat().st_mode
-                | stat.S_IXUSR
-                | stat.S_IXGRP
-                | stat.S_IXOTH
-            )
+        test_config.seed_cached_envy(self._cache_dir, "1.2.3", self._envy)
 
         # Delete the release archive so download would fail if attempted
         shutil.rmtree(self._releases_dir)
@@ -250,6 +238,31 @@ class TestReexecDownload(_ReexecTestBase):
         env = self._get_env(ENVY_TEST_SELF_VERSION="9.9.9")
         result = self._run_envy(["install"], cwd=self._project, env=env)
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+
+    def test_an_unusable_cached_binary_falls_through_to_the_download(self) -> None:
+        """`exists()` is too weak for a path about to be handed to exec.
+
+        A directory and a file truncated to zero both satisfy it, and exec_process then
+        fails and exits instead of falling back to the download that would have fixed it --
+        the same criteria the launchers apply before any envy binary exists to ask.
+        """
+        for label in ("directory", "empty-executable"):
+            with self.subTest(unusable=label):
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+                self._setup_reexec_project("1.2.3")
+
+                cached = self._cached_binary_path("1.2.3")
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                if label == "directory":
+                    cached.mkdir()
+                else:
+                    cached.write_bytes(b"")
+                    if sys.platform != "win32":
+                        cached.chmod(cached.stat().st_mode | stat.S_IXUSR)
+
+                env = self._get_env(ENVY_TEST_SELF_VERSION="9.9.9")
+                result = self._run_envy(["install"], cwd=self._project, env=env)
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
 
 
 class TestReexecAttestation(_ReexecTestBase):

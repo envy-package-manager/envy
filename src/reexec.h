@@ -24,10 +24,10 @@ struct reexec_request {
 // If version mismatch: downloads the correct envy, then throws reexec_request.
 // Returns normally if: no @envy version, version matches, dev build (0.0.0),
 // ENVY_REEXEC set, or ENVY_NO_REEXEC set.
-// `cache_root` is the already-resolved root, used to look for the requested version
-// already in cache before downloading it.
+// `resolved`'s mode and tier decide which trees may be searched before downloading, and a
+// MARKER tier is itself a reason to refuse a pre-0.2.0 downgrade.
 void reexec_if_needed(envy_meta const &meta,
-                      std::filesystem::path const &cache_root,
+                      cache_root_resolution const &resolved,
                       std::filesystem::path const &manifest_dir,
                       std::vector<std::string> drop_options = {});
 

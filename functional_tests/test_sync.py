@@ -590,7 +590,13 @@ PACKAGES = {{
         self.assertIn(b"\n", raw, "Product script has no line endings at all")
 
     def test_sync_platform_all_scripts_have_lf_line_endings(self):
-        """Both POSIX and Windows scripts use LF when deployed with --platform all."""
+        """Every deployed script uses LF -- except the one consumer that cannot read it.
+
+        envy.bat is CRLF because cmd.exe resolves `goto`/`call :label` by seeking, and
+        computes those offsets as if every line ended CRLF. On an LF-only batch the search
+        drifts a byte per line until it walks past the label, and the launcher then parses
+        no @envy directives at all. Product .bat wrappers carry no labels and stay LF.
+        """
         product_path = self.write_spec("product_provider", SPEC_PRODUCT_PROVIDER)
 
         manifest = self.create_manifest(f"""
@@ -603,13 +609,17 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
         bin_dir = self.test_dir / "envy-bin"
-        for name in ("tool", "tool.bat", "envy", "envy.bat"):
+        for name in ("tool", "tool.bat", "envy"):
             path = bin_dir / name
             self.assertTrue(path.exists(), f"{name} missing")
-            raw = path.read_bytes()
             self.assertNotIn(
-                b"\r", raw, f"{name} contains CR bytes (CRLF line endings)"
+                b"\r", path.read_bytes(), f"{name} contains CR bytes (CRLF line endings)"
             )
+
+        launcher = (bin_dir / "envy.bat").read_bytes()
+        self.assertTrue((bin_dir / "envy.bat").exists(), "envy.bat missing")
+        self.assertNotIn(b"\n", launcher.replace(b"\r\n", b""), "envy.bat has a bare LF")
+        self.assertIn(b"\r\n", launcher, "envy.bat is not CRLF")
 
     def test_sync_replaces_crlf_script_with_lf(self):
         """Deploy overwrites an existing CRLF envy-managed script with LF."""

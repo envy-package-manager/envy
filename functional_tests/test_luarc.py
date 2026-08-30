@@ -12,20 +12,6 @@ from . import test_config
 from .env import EnvyTestCase
 
 
-def _get_envy_version() -> str:
-    """Get the baked-in version from the envy binary."""
-    result = subprocess.run(
-        [str(test_config.get_envy_production_executable()), "version"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    for line in result.stderr.splitlines():
-        if line.startswith("envy version "):
-            return line.split()[2]
-    raise RuntimeError("Could not parse envy version from: " + result.stderr)
-
-
 _SEMVER_RE = re.compile(
     r"/envy/(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?)$"
 )
@@ -45,7 +31,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         self._bin_dir = self._temp_dir / "project" / "tools"
         self._cache_dir = self._temp_dir / "cache"
         self._envy = test_config.get_envy_production_executable()
-        self._version = _get_envy_version()
+        self._version = test_config.get_envy_version()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():

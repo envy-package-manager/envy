@@ -101,8 +101,7 @@ void cmd_run::execute() {
 
   reexec_if_needed(
       meta,
-      resolve_cache_root(meta.cache_request(cli_cache_root_, manifest_path.parent_path()))
-          .root,
+      resolve_cache_root(meta.cache_request(cli_cache_root_, manifest_path.parent_path())),
       manifest_path.parent_path());
 
   if (!meta.bin) {
