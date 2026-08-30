@@ -66,6 +66,10 @@ std::filesystem::path create_unique_temp_dir(std::string_view prefix);
 void flush_directory(std::filesystem::path const &dir);
 bool file_exists(std::filesystem::path const &path);
 
+// Regular, non-empty, and executable where that is a concept. `exists` accepts a directory
+// and a zero-length file, both of which fail at exec instead of falling through.
+bool can_execute_file(std::filesystem::path const &path);
+
 // One immediate child of a directory, as reported by the platform's native
 // enumeration (POSIX d_type, Windows file attributes).
 struct dir_entry {

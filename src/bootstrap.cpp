@@ -56,6 +56,10 @@ std::string stamp_bootstrap(platform_id platform) {
   replace_all(result, "@@DOWNLOAD_URL@@", kEnvyReleaseDownloadUrl);
   replace_all(result, "@@LATEST_URL@@", kEnvyReleaseLatestUrl);
   replace_all(result, "@@MIN_DIRECTIVE_VERSION@@", kEnvyMinDirectiveVersion);
+
+  // cmd.exe seeks `goto`/`call :label` by offsets that assume CRLF, so an LF batch drifts
+  // a byte per line until the search misses. Converted here, not in the repo.
+  if (platform == platform_id::WINDOWS) { replace_all(result, "\n", "\r\n"); }
   return result;
 }
 

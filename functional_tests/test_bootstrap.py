@@ -497,11 +497,12 @@ class BootstrapIntegrationTest(EnvyTestCase):
     def _write_verbatim(path: Path, text: str) -> Path:
         """Write LF-terminated text as bytes, defeating Python's newline translation.
 
-        `write_text` would emit CRLF on Windows. Neither envy nor a checked-out repo does:
-        `bootstrap_write_script` copies the embedded resource byte for byte (LF, per
-        cmake/EmbedResource.cmake's NORMALIZE_EOL), manifests are written by envy the same
-        way, and consumer repos carry `* -text` to keep git from touching either. Anything
-        cmd.exe or `for /f` does differently with LF has to be caught here or not at all.
+        `write_text` would emit CRLF on Windows. Neither envy nor a checked-out repo does
+        for a *manifest*: envy writes them byte for byte and consumer repos carry `* -text`
+        to keep git from touching them. Anything cmd.exe or `for /f` does differently with
+        LF has to be caught here or not at all.
+
+        The launchers are the exception -- see _stamp_bootstrap.
 
         The encoding is explicit for the same reason: this helper's contract is exact bytes.
         """
@@ -538,6 +539,10 @@ class BootstrapIntegrationTest(EnvyTestCase):
             content = content.replace(
                 "@@MIN_DIRECTIVE_VERSION@@", min_directive_version
             )
+        # CRLF, matching stamp_bootstrap(): this harness stamps the template itself rather
+        # than running `envy init`, so it must reproduce that or test a file envy never writes.
+        if sys.platform == "win32":
+            content = content.replace("\n", "\r\n")
         self._write_verbatim(dest, content)
         if sys.platform != "win32":
             dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -573,6 +578,7 @@ class BootstrapIntegrationTest(EnvyTestCase):
         set_mirror: bool = True,
         set_cache_root: bool = True,
         cwd: Path | None = None,
+        drop_env: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         """Run the bootstrap script and return the result.
 
@@ -594,15 +600,13 @@ class BootstrapIntegrationTest(EnvyTestCase):
         if set_cache_root:
             env["ENVY_CACHE_ROOT"] = str(cache_dir or self._temp_dir / "cache")
         else:
-            env.pop("ENVY_CACHE_ROOT", None)
-            sandbox = self._temp_dir / "home"
-            sandbox.mkdir(exist_ok=True)
-            env["HOME"] = str(sandbox)
-            env["USERPROFILE"] = str(sandbox)
-            env["XDG_CACHE_HOME"] = str(sandbox / "cache")
-            env["LOCALAPPDATA"] = str(sandbox / "AppData" / "Local")
+            env = test_config.sandbox_home_env(self._temp_dir / "home", env)
         if env_overrides:
             env.update(env_overrides)
+        # Deleted, never set to "": cmd.exe has no empty-but-defined variable, so `if
+        # defined` and bash's `${VAR:-}` would disagree and the two launchers diverge.
+        for name in drop_env:
+            env.pop(name, None)
 
         if sys.platform == "win32":
             cmd = ["cmd.exe", "/c", str(bootstrap_script), *args]
@@ -1540,6 +1544,251 @@ class BootstrapIntegrationTest(EnvyTestCase):
 
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn("envy version", result.stderr)
+
+    # --- borrowing an envy binary from the user-wide cache --------------------------
+    # A local cache constrains *writes*: a local tree reads the user-wide one for a binary.
+
+    _LOCAL_CACHE_BIN = "tools"
+
+    def _local_cache_project(
+        self,
+        name: str,
+        version: str = "1.2.3",
+        extra_directives: str = "",
+        markers: tuple[str, ...] = (),
+        **stamp_kwargs,
+    ) -> tuple[Path, Path]:
+        """A `cache-local` project and its launcher. Returns (project_dir, script)."""
+        project = self._temp_dir / name
+        bin_dir = project / self._LOCAL_CACHE_BIN
+        bin_dir.mkdir(parents=True)
+        header = f'-- @envy version "{version}"\n' if version else ""
+        self._write_verbatim(
+            project / "envy.lua",
+            header
+            + f'-- @envy bin "{self._LOCAL_CACHE_BIN}"\n'
+            + '-- @envy cache-local "out/.envy"\n'
+            + extra_directives
+            + "PACKAGES = {}\n",
+        )
+        for marker in markers:
+            self._write_verbatim(project / marker, "")
+        script = self._stamp_bootstrap(
+            bin_dir / ("envy.bat" if sys.platform == "win32" else "envy"),
+            version or "1.2.3",
+            **stamp_kwargs,
+        )
+        return project, script
+
+    def _sandbox_user_wide_root(self) -> Path:
+        """The user-wide root `_run_bootstrap(set_cache_root=False)` resolves to."""
+        return test_config.sandbox_user_wide_root(
+            test_config.sandbox_home_env(self._temp_dir / "home")
+        )
+
+    def _run_local(self, script: Path, args: list[str], **kwargs):
+        return self._run_bootstrap(script, args, set_cache_root=False, **kwargs)
+
+    def test_cache_shared_borrows_an_existing_envy_and_leaves_no_local_tree(self) -> None:
+        """The reported case: opting a fresh clone out of its local cache costs nothing.
+
+        The launcher used to miss the empty local tree, download 20 MB, self-deploy it into
+        the very directory the user was abandoning, and then download it a second time on
+        the next command because the shared tree still lacked it.
+        """
+        project, script = self._local_cache_project("optout")
+        test_config.seed_cached_envy(self._sandbox_user_wide_root(), "1.2.3")
+
+        result = self._run_local(script, ["cache", "--shared"])
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual([], self._archive_requests(), "downloaded an envy it already had")
+        self.assertNotIn("Downloading envy", result.stderr)
+        self.assertFalse(
+            (project / "out").exists(),
+            "opting out of the local cache created the local cache",
+        )
+        self.assertTrue((project / ".envy-cache-shared").is_file())
+
+    def test_cache_shared_with_a_new_version_lands_in_the_user_wide_tree(self) -> None:
+        """One download, into the tree the project is about to start using."""
+        project, script = self._local_cache_project("optout-newver", version="2.5.0")
+        user_wide = self._sandbox_user_wide_root()
+        test_config.seed_cached_envy(user_wide, "1.2.3")  # some other version
+
+        result = self._run_local(script, ["cache", "--shared"])
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(1, len(self._archive_requests()), self._server.request_paths)
+        deployed = user_wide / "envy" / test_config.get_envy_version()
+        self.assertTrue(deployed.is_dir(), f"nothing deployed under {user_wide}")
+        self.assertFalse((project / "out").exists())
+
+    def test_a_local_project_self_deploys_from_the_borrowed_binary(self) -> None:
+        """Borrowing is read-only; the local tree still ends up self-contained.
+
+        This is what keeps a populated `out/.envy` tarball runnable on a box with no
+        user-wide cache at all.
+        """
+        project, script = self._local_cache_project("borrow")
+        test_config.seed_cached_envy(self._sandbox_user_wide_root(), "1.2.3")
+
+        result = self._run_local(script, ["cache", "--root"])
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual([], self._archive_requests())
+        local_deploy = (
+            project / "out" / ".envy" / "envy" / test_config.get_envy_version()
+        )
+        self.assertTrue(local_deploy.is_dir(), f"expected a deploy at {local_deploy}")
+
+    def test_a_sums_pin_fails_closed_and_downloads(self) -> None:
+        """A pinned project must not run bytes it never attested.
+
+        The cache fast path never re-hashes, and the user-wide tree is written by every
+        other project on the box -- so the pin, not the tree, is the trust boundary.
+        """
+        _, script = self._local_cache_project(
+            "pinned",
+            extra_directives=f'-- @envy sha256sums "{self._server.sums_pin}"\n',
+        )
+        test_config.seed_cached_envy(self._sandbox_user_wide_root(), "1.2.3")
+
+        result = self._run_local(script, ["cache", "--root"])
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(1, len(self._archive_requests()), self._server.request_paths)
+        self.assertTrue(
+            any(p.endswith("SHA256SUMS") for p in self._server.request_paths),
+            f"pinned bootstrap skipped attestation: {self._server.request_paths}",
+        )
+
+    def test_an_override_names_exactly_one_tree(self) -> None:
+        """`ENVY_CACHE_ROOT` must not be quietly widened to two trees."""
+        _, script = self._local_cache_project("override")
+        test_config.seed_cached_envy(self._sandbox_user_wide_root(), "1.2.3")
+        empty = self._temp_dir / "empty-override"
+        empty.mkdir()
+
+        result = self._run_bootstrap(script, ["cache", "--root"], cache_dir=empty)
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(1, len(self._archive_requests()), self._server.request_paths)
+
+    def test_a_corrupt_local_binary_falls_through_instead_of_aborting(self) -> None:
+        """`[[ -x ]]` is true for a directory and for a truncated file that kept the bit.
+
+        Testing it alone handed both to exec, which fails with 126 and takes the whole
+        launcher down rather than falling through to another candidate.
+        """
+        for label, make in (
+            ("directory", lambda p: p.mkdir(parents=True)),
+            ("empty-executable", self._write_empty_executable),
+        ):
+            with self.subTest(corrupt=label):
+                project, script = self._local_cache_project(f"corrupt-{label}")
+                test_config.seed_cached_envy(self._sandbox_user_wide_root(), "1.2.3")
+                bad = (
+                    project
+                    / "out"
+                    / ".envy"
+                    / "envy"
+                    / "1.2.3"
+                    / ("envy.exe" if sys.platform == "win32" else "envy")
+                )
+                bad.parent.mkdir(parents=True, exist_ok=True)
+                make(bad)
+
+                result = self._run_local(script, ["cache", "--root"])
+
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+                self.assertEqual([], self._archive_requests())
+                self._server.request_paths.clear()
+
+    @staticmethod
+    def _write_empty_executable(path: Path) -> None:
+        path.write_bytes(b"")
+        if sys.platform != "win32":
+            path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX HOME semantics")
+    def test_a_local_project_runs_with_no_user_wide_root_at_all(self) -> None:
+        """The tarball case: populate a local tree, move it to a box with no HOME.
+
+        `set -u` used to abort the launcher here, because the platform default was expanded
+        unconditionally rather than only where shared mode needs it.
+        """
+        project, script = self._local_cache_project("airgapped")
+        test_config.seed_cached_envy(project / "out" / ".envy", "1.2.3")
+
+        result = self._run_local(
+            script,
+            ["cache", "--root"],
+            drop_env=("HOME", "XDG_CACHE_HOME", "USERPROFILE", "LOCALAPPDATA"),
+        )
+
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual([], self._archive_requests())
+
+    def test_a_recorded_local_mode_refuses_a_pre_marker_envy(self) -> None:
+        """The guard keyed on directives alone, and a marker leaves none behind.
+
+        `envy cache --local` puts a project on its own tree with nothing in the manifest to
+        show for it, so an envy that predates the markers would read the same manifest,
+        resolve the *shared* cache, and exit 0.
+        """
+        project = self._temp_dir / "marker-only"
+        bin_dir = project / self._LOCAL_CACHE_BIN
+        bin_dir.mkdir(parents=True)
+        self._write_verbatim(
+            project / "envy.lua",
+            '-- @envy version "0.1.0"\n'
+            f'-- @envy bin "{self._LOCAL_CACHE_BIN}"\n'
+            "PACKAGES = {}\n",
+        )
+        self._write_verbatim(project / ".envy-cache-local", "")
+        script = self._stamp_bootstrap(
+            bin_dir / ("envy.bat" if sys.platform == "win32" else "envy"),
+            "0.1.0",
+            min_directive_version="0.2.0",
+        )
+
+        result = self._run_local(script, ["cache", "--root"])
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("marker", result.stderr)
+        self.assertEqual([], self._archive_requests(), "refused, but downloaded anyway")
+
+    def test_a_local_project_never_writes_to_the_user_wide_cache(self) -> None:
+        """The invariant, asserted rather than reasoned about.
+
+        Every write site under a local run is supposed to land in the project's own tree.
+        Shell hooks were the one that did not, and a snapshot is what catches the next one.
+        """
+        project, script = self._local_cache_project("invariant")
+        user_wide = self._sandbox_user_wide_root()
+        test_config.seed_cached_envy(user_wide, "1.2.3")
+
+        def snapshot() -> dict[str, tuple[int, int]]:
+            return {
+                str(p.relative_to(user_wide)): (p.stat().st_size, p.stat().st_mtime_ns)
+                for p in sorted(user_wide.rglob("*"))
+                if p.is_file()
+            }
+
+        before = snapshot()
+        for args in (["cache", "--root"], ["cache"], ["shell", "zsh"], ["--version"]):
+            with self.subTest(args=args):
+                # Exit code is not the point -- `shell zsh` legitimately fails when no hook
+                # has ever been written. Touching this tree is the point.
+                self._run_local(script, args)
+                self.assertEqual(before, snapshot(), f"{args} wrote to {user_wide}")
+
+        self.assertFalse((user_wide / "shell").exists(), "hooks written from a local tree")
+        self.assertFalse(
+            (project / "out" / ".envy" / "shell").exists(),
+            "hooks written into the project tree",
+        )
 
 
 if __name__ == "__main__":

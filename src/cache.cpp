@@ -132,21 +132,16 @@ void cache_announce_root_once(cache_root_resolution const &resolved,
             shared ? "local" : "shared");
 }
 
-cache_root_resolution resolve_cache_root(cache_root_request const &req) {
-  // An override names one tree outright, so it short-circuits every project-scoped tier.
-  // It must already be absolute: the binary used to absolutize it against its own cwd
-  // while both launchers took it verbatim, so a relative value named two different trees
-  // in one invocation.
-  if (req.cli_override) {
-    if (!req.cli_override->is_absolute()) {
-      throw std::runtime_error("cache root override must be an absolute path: '" +
-                               req.cli_override->string() + "'");
-    }
-    return { normalized(*req.cli_override),
-             cache_mode::SHARED,
-             cache_root_tier::CLI_OVERRIDE };
-  }
+namespace {
 
+// Shared by resolve_cache_root and cache_root_for_mode so neither skips a validation the
+// other performs.
+struct project_trees {
+  std::optional<path> state;
+  path local;  // empty when no manifest was found
+};
+
+project_trees resolve_project_trees(cache_root_request const &req) {
   if (req.cache_local) {
     if (auto const bad{ validate_project_relative_path(*req.cache_local) }) {
       throw std::runtime_error("'@envy cache-local' " + *bad + ": '" + *req.cache_local +
@@ -154,30 +149,66 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
     }
   }
 
-  auto const state{ resolve_state_dir(req.state_dir, req.manifest_dir) };
-  auto const local_tree{ req.manifest_dir.empty()
-                             ? path{}
-                             : normalized(req.manifest_dir / (req.cache_local
-                                                                  ? *req.cache_local
-                                                                  : kDefaultCacheLocal)) };
+  auto state{ resolve_state_dir(req.state_dir, req.manifest_dir) };
+  auto local{ req.manifest_dir.empty()
+                  ? path{}
+                  : normalized(req.manifest_dir / (req.cache_local
+                                                       ? *req.cache_local
+                                                       : kDefaultCacheLocal)) };
 
   // Equal is the co-located teardown a project asks for by pointing both directives at one
   // tree. Strict nesting is the accident: markers under the cache root vanish with a cache
   // wipe, and a cache root under the state dir makes `state-dir` mean something else.
-  if (req.state_dir && state && !local_tree.empty() && *state != local_tree) {
-    if (strictly_inside(*state, local_tree) || strictly_inside(local_tree, *state)) {
+  if (req.state_dir && state && !local.empty() && *state != local) {
+    if (strictly_inside(*state, local) || strictly_inside(local, *state)) {
       throw std::runtime_error(
           "'@envy state-dir' and '@envy cache-local' must not nest: '" + state->string() +
-          "' vs '" + local_tree.string() +
+          "' vs '" + local.string() +
           "'. Point them at the same directory to keep "
           "the override markers with the cache tree.");
     }
   }
 
+  return { std::move(state), std::move(local) };
+}
+
+path root_in_mode(path const &local_tree, cache_mode mode) {
+  if (mode == cache_mode::LOCAL) {
+    if (local_tree.empty()) {
+      throw std::runtime_error(
+          "cache: local mode needs a manifest directory to anchor to, and none was found");
+    }
+    return local_tree;
+  }
+
+  if (auto def{ platform::get_default_cache_root() }) { return normalized(*def); }
+  throw std::runtime_error("cannot determine cache root");
+}
+
+// Absolute only -- the binary used to absolutize against its own cwd while the launchers
+// took it verbatim. SHARED always, so no caller pairs it with another mode.
+std::optional<cache_root_resolution> override_resolution(cache_root_request const &req) {
+  if (!req.cli_override) { return std::nullopt; }
+  if (!req.cli_override->is_absolute()) {
+    throw std::runtime_error("cache root override must be an absolute path: '" +
+                             req.cli_override->string() + "'");
+  }
+  return cache_root_resolution{ normalized(*req.cli_override),
+                                cache_mode::SHARED,
+                                cache_root_tier::CLI_OVERRIDE };
+}
+
+}  // namespace
+
+cache_root_resolution resolve_cache_root(cache_root_request const &req) {
+  if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }
+
+  auto const trees{ resolve_project_trees(req) };
+
   bool local_marker{ false }, shared_marker{ false };
-  if (state) {
-    local_marker = platform::file_exists(*state / kCacheLocalMarker);
-    shared_marker = platform::file_exists(*state / kCacheSharedMarker);
+  if (trees.state) {
+    local_marker = platform::file_exists(*trees.state / kCacheLocalMarker);
+    shared_marker = platform::file_exists(*trees.state / kCacheSharedMarker);
   }
 
   auto const mode{ resolve_cache_mode(local_marker,
@@ -192,19 +223,49 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
     return cache_root_tier::DEFAULT;
   }() };
 
-  if (mode == cache_mode::LOCAL) {
-    if (local_tree.empty()) {
-      throw std::runtime_error(
-          "cache: local mode needs a manifest directory to anchor to, and none was found");
-    }
-    return { local_tree, mode, tier };
+  return { root_in_mode(trees.local, mode), mode, tier };
+}
+
+cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode) {
+  // `mode` is what the caller is about to record; an override outranks it.
+  if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }
+
+  // MARKER: the caller is about to write one, and no other tier yields a mode the manifest
+  // does not already imply.
+  return { root_in_mode(resolve_project_trees(req).local, mode),
+           mode,
+           cache_root_tier::MARKER };
+}
+
+std::optional<path> resolve_user_wide_cache_root(std::optional<path> const &cli_override) {
+  // Same function as every other tier: rejected here but accepted there is two answers.
+  if (auto ovr{ override_resolution({ .cli_override = cli_override }) }) {
+    return std::move(ovr->root);
   }
 
-  if (auto def{ platform::get_default_cache_root() }) {
-    return { normalized(*def), mode, tier };
+  // nullopt, not a throw: a HOME-less box still runs a project whose cache is all in-tree.
+  if (auto def{ platform::get_default_cache_root() }) { return normalized(*def); }
+  return std::nullopt;
+}
+
+std::vector<path> envy_binary_candidates(cache_root_resolution const &resolved,
+                                         std::optional<path> const &user_wide_root,
+                                         std::string_view version,
+                                         bool has_sums_pin) {
+  path const rel{ path{ "envy" } / std::string{ version } / platform::exe_name("envy") };
+  std::vector<path> out{ resolved.root / rel };
+
+  // Keyed on the tier, not the mode: an override reports SHARED, so a mode test would read
+  // backwards. An explicit root names one tree and must not be widened to two.
+  if (resolved.tier == cache_root_tier::CLI_OVERRIDE ||
+      resolved.mode != cache_mode::LOCAL || has_sums_pin || !user_wide_root) {
+    return out;
   }
 
-  throw std::runtime_error("cannot determine cache root");
+  if (auto candidate{ *user_wide_root / rel }; candidate != out.front()) {
+    out.push_back(std::move(candidate));
+  }
+  return out;
 }
 
 struct cache_impl {

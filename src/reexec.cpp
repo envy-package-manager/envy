@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -138,7 +139,7 @@ reexec_decision reexec_should(std::string_view self_version,
 }
 
 void reexec_if_needed(envy_meta const &meta,
-                      std::filesystem::path const &cache_root,
+                      cache_root_resolution const &resolved,
                       std::filesystem::path const &manifest_dir,
                       std::vector<std::string> drop_options) {
   // Consume and unset the loop guard if present
@@ -164,20 +165,31 @@ void reexec_if_needed(envy_meta const &meta,
   // the downgrade rather than hand it a manifest it cannot read correctly.
   // 0.0.0 is a dev build, let through for the same reason reexec_should() lets a 0.0.0
   // self through: built from a working tree, so its support cannot be read off a version.
-  if ((meta.cache_local || meta.declared_cache_mode || meta.state_dir) &&
+  // A MARKER tier counts as much: `envy cache --local` leaves no directive behind, and a
+  // pre-marker envy cannot see that choice either.
+  if ((meta.cache_local || meta.declared_cache_mode || meta.state_dir ||
+       resolved.tier == cache_root_tier::MARKER) &&
       version != "0.0.0" && envy_release_version_less(version, kEnvyMinDirectiveVersion)) {
     throw std::runtime_error(
-        "manifest pins '@envy version \"" + version +
-        "\"', which predates '@envy cache-local'/'cache-mode'/'state-dir' (added in " +
+        "manifest resolves a cache mode from '@envy cache-local'/'cache-mode'/'state-dir' "
+        "or an 'envy cache' marker, but pins '@envy version \"" +
+        version + "\"', which predates them (added in " +
         std::string{ kEnvyMinDirectiveVersion } +
         "). That envy would silently use the shared cache. Raise or remove the version "
         "pin.");
   }
 
-  // Fast path: check if the requested version is already in cache
-  auto const cached_binary{ cache_root / "envy" / version / platform::exe_name("envy") };
-  if (std::filesystem::exists(cached_binary)) {
-    throw reexec_request{ cached_binary, std::move(drop_options) };
+  // Fast path: a local tree may borrow the user's own copy rather than re-download one.
+  for (auto const &candidate :
+       envy_binary_candidates(resolved,
+                              resolve_user_wide_cache_root(std::nullopt),
+                              version,
+                              meta.sha256sums.has_value())) {
+    // The launchers' criteria, not exists(): a directory or a zero-length file would fail
+    // inside exec_process, which exits rather than falling through to the download.
+    if (platform::can_execute_file(candidate)) {
+      throw reexec_request{ candidate, std::move(drop_options) };
+    }
   }
 
   // Slow path: download to temp dir, re-exec from there.

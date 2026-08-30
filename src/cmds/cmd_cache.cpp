@@ -70,22 +70,30 @@ void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected
   auto cfg_ptr{ std::make_shared<cfg>() };
   auto *root_flag{ sub->add_flag("--root",
                                  "Print the resolved cache root and nothing else") };
+  auto *user_wide_flag{ sub->add_flag("--user-wide-root",
+                                      "Print the user-wide cache root and nothing else") };
   auto *local_flag{ sub->add_flag("--local",
                                   "Use this project's own cache tree from now on") };
   auto *shared_flag{ sub->add_flag("--shared", "Use the user-wide cache from now on") };
 
-  // One action per invocation: --root reports, --local/--shared mutate. Combining them
-  // would have to pick an order, and there is no sensible one.
-  root_flag->excludes(local_flag)->excludes(shared_flag);
+  // One action per invocation: combining them would have to pick an order, and there is
+  // no sensible one.
+  root_flag->excludes(local_flag)->excludes(shared_flag)->excludes(user_wide_flag);
+  user_wide_flag->excludes(local_flag)->excludes(shared_flag);
   local_flag->excludes(shared_flag);
 
-  sub->callback(
-      [on_selected = std::move(on_selected), cfg_ptr, root_flag, local_flag, shared_flag] {
-        if (*root_flag) { cfg_ptr->act = cfg::action::PRINT_ROOT; }
-        if (*local_flag) { cfg_ptr->act = cfg::action::SET_LOCAL; }
-        if (*shared_flag) { cfg_ptr->act = cfg::action::SET_SHARED; }
-        on_selected(*cfg_ptr);
-      });
+  sub->callback([on_selected = std::move(on_selected),
+                 cfg_ptr,
+                 root_flag,
+                 user_wide_flag,
+                 local_flag,
+                 shared_flag] {
+    if (*root_flag) { cfg_ptr->act = cfg::action::PRINT_ROOT; }
+    if (*user_wide_flag) { cfg_ptr->act = cfg::action::PRINT_USER_WIDE_ROOT; }
+    if (*local_flag) { cfg_ptr->act = cfg::action::SET_LOCAL; }
+    if (*shared_flag) { cfg_ptr->act = cfg::action::SET_SHARED; }
+    on_selected(*cfg_ptr);
+  });
 }
 
 cmd_cache::cmd_cache(cmd_cache::cfg cfg,
@@ -159,6 +167,19 @@ void cmd_cache::execute() {
   // into a failed report.
   bool const writes_marker{ cfg_.act == cfg::action::SET_LOCAL ||
                             cfg_.act == cfg::action::SET_SHARED };
+
+  // Manifest-blind by construction, and answered before discovery so the parity oracle
+  // still works inside a project whose envy.lua does not parse.
+  if (cfg_.act == cfg::action::PRINT_USER_WIDE_ROOT) {
+    auto const user_wide{ resolve_user_wide_cache_root(cli_cache_root_) };
+    if (!user_wide) {
+      throw std::runtime_error(
+          std::string{ "cache: cannot determine a user-wide cache root: " } +
+          platform::get_default_cache_root_env_vars() + " not set");
+    }
+    tui::print_stdout("%s\n", user_wide->string().c_str());
+    return;
+  }
 
   envy_meta meta;
   std::filesystem::path manifest_dir;

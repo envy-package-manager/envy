@@ -43,12 +43,9 @@ int main(int argc, char *argv[]) {
   // outside it that surfaced as `libc++abi: terminating due to uncaught exception` instead
   // of envy's own error line.
   try {
-    // Manifest-aware, like every other path into the cache. Built from the override alone,
-    // this deployed envy into the user-wide tree while the command it was about to run
-    // used the project's own -- two copies, and `envy shell` pointing at the wrong one.
-    // Commands with no manifest (init, version) discover nothing and land on the default,
-    // as before.
-    envy::self_deploy::ensure([&] {
+    // Manifest-aware: built from the override alone, this deployed one version into two
+    // trees. The whole resolution, since a local tree writes no shell hooks.
+    auto const deploy_target{ [&] {
       // Best-effort, and deliberately silent on failure. Both halves throw: discovery
       // parses directives, and resolution rejects states such as both override markers
       // existing at once. This step runs for *every* command, including ones that never
@@ -86,12 +83,26 @@ int main(int argc, char *argv[]) {
             manifest_dir = found->path.parent_path();
           }
         }
-        return envy::resolve_cache_root(meta.cache_request(args.cache_root, manifest_dir))
-            .root;
+        auto const req{ meta.cache_request(args.cache_root, manifest_dir) };
+
+        // Runs before the marker is written, so the deploy names the tree the command is
+        // about to establish -- not the one the user is in the middle of abandoning.
+        if (auto const *cc{ std::get_if<envy::cmd_cache::cfg>(&*args.cmd_cfg) };
+            cc && (cc->act == envy::cmd_cache::cfg::action::SET_LOCAL ||
+                   cc->act == envy::cmd_cache::cfg::action::SET_SHARED)) {
+          return envy::cache_root_for_mode(
+              req,
+              cc->act == envy::cmd_cache::cfg::action::SET_LOCAL
+                  ? envy::cache_mode::LOCAL
+                  : envy::cache_mode::SHARED);
+        }
+
+        return envy::resolve_cache_root(req);
       } catch (std::exception const &) {
-        return envy::resolve_cache_root(envy::cache_root_request{}).root;
+        return envy::resolve_cache_root(envy::cache_root_request{});
       }
-    }());
+    }() };
+    envy::self_deploy::ensure(deploy_target.root, deploy_target.mode);
 
     auto cmd{ std::visit(
         [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },

@@ -30,11 +30,11 @@ cmd_startup cmd_startup_load(std::string_view cmd_name,
 
   // Throws reexec_request when it re-execs, so everything below runs only on the proceed
   // path -- which is what keeps the first-run notice from printing twice per invocation.
-  reexec_if_needed(m->meta, resolved.root, manifest_dir);
+  reexec_if_needed(m->meta, resolved, manifest_dir);
 
   cache_announce_root_once(resolved, m->meta.bin);
 
-  auto c{ self_deploy::ensure(resolved.root) };
+  auto c{ self_deploy::ensure(resolved.root, resolved.mode) };
   return { std::move(m), std::move(c) };
 }
 

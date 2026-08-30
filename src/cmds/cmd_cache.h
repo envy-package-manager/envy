@@ -15,9 +15,9 @@ namespace envy {
 class cmd_cache : public cmd {
  public:
   struct cfg : cmd_cfg<cmd_cache>, cmd_project_anchor {
-    // REPORT is the usage table; PRINT_ROOT is the resolved root alone, with no scan, so
-    // tests can compare it against what a launcher computed without paying for a walk.
-    enum class action { REPORT, PRINT_ROOT, SET_LOCAL, SET_SHARED };
+    // REPORT is the usage table; PRINT_ROOT and PRINT_USER_WIDE_ROOT are launcher-parity
+    // oracles for the two roots, printed alone so a test pays for no disk walk.
+    enum class action { REPORT, PRINT_ROOT, PRINT_USER_WIDE_ROOT, SET_LOCAL, SET_SHARED };
     action act{ action::REPORT };
   };
 
