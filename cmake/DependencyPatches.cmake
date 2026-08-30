@@ -380,8 +380,6 @@ function(envy_patch_aws_crt_base64_sig source_dir binary_dir)
     unset(AWS_C_COMMON_ENCODING_AVX2)
 endfunction()
 
-# Make libcurl’s pkg-config metadata reference the actual zlib target we
-# build instead of the abstract ZLIB::ZLIB alias.
 # The generated S3 endpoint ruleset is a 119 KB JSON blob emitted one char
 # literal per byte, read once when an S3 client is built. Deflate it to ~4.5 KB
 # and inflate on first use.
@@ -418,6 +416,8 @@ function(envy_patch_aws_s3_rules_gzip source_dir binary_dir)
     unset(AWS_S3_ENDPOINT_RULES_CPP)
 endfunction()
 
+# Make libcurl’s pkg-config metadata reference the actual zlib target we
+# build instead of the abstract ZLIB::ZLIB alias.
 function(envy_patch_libcurl_cmakelists source_dir binary_dir zlib_target)
     set(_source_dir_norm "${source_dir}")
     set(_binary_dir_norm "${binary_dir}")
