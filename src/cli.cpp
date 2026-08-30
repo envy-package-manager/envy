@@ -83,8 +83,10 @@ cli_args cli_parse(int argc, char **argv) {
   // Support version flags (-v / --version) triggering version command directly.
   bool version_flag_short{ false };
   bool version_flag_long{ false };
-  app.flag("-v", version_flag_short, "Show version information (alias for version "
-                                     "subcommand)");
+  app.flag("-v",
+           version_flag_short,
+           "Show version information (alias for version "
+           "subcommand)");
   app.flag("--version",
            version_flag_long,
            "Show version information (alias for version subcommand)");

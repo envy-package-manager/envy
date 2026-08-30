@@ -45,9 +45,7 @@ bool has_short(char const *names, char want) {
   return false;
 }
 
-bool is_vector(cli_dest k) {
-  return k == cli_dest::VEC_STRING || k == cli_dest::VEC_PATH;
-}
+bool is_vector(cli_dest k) { return k == cli_dest::VEC_STRING || k == cli_dest::VEC_PATH; }
 
 bool takes_value(cli_dest k) { return k != cli_dest::FLAG && k != cli_dest::HELP; }
 

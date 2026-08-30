@@ -63,18 +63,18 @@ void print_section(char const *title,
 cli_cmd &cmd_cache::register_cli(cli_cmd &app, cfg &c) {
   auto &sub{ app.sub("cache", "Show cache location and disk usage") };
 
-  auto const root_flag{ sub.flag("--root",
-                                 c.want_root,
-                                 "Print the resolved cache root and nothing else") };
+  auto const root_flag{
+    sub.flag("--root", c.want_root, "Print the resolved cache root and nothing else")
+  };
   auto const user_wide_flag{ sub.flag("--user-wide-root",
                                       c.want_user_wide,
                                       "Print the user-wide cache root and nothing else") };
-  auto const local_flag{ sub.flag("--local",
-                                  c.want_local,
-                                  "Use this project's own cache tree from now on") };
-  auto const shared_flag{ sub.flag("--shared",
-                                   c.want_shared,
-                                   "Use the user-wide cache from now on") };
+  auto const local_flag{
+    sub.flag("--local", c.want_local, "Use this project's own cache tree from now on")
+  };
+  auto const shared_flag{
+    sub.flag("--shared", c.want_shared, "Use the user-wide cache from now on")
+  };
 
   // One action per invocation: combining them would have to pick an order, and there is
   // no sensible one.

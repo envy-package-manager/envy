@@ -405,37 +405,37 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
   // One overload per alternative, so a new content type is a compile error here rather
   // than the silently-empty row an if-constexpr cascade's trailing return would give.
   return std::visit(
-      envy::match{
-          [&](envy::tui::progress_data const &data) {
-            std::ostringstream oss;
-            oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
-                << std::setprecision(1) << data.percent << "%\n";
-            return oss.str();
-          },
-          [&](envy::tui::text_stream_data const &data) {
-            std::size_t const start_idx{ (data.line_limit > 0 &&
-                                          data.lines.size() > data.line_limit)
-                                             ? data.lines.size() - data.line_limit
-                                             : 0 };
-            std::ostringstream oss;
-            oss << "[" << frame.label << "] " << dots(data.start_time) << " "
-                << (data.header_text.empty() ? "build output:" : data.header_text) << "\n";
-            for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
-              oss << "   " << data.lines[i] << "\n";
-            }
-            return oss.str();
-          },
-          [&](envy::tui::spinner_data const &data) {
-            std::ostringstream oss;
-            oss << "[" << frame.label << "] " << data.text << dots(data.start_time)
-                << "\n";
-            return oss.str();
-          },
-          [&](envy::tui::static_text_data const &data) {
-            std::ostringstream oss;
-            oss << "[" << frame.label << "] " << data.text << "\n";
-            return oss.str();
-          } },
+      envy::match{ [&](envy::tui::progress_data const &data) {
+                    std::ostringstream oss;
+                    oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
+                        << std::setprecision(1) << data.percent << "%\n";
+                    return oss.str();
+                  },
+                   [&](envy::tui::text_stream_data const &data) {
+                     std::size_t const start_idx{ (data.line_limit > 0 &&
+                                                   data.lines.size() > data.line_limit)
+                                                      ? data.lines.size() - data.line_limit
+                                                      : 0 };
+                     std::ostringstream oss;
+                     oss << "[" << frame.label << "] " << dots(data.start_time) << " "
+                         << (data.header_text.empty() ? "build output:" : data.header_text)
+                         << "\n";
+                     for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
+                       oss << "   " << data.lines[i] << "\n";
+                     }
+                     return oss.str();
+                   },
+                   [&](envy::tui::spinner_data const &data) {
+                     std::ostringstream oss;
+                     oss << "[" << frame.label << "] " << data.text
+                         << dots(data.start_time) << "\n";
+                     return oss.str();
+                   },
+                   [&](envy::tui::static_text_data const &data) {
+                     std::ostringstream oss;
+                     oss << "[" << frame.label << "] " << data.text << "\n";
+                     return oss.str();
+                   } },
       frame.content);
 }
 

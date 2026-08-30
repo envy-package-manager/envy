@@ -29,7 +29,7 @@ enum class cli_check : uint8_t { NONE, EXISTING_FILE, EXISTING_DIR, ONE_OF };
 
 // Plain descriptor: no behavior, no ownership, no virtuals.
 struct cli_option {
-  char const *names{};    // "-q,--quiet"; for a positional, its display name
+  char const *names{};  // "-q,--quiet"; for a positional, its display name
   char const *desc{};
   void *dest{};
   char const *env{};      // environment variable consulted when the option is absent

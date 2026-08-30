@@ -3,12 +3,12 @@
 #include "embedded_licenses.h"
 #include "platform.h"
 
-#include "cli_parse.h"
 #include "archive.h"
 #include "aws/core/Version.h"
 #include "aws/crt/Api.h"
 #include "blake3.h"
 #include "bzlib.h"
+#include "cli_parse.h"
 #if !defined(_WIN32)
 #include "curl/curl.h"
 #endif

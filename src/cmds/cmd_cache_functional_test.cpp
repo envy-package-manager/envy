@@ -46,10 +46,14 @@ void add_cache_test_options(cli_cmd &sub, cache_test_cfg &cfg) {
   sub.opt("--barrier-dir", cfg.barrier_dir, "Barrier directory");
   sub.opt("--barrier-signal", cfg.barrier_signal, "Barrier to signal before lock");
   sub.opt("--barrier-wait", cfg.barrier_wait, "Barrier to wait for before lock");
-  sub.opt("--barrier-signal-after", cfg.barrier_signal_after, "Barrier to signal after "
-                                                              "lock");
-  sub.opt("--barrier-wait-after", cfg.barrier_wait_after, "Barrier to wait for after "
-                                                          "lock");
+  sub.opt("--barrier-signal-after",
+          cfg.barrier_signal_after,
+          "Barrier to signal after "
+          "lock");
+  sub.opt("--barrier-wait-after",
+          cfg.barrier_wait_after,
+          "Barrier to wait for after "
+          "lock");
   sub.opt("--crash-after", cfg.crash_after_ms, "Crash after N milliseconds");
   sub.flag("--fail-before-complete",
            cfg.fail_before_complete,

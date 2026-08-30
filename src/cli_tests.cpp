@@ -3027,7 +3027,11 @@ void put_env(char const *name, char const *value) {
   // distinction ENVY_IGNORE_DEPOT does not draw anyway.
   _putenv_s(name, value ? value : "");
 #else
-  if (value) { setenv(name, value, 1); } else { unsetenv(name); }
+  if (value) {
+    setenv(name, value, 1);
+  } else {
+    unsetenv(name);
+  }
 #endif
 }
 
@@ -3090,8 +3094,11 @@ TEST_CASE("cli_parse: --name=value form lands the value for every option kind") 
   }
 
   SUBCASE("fetch") {
-    auto const cfg{ accepts<envy::cmd_fetch::cfg>({ "envy", "fetch", "https://x/y",
-                                                    "out.bin", "--manifest-root=/r",
+    auto const cfg{ accepts<envy::cmd_fetch::cfg>({ "envy",
+                                                    "fetch",
+                                                    "https://x/y",
+                                                    "out.bin",
+                                                    "--manifest-root=/r",
                                                     "--ref=main" }) };
     CHECK(*cfg.manifest_root == std::filesystem::path{ "/r" });
     CHECK(*cfg.ref == "main");
@@ -3104,7 +3111,10 @@ TEST_CASE("cli_parse: --name=value form lands the value for every option kind") 
 
   SUBCASE("import") {
     auto const cfg{ accepts<envy::cmd_import::cfg>(
-        { "envy", "import", std::string{ "--dir=" } + kDir, "--manifest=/m/envy.lua",
+        { "envy",
+          "import",
+          std::string{ "--dir=" } + kDir,
+          "--manifest=/m/envy.lua",
           std::string{ "--checksums=" } + kOtherFile }) };
     CHECK(*cfg.dir == std::filesystem::path{ kDir });
     CHECK(*cfg.manifest_path == std::filesystem::path{ "/m/envy.lua" });
@@ -3112,10 +3122,14 @@ TEST_CASE("cli_parse: --name=value form lands the value for every option kind") 
   }
 
   SUBCASE("init") {
-    auto const cfg{ accepts<envy::cmd_init::cfg>({ "envy", "init", "p", "b",
+    auto const cfg{ accepts<envy::cmd_init::cfg>({ "envy",
+                                                   "init",
+                                                   "p",
+                                                   "b",
                                                    "--mirror=https://m/",
                                                    "--envy-version=1.2.3",
-                                                   "--deploy=false", "--root=false",
+                                                   "--deploy=false",
+                                                   "--root=false",
                                                    "--platform=all" }) };
     CHECK(*cfg.mirror == "https://m/");
     CHECK(*cfg.envy_version == "1.2.3");
@@ -3130,9 +3144,12 @@ TEST_CASE("cli_parse: --name=value form lands the value for every option kind") 
   }
 
   SUBCASE("merge-depot") {
-    auto const cfg{ accepts<envy::cmd_merge_depot::cfg>(
-        { "envy", "merge-depot", kOtherFile, "--existing=e.txt", "--retain=r.txt",
-          "--retain-prefix=pkgs/" }) };
+    auto const cfg{ accepts<envy::cmd_merge_depot::cfg>({ "envy",
+                                                          "merge-depot",
+                                                          kOtherFile,
+                                                          "--existing=e.txt",
+                                                          "--retain=r.txt",
+                                                          "--retain-prefix=pkgs/" }) };
     CHECK(*cfg.existing_path == "e.txt");
     REQUIRE(cfg.retain.has_value());
     CHECK(cfg.retain->path == "r.txt");
@@ -3199,9 +3216,8 @@ TEST_CASE("cli_parse: --name value form lands the same values") {
   }
 
   SUBCASE("export") {
-    auto const cfg{ accepts<envy::cmd_export::cfg>({ "envy", "export", "--output-dir",
-                                                     "/out", "--depot-prefix",
-                                                     "https://d/" }) };
+    auto const cfg{ accepts<envy::cmd_export::cfg>(
+        { "envy", "export", "--output-dir", "/out", "--depot-prefix", "https://d/" }) };
     CHECK(*cfg.output_dir == std::filesystem::path{ "/out" });
     CHECK(*cfg.depot_prefix == "https://d/");
   }
@@ -3214,25 +3230,40 @@ TEST_CASE("cli_parse: --name value form lands the same values") {
   }
 
   SUBCASE("fetch") {
-    auto const cfg{ accepts<envy::cmd_fetch::cfg>({ "envy", "fetch", "https://x/y",
-                                                    "out.bin", "--manifest-root", "/r",
-                                                    "--ref", "main" }) };
+    auto const cfg{ accepts<envy::cmd_fetch::cfg>({ "envy",
+                                                    "fetch",
+                                                    "https://x/y",
+                                                    "out.bin",
+                                                    "--manifest-root",
+                                                    "/r",
+                                                    "--ref",
+                                                    "main" }) };
     CHECK(*cfg.manifest_root == std::filesystem::path{ "/r" });
     CHECK(*cfg.ref == "main");
   }
 
   SUBCASE("import") {
-    auto const cfg{ accepts<envy::cmd_import::cfg>({ "envy", "import", "--dir", kDir,
-                                                     "--checksums", kOtherFile }) };
+    auto const cfg{ accepts<envy::cmd_import::cfg>(
+        { "envy", "import", "--dir", kDir, "--checksums", kOtherFile }) };
     CHECK(*cfg.dir == std::filesystem::path{ kDir });
     CHECK(*cfg.checksums_path == std::filesystem::path{ kOtherFile });
   }
 
   SUBCASE("init") {
-    auto const cfg{ accepts<envy::cmd_init::cfg>({ "envy", "init", "p", "b", "--mirror",
-                                                   "https://m/", "--envy-version", "1.2.3",
-                                                   "--deploy", "false", "--root", "false",
-                                                   "--platform", "all" }) };
+    auto const cfg{ accepts<envy::cmd_init::cfg>({ "envy",
+                                                   "init",
+                                                   "p",
+                                                   "b",
+                                                   "--mirror",
+                                                   "https://m/",
+                                                   "--envy-version",
+                                                   "1.2.3",
+                                                   "--deploy",
+                                                   "false",
+                                                   "--root",
+                                                   "false",
+                                                   "--platform",
+                                                   "all" }) };
     CHECK(*cfg.mirror == "https://m/");
     CHECK(*cfg.envy_version == "1.2.3");
     CHECK(cfg.deploy == std::optional<bool>{ false });
@@ -3241,9 +3272,15 @@ TEST_CASE("cli_parse: --name value form lands the same values") {
   }
 
   SUBCASE("merge-depot") {
-    auto const cfg{ accepts<envy::cmd_merge_depot::cfg>(
-        { "envy", "merge-depot", kOtherFile, "--existing", "e.txt", "--retain-s3-ls",
-          "ls.txt", "--retain-prefix", "pkgs/" }) };
+    auto const cfg{ accepts<envy::cmd_merge_depot::cfg>({ "envy",
+                                                          "merge-depot",
+                                                          kOtherFile,
+                                                          "--existing",
+                                                          "e.txt",
+                                                          "--retain-s3-ls",
+                                                          "ls.txt",
+                                                          "--retain-prefix",
+                                                          "pkgs/" }) };
     CHECK(*cfg.existing_path == "e.txt");
     REQUIRE(cfg.retain.has_value());
     CHECK(cfg.retain->path == "ls.txt");
@@ -3258,9 +3295,9 @@ TEST_CASE("cli_parse: --name value form lands the same values") {
   }
 
   SUBCASE("use") {
-    CHECK(*accepts<envy::cmd_use::cfg>(
-               { "envy", "use", "1.2.3", "--mirror", "https://m/" })
-               .mirror == "https://m/");
+    CHECK(
+        *accepts<envy::cmd_use::cfg>({ "envy", "use", "1.2.3", "--mirror", "https://m/" })
+             .mirror == "https://m/");
   }
 }
 
@@ -3350,11 +3387,11 @@ TEST_CASE("cli_parse: arguments that look like options") {
   }
 
   SUBCASE("an option value may start with a dash") {
-    CHECK(*accepts<envy::cmd_fetch::cfg>(
-               { "envy", "fetch", "s", "d", "--ref", "-abc" })
+    CHECK(*accepts<envy::cmd_fetch::cfg>({ "envy", "fetch", "s", "d", "--ref", "-abc" })
                .ref == "-abc");
-    CHECK(*accepts<envy::cmd_fetch::cfg>({ "envy", "fetch", "s", "d", "--ref=-abc" })
-               .ref == "-abc");
+    CHECK(
+        *accepts<envy::cmd_fetch::cfg>({ "envy", "fetch", "s", "d", "--ref=-abc" }).ref ==
+        "-abc");
   }
 
   SUBCASE("a leading-dash word is not a positional") {
@@ -3459,9 +3496,9 @@ TEST_CASE("cli_parse: repeated options") {
   }
 
   SUBCASE("flags are idempotent") {
-    CHECK(accepts<envy::cmd_version::cfg>(
-              { "envy", "version", "--licenses", "--licenses" })
-              .show_licenses);
+    CHECK(
+        accepts<envy::cmd_version::cfg>({ "envy", "version", "--licenses", "--licenses" })
+            .show_licenses);
     CHECK(accepts<envy::cmd_install::cfg>(
               { "envy", "install", "--ignore-depot", "--ignore-depot" })
               .ignore_depot);
@@ -3477,8 +3514,9 @@ TEST_CASE("cli_parse: repeated options") {
               .only.size() == 2);
     CHECK(accepts<envy::cmd_hash::cfg>({ "envy", "hash", "a", "b", "c" }).paths.size() ==
           3);
-    CHECK(accepts<envy::cmd_install::cfg>({ "envy", "install", "a", "b" })
-              .queries.size() == 2);
+    CHECK(
+        accepts<envy::cmd_install::cfg>({ "envy", "install", "a", "b" }).queries.size() ==
+        2);
     CHECK(accepts<envy::cmd_deploy::cfg>({ "envy", "deploy", "a", "b", "c" })
               .identities.size() == 3);
   }
@@ -3688,15 +3726,18 @@ TEST_CASE("cli_parse: value validators") {
     struct {
       std::vector<std::string> ok, missing, directory;
     } const cases[]{
-      { { "envy", "extract", kFile }, { "envy", "extract", kMissing },
+      { { "envy", "extract", kFile },
+        { "envy", "extract", kMissing },
         { "envy", "extract", kDir } },
-      { { "envy", "import", kFile }, { "envy", "import", kMissing },
+      { { "envy", "import", kFile },
+        { "envy", "import", kMissing },
         { "envy", "import", kDir } },
       { { "envy", "import", "--checksums", kOtherFile, "--dir", kDir },
         { "envy", "import", "--checksums", kMissing, "--dir", kDir },
         { "envy", "import", "--checksums", kDir, "--dir", kDir } },
       { { "envy", "lua", kFile }, { "envy", "lua", kMissing }, { "envy", "lua", kDir } },
-      { { "envy", "merge-depot", kOtherFile }, { "envy", "merge-depot", kMissing },
+      { { "envy", "merge-depot", kOtherFile },
+        { "envy", "merge-depot", kMissing },
         { "envy", "merge-depot", kDir } },
     };
     for (auto const &c : cases) {
@@ -3755,10 +3796,11 @@ TEST_CASE("cli_parse: help is available everywhere and runs nothing") {
   }
 
   SUBCASE("every subcommand") {
-    for (char const *name : { "cache", "deploy", "export", "extract", "fetch",
-                              "git-resolve", "hash", "import", "init", "install", "lua",
-                              "merge-depot", "mirror-envy", "package", "product", "run",
-                              "shell", "sync", "use", "version" }) {
+    for (char const *name :
+         { "cache",       "deploy",      "export",      "extract", "fetch",
+           "git-resolve", "hash",        "import",      "init",    "install",
+           "lua",         "merge-depot", "mirror-envy", "package", "product",
+           "run",         "shell",       "sync",        "use",     "version" }) {
       prints_help({ "envy", name, "--help" }, std::string{ "envy " } + name);
       prints_help({ "envy", name, "-h" }, std::string{ "envy " } + name);
     }
@@ -3869,10 +3911,28 @@ TEST_CASE("cli_parse: cache-test parent and children") {
 
   SUBCASE("every choreography option, in the space-separated form") {
     auto const cfg{ accepts<envy::cmd_cache_ensure_package::cfg>(
-        { "envy", "cache-test", "ensure-package", "gcc", "darwin", "arm64", "deadbeef",
-          "--test-id", "t", "--barrier-dir", "/b", "--barrier-signal", "s",
-          "--barrier-wait", "w", "--barrier-signal-after", "sa", "--barrier-wait-after",
-          "wa", "--crash-after", "42", "--fail-before-complete" }) };
+        { "envy",
+          "cache-test",
+          "ensure-package",
+          "gcc",
+          "darwin",
+          "arm64",
+          "deadbeef",
+          "--test-id",
+          "t",
+          "--barrier-dir",
+          "/b",
+          "--barrier-signal",
+          "s",
+          "--barrier-wait",
+          "w",
+          "--barrier-signal-after",
+          "sa",
+          "--barrier-wait-after",
+          "wa",
+          "--crash-after",
+          "42",
+          "--fail-before-complete" }) };
     CHECK(cfg.identity == "gcc");
     CHECK(cfg.platform == "darwin");
     CHECK(cfg.arch == "arm64");
@@ -3888,7 +3948,14 @@ TEST_CASE("cli_parse: cache-test parent and children") {
   }
 
   SUBCASE("--crash-after wants a number") {
-    rejects({ "envy", "cache-test", "ensure-package", "a", "b", "c", "d", "--crash-after",
+    rejects({ "envy",
+              "cache-test",
+              "ensure-package",
+              "a",
+              "b",
+              "c",
+              "d",
+              "--crash-after",
               "soon" });
     CHECK(accepts<envy::cmd_cache_ensure_spec::cfg>(
               { "envy", "cache-test", "ensure-spec", "a", "--crash-after", "-1" })
