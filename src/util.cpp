@@ -2,7 +2,7 @@
 
 #include "platform.h"
 
-#include "zlib.h"
+#include "zlib_compat.h"
 
 #include <array>
 #include <cstdio>

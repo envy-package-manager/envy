@@ -22,7 +22,7 @@
 #include "sol/sol.hpp"
 #include "tui.h"
 #include "util.h"
-#include "zlib.h"
+#include "zlib_compat.h"
 #include "zstd.h"
 
 #include <array>
