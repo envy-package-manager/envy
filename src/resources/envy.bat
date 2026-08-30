@@ -132,9 +132,8 @@ set "ENVY_MANIFEST_DIR="
 for %%I in ("!ENVY_MANIFEST!") do set "ENVY_MANIFEST_DIR=%%~dpI"
 if "!ENVY_MANIFEST_DIR:~-1!"=="\" set "ENVY_MANIFEST_DIR=!ENVY_MANIFEST_DIR:~0,-1!"
 
-REM Cleared ahead of the tiers, not inside :resolve_project_cache, which the override path
-REM below skips: setlocal copies the parent environment, so an exported ENVY_MODE would
-REM otherwise reach the candidate selection with a value this script never chose.
+REM Cleared ahead of the tiers, which the override path below skips: setlocal copies the
+REM parent environment, so an exported ENVY_MODE would reach the candidate selection.
 set "ENVY_MODE="
 set "ENVY_SHARED_CACHE="
 set "ENVY_MODE_FROM_MARKER="
@@ -154,9 +153,8 @@ if errorlevel 1 exit /b 1
 goto :cache_resolved
 
 :resolve_project_cache
-REM The user's own cache root; src/resources/envy says what reads it. Empty under
-REM ENVY_CACHE_ROOT, which never reaches this label. Guarded: an unguarded join yields
-REM "\envy", which is *defined*, so `if exist` would take the drive root for a cache.
+REM The user's own cache root; src/resources/envy says what reads it. Guarded because an
+REM unguarded join yields "\envy" -- *defined*, so `if exist` takes the drive root for it.
 if defined LOCALAPPDATA set "ENVY_SHARED_CACHE=!LOCALAPPDATA!\envy"
 
 REM @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside the
@@ -291,19 +289,15 @@ if defined ENVY_USES_NEW_DIRECTIVES if not "!ENVY_VERSION!"=="0.0.0" (
     if errorlevel 1 exit /b 1
 )
 
-REM Regular and non-empty, not just `if exist`: that is true for a directory and for a file
-REM truncated to zero, and running either fails instead of trying the next candidate.
-REM Inline rather than a subroutine -- this file keeps `call` to a minimum on purpose.
+REM Regular and non-empty, not just `if exist`: that accepts a directory and a zero-length
+REM file, and running either fails instead of trying the next candidate.
 set "ENVY_BIN=!ENVY_CACHE!\envy\!ENVY_VERSION!\envy.exe"
 set "ENVY_BIN_OK="
 if exist "!ENVY_BIN!" if not exist "!ENVY_BIN!\" for %%I in ("!ENVY_BIN!") do if not "%%~zI"=="0" set "ENVY_BIN_OK=1"
 if defined ENVY_BIN_OK goto :run
 
-REM A local tree borrows the user's own copy of this version rather than downloading a
-REM second one; src/resources/envy carries the reasoning, including why a sums pin turns it
-REM off and why it never runs the other way. ENVY_MODE is empty under ENVY_CACHE_ROOT, so an
-REM explicit root still names exactly one tree. Above the "Downloading envy" banner, so a
-REM probe that succeeds never announces a download it does not perform.
+REM A local tree borrows the user's own copy; src/resources/envy carries the reasoning.
+REM Above the "Downloading envy" banner, so a hit never announces a download.
 if not "!ENVY_MODE!"=="local" goto :no_shared_probe
 if defined ENVY_SUMS_PIN goto :no_shared_probe
 if not defined ENVY_SHARED_CACHE goto :no_shared_probe

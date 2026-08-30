@@ -539,12 +539,8 @@ class BootstrapIntegrationTest(EnvyTestCase):
             content = content.replace(
                 "@@MIN_DIRECTIVE_VERSION@@", min_directive_version
             )
-        # CRLF for envy.bat, matching what stamp_bootstrap() writes. cmd.exe resolves
-        # `goto`/`call :label` by seeking, and on an LF-only batch those offsets drift by a
-        # byte per line until the search walks past the label -- "The system cannot find the
-        # batch label specified", after which the launcher silently parses no directives.
-        # This harness stamps the template itself instead of running `envy init`, so it has
-        # to reproduce that conversion or it tests a file envy would never write.
+        # CRLF, matching stamp_bootstrap(): this harness stamps the template itself rather
+        # than running `envy init`, so it must reproduce that or test a file envy never writes.
         if sys.platform == "win32":
             content = content.replace("\n", "\r\n")
         self._write_verbatim(dest, content)
@@ -1550,11 +1546,7 @@ class BootstrapIntegrationTest(EnvyTestCase):
         self.assertIn("envy version", result.stderr)
 
     # --- borrowing an envy binary from the user-wide cache --------------------------
-    #
-    # A local cache exists so that running the project touches nothing outside its own
-    # tree. That is a constraint on *writes*: re-downloading 20 MB of a binary the user
-    # already has, once per project, is pure waste. So a local tree reads the user-wide
-    # one to find an envy it can run, and writes only to itself.
+    # A local cache constrains *writes*: a local tree reads the user-wide one for a binary.
 
     _LOCAL_CACHE_BIN = "tools"
 

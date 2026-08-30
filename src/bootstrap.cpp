@@ -57,16 +57,8 @@ std::string stamp_bootstrap(platform_id platform) {
   replace_all(result, "@@LATEST_URL@@", kEnvyReleaseLatestUrl);
   replace_all(result, "@@MIN_DIRECTIVE_VERSION@@", kEnvyMinDirectiveVersion);
 
-  // CRLF for cmd.exe, and only for it. cmd resolves `goto`/`call :label` by seeking
-  // through the file, and on an LF-only batch it computes those offsets as if every line
-  // carried a CR -- so the search drifts by one byte per line and eventually walks past
-  // the label. The symptom is "The system cannot find the batch label specified", and it
-  // is position-dependent: envy.bat ran for a long time on LF, then stopped finding
-  // :quoted_value (silently parsing *no* @envy directives) when the file grew by 40 lines.
-  //
-  // Converted here rather than in the checked-in resource so the repo, the embedded blob
-  // and every test fixture stay LF -- one encoding everywhere except the one consumer that
-  // cannot read it.
+  // cmd.exe seeks `goto`/`call :label` by offsets that assume CRLF, so an LF batch drifts
+  // a byte per line until the search misses. Converted here, not in the repo.
   if (platform == platform_id::WINDOWS) { replace_all(result, "\n", "\r\n"); }
   return result;
 }

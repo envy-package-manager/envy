@@ -165,11 +165,8 @@ void reexec_if_needed(envy_meta const &meta,
   // the downgrade rather than hand it a manifest it cannot read correctly.
   // 0.0.0 is a dev build, let through for the same reason reexec_should() lets a 0.0.0
   // self through: built from a working tree, so its support cannot be read off a version.
-  //
-  // A MARKER tier counts as much as the directives do: `envy cache --local` puts a project
-  // on its own tree with no directive anywhere in the manifest, and an envy that predates
-  // the markers cannot see that choice either -- it would read the same manifest, resolve
-  // the shared cache, and exit 0.
+  // A MARKER tier counts as much: `envy cache --local` leaves no directive behind, and a
+  // pre-marker envy cannot see that choice either.
   if ((meta.cache_local || meta.declared_cache_mode || meta.state_dir ||
        resolved.tier == cache_root_tier::MARKER) &&
       version != "0.0.0" && envy_release_version_less(version, kEnvyMinDirectiveVersion)) {
@@ -182,17 +179,14 @@ void reexec_if_needed(envy_meta const &meta,
         "pin.");
   }
 
-  // Fast path: the requested version may already be on disk. A local tree may borrow the
-  // user's own copy rather than re-download one it already has; see envy_binary_candidates
-  // for why that is read-only and why a sums pin turns it off.
+  // Fast path: a local tree may borrow the user's own copy rather than re-download one.
   for (auto const &candidate :
        envy_binary_candidates(resolved,
                               resolve_user_wide_cache_root(std::nullopt),
                               version,
                               meta.sha256sums.has_value())) {
-    // The launchers' criteria, not merely exists(): a directory or a file truncated to
-    // zero would satisfy exists() and then fail inside exec_process, which exits rather
-    // than falling through to the download below.
+    // The launchers' criteria, not exists(): a directory or a zero-length file would fail
+    // inside exec_process, which exits rather than falling through to the download.
     if (platform::can_execute_file(candidate)) {
       throw reexec_request{ candidate, std::move(drop_options) };
     }

@@ -43,14 +43,8 @@ int main(int argc, char *argv[]) {
   // outside it that surfaced as `libc++abi: terminating due to uncaught exception` instead
   // of envy's own error line.
   try {
-    // Manifest-aware, like every other path into the cache. Built from the override alone,
-    // this deployed envy into the user-wide tree while the command it was about to run
-    // used the project's own -- two copies of one version, in two trees. Commands with no
-    // manifest (init, version) discover nothing and land on the default, as before.
-    //
-    // The whole resolution, not just a path: a local tree writes no shell hooks, so the
-    // mode has to travel with the root -- and for `envy cache --local/--shared` under an
-    // override, the mode is the override's, not the one being recorded.
+    // Manifest-aware: built from the override alone, this deployed one version into two
+    // trees. The whole resolution, since a local tree writes no shell hooks.
     auto const deploy_target{ [&] {
       // Best-effort, and deliberately silent on failure. Both halves throw: discovery
       // parses directives, and resolution rejects states such as both override markers
@@ -91,10 +85,8 @@ int main(int argc, char *argv[]) {
         }
         auto const req{ meta.cache_request(args.cache_root, manifest_dir) };
 
-        // `envy cache --local/--shared` runs this before its own marker is written, so the
-        // deploy has to name the tree the command is about to establish. Deploying into
-        // the tree still recorded on disk is what left a 20 MB binary in a project-local
-        // directory the user was in the middle of abandoning, which nothing ever collects.
+        // Runs before the marker is written, so the deploy names the tree the command is
+        // about to establish -- not the one the user is in the middle of abandoning.
         if (auto const *cc{ std::get_if<envy::cmd_cache::cfg>(&*args.cmd_cfg) };
             cc && (cc->act == envy::cmd_cache::cfg::action::SET_LOCAL ||
                    cc->act == envy::cmd_cache::cfg::action::SET_SHARED)) {

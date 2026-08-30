@@ -66,12 +66,8 @@ std::filesystem::path create_unique_temp_dir(std::string_view prefix);
 void flush_directory(std::filesystem::path const &dir);
 bool file_exists(std::filesystem::path const &path);
 
-// Can this path be handed to exec? Regular, non-empty, and executable where that is a
-// concept. `exists` is too weak: it accepts a directory, and a file truncated to zero
-// keeps its name -- exec then fails and, from a launcher, takes the whole process down
-// rather than falling through to the next candidate. Mirrors `usable_envy` in
-// src/resources/envy and `:usable_envy` in envy.bat, which have to make the same
-// judgement before any envy binary exists to ask.
+// Regular, non-empty, and executable where that is a concept. `exists` accepts a directory
+// and a zero-length file, both of which fail at exec instead of falling through.
 bool can_execute_file(std::filesystem::path const &path);
 
 // One immediate child of a directory, as reported by the platform's native

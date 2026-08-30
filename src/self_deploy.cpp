@@ -39,14 +39,9 @@ void update_latest_if_newer(path const &envy_dir, std::string_view version) {
 bool copy_binary(path const &src, path const &dst) {
   std::error_code ec;
 
-  // Self-copy: ensure_envy gates on binary *and* types, so a version directory that lost
-  // its envy.lua asks for a deploy whose source is already the destination. The rename
-  // would then overwrite a running image -- which fails outright on Windows, where the
-  // launcher spawns rather than execs and the file stays locked. The early return on
-  // failure would skip writing the very types this deploy exists to restore, so the
-  // warning repeats forever. equivalent() reports false (and sets ec) when dst is absent,
-  // which is the ordinary case.
-  if (std::filesystem::equivalent(src, dst, ec)) { return true; }
+  // A version dir that lost its envy.lua asks for a deploy whose source is the
+  // destination; the rename would overwrite a running image, fatal on Windows.
+  if (std::filesystem::equivalent(src, dst, ec)) { return true; }  // false when dst absent
   ec.clear();
 
   // Atomic deploy: copy to temp, set permissions, then rename. Avoids ETXTBSY on
@@ -104,12 +99,8 @@ std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
 
     update_latest_if_newer(result.envy_dir.parent_path(), ENVY_VERSION_STR);
 
-    // A project on its own cache tree takes no part in shell integration. The profile
-    // sources the user-wide hook, so a copy here is never read and `rm -rf` on the build
-    // root takes it with it. Redirecting the write to the user-wide tree instead would be
-    // worse: a local cache exists so that running the project touches nothing outside it,
-    // and conjuring ~/Library/Caches/envy to hold a hook breaks exactly that promise. So
-    // neither is written, and `envy shell` says why.
+    // A copy here is never the one the profile sources, and writing the user-wide tree
+    // instead would break the promise a local cache makes. So neither; `envy shell` says.
     if (mode != cache_mode::LOCAL) { shell_hooks::ensure(c->root()); }
   } catch (std::exception const &e) { tui::warn("self-deploy: failed: %s", e.what()); }
 

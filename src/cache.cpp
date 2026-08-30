@@ -134,9 +134,8 @@ void cache_announce_root_once(cache_root_resolution const &resolved,
 
 namespace {
 
-// The state dir and the local tree a manifest names, with both directive-level rules
-// applied. Shared by resolve_cache_root and cache_root_for_mode so neither can skip a
-// validation the other performs.
+// Shared by resolve_cache_root and cache_root_for_mode so neither skips a validation the
+// other performs.
 struct project_trees {
   std::optional<path> state;
   path local;  // empty when no manifest was found
@@ -186,14 +185,8 @@ path root_in_mode(path const &local_tree, cache_mode mode) {
   throw std::runtime_error("cannot determine cache root");
 }
 
-// An override names one tree outright, so it short-circuits every project-scoped tier. It
-// must already be absolute: the binary used to absolutize it against its own cwd while
-// both launchers took it verbatim, so a relative value named two different trees in one
-// invocation.
-//
-// SHARED whatever the project declares, because the tree it names is the user's own. Every
-// consumer keyed on the mode has to see that -- shell hooks especially, which a LOCAL mode
-// suppresses. One definition, so no caller can pair an override root with another mode.
+// Absolute only -- the binary used to absolutize against its own cwd while the launchers
+// took it verbatim. SHARED always, so no caller pairs it with another mode.
 std::optional<cache_root_resolution> override_resolution(cache_root_request const &req) {
   if (!req.cli_override) { return std::nullopt; }
   if (!req.cli_override->is_absolute()) {
@@ -234,27 +227,23 @@ cache_root_resolution resolve_cache_root(cache_root_request const &req) {
 }
 
 cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode) {
-  // `mode` is what the caller is about to record; an override outranks it and reports
-  // SHARED, exactly as it does for every other resolution.
+  // `mode` is what the caller is about to record; an override outranks it.
   if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }
 
-  // MARKER is the tier this is standing in for: the caller is about to write one, and no
-  // other tier can produce a mode the manifest does not already imply.
+  // MARKER: the caller is about to write one, and no other tier yields a mode the manifest
+  // does not already imply.
   return { root_in_mode(resolve_project_trees(req).local, mode),
            mode,
            cache_root_tier::MARKER };
 }
 
 std::optional<path> resolve_user_wide_cache_root(std::optional<path> const &cli_override) {
-  // Same absoluteness rule and the same normalization as every other tier, from the same
-  // function: an override rejected here but accepted there would be two answers again.
+  // Same function as every other tier: rejected here but accepted there is two answers.
   if (auto ovr{ override_resolution({ .cli_override = cli_override }) }) {
     return std::move(ovr->root);
   }
 
-  // nullopt, not a throw: a HOME-less box is a supported place to run a project whose
-  // cache is entirely inside its own tree, and every caller of this treats "no user-wide
-  // root" as "there is nothing over there to look at".
+  // nullopt, not a throw: a HOME-less box still runs a project whose cache is all in-tree.
   if (auto def{ platform::get_default_cache_root() }) { return normalized(*def); }
   return std::nullopt;
 }
@@ -266,9 +255,8 @@ std::vector<path> envy_binary_candidates(cache_root_resolution const &resolved,
   path const rel{ path{ "envy" } / std::string{ version } / platform::exe_name("envy") };
   std::vector<path> out{ resolved.root / rel };
 
-  // Keyed on the tier, not the mode: an override reports SHARED (see resolve_cache_root),
-  // so a mode test would read backwards the day that changes. An explicit absolute root
-  // names exactly one tree and must not be quietly widened to two.
+  // Keyed on the tier, not the mode: an override reports SHARED, so a mode test would read
+  // backwards. An explicit root names one tree and must not be widened to two.
   if (resolved.tier == cache_root_tier::CLI_OVERRIDE ||
       resolved.mode != cache_mode::LOCAL || has_sums_pin || !user_wide_root) {
     return out;

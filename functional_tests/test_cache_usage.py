@@ -232,9 +232,8 @@ class TestCacheUsage(EnvyTestCase):
             b'-- @envy cache-mode "shared"\n'
             b"PACKAGES = {}\n"
         )
-        # Forward slashes: `envy shell` prints a portable path for the profile to source,
-        # so the separator is '/' on every platform. Comparing native separators passed on
-        # POSIX and failed on Windows for a path that was perfectly correct.
+        # `envy shell` prints a portable path, so the separator is '/' everywhere. Native
+        # separators passed on POSIX and failed on Windows for a correct path.
         expected_hook = (
             str(user_wide / "shell" / "hook.zsh").replace(str(home), "$HOME").replace("\\", "/")
         )

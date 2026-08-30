@@ -46,10 +46,8 @@ shell_info const *find_shell(std::string const &name) {
   return nullptr;
 }
 
-// The project this command was invoked from, if it resolves at all -- advisory only.
-// Best-effort by design: discovery parses directives and resolution rejects states such as
-// both markers existing at once, and neither can move the hook path, so letting either
-// escape would break `envy shell` over state that has nothing to do with it.
+// Advisory only, and best-effort: neither discovery nor resolution can move the hook path,
+// so letting either throw would break `envy shell` over unrelated state.
 std::optional<cache_root_resolution> project_cache_best_effort(
     std::optional<fs::path> const &cli_cache_root,
     std::optional<fs::path> const &project_dir) {
@@ -86,10 +84,8 @@ void cmd_shell::execute() {
                              "'. Use: bash, zsh, fish, powershell");
   }
 
-  // Hooks belong to the user, not to a project: the profile sources one path for every
-  // directory the shell ever visits, so the hook root is the override or the platform
-  // default and no project tier can move it. It is also the only root a local-cache
-  // project must never populate, which is why self-deploy skips hooks there entirely.
+  // A profile sources one path for every directory the shell visits, so no project tier
+  // moves the hook root -- and a local-cache project never populates it at all.
   auto const hook_root{ resolve_user_wide_cache_root(cli_cache_root_) };
   if (!hook_root) {
     throw std::runtime_error(
@@ -101,9 +97,8 @@ void cmd_shell::execute() {
   auto const project{ project_cache_best_effort(cli_cache_root_, cfg_.project_dir) };
   bool const project_is_local{ project && project->mode == cache_mode::LOCAL };
 
-  // A tree written by an envy that still put hooks under the project root. Named rather
-  // than deleted: it may be the very file the user's profile sources today, and nothing
-  // refreshes it any more, so the version stamp is frozen wherever it stopped.
+  // Named rather than deleted: it may be the file the user's profile sources today, and
+  // nothing refreshes it any more, so its version stamp is frozen wherever it stopped.
   if (project && project_is_local && fs::exists(project->root / "shell")) {
     tui::warn("Ignoring stale shell hooks under %s",
               (project->root / "shell").string().c_str());
@@ -114,9 +109,7 @@ void cmd_shell::execute() {
 
   fs::path const hook_path{ *hook_root / "shell" / ("hook." + std::string{ si->ext }) };
   if (!fs::exists(hook_path)) {
-    // "Run any envy command" is exactly the advice a local-cache-only user cannot act on:
-    // every command they run skips hooks by design, so say what would actually populate
-    // it.
+    // "Run any envy command" is advice a local-cache-only user cannot act on.
     throw std::runtime_error(
         "shell: hook file not found at " + hook_path.string() + ". " +
         (project_is_local
@@ -155,9 +148,8 @@ void cmd_shell::execute() {
   tui::info("  %s", source_line.c_str());
   tui::info("");
 
-  // Only an override earns the warning now. A project-local tree used to trigger it, but
-  // hooks no longer live there at all -- and a plain platform default is not "easily lost"
-  // in any sense worth a line of output.
+  // Only an override earns it now: hooks never live in a project tree, and the platform
+  // default is not "easily lost" in any sense worth a line of output.
   if (cli_cache_root_) {
     tui::warn("Hook files are stored in cache at %s", hook_root->string().c_str());
     tui::warn("Moving or deleting this cache will break shell integration.");

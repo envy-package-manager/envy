@@ -532,9 +532,8 @@ def _get_bash_cache_root_script() -> str:
     anchor = 'if [[ -z "$ENVY_VERSION" ]]; then'
     if anchor not in src:
         raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
-    # Both roots: ENVY_SHARED_CACHE is the second root this launcher computes, and a second
-    # root resolved twice with nothing comparing the two answers is how this area went
-    # wrong the first time. Empty line 2 means "no user-wide root", which is meaningful.
+    # Both roots: a second root resolved twice with nothing comparing the answers is how
+    # this area went wrong the first time. An empty line 2 means "no user-wide root".
     return src.split(anchor)[0] + 'echo "$ENVY_CACHE"\necho "$ENVY_SHARED_CACHE"\n'
 
 
@@ -709,10 +708,8 @@ class _CacheRootParityMixin:
         root, user_wide = self._launcher_roots(project, env)
         self.assertEqual(self._binary_root(project, env).resolve(), root.resolve())
 
-        # An explicit root names exactly one tree, so the launcher must not carry a
-        # user-wide root at all -- an empty value is what turns the binary borrow off.
-        # (`envy cache --user-wide-root` still answers here; it reports where shell hooks
-        # live, which an override does move. The launcher never consults that.)
+        # An explicit root names one tree, so the launcher carries no user-wide root at
+        # all -- empty is what turns the borrow off. `--user-wide-root` still answers.
         self.assertEqual("", str(user_wide))
 
     def test_no_user_wide_root_without_home(self) -> None:
@@ -781,9 +778,8 @@ class TestBashCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
 class TestBatchCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
     def setUp(self) -> None:
         super().setUp()
-        # write_text, not write_bytes: on Windows it emits CRLF, which is what cmd.exe
-        # needs to resolve `call :quoted_value` and what stamp_bootstrap() writes. An
-        # LF-only envy.bat silently parses no @envy directives at all.
+        # write_text, not write_bytes: on Windows it emits the CRLF cmd.exe needs to
+        # resolve `call :quoted_value`, and that stamp_bootstrap() writes.
         self._script = self._temp_dir / "cache_root.bat"
         self._script.write_text(_get_batch_cache_root_script())
 

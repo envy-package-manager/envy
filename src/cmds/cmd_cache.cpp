@@ -76,8 +76,8 @@ void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected
                                   "Use this project's own cache tree from now on") };
   auto *shared_flag{ sub->add_flag("--shared", "Use the user-wide cache from now on") };
 
-  // One action per invocation: --root/--user-wide-root report, --local/--shared mutate.
-  // Combining them would have to pick an order, and there is no sensible one.
+  // One action per invocation: combining them would have to pick an order, and there is
+  // no sensible one.
   root_flag->excludes(local_flag)->excludes(shared_flag)->excludes(user_wide_flag);
   user_wide_flag->excludes(local_flag)->excludes(shared_flag);
   local_flag->excludes(shared_flag);
@@ -168,10 +168,8 @@ void cmd_cache::execute() {
   bool const writes_marker{ cfg_.act == cfg::action::SET_LOCAL ||
                             cfg_.act == cfg::action::SET_SHARED };
 
-  // The user-wide root is manifest-blind by construction -- it is the override or the
-  // platform default, and no project tier can move it. Answering before discovery also
-  // keeps the launcher-parity oracle usable inside a project whose envy.lua does not
-  // parse.
+  // Manifest-blind by construction, and answered before discovery so the parity oracle
+  // still works inside a project whose envy.lua does not parse.
   if (cfg_.act == cfg::action::PRINT_USER_WIDE_ROOT) {
     auto const user_wide{ resolve_user_wide_cache_root(cli_cache_root_) };
     if (!user_wide) {

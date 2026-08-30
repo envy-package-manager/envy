@@ -255,12 +255,8 @@ def get_test_env() -> dict[str, str]:
     return env
 
 
-# --- cache-root sandboxing -----------------------------------------------------------
-#
-# Anything that exercises a shared-mode resolution has to redirect the platform-default
-# cache first, or main()'s pre-dispatch self-deploy writes into the developer's real one.
-# Four modules grew their own copy of this pair, each with its own idea of which variables
-# matter; they are one pair now so a new platform tier lands in exactly one place.
+# Cache-root sandboxing: redirect the platform default, or self-deploy writes the
+# developer's real cache. Four modules grew their own copy; one now, so a new tier lands once.
 
 
 def sandbox_home_env(home: Path, base: dict[str, str] | None = None) -> dict[str, str]:
