@@ -3,6 +3,7 @@
 #include "doctest.h"
 #include "embedded_init_resources.h"
 #include "platform.h"
+#include "util.h"
 
 #include <filesystem>
 #include <stdexcept>
@@ -26,14 +27,12 @@ fs::path manifest_fixture_root() {
   return fs::absolute(root);
 }
 
-std::string_view embedded_posix_template() {
-  return { reinterpret_cast<char const *>(envy::embedded::kProductScriptPosix),
-           envy::embedded::kProductScriptPosixSize };
+std::string embedded_posix_template() {
+  return envy::util_inflate_resource(envy::embedded::kProductScriptPosix);
 }
 
-std::string_view embedded_windows_template() {
-  return { reinterpret_cast<char const *>(envy::embedded::kProductScriptWindows),
-           envy::embedded::kProductScriptWindowsSize };
+std::string embedded_windows_template() {
+  return envy::util_inflate_resource(envy::embedded::kProductScriptWindows);
 }
 
 }  // namespace
@@ -43,7 +42,7 @@ TEST_CASE("deploy: kProductScriptVersion is positive") {
 }
 
 TEST_CASE("deploy: embedded POSIX template has version baked at build time") {
-  std::string_view const tmpl{ embedded_posix_template() };
+  std::string const tmpl{ embedded_posix_template() };
   std::string const expected_marker{ "schema \"" +
                                      std::to_string(envy::kProductScriptVersion) + "\"" };
   CHECK(tmpl.find(expected_marker) != std::string_view::npos);
@@ -54,7 +53,7 @@ TEST_CASE("deploy: embedded POSIX template has version baked at build time") {
 }
 
 TEST_CASE("deploy: embedded Windows template has version baked at build time") {
-  std::string_view const tmpl{ embedded_windows_template() };
+  std::string const tmpl{ embedded_windows_template() };
   std::string const expected_marker{ "schema \"" +
                                      std::to_string(envy::kProductScriptVersion) + "\"" };
   CHECK(tmpl.find(expected_marker) != std::string_view::npos);

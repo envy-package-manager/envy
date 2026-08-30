@@ -12,7 +12,7 @@
 #include "tui.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 #include "picojson.h"
 
 #include <algorithm>
@@ -23,16 +23,13 @@
 
 namespace envy {
 
-void cmd_product::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand(
-      "product",
-      "Query product value or list all products from manifest") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("product", cfg_ptr->product_name, "Product name (omit to list all)");
-  sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest");
-  sub->add_flag("--json", cfg_ptr->json, "Output as JSON (to stdout)");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_product::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("product",
+                     "Query product value or list all products from manifest") };
+  sub.pos("product", c.product_name, "Product name (omit to list all)");
+  sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
+  sub.flag("--json", c.json, "Output as JSON (to stdout)");
+  return sub;
 }
 
 cmd_product::cmd_product(cfg cfg,

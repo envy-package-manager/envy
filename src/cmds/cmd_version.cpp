@@ -3,12 +3,12 @@
 #include "embedded_licenses.h"
 #include "platform.h"
 
-#include "CLI11.hpp"
 #include "archive.h"
 #include "aws/core/Version.h"
 #include "aws/crt/Api.h"
 #include "blake3.h"
 #include "bzlib.h"
+#include "cli_parse.h"
 #if !defined(_WIN32)
 #include "curl/curl.h"
 #endif
@@ -21,7 +21,8 @@
 #include "semver.hpp"
 #include "sol/sol.hpp"
 #include "tui.h"
-#include "zlib.h"
+#include "util.h"
+#include "zlib_compat.h"
 #include "zstd.h"
 
 #include <array>
@@ -37,53 +38,17 @@
 
 namespace envy {
 
-void cmd_version::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("version", "Show version information") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_flag("--licenses", cfg_ptr->show_licenses, "Print all licenses");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_version::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("version", "Show version information") };
+  sub.flag("--licenses", c.show_licenses, "Print all licenses");
+  return sub;
 }
 
 namespace {
 
 void print_licenses() {
-  z_stream strm{};
-  strm.next_in =
-      const_cast<Bytef *>(reinterpret_cast<Bytef const *>(embedded::kLicensesCompressed));
-  strm.avail_in = static_cast<uInt>(embedded::kLicensesCompressedSize);
-
-  // 16 + MAX_WBITS enables gzip header detection
-  if (inflateInit2(&strm, 16 + MAX_WBITS) != Z_OK) {
-    tui::error("Failed to initialize zlib for license decompression");
-    return;
-  }
-
-  std::vector<unsigned char> decompressed;
-  decompressed.resize(256 * 1024);
-
-  strm.next_out = decompressed.data();
-  strm.avail_out = static_cast<uInt>(decompressed.size());
-
-  int ret{ Z_OK };
-  while (ret != Z_STREAM_END) {
-    ret = inflate(&strm, Z_NO_FLUSH);
-    if (ret == Z_BUF_ERROR && strm.avail_out == 0) {
-      size_t const old_size{ decompressed.size() };
-      decompressed.resize(old_size * 2);
-      strm.next_out = decompressed.data() + old_size;
-      strm.avail_out = static_cast<uInt>(old_size);
-    } else if (ret != Z_OK && ret != Z_STREAM_END) {
-      inflateEnd(&strm);
-      tui::error("Failed to decompress licenses (zlib error %d)", ret);
-      return;
-    }
-  }
-
-  size_t const total_size{ strm.total_out };
-  inflateEnd(&strm);
-
-  if (std::fwrite(decompressed.data(), 1, total_size, stdout) != total_size) {
+  std::string const text{ util_inflate_resource(embedded::kLicenses) };
+  if (std::fwrite(text.data(), 1, text.size(), stdout) != text.size()) {
     tui::error("Failed to write licenses to stdout");
   }
 }
@@ -158,7 +123,6 @@ void cmd_version::execute() {
             SEMVER_VERSION_MINOR,
             SEMVER_VERSION_PATCH);
   tui::info("  picojson: %s", ENVY_PICOJSON_VERSION);
-  tui::info("  CLI11: %s", CLI11_VERSION);
 
   if (cfg_.show_licenses) {
     tui::info("");

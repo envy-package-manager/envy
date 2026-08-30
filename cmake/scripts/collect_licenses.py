@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Compress license files into a gzip blob.
+"""Concatenate license files into one text blob.
 
-Usage: compress_licenses.py <output.gz> <manifest-file>
+Usage: collect_licenses.py <output.txt> <manifest-file>
 
 Reads manifest (from find_licenses.py) with format: name|license_path
-Concatenates licenses with headers, gzip compresses, writes to output.
+Concatenates licenses with component headers and writes plain UTF-8; embed_resource.py
+--compress squeezes it alongside every other embedded resource.
 """
 
 import argparse
-import gzip
 import html
 import re
 import sys
@@ -39,7 +39,7 @@ def extract_lua_license(html_content: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", help="Output .gz file path")
+    parser.add_argument("output", help="Output .txt file path")
     parser.add_argument("manifest", help="Manifest file from find_licenses.py")
     args = parser.parse_args()
 
@@ -84,11 +84,9 @@ def main() -> int:
 
     full_text = "\n".join(parts)
 
-    # Compress and write
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(output_path, "wb", compresslevel=9) as f:
-        f.write(full_text.encode("utf-8"))
+    output_path.write_bytes(full_text.encode("utf-8"))
 
     return 0
 

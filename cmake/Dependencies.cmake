@@ -88,10 +88,6 @@ set(ENVY_LIBZSTD_ARCHIVE "zstd-${ENVY_LIBZSTD_VERSION}.tar.gz")
 set(ENVY_LIBZSTD_URL "https://github.com/facebook/zstd/archive/refs/tags/v${ENVY_LIBZSTD_VERSION}.tar.gz")
 set(ENVY_LIBZSTD_SHA256 37d7284556b20954e56e1ca85b80226768902e2edabd3b649e9e72c0c9012ee3)
 
-set(ENVY_CLI11_VERSION "2.6.2")
-set(ENVY_CLI11_URL "https://github.com/CLIUtils/CLI11/releases/download/v${ENVY_CLI11_VERSION}/CLI11.hpp")
-set(ENVY_CLI11_SHA256 227a16fe5f9f8ada80c3c409492475536f597e7bd83a6c26eacc3c8c149a9295)
-
 set(ENVY_SEMVER_VERSION "1.0.0-rc")
 set(ENVY_SEMVER_URL "https://raw.githubusercontent.com/Neargye/semver/v${ENVY_SEMVER_VERSION}/include/semver.hpp")
 set(ENVY_SEMVER_SHA256 af2c0c53124dc7f52c58a7205e458ad3efbac2f61ce55addf9c8f94338a04182)
@@ -141,7 +137,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/deps/Libarchive.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Blake3.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Lua.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Sol2.cmake")
-include("${CMAKE_CURRENT_LIST_DIR}/deps/CLI11.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Semver.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Picojson.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Doctest.cmake")
@@ -166,7 +161,6 @@ target_link_libraries(envy_thirdparty
         lua::lua
         sol2::sol2
         blake3::blake3
-        CLI11::CLI11
         semver::semver
         picojson::picojson
         AWS::aws-cpp-sdk-s3

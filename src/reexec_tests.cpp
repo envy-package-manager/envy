@@ -130,7 +130,8 @@ TEST_CASE("reexec_argv_without: absent option leaves argv untouched") {
 }
 
 TEST_CASE("reexec_argv_without: trailing option with no value") {
-  // CLI11 would have rejected this already; the filter must not read past the terminator.
+  // The parser would have rejected this already; the filter must not read past the
+  // terminator.
   auto argv{ make_argv({ "envy", "init", "--envy-version" }) };
   auto const kept{ to_strings(envy::reexec_argv_without(argv.data(), "--envy-version")) };
   CHECK(kept == std::vector<std::string>{ "envy", "init" });

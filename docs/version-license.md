@@ -10,10 +10,10 @@
 `find_licenses.py` searches each dependency source directory for common license file names (LICENSE, COPYING, LICENSE.txt, etc.), writes a manifest of discovered paths.
 
 ### Build Time
-`compress_licenses.py` reads the manifest, concatenates licenses with component headers, gzip-compresses the result. CMake `add_custom_command` with DEPENDS on all license files ensures rebuilds on changes.
+`collect_licenses.py` reads the manifest and concatenates licenses with component headers; `embed_resource.py --compress` gzips the blob, the same path every other embedded resource takes. CMake `add_custom_command` with DEPENDS on all license files ensures rebuilds on changes.
 
 ### Runtime
-zlib `inflate()` decompresses the embedded blob; output goes to stdout for piping.
+`util_inflate_resource` expands the embedded blob; output goes to stdout for piping.
 
 ## Output Format
 
@@ -38,6 +38,7 @@ BLAKE3
 |------|---------|
 | `LICENSE` | Envy's dual 0BSD/Unlicense |
 | `cmake/scripts/find_licenses.py` | Discover license files in source dirs |
-| `cmake/scripts/compress_licenses.py` | Concatenate and gzip compress |
+| `cmake/scripts/collect_licenses.py` | Concatenate into one text blob |
+| `cmake/scripts/embed_resource.py` | Gzip and emit as a `gz_resource` |
 | `cmake/FindLicenses.cmake` | CMake integration |
 | `src/cmds/cmd_version.cpp` | Decompression and display |

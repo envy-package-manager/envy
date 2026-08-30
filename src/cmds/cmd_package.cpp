@@ -11,28 +11,21 @@
 #include "tui.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <memory>
 #include <set>
 
 namespace envy {
 
-void cmd_package::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("package",
-                                "Query and install package, print package path") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("identity",
-                  cfg_ptr->identity,
-                  "Package identity (partial matching supported)")
-      ->required();
-  sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest");
-  sub->add_flag("--ignore-depot",
-                cfg_ptr->ignore_depot,
-                "Ignore package depot; rebuild from source")
-      ->envname("ENVY_IGNORE_DEPOT");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_package::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("package", "Query and install package, print package path") };
+  sub.pos("identity", c.identity, "Package identity (partial matching supported)")
+      .required();
+  sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
+  sub.flag("--ignore-depot", c.ignore_depot, "Ignore package depot; rebuild from source")
+      .envname("ENVY_IGNORE_DEPOT");
+  return sub;
 }
 
 cmd_package::cmd_package(cfg cfg,

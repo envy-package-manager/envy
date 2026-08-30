@@ -8,7 +8,7 @@
 #include "self_deploy.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <memory>
@@ -20,19 +20,13 @@ namespace envy {
 
 namespace fs = std::filesystem;
 
-void cmd_install::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("install", "Install packages from manifest") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("queries",
-                  cfg_ptr->queries,
-                  "Package queries to install (install all if omitted)");
-  sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest");
-  sub->add_flag("--ignore-depot",
-                cfg_ptr->ignore_depot,
-                "Ignore package depot; rebuild from source")
-      ->envname("ENVY_IGNORE_DEPOT");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_install::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("install", "Install packages from manifest") };
+  sub.pos("queries", c.queries, "Package queries to install (install all if omitted)");
+  sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
+  sub.flag("--ignore-depot", c.ignore_depot, "Ignore package depot; rebuild from source")
+      .envname("ENVY_IGNORE_DEPOT");
+  return sub;
 }
 
 cmd_install::cmd_install(cfg cfg, std::optional<fs::path> const &cli_cache_root)

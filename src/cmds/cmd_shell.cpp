@@ -7,7 +7,7 @@
 #include "platform.h"
 #include "tui.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <memory>
@@ -63,15 +63,12 @@ std::optional<cache_root_resolution> project_cache_best_effort(
 
 }  // namespace
 
-void cmd_shell::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("shell",
-                                "Print shell hook source line for your profile") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("shell", cfg_ptr->shell, "Shell name (bash, zsh, fish, powershell)")
-      ->required()
-      ->check(CLI::IsMember({ "bash", "zsh", "fish", "powershell" }));
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_shell::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("shell", "Print shell hook source line for your profile") };
+  sub.pos("shell", c.shell, "Shell name (bash, zsh, fish, powershell)")
+      .required()
+      .one_of("bash,zsh,fish,powershell");
+  return sub;
 }
 
 cmd_shell::cmd_shell(cmd_shell::cfg cfg, std::optional<fs::path> const &cli_cache_root)

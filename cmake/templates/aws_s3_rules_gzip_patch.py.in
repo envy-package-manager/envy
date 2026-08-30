@@ -1,0 +1,95 @@
+import pathlib
+import re
+import zlib
+
+# The generated S3 endpoint ruleset is a 119 KB JSON document emitted as one
+# char literal per byte -- 2.6% of the whole envy binary for a table that is
+# read once, when an S3 client is constructed. Deflate it (zlib format, ~4.5 KB)
+# and inflate on first call instead. RulesBlobStrLen/RulesBlobSize keep their
+# uncompressed values because S3EndpointProvider passes them to the rule engine
+# alongside the pointer.
+#
+# uncompress() is declared locally rather than via <zlib.h>: the aws-cpp-sdk-s3
+# target does not depend on zlib, but envy links it into the same executable, so
+# the symbol resolves at link time without touching the SDK's build files.
+
+rules_cpp = pathlib.Path(r"@AWS_S3_ENDPOINT_RULES_CPP@")
+text = rules_cpp.read_text()
+
+marker = "/* envy: deflated ruleset */"
+if marker in text:
+    raise SystemExit(0)
+
+m = re.search(r"static constexpr RulesBlobT RulesBlob = \{\s*\{(.*?)\}\s*\};", text, re.S)
+if not m:
+    raise RuntimeError("aws-sdk-s3: RulesBlob array literal not found")
+
+# Only '\\', '\'' and '\0' are escaped; every other entry is a bare printable char.
+escapes = {"\\\\": 0x5C, "\\'": 0x27, "\\0": 0x00}
+blob = bytearray()
+for lit in re.findall(r"'((?:\\.|[^'])*)'", m.group(1)):
+    blob.append(escapes[lit] if lit in escapes else ord(lit))
+
+str_len = int(re.search(r"RulesBlobStrLen = (\d+);", text).group(1))
+size = int(re.search(r"RulesBlobSize = (\d+);", text).group(1))
+if len(blob) != size or blob[-1] != 0 or len(blob) != str_len + 1:
+    raise RuntimeError(
+        f"aws-sdk-s3: recovered {len(blob)} bytes, expected {size} "
+        f"(str_len {str_len}, trailing NUL {blob[-1] if blob else 'n/a'})"
+    )
+
+payload = bytes(blob[:str_len])  # drop the NUL; re-added after inflate
+deflated = zlib.compress(payload, 9)
+if zlib.decompress(deflated) != payload:
+    raise RuntimeError("aws-sdk-s3: deflate round-trip mismatch")
+
+rows = [
+    "    " + ", ".join(f"0x{b:02x}" for b in deflated[i : i + 16])
+    for i in range(0, len(deflated), 16)
+]
+
+replacement = (
+    marker
+    + "\nextern \"C\" int uncompress(unsigned char *dest, unsigned long *destLen,\n"
+    "                          unsigned char const *source, unsigned long sourceLen);\n\n"
+    f"static constexpr unsigned char RulesBlobDeflated[{len(deflated)}] = {{\n"
+    + ",\n".join(rows)
+    + "\n};\n\n"
+    f"static char RulesBlobInflated[S3EndpointRules::RulesBlobSize];\n"
+)
+
+text = text.replace(m.group(0), replacement, 1)
+
+old_getter = "const char* S3EndpointRules::GetRulesBlob() { return RulesBlob.data(); }"
+if old_getter not in text:
+    raise RuntimeError("aws-sdk-s3: GetRulesBlob definition not found")
+
+new_getter = (
+    "const char* S3EndpointRules::GetRulesBlob() {\n"
+    "  // Function-local static: inflated once, thread-safely, on first use.\n"
+    "  static char const *const blob = []() -> char const * {\n"
+    "    unsigned long len = S3EndpointRules::RulesBlobStrLen;\n"
+    "    if (uncompress(reinterpret_cast<unsigned char *>(RulesBlobInflated), &len,\n"
+    "                   RulesBlobDeflated, sizeof(RulesBlobDeflated)) != 0 ||\n"
+    "        len != S3EndpointRules::RulesBlobStrLen) {\n"
+    "      return \"\";  // unreachable: the payload is validated at patch time\n"
+    "    }\n"
+    "    RulesBlobInflated[S3EndpointRules::RulesBlobStrLen] = '\\0';\n"
+    "    return RulesBlobInflated;\n"
+    "  }();\n"
+    "  return blob;\n"
+    "}"
+)
+
+text = text.replace(old_getter, new_getter, 1)
+
+# Aws::Array is only referenced by the literal we just removed.
+text = text.replace(
+    "using RulesBlobT = Aws::Array<const char, S3EndpointRules::RulesBlobSize>;\n", "", 1
+)
+
+rules_cpp.write_text(text)
+print(
+    f"aws-sdk-s3: RulesBlob {str_len:,} -> {len(deflated):,} bytes deflated "
+    f"({str_len - len(deflated):,} saved)"
+)

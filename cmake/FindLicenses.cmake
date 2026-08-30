@@ -1,25 +1,25 @@
-# FindLicenses.cmake - Discover and compress third-party licenses
+# FindLicenses.cmake - Discover and concatenate third-party licenses
 #
-# find_and_compress_licenses(
-#     OUTPUT <output.gz>
+# find_and_collect_licenses(
+#     OUTPUT <output.txt>
 #     SOURCES <name1>=<path1> [<name2>=<path2> ...]
 # )
 #
-# Discovers license files at configure time, compresses at build time.
-# Creates custom target 'envy_licenses_compressed' that generates the output file.
+# Discovers license files at configure time, concatenates at build time. Creates custom
+# target 'envy_licenses_collected'; embed_resources() COMPRESS does the gzipping.
 
-function(find_and_compress_licenses)
+function(find_and_collect_licenses)
     cmake_parse_arguments(PARSE_ARGV 0 ARG "" "OUTPUT" "SOURCES")
 
     if(NOT ARG_OUTPUT)
-        message(FATAL_ERROR "find_and_compress_licenses: OUTPUT is required")
+        message(FATAL_ERROR "find_and_collect_licenses: OUTPUT is required")
     endif()
     if(NOT ARG_SOURCES)
-        message(FATAL_ERROR "find_and_compress_licenses: SOURCES is required")
+        message(FATAL_ERROR "find_and_collect_licenses: SOURCES is required")
     endif()
 
     set(FIND_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/find_licenses.py")
-    set(COMPRESS_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/compress_licenses.py")
+    set(COLLECT_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scripts/collect_licenses.py")
     set(MANIFEST_FILE "${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.manifest")
 
     # Run find_licenses.py at configure time to discover license paths
@@ -47,15 +47,15 @@ function(find_and_compress_licenses)
     get_filename_component(OUTPUT_DIR "${ARG_OUTPUT}" DIRECTORY)
     file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 
-    # Build-time compression command
+    # Build-time concatenation command
     add_custom_command(
         OUTPUT "${ARG_OUTPUT}"
-        COMMAND "${Python3_EXECUTABLE}" "${COMPRESS_SCRIPT}" "${ARG_OUTPUT}" "${MANIFEST_FILE}"
-        DEPENDS ${LICENSE_FILES} "${MANIFEST_FILE}" "${COMPRESS_SCRIPT}"
-        COMMENT "Compressing third-party licenses"
+        COMMAND "${Python3_EXECUTABLE}" "${COLLECT_SCRIPT}" "${ARG_OUTPUT}" "${MANIFEST_FILE}"
+        DEPENDS ${LICENSE_FILES} "${MANIFEST_FILE}" "${COLLECT_SCRIPT}"
+        COMMENT "Collecting third-party licenses"
         VERBATIM
     )
 
     # Custom target for dependency tracking
-    add_custom_target(envy_licenses_compressed DEPENDS "${ARG_OUTPUT}")
+    add_custom_target(envy_licenses_collected DEPENDS "${ARG_OUTPUT}")
 endfunction()

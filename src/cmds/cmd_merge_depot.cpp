@@ -6,7 +6,7 @@
 #include "tui_actions.h"
 #include "uri.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <cctype>
 #include <filesystem>
@@ -131,41 +131,40 @@ std::unordered_set<std::string> parse_s3_ls_lines(std::istream &in) {
   return keys;
 }
 
-void cmd_merge_depot::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("merge-depot", "Merge depot manifest files") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("depot_manifests",
-                  cfg_ptr->depot_manifests,
-                  "Per-OS depot manifest files to merge")
-      ->required()
-      ->check(CLI::ExistingFile);
-  sub->add_option("--existing",
-                  cfg_ptr->existing_path,
-                  "Existing merged depot manifest (local path or remote URL)");
-  auto retain_str{ std::make_shared<std::string>() };
-  auto *retain_opt{ sub->add_option("--retain",
-                                    *retain_str,
-                                    "Retain list: prune entries whose path is absent") };
-  auto *retain_s3_ls_opt{
-    sub->add_option("--retain-s3-ls", *retain_str, "Retain list in 'aws s3 ls' format")
+cli_cmd &cmd_merge_depot::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("merge-depot", "Merge depot manifest files") };
+  sub.pos("depot_manifests", c.depot_manifests, "Per-OS depot manifest files to merge")
+      .required()
+      .check_file();
+  sub.opt("--existing",
+          c.existing_path,
+          "Existing merged depot manifest (local path or remote URL)");
+  auto const retain_opt{ sub.opt("--retain",
+                                 c.retain_plain,
+                                 "Retain list: prune entries whose path is absent") };
+  auto const retain_s3_ls_opt{
+    sub.opt("--retain-s3-ls", c.retain_s3_ls, "Retain list in 'aws s3 ls' format")
   };
-  retain_opt->excludes(retain_s3_ls_opt);
-  retain_opt->each([cfg_ptr](std::string const &val) {
-    cfg_ptr->retain = retain_source{ val, retain_format::PLAIN };
-  });
-  retain_s3_ls_opt->each([cfg_ptr](std::string const &val) {
-    cfg_ptr->retain = retain_source{ val, retain_format::S3_LS };
-  });
-  sub->add_option("--retain-prefix",
-                  cfg_ptr->retain_prefix,
-                  "Prefix to prepend to each retain entry before matching");
-  sub->add_flag("--strict",
-                cfg_ptr->strict,
-                "Treat hash changes vs existing depot manifest as errors");
-  sub->callback([cfg_ptr, retain_str, on_selected = std::move(on_selected)] {
-    (void)retain_str;  // prevent -Wunused-lambda-capture; extends lifetime for CLI11
-    on_selected(*cfg_ptr);
-  });
+  retain_opt.excludes(retain_s3_ls_opt);
+  sub.opt("--retain-prefix",
+          c.retain_prefix,
+          "Prefix to prepend to each retain entry before matching");
+  sub.flag("--strict",
+           c.strict,
+           "Treat hash changes vs existing depot manifest as errors");
+  sub.finalize(
+      [](void *p) -> char const * {
+        auto &sel{ *static_cast<cfg *>(p) };
+        if (sel.retain_plain) {
+          sel.retain = retain_source{ *sel.retain_plain, retain_format::PLAIN };
+        }
+        if (sel.retain_s3_ls) {
+          sel.retain = retain_source{ *sel.retain_s3_ls, retain_format::S3_LS };
+        }
+        return nullptr;
+      },
+      &c);
+  return sub;
 }
 
 cmd_merge_depot::cmd_merge_depot(

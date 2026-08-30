@@ -3,7 +3,7 @@
 #include "git_resolve.h"
 #include "tui.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <chrono>
 #include <memory>
@@ -12,17 +12,13 @@
 
 namespace envy {
 
-void cmd_git_resolve::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand(
+cli_cmd &cmd_git_resolve::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub(
       "git-resolve",
       "Resolve a git ref (tag/branch/sha) in a remote repo to a full commit sha") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("url", cfg_ptr->repo, "Remote repository URL (https/git/file)")
-      ->required();
-  sub->add_option("ref", cfg_ptr->ref, "Ref to resolve: tag, branch, or full sha")
-      ->required();
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+  sub.pos("url", c.repo, "Remote repository URL (https/git/file)").required();
+  sub.pos("ref", c.ref, "Ref to resolve: tag, branch, or full sha").required();
+  return sub;
 }
 
 cmd_git_resolve::cmd_git_resolve(

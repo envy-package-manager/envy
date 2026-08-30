@@ -16,15 +16,14 @@ namespace {
 
 struct hook_resource {
   char const *ext;
-  unsigned char const *data;
-  std::size_t size;
+  gz_resource res;
 };
 
 constexpr hook_resource kHooks[] = {
-  { "bash", embedded::kShellHookBash, embedded::kShellHookBashSize },
-  { "zsh", embedded::kShellHookZsh, embedded::kShellHookZshSize },
-  { "fish", embedded::kShellHookFish, embedded::kShellHookFishSize },
-  { "ps1", embedded::kShellHookPs1, embedded::kShellHookPs1Size },
+  { "bash", embedded::kShellHookBash },
+  { "zsh", embedded::kShellHookZsh },
+  { "fish", embedded::kShellHookFish },
+  { "ps1", embedded::kShellHookPs1 },
 };
 
 }  // namespace
@@ -90,9 +89,8 @@ int ensure(std::filesystem::path const &cache_root) {
     }
 
     bool const was_update{ fs::exists(hook_path) };
-    std::string_view const content{ reinterpret_cast<char const *>(h.data), h.size };
     try {
-      util_write_file(hook_path, content);
+      util_write_file(hook_path, util_inflate_resource(h.res));
       ++written;
       if (was_update) { tui::info("Shell hook updated (%s) — restart your shell", h.ext); }
     } catch (std::exception const &e) {

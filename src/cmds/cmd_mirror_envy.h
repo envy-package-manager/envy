@@ -3,15 +3,14 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 // One release archive to mirror.
 struct mirror_envy_item {
@@ -59,7 +58,7 @@ class cmd_mirror_envy : public cmd {
     std::string from;
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_mirror_envy(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

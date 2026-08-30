@@ -5,7 +5,7 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <memory>
@@ -31,13 +31,11 @@ void hash_one_file(std::filesystem::path const &file,
 
 }  // namespace
 
-void cmd_hash::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("hash", "Compute SHA256 hash of files") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("paths", cfg_ptr->paths, "Files and/or directories to hash")->required();
-  sub->add_option("--prefix", cfg_ptr->prefix, "URL prefix for output lines");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_hash::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("hash", "Compute SHA256 hash of files") };
+  sub.pos("paths", c.paths, "Files and/or directories to hash").required();
+  sub.opt("--prefix", c.prefix, "URL prefix for output lines");
+  return sub;
 }
 
 cmd_hash::cmd_hash(cmd_hash::cfg cfg,

@@ -8,7 +8,7 @@
 #include "self_deploy.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <memory>
@@ -18,28 +18,20 @@ namespace envy {
 
 namespace fs = std::filesystem;
 
-void cmd_deploy::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("deploy", "Deploy product scripts") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("identities",
-                  cfg_ptr->identities,
-                  "Spec identities to deploy (deploy all if omitted)");
-  auto *manifest_opt{
-    sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest")
+cli_cmd &cmd_deploy::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("deploy", "Deploy product scripts") };
+  sub.pos("identities", c.identities, "Spec identities to deploy (deploy all if omitted)");
+  auto const manifest_opt{
+    sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest")
   };
-  sub->add_flag("--strict",
-                cfg_ptr->strict,
-                "Error on non-envy-managed product script conflicts");
-  sub->add_flag("--subproject",
-                cfg_ptr->subproject,
-                "Use nearest manifest instead of walking to root")
-      ->excludes(manifest_opt);
-  sub->add_option("--platform",
-                  cfg_ptr->platform_flag,
-                  "Script platform: posix, windows, or all (default: current OS)")
-      ->check(CLI::IsMember({ "posix", "windows", "all" }));
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+  sub.flag("--strict", c.strict, "Error on non-envy-managed product script conflicts");
+  sub.flag("--subproject", c.subproject, "Use nearest manifest instead of walking to root")
+      .excludes(manifest_opt);
+  sub.opt("--platform",
+          c.platform_flag,
+          "Script platform: posix, windows, or all (default: current OS)")
+      .one_of("posix,windows,all");
+  return sub;
 }
 
 cmd_deploy::cmd_deploy(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root)

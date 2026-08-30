@@ -10,7 +10,7 @@
 #include "uri.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -149,25 +149,19 @@ mirror_envy_plan mirror_envy_make_plan(std::string_view version,
   return plan;
 }
 
-void cmd_mirror_envy::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("mirror-envy",
-                                "Mirror an envy release for all platforms to a directory "
-                                "or S3 prefix") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  cfg_ptr->from = std::string{ kEnvyReleaseDownloadUrl };
+cli_cmd &cmd_mirror_envy::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("mirror-envy",
+                     "Mirror an envy release for all platforms to a directory or S3 "
+                     "prefix") };
+  c.from = std::string{ kEnvyReleaseDownloadUrl };
 
-  sub->add_option("version", cfg_ptr->version, "Envy version to mirror (e.g. 1.2.3)")
-      ->required();
-  sub->add_option("destination",
-                  cfg_ptr->dest,
-                  "Local directory or s3://bucket/prefix to mirror into")
-      ->required();
-  sub->add_option("--from",
-                  cfg_ptr->from,
-                  "Source mirror to read the release from (default: envy's GitHub "
-                  "releases)");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+  sub.pos("version", c.version, "Envy version to mirror (e.g. 1.2.3)").required();
+  sub.pos("destination", c.dest, "Local directory or s3://bucket/prefix to mirror into")
+      .required();
+  sub.opt("--from",
+          c.from,
+          "Source mirror to read the release from (default: envy's GitHub releases)");
+  return sub;
 }
 
 cmd_mirror_envy::cmd_mirror_envy(cmd_mirror_envy::cfg cfg,

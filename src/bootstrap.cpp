@@ -26,14 +26,10 @@ namespace {
 
 constexpr std::string_view kEnvyManagedMarker{ "envy-managed" };
 
-std::string_view get_bootstrap_template(platform_id platform) {
+std::string get_bootstrap_template(platform_id platform) {
   switch (platform) {
-    case platform_id::POSIX:
-      return { reinterpret_cast<char const *>(embedded::kBootstrapPosix),
-               embedded::kBootstrapPosixSize };
-    case platform_id::WINDOWS:
-      return { reinterpret_cast<char const *>(embedded::kBootstrapWindows),
-               embedded::kBootstrapWindowsSize };
+    case platform_id::POSIX: return util_inflate_resource(embedded::kBootstrapPosix);
+    case platform_id::WINDOWS: return util_inflate_resource(embedded::kBootstrapWindows);
     default: throw std::logic_error("unhandled platform_id in get_bootstrap_template");
   }
 }

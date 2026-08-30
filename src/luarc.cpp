@@ -59,16 +59,6 @@ std::string make_portable_path(fs::path const &path) {
 
 namespace {
 
-std::string_view get_type_definitions() {
-  return { reinterpret_cast<char const *>(embedded::kTypeDefinitions),
-           embedded::kTypeDefinitionsSize };
-}
-
-std::string_view get_luarc_template() {
-  return { reinterpret_cast<char const *>(embedded::kLuarcTemplate),
-           embedded::kLuarcTemplateSize };
-}
-
 void replace_all(std::string &s, std::string_view from, std::string_view to) {
   size_t pos{ 0 };
   while ((pos = s.find(from, pos)) != std::string::npos) {
@@ -202,7 +192,8 @@ fs::path extract_lua_ls_types(fs::path const &cache_root) {
                              types_dir.string() + ": " + ec.message());
   }
 
-  auto const types{ stamp_placeholders(get_type_definitions(), kEnvyReleaseDownloadUrl) };
+  auto const types{ stamp_placeholders(util_inflate_resource(embedded::kTypeDefinitions),
+                                       kEnvyReleaseDownloadUrl) };
   util_write_file(types_path, types);
 
   tui::info("Extracted type definitions to %s", types_path.string().c_str());
@@ -229,7 +220,7 @@ void write_luarc(fs::path const &project_dir, envy_meta const &meta) {
     entries += "\"" + canonical[i] + "\"";
   }
 
-  std::string content{ get_luarc_template() };
+  std::string content{ util_inflate_resource(embedded::kLuarcTemplate) };
   replace_all(content, "@@LUA_VERSION@@", LUA_VERSION);
   replace_all(content, "\"@@TYPES_DIR@@\"", entries);
 

@@ -31,7 +31,7 @@ Initialization & includes: brace-init new vars; use `=` only for reassignment; `
 Structure: favor value types over heap; keep headers self-contained; declare inline members in-class, define out-of-line right below; avoid ad-hoc FetchContent.
 Atomics: default to `memory_order_seq_cst`; only tighten semantics when correctness demands it.
 Formatting: prefer stdio-style (`snprintf`, `fprintf`) over iostream for output.
-Control flow: consolidate cleanup paths—extract once, clean once. Ternaries over branched returns when cleanup is identical. Prefer `switch` on variant index over cascading type checks; guard indices with `static_assert`. Golf judiciously: compress when clarity improves, expand when debugging suffers.
+Control flow: consolidate cleanup paths—extract once, clean once. Ternaries over branched returns when cleanup is identical. Visit variants with `std::visit` + `envy::match`, one lambda per alternative—a new alternative then fails to compile. Don't enumerate variant alternatives with an `if constexpr` cascade; its trailing return swallows the new one silently. (Cascades over open type sets with a meaningful catch-all are fine—see `sol_util.h` `type_name_for_error`.) `switch` on `index()` only when you need the index; guard with `static_assert`. It's ~55B/site cheaper than `match`—not a reason to prefer it. Golf judiciously: compress when clarity improves, expand when debugging suffers.
 Encapsulation: **NEVER use the `friend` keyword without explicit user permission.** Design proper public interfaces instead—move implementation into methods, use accessor patterns, or restructure classes to avoid circumventing access control.
 
 ## Testing Guidelines & Performance Philosophy
