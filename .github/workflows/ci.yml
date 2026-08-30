@@ -70,10 +70,11 @@ jobs:
             build_args: --sanitizer=asan
             cache_group: linux-x64-asan
             cache_writer: true
+          # Stamped so version bugs land here, not at tag time; a tag's own -D still wins.
           - name: linux-x64-ubsan
             os: ubuntu-latest
             shard: func-ubsan
-            build_args: --sanitizer=ubsan
+            build_args: --sanitizer=ubsan -DENVY_VERSION=0.3.0
             cache_group: linux-x64-ubsan
             cache_writer: true
           - name: linux-x64-tsan

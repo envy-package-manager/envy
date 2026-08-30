@@ -18,10 +18,10 @@ from pathlib import Path
 from . import test_config
 from .env import EnvyTestCase
 
-# Pinning a version keeps the shipped launcher off the network: it finds the binary at
-# $CACHE/envy/<version>/envy and execs it. The binary is a dev build (0.0.0), which never
-# re-execs on a version mismatch.
-PINNED_VERSION = "1.2.3"
+# Pin this build: the launcher finds it at $CACHE/envy/<version>/envy, and any other pin
+# re-execs on a release build -- only a dev build (0.0.0) is exempt from the download.
+PINNED_VERSION = test_config.get_envy_version()
+SKEW_VERSION = "1.2.3"  # TestStampedVersionSkew wants that mismatch, and opts in for it
 BINARY_NAME = "envy.exe" if sys.platform == "win32" else "envy"
 
 
@@ -53,6 +53,7 @@ class _AnchorTestBase(EnvyTestCase):
         bin_value: str = "tools",
         directives: str = "",
         root: Path | None = None,
+        version: str = PINNED_VERSION,
     ) -> Path:
         """A project rooted at `root or tree/name`, providing `products`."""
         root = root or (self.tree / name)
@@ -63,7 +64,7 @@ class _AnchorTestBase(EnvyTestCase):
         (root / "envy.lua").write_text(
             f'-- @envy bin "{bin_value}"\n'
             f'-- @envy deploy "true"\n'
-            f'-- @envy version "{PINNED_VERSION}"\n'
+            f'-- @envy version "{version}"\n'
             f"{directives}"
             f'PACKAGES = {{\n  {{ spec = "local.{name}@v1", '
             f'source = "{self.lua_path(spec)}" }},\n}}\n',
@@ -542,19 +543,17 @@ class TestStampedVersionSkew(_AnchorTestBase):
     """
 
     def test_a_pin_the_running_build_does_not_match_warns(self):
-        b = self.project("b", '{ tool = "B-tool" }')
-        run = self.sync(b / "envy.lua", cwd=b)
+        b = self.project("b", '{ tool = "B-tool" }', version=SKEW_VERSION)
+        env = test_config.get_test_env()
+        env["ENVY_NO_REEXEC"] = "1"  # a release build would exec the pin, not warn
+        run = self.sync(b / "envy.lua", cwd=b, env=env)
         self.assertEqual(0, run.returncode, run.stderr)
-        self.assertIn(f"pins {PINNED_VERSION}", run.stderr)
+        self.assertIn(f"pins {SKEW_VERSION}", run.stderr)
         self.assertIn("Retarget the pin", run.stderr)
 
     def test_a_matching_pin_is_silent(self):
-        b = self.project("b", '{ tool = "B-tool" }')
-        env = dict(os.environ)
-        env.update(test_config.get_test_env())
-        env["ENVY_TEST_SELF_VERSION"] = PINNED_VERSION
-        env["ENVY_NO_REEXEC"] = "1"
-        run = self.sync(b / "envy.lua", cwd=b, env=env)
+        b = self.project("b", '{ tool = "B-tool" }')  # pins this build
+        run = self.sync(b / "envy.lua", cwd=b)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertNotIn("bin scripts stamped from", run.stderr)
 
