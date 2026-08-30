@@ -3966,10 +3966,14 @@ TEST_CASE("cli_parse: cache-test parent and children") {
     // strtol widens to long, so these parse cleanly but do not fit an int.
     rejects({ "envy", "cache-test", "ensure-spec", "a", "--crash-after", "2147483648" });
     rejects({ "envy", "cache-test", "ensure-spec", "a", "--crash-after", "-2147483649" });
-    rejects({ "envy", "cache-test", "ensure-spec", "a", "--crash-after",
+    rejects({ "envy",
+              "cache-test",
+              "ensure-spec",
+              "a",
+              "--crash-after",
               "99999999999999999999" });
-    CHECK(accepts<envy::cmd_cache_ensure_spec::cfg>({ "envy", "cache-test", "ensure-spec",
-                                                      "a", "--crash-after", "2147483647" })
+    CHECK(accepts<envy::cmd_cache_ensure_spec::cfg>(
+              { "envy", "cache-test", "ensure-spec", "a", "--crash-after", "2147483647" })
               .crash_after_ms == 2147483647);
   }
 

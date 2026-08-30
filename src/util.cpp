@@ -193,8 +193,9 @@ std::string util_inflate_resource(gz_resource const &res) {
   // so exceeding it means the generator is broken, not that the input is legitimately big.
   constexpr size_t kZlibMax{ std::numeric_limits<uInt>::max() };
   if (res.size > kZlibMax || res.inflated_size > kZlibMax) {
-    throw std::runtime_error("util_inflate_resource: resource exceeds zlib's 32-bit "
-                             "limit");
+    throw std::runtime_error(
+        "util_inflate_resource: resource exceeds zlib's 32-bit "
+        "limit");
   }
 
   z_stream strm{};
@@ -218,8 +219,9 @@ std::string util_inflate_resource(gz_resource const &res) {
       size_t const grown{ out.size() };
       if (grown > kZlibMax / 2) {
         inflateEnd(&strm);
-        throw std::runtime_error("util_inflate_resource: inflated size exceeds zlib's "
-                                 "32-bit limit");
+        throw std::runtime_error(
+            "util_inflate_resource: inflated size exceeds zlib's "
+            "32-bit limit");
       }
       out.resize(grown * 2);
       strm.next_out = reinterpret_cast<Bytef *>(out.data()) + grown;
