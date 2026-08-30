@@ -21,14 +21,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string_view get_product_script_template(platform_id platform) {
+std::string get_product_script_template(platform_id platform) {
   switch (platform) {
-    case platform_id::POSIX:
-      return { reinterpret_cast<char const *>(embedded::kProductScriptPosix),
-               embedded::kProductScriptPosixSize };
+    case platform_id::POSIX: return util_inflate_resource(embedded::kProductScriptPosix);
     case platform_id::WINDOWS:
-      return { reinterpret_cast<char const *>(embedded::kProductScriptWindows),
-               embedded::kProductScriptWindowsSize };
+      return util_inflate_resource(embedded::kProductScriptWindows);
     default:
       throw std::logic_error("unhandled platform_id in get_product_script_template");
   }

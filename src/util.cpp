@@ -2,6 +2,8 @@
 
 #include "platform.h"
 
+#include "zlib.h"
+
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -183,6 +185,38 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
     throw std::runtime_error("util_write_file: failed to rename " + temp_path.string() +
                              " to " + path.string() + ": " + ec.message());
   }
+}
+
+std::string util_inflate_resource(gz_resource const &res) {
+  z_stream strm{};
+  strm.next_in = const_cast<Bytef *>(res.data);
+  strm.avail_in = static_cast<uInt>(res.size);
+  if (inflateInit2(&strm, 16 + MAX_WBITS) != Z_OK) {  // 16 + MAX_WBITS: gzip header
+    throw std::runtime_error("util_inflate_resource: inflateInit2 failed");
+  }
+
+  std::string out;
+  out.resize(res.inflated_size ? res.inflated_size : 64 * 1024);
+  strm.next_out = reinterpret_cast<Bytef *>(out.data());
+  strm.avail_out = static_cast<uInt>(out.size());
+
+  int ret{ Z_OK };
+  while (ret != Z_STREAM_END) {
+    ret = inflate(&strm, Z_NO_FLUSH);
+    if (ret == Z_BUF_ERROR && strm.avail_out == 0) {
+      size_t const grown{ out.size() };
+      out.resize(grown * 2);
+      strm.next_out = reinterpret_cast<Bytef *>(out.data()) + grown;
+      strm.avail_out = static_cast<uInt>(grown);
+    } else if (ret != Z_OK && ret != Z_STREAM_END) {
+      inflateEnd(&strm);
+      throw std::runtime_error("util_inflate_resource: corrupt gzip stream");
+    }
+  }
+
+  out.resize(strm.total_out);
+  inflateEnd(&strm);
+  return out;
 }
 
 std::string util_format_bytes(std::uint64_t bytes) {

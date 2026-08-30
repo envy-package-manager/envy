@@ -3,7 +3,7 @@
 #include "cache.h"
 #include "platform.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <chrono>
 #include <filesystem>
@@ -41,21 +41,19 @@ class test_barrier {
   std::filesystem::path barrier_dir_;
 };
 
-void add_cache_test_options(CLI::App &sub, cache_test_cfg &cfg) {
-  sub.add_option("--test-id", cfg.test_id, "Test ID for barrier isolation");
-  sub.add_option("--barrier-dir", cfg.barrier_dir, "Barrier directory");
-  sub.add_option("--barrier-signal", cfg.barrier_signal, "Barrier to signal before lock");
-  sub.add_option("--barrier-wait", cfg.barrier_wait, "Barrier to wait for before lock");
-  sub.add_option("--barrier-signal-after",
-                 cfg.barrier_signal_after,
-                 "Barrier to signal after lock");
-  sub.add_option("--barrier-wait-after",
-                 cfg.barrier_wait_after,
-                 "Barrier to wait for after lock");
-  sub.add_option("--crash-after", cfg.crash_after_ms, "Crash after N milliseconds");
-  sub.add_flag("--fail-before-complete",
-               cfg.fail_before_complete,
-               "Exit without marking complete");
+void add_cache_test_options(cli_cmd &sub, cache_test_cfg &cfg) {
+  sub.opt("--test-id", cfg.test_id, "Test ID for barrier isolation");
+  sub.opt("--barrier-dir", cfg.barrier_dir, "Barrier directory");
+  sub.opt("--barrier-signal", cfg.barrier_signal, "Barrier to signal before lock");
+  sub.opt("--barrier-wait", cfg.barrier_wait, "Barrier to wait for before lock");
+  sub.opt("--barrier-signal-after", cfg.barrier_signal_after, "Barrier to signal after "
+                                                              "lock");
+  sub.opt("--barrier-wait-after", cfg.barrier_wait_after, "Barrier to wait for after "
+                                                          "lock");
+  sub.opt("--crash-after", cfg.crash_after_ms, "Crash after N milliseconds");
+  sub.flag("--fail-before-complete",
+           cfg.fail_before_complete,
+           "Exit without marking complete");
 }
 
 // The two ensure_* variants differ only in which entry they take, so the
@@ -90,29 +88,22 @@ void run_ensure(cache_test_cfg const &cfg, EnsureFn &&ensure) {
 
 }  // namespace
 
-void cmd_cache_ensure_package::register_cli(CLI::App &parent,
-                                            std::function<void(cfg)> on_selected) {
-  auto *sub{ parent.add_subcommand("ensure-package", "Test package cache entry") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("identity", cfg_ptr->identity, "Package identity")->required();
-  sub->add_option("platform", cfg_ptr->platform, "Platform (darwin/linux/windows)")
-      ->required();
-  sub->add_option("arch", cfg_ptr->arch, "Architecture (arm64/x86_64)")->required();
-  sub->add_option("hash_prefix", cfg_ptr->hash_prefix, "Hash prefix")->required();
-  add_cache_test_options(*sub, *cfg_ptr);
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_cache_ensure_package::register_cli(cli_cmd &parent, cfg &c) {
+  auto &sub{ parent.sub("ensure-package", "Test package cache entry") };
+  sub.pos("identity", c.identity, "Package identity").required();
+  sub.pos("platform", c.platform, "Platform (darwin/linux/windows)").required();
+  sub.pos("arch", c.arch, "Architecture (arm64/x86_64)").required();
+  sub.pos("hash_prefix", c.hash_prefix, "Hash prefix").required();
+  add_cache_test_options(sub, c);
+  return sub;
 }
 
-void cmd_cache_ensure_spec::register_cli(CLI::App &parent,
-                                         std::function<void(cfg)> on_selected) {
-  auto *sub{ parent.add_subcommand("ensure-spec", "Test spec cache entry") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("identity", cfg_ptr->identity, "Spec identity")->required();
-  sub->add_option("--source", cfg_ptr->source, "Source key (default: the identity)");
-  add_cache_test_options(*sub, *cfg_ptr);
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_cache_ensure_spec::register_cli(cli_cmd &parent, cfg &c) {
+  auto &sub{ parent.sub("ensure-spec", "Test spec cache entry") };
+  sub.pos("identity", c.identity, "Spec identity").required();
+  sub.opt("--source", c.source, "Source key (default: the identity)");
+  add_cache_test_options(sub, c);
+  return sub;
 }
 
 cmd_cache_ensure_package::cmd_cache_ensure_package(

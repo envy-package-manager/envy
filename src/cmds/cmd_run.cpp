@@ -4,7 +4,7 @@
 #include "platform.h"
 #include "reexec.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -26,14 +26,10 @@ namespace envy {
 
 namespace fs = std::filesystem;
 
-void cmd_run::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("run", "Run a command with envy bin dir on PATH") };
-  sub->prefix_command();
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->callback([sub, cfg_ptr, on_selected = std::move(on_selected)] {
-    cfg_ptr->command = sub->remaining();
-    on_selected(*cfg_ptr);
-  });
+cli_cmd &cmd_run::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("run", "Run a command with envy bin dir on PATH") };
+  sub.prefix_command(c.command);
+  return sub;
 }
 
 cmd_run::cmd_run(cmd_run::cfg cfg, std::optional<fs::path> const &cli_cache_root)

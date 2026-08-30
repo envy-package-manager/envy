@@ -11,7 +11,7 @@
 #include "tui.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <memory>
 #include <stdexcept>
@@ -20,23 +20,15 @@
 
 namespace envy {
 
-void cmd_export::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("export", "Export cached packages as tar.zst archives") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("queries",
-                  cfg_ptr->queries,
-                  "Package queries to export (export all if omitted)");
-  sub->add_option("-o,--output-dir", cfg_ptr->output_dir, "Output directory for archives");
-  sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest");
-  sub->add_option("--depot-prefix",
-                  cfg_ptr->depot_prefix,
-                  "URL prefix for depot manifest output");
-  sub->add_flag("--ignore-depot",
-                cfg_ptr->ignore_depot,
-                "Ignore package depot; rebuild from source")
-      ->envname("ENVY_IGNORE_DEPOT");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_export::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("export", "Export cached packages as tar.zst archives") };
+  sub.pos("queries", c.queries, "Package queries to export (export all if omitted)");
+  sub.opt("-o,--output-dir", c.output_dir, "Output directory for archives");
+  sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
+  sub.opt("--depot-prefix", c.depot_prefix, "URL prefix for depot manifest output");
+  sub.flag("--ignore-depot", c.ignore_depot, "Ignore package depot; rebuild from source")
+      .envname("ENVY_IGNORE_DEPOT");
+  return sub;
 }
 
 cmd_export::cmd_export(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root)

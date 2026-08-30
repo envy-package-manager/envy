@@ -3,16 +3,15 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <iosfwd>
 #include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 struct depot_manifest_entry {
   std::string hash;  // lowercase 64-char hex
@@ -37,9 +36,12 @@ class cmd_merge_depot : public cmd {
     std::optional<retain_source> retain;
     std::optional<std::string> retain_prefix;
     bool strict{ false };
+    // Parse scratch: the two retain spellings differ only in format, so they share a
+    // destination and are folded into `retain` once argv parses.
+    std::optional<std::string> retain_plain, retain_s3_ls;
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_merge_depot(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

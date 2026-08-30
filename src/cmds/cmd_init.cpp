@@ -14,7 +14,7 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -31,38 +31,32 @@ namespace envy {
 
 namespace fs = std::filesystem;
 
-void cmd_init::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("init",
-                                "Initialize envy project with bootstrap scripts") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("project-dir", cfg_ptr->project_dir, "Project directory for manifest")
-      ->required();
-  sub->add_option("bin-dir", cfg_ptr->bin_dir, "Directory for bootstrap scripts")
-      ->required();
-  sub->add_option("--mirror", cfg_ptr->mirror, "Override download mirror URL");
-  sub->add_option("--envy-version",
-                  cfg_ptr->envy_version,
-                  "Initialize the project at this envy version instead of this binary's, "
-                  "re-execing into it (downloading it if the cache lacks it)");
-  sub->add_flag("--pin-sums",
-                cfg_ptr->pin_sums,
-                "Fetch this release's SHA256SUMS and pin its hash in @envy sha256sums, so "
-                "bootstrap attests every envy binary it downloads");
-  sub->add_option("--deploy", cfg_ptr->deploy, "Set @envy deploy directive (true/false)");
-  sub->add_option("--root", cfg_ptr->root, "Set @envy root directive (true/false)");
-  sub->add_option("--platform",
-                  cfg_ptr->platform_flag,
-                  "Script platform: posix, windows, or all (default: current OS)")
-      ->check(CLI::IsMember({ "posix", "windows", "all" }));
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_init::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("init", "Initialize envy project with bootstrap scripts") };
+  sub.pos("project-dir", c.project_dir, "Project directory for manifest").required();
+  sub.pos("bin-dir", c.bin_dir, "Directory for bootstrap scripts").required();
+  sub.opt("--mirror", c.mirror, "Override download mirror URL");
+  sub.opt("--envy-version",
+          c.envy_version,
+          "Initialize the project at this envy version instead of this binary's, "
+          "re-execing into it (downloading it if the cache lacks it)");
+  sub.flag("--pin-sums",
+           c.pin_sums,
+           "Fetch this release's SHA256SUMS and pin its hash in @envy sha256sums, so "
+           "bootstrap attests every envy binary it downloads");
+  sub.opt("--deploy", c.deploy, "Set @envy deploy directive (true/false)");
+  sub.opt("--root", c.root, "Set @envy root directive (true/false)");
+  sub.opt("--platform",
+          c.platform_flag,
+          "Script platform: posix, windows, or all (default: current OS)")
+      .one_of("posix,windows,all");
+  return sub;
 }
 
 namespace {
 
-std::string_view get_manifest_template() {
-  return { reinterpret_cast<char const *>(embedded::kManifestTemplate),
-           embedded::kManifestTemplateSize };
+std::string get_manifest_template() {
+  return util_inflate_resource(embedded::kManifestTemplate);
 }
 
 void replace_all(std::string &s, std::string_view from, std::string_view to) {

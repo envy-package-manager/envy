@@ -74,8 +74,11 @@ endif()
 
 # Favor size-optimized release binaries by normalizing optimization flags.
 # MSVC: /O1 = minimize size (/Os /Oy /Ob2 /GF /Gy).  /Os alone is just a
-# preference flag that has no effect without /O1 or /O2.
-set(_envy_size_opt "-Os")
+# preference flag that has no effect without /O1 or /O2; MSVC has no /Oz.
+# -Oz over -Os: measured -18.6% binary on arm64 with no runtime regression -- the
+# hot loops are hardware-SHA and zstd, which -Oz does not touch.  Needs clang or
+# GCC 12+, which every CI builder has; it constrains builders, not run hosts.
+set(_envy_size_opt "-Oz")
 if(MSVC)
     set(_envy_size_opt "/O1")
 endif()
@@ -179,6 +182,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 embed_resources(envy_embedded_resources
     OUTPUT embedded_init_resources.h
     NORMALIZE_EOL
+    COMPRESS
     DEFINES
         ENVY_HOOK_VERSION=${ENVY_SHELL_HOOK_VERSION}
         ENVY_PRODUCT_SCRIPT_VERSION=${ENVY_PRODUCT_SCRIPT_VERSION}
@@ -199,7 +203,7 @@ embed_resources(envy_embedded_resources
 # Discover and compress third-party licenses for embedding
 include(cmake/FindLicenses.cmake)
 
-# Note: CLI11 and Doctest are single-header files with licenses embedded in comments.
+# Note: Doctest is a single-header file with its license embedded in comments.
 # All other dependencies have separate license files that are discovered automatically.
 set(ENVY_LICENSE_SOURCES
     "envy=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
@@ -228,24 +232,26 @@ if(NOT WIN32)
     list(APPEND ENVY_LICENSE_SOURCES "mbedTLS=${mbedtls_SOURCE_DIR}")
 endif()
 
-find_and_compress_licenses(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.gz"
+find_and_collect_licenses(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.txt"
     SOURCES ${ENVY_LICENSE_SOURCES}
 )
 
 # Embed compressed licenses
 embed_resources(envy_embedded_licenses
     OUTPUT embedded_licenses.h
+    COMPRESS
     RESOURCES
-        licenses_compressed=${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.gz
+        licenses=${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.txt
 )
-add_dependencies(envy_embedded_licenses envy_licenses_compressed)
+add_dependencies(envy_embedded_licenses envy_licenses_collected)
 
 # Common source files shared by all envy executables (main added separately)
 set(ENVY_BASE_SOURCES
     src/bootstrap.cpp
     src/cache.cpp
     src/cli.cpp
+    src/cli_parse.cpp
     src/cmd.cpp
     src/cmds/cmd_cache.cpp
     src/cmds/cmd_deploy.cpp

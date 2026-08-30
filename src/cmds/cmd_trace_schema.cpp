@@ -4,15 +4,14 @@
 #include "tui.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <string>
 
 namespace envy {
 
-void cmd_trace_schema::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("trace-schema", "Dump the trace event registry as JSON") };
-  sub->callback([on_selected = std::move(on_selected)] { on_selected(cfg{}); });
+cli_cmd &cmd_trace_schema::register_cli(cli_cmd &app, cfg &) {
+  return app.sub("trace-schema", "Dump the trace event registry as JSON");
 }
 
 cmd_trace_schema::cmd_trace_schema(

@@ -1,75 +1,103 @@
 #include "cli.h"
+#include "cli_parse.h"
 #include "tui.h"
 
-#include "CLI11.hpp"
-
 #include <concepts>
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace envy {
 
+namespace {
+
+// Every command's config lives for the whole parse, so registration can hand the parser a
+// pointer to the field it fills. The tuple mirrors the variant, alternative for
+// alternative, which is what lets a selected command be looked up by index.
+template <typename>
+struct cfg_store;
+template <typename... Ts>
+struct cfg_store<std::variant<Ts...>> {
+  using type = std::tuple<Ts...>;
+};
+using cfg_store_t = cfg_store<cli_args::cmd_cfg_t>::type;
+
+template <typename T, std::size_t I = 0>
+constexpr int cfg_index() {
+  if constexpr (std::is_same_v<T, std::variant_alternative_t<I, cli_args::cmd_cfg_t>>) {
+    return static_cast<int>(I);
+  } else {
+    return cfg_index<T, I + 1>();
+  }
+}
+
+}  // namespace
+
 cli_args cli_parse(int argc, char **argv) {
-  CLI::App app{ "envy - freeform package manager" };
-  // Disable Windows-style '/' option prefixes so absolute POSIX-style paths
-  // like "/tmp/file" are treated as positional arguments on Windows.
-  app.allow_windows_style_options(false);
+  // A leading '/' never introduces an option, so absolute POSIX-style paths like
+  // "/tmp/file" are treated as positional arguments on Windows too.
+  cli_cmd app{ nullptr, "envy", "envy - freeform package manager" };
 
   bool verbose{ false };
-  auto *verbose_flag{ app.add_flag(
+  auto const verbose_flag{ app.flag(
       "--verbose",
       verbose,
       "Verbose logging: per-package decision narrative, decorated with timestamp and "
       "level") };
 
   bool quiet{ false };
-  app.add_flag("-q,--quiet", quiet, "Quiet logging: warnings and errors only")
-      ->excludes(verbose_flag);
+  app.flag("-q,--quiet", quiet, "Quiet logging: warnings and errors only")
+      .excludes(verbose_flag);
 
   std::optional<std::filesystem::path> cache_root;
-  app.add_option("--cache-root", cache_root, "Cache root directory (overrides default)")
-      ->envname("ENVY_CACHE_ROOT");
+  app.opt("--cache-root", cache_root, "Cache root directory (overrides default)")
+      .envname("ENVY_CACHE_ROOT");
 
   // take_last, not the default reject-duplicates: a bin dir's launcher injects this ahead
   // of the user's own argv, so a hand-typed --project has to be able to override it.
   std::optional<std::filesystem::path> project_dir;
-  app.add_option("--project",
-                 project_dir,
-                 "Operate on the project containing DIR (walks up from DIR for envy.lua) "
-                 "instead of the one containing the current directory")
-      ->check(CLI::ExistingDirectory)
-      ->take_last();
+  app.opt("--project",
+          project_dir,
+          "Operate on the project containing DIR (walks up from DIR for envy.lua) "
+          "instead of the one containing the current directory")
+      .check_dir()
+      .take_last();
 
   std::string trace_spec;
-  auto *trace_option{ app.add_option("--trace",
-                                     trace_spec,
-                                     "Enable trace logging. Provide a comma-separated "
-                                     "list: 'stderr' for human-readable stderr and/or "
-                                     "'file:<path>' for JSONL file output. Defaults to "
-                                     "stderr if no value provided.") };
-  trace_option->expected(0, 1);
+  auto const trace_option{
+    app.opt("--trace",
+            trace_spec,
+            "Enable trace logging. Provide a comma-separated list: 'stderr' for "
+            "human-readable stderr and/or 'file:<path>' for JSONL file output. Defaults "
+            "to stderr if no value provided.")
+        .optional_value()
+  };
 
   // Support version flags (-v / --version) triggering version command directly.
   bool version_flag_short{ false };
   bool version_flag_long{ false };
-  app.add_flag("-v",
-               version_flag_short,
-               "Show version information (alias for version subcommand)");
-  app.add_flag("--version",
-               version_flag_long,
-               "Show version information (alias for version subcommand)");
+  app.flag("-v", version_flag_short, "Show version information (alias for version "
+                                     "subcommand)");
+  app.flag("--version",
+           version_flag_long,
+           "Show version information (alias for version subcommand)");
 
-  std::optional<cli_args::cmd_cfg_t> cmd_cfg;
+  cfg_store_t store{};
 
-  auto const register_cmds{ [&]<typename... Ts>(CLI::App &parent) {
-    (Ts::register_cli(parent, [&](auto c) { cmd_cfg = c; }), ...);
+  auto const register_cmds{ [&]<typename... Ts>(cli_cmd &parent) {
+    ((void)Ts::register_cli(parent, std::get<typename Ts::cfg>(store))
+         .set_id(cfg_index<typename Ts::cfg>()),
+     ...);
   } };
 
-  // CLI11 lists subcommands in registration order, so this list is sorted by subcommand
+  // Subcommands are listed in registration order, so this list is sorted by subcommand
   // name; split around 'cache-test' to keep it in place. cli_tests enforces the order.
   register_cmds.operator()<cmd_cache>(app);
 
@@ -77,7 +105,7 @@ cli_args cli_parse(int argc, char **argv) {
   // Test-only cache drivers get their own parent so the production "cache"
   // command never has to reason about child subcommands.
   register_cmds.operator()<cmd_cache_ensure_package, cmd_cache_ensure_spec>(
-      *app.add_subcommand("cache-test", "Drive cache primitives directly (test only)"));
+      app.sub("cache-test", "Drive cache primitives directly (test only)"));
 #endif
 
   register_cmds.operator()<cmd_deploy,
@@ -104,19 +132,21 @@ cli_args cli_parse(int argc, char **argv) {
                            cmd_version>(app);
 
   cli_args args{};
+  std::optional<cli_args::cmd_cfg_t> cmd_cfg;
 
-  try {
-    app.parse(argc, argv);
-  } catch (CLI::CallForHelp const &) {
-    args.cli_output = app.help();
-  } catch (CLI::ParseError const &e) {
-    auto const &subs{ app.get_subcommands() };
-    std::string help{ subs.empty() ? app.help() : subs.back()->help() };
-    args.cli_output = help + "Error: " + e.what() + "\n";
+  auto const parsed{ cli_run(app, argc, argv) };
+  if (!parsed.error.empty()) {
+    args.cli_output = parsed.help_text + "Error: " + parsed.error + "\n";
+  } else if (!parsed.help_requested && parsed.selected_id >= 0) {
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      ((parsed.selected_id == static_cast<int>(I) ? void(cmd_cfg = std::get<I>(store))
+                                                  : void()),
+       ...);
+    }(std::make_index_sequence<std::variant_size_v<cli_args::cmd_cfg_t>>{});
   }
 
   // Handle trace logging: --trace defaults to stderr if no value provided
-  bool const trace_requested{ trace_option->count() > 0 };
+  bool const trace_requested{ trace_option.count() > 0 };
   auto const trace_specs_tokens{ [&] {
     std::vector<std::string> tokens;
     if (trace_requested) {
@@ -167,7 +197,8 @@ cli_args cli_parse(int argc, char **argv) {
     args.decorated_logging = false;
   }
 
-  if (version_flag_short || version_flag_long) {
+  if (parsed.error.empty() && !parsed.help_requested &&
+      (version_flag_short || version_flag_long)) {
     args.cmd_cfg = cmd_version::cfg{};
     args.cache_root = cache_root;
     return args;
@@ -188,7 +219,7 @@ cli_args cli_parse(int argc, char **argv) {
           *args.cmd_cfg);
     }
   } else if (args.cli_output.empty()) {
-    args.cli_output = app.help();
+    args.cli_output = parsed.help_text;
   }
 
   args.cache_root = cache_root;

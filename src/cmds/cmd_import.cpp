@@ -12,7 +12,7 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <cctype>
 #include <chrono>
@@ -214,27 +214,24 @@ std::unordered_map<std::string, std::string> parse_checksums_map(
 
 }  // namespace
 
-void cmd_import::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("import", "Import package archive into cache") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("archive", cfg_ptr->archive_path, "Path to .tar.zst or .txt manifest")
-      ->check(CLI::ExistingFile);
-  sub->add_option("--dir", cfg_ptr->dir, "Directory of .tar.zst archives to import")
-      ->check(CLI::ExistingDirectory);
-  sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest");
-  sub->add_option("--checksums", cfg_ptr->checksums_path, "Path to checksums .txt file")
-      ->check(CLI::ExistingFile);
-  sub->callback([cfg_ptr, on_selected = std::move(on_selected)] {
-    bool const has_archive{ !cfg_ptr->archive_path.empty() };
-    bool const has_dir{ cfg_ptr->dir.has_value() };
-    if (has_archive && has_dir) {
-      throw CLI::ValidationError("Cannot specify both archive and --dir");
-    }
-    if (!has_archive && !has_dir) {
-      throw CLI::ValidationError("Must specify either archive/manifest or --dir");
-    }
-    on_selected(*cfg_ptr);
-  });
+cli_cmd &cmd_import::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("import", "Import package archive into cache") };
+  sub.pos("archive", c.archive_path, "Path to .tar.zst or .txt manifest").check_file();
+  sub.opt("--dir", c.dir, "Directory of .tar.zst archives to import").check_dir();
+  sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
+  sub.opt("--checksums", c.checksums_path, "Path to checksums .txt file").check_file();
+  sub.finalize(
+      [](void *p) -> char const * {
+        auto const &sel{ *static_cast<cfg *>(p) };
+        bool const has_archive{ !sel.archive_path.empty() };
+        if (has_archive && sel.dir) { return "Cannot specify both archive and --dir"; }
+        if (!has_archive && !sel.dir) {
+          return "Must specify either archive/manifest or --dir";
+        }
+        return nullptr;
+      },
+      &c);
+  return sub;
 }
 
 cmd_import::cmd_import(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root)

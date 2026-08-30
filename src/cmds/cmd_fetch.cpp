@@ -6,7 +6,7 @@
 #include "tui_actions.h"
 #include "uri.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <memory>
@@ -15,19 +15,15 @@
 
 namespace envy {
 
-void cmd_fetch::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("fetch", "Download resource to local file") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("source", cfg_ptr->source, "Source URI (http/https/git/etc.)")
-      ->required();
-  sub->add_option("destination", cfg_ptr->destination, "Destination file path")
-      ->required();
-  sub->add_option("--manifest-root",
-                  cfg_ptr->manifest_root,
-                  "Manifest root for resolving relative file URIs");
-  sub->add_option("--ref", cfg_ptr->ref, "Git ref (branch/tag/SHA) for git sources");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_fetch::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("fetch", "Download resource to local file") };
+  sub.pos("source", c.source, "Source URI (http/https/git/etc.)").required();
+  sub.pos("destination", c.destination, "Destination file path").required();
+  sub.opt("--manifest-root",
+          c.manifest_root,
+          "Manifest root for resolving relative file URIs");
+  sub.opt("--ref", c.ref, "Git ref (branch/tag/SHA) for git sources");
+  return sub;
 }
 
 cmd_fetch::cmd_fetch(cmd_fetch::cfg cfg,

@@ -3,14 +3,13 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 // Retarget '@envy version'; `sums_hex` replaces or inserts the '@envy sha256sums' pin,
 // nullopt drops it. Splices in place, preserving formatting. Throws with no '@envy
@@ -31,7 +30,7 @@ class cmd_use : public cmd {
     bool force{ false };
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_use(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

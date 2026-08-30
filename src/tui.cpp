@@ -394,54 +394,48 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
     return output;
   }
 
+  // Elapsed-time dot cycle, 1-4 dots, shared by the two animated rows.
+  auto const dots{ [&](std::chrono::steady_clock::time_point start) {
+    auto const secs{
+      std::chrono::duration_cast<std::chrono::seconds>(now - start).count()
+    };
+    return std::string(static_cast<std::size_t>((secs % 4) + 1), '.');
+  } };
+
+  // One overload per alternative, so a new content type is a compile error here rather
+  // than the silently-empty row an if-constexpr cascade's trailing return would give.
   return std::visit(
-      [&](auto const &data) -> std::string {
-        using T = std::decay_t<decltype(data)>;
-        if constexpr (std::is_same_v<T, envy::tui::progress_data>) {
-          std::ostringstream oss;
-          oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
-              << std::setprecision(1) << data.percent << "%\n";
-          return oss.str();
-        } else if constexpr (std::is_same_v<T, envy::tui::text_stream_data>) {
-          // Determine which lines to render
-          std::size_t start_idx{ 0 };
-          if (data.line_limit > 0 && data.lines.size() > data.line_limit) {
-            start_idx = data.lines.size() - data.line_limit;
-          }
-
-          // Compute dots for fallback spinner
-          auto const elapsed{ now - data.start_time };
-          auto const elapsed_sec{
-            std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()
-          };
-          int const dot_count{ static_cast<int>((elapsed_sec % 4) + 1) };  // 1-4 dots
-
-          std::ostringstream oss;
-          oss << "[" << frame.label << "] " << std::string(dot_count, '.') << " "
-              << (data.header_text.empty() ? "build output:" : data.header_text) << "\n";
-
-          for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
-            oss << "   " << data.lines[i] << "\n";
-          }
-          return oss.str();
-        } else if constexpr (std::is_same_v<T, envy::tui::spinner_data>) {
-          auto const elapsed{ now - data.start_time };
-          auto const elapsed_sec{
-            std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()
-          };
-          int const dot_count{ static_cast<int>((elapsed_sec % 4) + 1) };
-
-          std::ostringstream oss;
-          oss << "[" << frame.label << "] " << data.text << std::string(dot_count, '.')
-              << "\n";
-          return oss.str();
-        } else if constexpr (std::is_same_v<T, envy::tui::static_text_data>) {
-          std::ostringstream oss;
-          oss << "[" << frame.label << "] " << data.text << "\n";
-          return oss.str();
-        }
-        return "";
-      },
+      envy::match{
+          [&](envy::tui::progress_data const &data) {
+            std::ostringstream oss;
+            oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
+                << std::setprecision(1) << data.percent << "%\n";
+            return oss.str();
+          },
+          [&](envy::tui::text_stream_data const &data) {
+            std::size_t const start_idx{ (data.line_limit > 0 &&
+                                          data.lines.size() > data.line_limit)
+                                             ? data.lines.size() - data.line_limit
+                                             : 0 };
+            std::ostringstream oss;
+            oss << "[" << frame.label << "] " << dots(data.start_time) << " "
+                << (data.header_text.empty() ? "build output:" : data.header_text) << "\n";
+            for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
+              oss << "   " << data.lines[i] << "\n";
+            }
+            return oss.str();
+          },
+          [&](envy::tui::spinner_data const &data) {
+            std::ostringstream oss;
+            oss << "[" << frame.label << "] " << data.text << dots(data.start_time)
+                << "\n";
+            return oss.str();
+          },
+          [&](envy::tui::static_text_data const &data) {
+            std::ostringstream oss;
+            oss << "[" << frame.label << "] " << data.text << "\n";
+            return oss.str();
+          } },
       frame.content);
 }
 

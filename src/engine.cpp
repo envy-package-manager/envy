@@ -1580,8 +1580,7 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
           package->resolved_weak_dependency_keys.push_back(wr.resolved->key.canonical());
         }
       }
-      std::sort(package->resolved_weak_dependency_keys.begin(),
-                package->resolved_weak_dependency_keys.end());
+      std::ranges::sort(package->resolved_weak_dependency_keys);
     }
   }
 }

@@ -382,6 +382,42 @@ endfunction()
 
 # Make libcurl’s pkg-config metadata reference the actual zlib target we
 # build instead of the abstract ZLIB::ZLIB alias.
+# The generated S3 endpoint ruleset is a 119 KB JSON blob emitted one char
+# literal per byte, read once when an S3 client is built. Deflate it to ~4.5 KB
+# and inflate on first use.
+function(envy_patch_aws_s3_rules_gzip source_dir binary_dir)
+    set(_source_dir_norm "${source_dir}")
+    set(_binary_dir_norm "${binary_dir}")
+
+    set(_stamp "${_binary_dir_norm}/envy_aws_s3_rules_gzip_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${_binary_dir_norm}/envy_patch_aws_s3_rules_gzip.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_s3_rules_gzip_patch.py.in")
+
+    set(AWS_S3_ENDPOINT_RULES_CPP
+        "${_source_dir_norm}/generated/src/aws-cpp-sdk-s3/source/S3EndpointRules.cpp")
+    if(NOT EXISTS "${AWS_S3_ENDPOINT_RULES_CPP}")
+        return()
+    endif()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(_source_dir_norm)
+    unset(_binary_dir_norm)
+    unset(AWS_S3_ENDPOINT_RULES_CPP)
+endfunction()
+
 function(envy_patch_libcurl_cmakelists source_dir binary_dir zlib_target)
     set(_source_dir_norm "${source_dir}")
     set(_binary_dir_norm "${binary_dir}")

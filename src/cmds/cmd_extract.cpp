@@ -4,7 +4,7 @@
 #include "tui.h"
 #include "tui_actions.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <filesystem>
 #include <functional>
@@ -13,22 +13,17 @@
 
 namespace envy {
 
-void cmd_extract::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("extract", "Extract archive to destination") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("archive", cfg_ptr->archive_path, "Archive file to extract")
-      ->required()
-      ->check(CLI::ExistingFile);
-  sub->add_option("destination",
-                  cfg_ptr->destination,
-                  "Destination directory (defaults to current directory)");
-  sub->add_option("--only",
-                  cfg_ptr->only,
-                  "Extract only this archive-relative path or glob; a directory takes its "
-                  "whole subtree (repeatable, default: everything)")
-      ->allow_extra_args(false);
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+cli_cmd &cmd_extract::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("extract", "Extract archive to destination") };
+  sub.pos("archive", c.archive_path, "Archive file to extract").required().check_file();
+  sub.pos("destination",
+          c.destination,
+          "Destination directory (defaults to current directory)");
+  sub.opt("--only",
+          c.only,
+          "Extract only this archive-relative path or glob; a directory takes its whole "
+          "subtree (repeatable, default: everything)");
+  return sub;
 }
 
 cmd_extract::cmd_extract(cmd_extract::cfg cfg,

@@ -6,7 +6,7 @@
 #include "tui.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <algorithm>
 #include <chrono>
@@ -36,11 +36,7 @@ std::vector<platform::dir_entry> child_dirs(std::filesystem::path const &dir) {
   auto entries{ platform::dir_list(dir) };
   std::erase_if(entries,
                 [](platform::dir_entry const &e) { return !e.is_dir || e.is_symlink; });
-  std::sort(entries.begin(),
-            entries.end(),
-            [](platform::dir_entry const &a, platform::dir_entry const &b) {
-              return a.name < b.name;
-            });
+  std::ranges::sort(entries, {}, &platform::dir_entry::name);
   return entries;
 }
 
@@ -64,36 +60,39 @@ void print_section(char const *title,
 
 }  // namespace
 
-void cmd_cache::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("cache", "Show cache location and disk usage") };
+cli_cmd &cmd_cache::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("cache", "Show cache location and disk usage") };
 
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  auto *root_flag{ sub->add_flag("--root",
+  auto const root_flag{ sub.flag("--root",
+                                 c.want_root,
                                  "Print the resolved cache root and nothing else") };
-  auto *user_wide_flag{ sub->add_flag("--user-wide-root",
+  auto const user_wide_flag{ sub.flag("--user-wide-root",
+                                      c.want_user_wide,
                                       "Print the user-wide cache root and nothing else") };
-  auto *local_flag{ sub->add_flag("--local",
+  auto const local_flag{ sub.flag("--local",
+                                  c.want_local,
                                   "Use this project's own cache tree from now on") };
-  auto *shared_flag{ sub->add_flag("--shared", "Use the user-wide cache from now on") };
+  auto const shared_flag{ sub.flag("--shared",
+                                   c.want_shared,
+                                   "Use the user-wide cache from now on") };
 
   // One action per invocation: combining them would have to pick an order, and there is
   // no sensible one.
-  root_flag->excludes(local_flag)->excludes(shared_flag)->excludes(user_wide_flag);
-  user_wide_flag->excludes(local_flag)->excludes(shared_flag);
-  local_flag->excludes(shared_flag);
+  root_flag.excludes(local_flag).excludes(shared_flag).excludes(user_wide_flag);
+  user_wide_flag.excludes(local_flag).excludes(shared_flag);
+  local_flag.excludes(shared_flag);
 
-  sub->callback([on_selected = std::move(on_selected),
-                 cfg_ptr,
-                 root_flag,
-                 user_wide_flag,
-                 local_flag,
-                 shared_flag] {
-    if (*root_flag) { cfg_ptr->act = cfg::action::PRINT_ROOT; }
-    if (*user_wide_flag) { cfg_ptr->act = cfg::action::PRINT_USER_WIDE_ROOT; }
-    if (*local_flag) { cfg_ptr->act = cfg::action::SET_LOCAL; }
-    if (*shared_flag) { cfg_ptr->act = cfg::action::SET_SHARED; }
-    on_selected(*cfg_ptr);
-  });
+  sub.finalize(
+      [](void *p) -> char const * {
+        auto &sel{ *static_cast<cfg *>(p) };
+        if (sel.want_root) { sel.act = cfg::action::PRINT_ROOT; }
+        if (sel.want_user_wide) { sel.act = cfg::action::PRINT_USER_WIDE_ROOT; }
+        if (sel.want_local) { sel.act = cfg::action::SET_LOCAL; }
+        if (sel.want_shared) { sel.act = cfg::action::SET_SHARED; }
+        return nullptr;
+      },
+      &c);
+  return sub;
 }
 
 cmd_cache::cmd_cache(cmd_cache::cfg cfg,
@@ -272,7 +271,7 @@ void cmd_cache::execute() {
       size_width = std::max(size_width, r.size_text.size());
     }
     // Biggest first: the point of the command is finding what to reclaim.
-    std::sort(rows->begin(), rows->end(), [](row const &a, row const &b) {
+    std::ranges::sort(*rows, [](row const &a, row const &b) {
       return (a.size.bytes != b.size.bytes) ? (a.size.bytes > b.size.bytes)
                                             : (a.label < b.label);
     });

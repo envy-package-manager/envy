@@ -91,10 +91,8 @@ std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
     if (!result.already_cached) {
       if (!copy_binary(platform::get_exe_path(), result.binary_path)) { return c; }
 
-      std::string_view const types{ reinterpret_cast<char const *>(
-                                        embedded::kTypeDefinitions),
-                                    embedded::kTypeDefinitionsSize };
-      util_write_file(result.types_path, types);
+      util_write_file(result.types_path,
+                      util_inflate_resource(embedded::kTypeDefinitions));
     }
 
     update_latest_if_newer(result.envy_dir.parent_path(), ENVY_VERSION_STR);

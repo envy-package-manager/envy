@@ -3,13 +3,12 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 // Functional-tester-only: drive cache::ensure_pkg / ensure_spec directly so tests
 // can choreograph two processes around a single lock. What happened is reported
@@ -35,7 +34,7 @@ class cmd_cache_ensure_package : public cmd {
     std::string hash_prefix;
   };
 
-  static void register_cli(CLI::App &parent, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_cache_ensure_package(cfg const &config,
                            std::optional<std::filesystem::path> const &cli_cache_root);
@@ -53,7 +52,7 @@ class cmd_cache_ensure_spec : public cmd {
     std::string source;  // empty = key on the identity (one entry per identity)
   };
 
-  static void register_cli(CLI::App &parent, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_cache_ensure_spec(cfg const &config,
                         std::optional<std::filesystem::path> const &cli_cache_root);

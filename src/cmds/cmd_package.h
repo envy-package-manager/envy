@@ -3,13 +3,12 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 class cmd_package : public cmd {
  public:
@@ -19,7 +18,7 @@ class cmd_package : public cmd {
     bool ignore_depot = false;
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_package(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

@@ -20,6 +20,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -255,11 +256,18 @@ fetch_result fetch_git_repo(std::string const &url,
 }  // namespace
 
 fetch_result fetch_single(fetch_request const &request) {
-  auto const fetch_http{ [](auto const &req) -> fetch_result {
-    auto const info{ uri_classify(req.source) };
+  // Every scheme resolves its source the same way, and an unresolvable one is a caller
+  // bug, not a transport failure.
+  auto const classify{ [](std::string const &source) {
+    auto const info{ uri_classify(source) };
     if (info.canonical.empty() && info.scheme == uri_scheme::UNKNOWN) {
       throw std::invalid_argument("fetch: source URI is empty");
     }
+    return info;
+  } };
+
+  auto const fetch_http{ [&](auto const &req) -> fetch_result {
+    auto const info{ classify(req.source) };
     return fetch_result{
       .scheme = info.scheme,
       .resolved_source = std::filesystem::path{ info.canonical },
@@ -268,11 +276,8 @@ fetch_result fetch_single(fetch_request const &request) {
     };
   } };
 
-  auto const fetch_ftp{ [](auto const &req) -> fetch_result {
-    auto const info{ uri_classify(req.source) };
-    if (info.canonical.empty() && info.scheme == uri_scheme::UNKNOWN) {
-      throw std::invalid_argument("fetch: source URI is empty");
-    }
+  auto const fetch_ftp{ [&](auto const &req) -> fetch_result {
+    auto const info{ classify(req.source) };
     return fetch_result{
       .scheme = info.scheme,
       .resolved_source = std::filesystem::path{ info.canonical },
@@ -287,11 +292,8 @@ fetch_result fetch_single(fetch_request const &request) {
           [&](fetch_request_https const &req) { return fetch_http(req); },
           [&](fetch_request_ftp const &req) { return fetch_ftp(req); },
           [&](fetch_request_ftps const &req) { return fetch_ftp(req); },
-          [](fetch_request_s3 const &req) -> fetch_result {
-            auto const info{ uri_classify(req.source) };
-            if (info.canonical.empty() && info.scheme == uri_scheme::UNKNOWN) {
-              throw std::invalid_argument("fetch: source URI is empty");
-            }
+          [&](fetch_request_s3 const &req) -> fetch_result {
+            auto const info{ classify(req.source) };
             return fetch_result{ .scheme = info.scheme,
                                  .resolved_source =
                                      std::filesystem::path{ info.canonical },
@@ -301,12 +303,10 @@ fetch_result fetch_single(fetch_request const &request) {
                                                           .region = req.region,
                                                           .progress = req.progress }) };
           },
-          [](fetch_request_file const &req) -> fetch_result {
-            auto const info{ uri_classify(req.source) };
-            if (info.canonical.empty() && info.scheme == uri_scheme::UNKNOWN) {
-              throw std::invalid_argument("fetch: source URI is empty");
-            }
-            return fetch_local_file(info.canonical, req.destination, req.file_root);
+          [&](fetch_request_file const &req) -> fetch_result {
+            return fetch_local_file(classify(req.source).canonical,
+                                    req.destination,
+                                    req.file_root);
           },
           [](fetch_request_git const &req) -> fetch_result {
             return fetch_git_repo(req.source,

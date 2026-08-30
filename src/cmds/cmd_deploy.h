@@ -3,14 +3,13 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 class cmd_deploy : public cmd {
  public:
@@ -22,7 +21,7 @@ class cmd_deploy : public cmd {
     std::string platform_flag;  // "posix", "windows", "all", or empty (current OS)
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_deploy(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

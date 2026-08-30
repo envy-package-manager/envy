@@ -5,12 +5,11 @@
 #include "manifest.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 class cmd_cache : public cmd {
  public:
@@ -19,9 +18,11 @@ class cmd_cache : public cmd {
     // oracles for the two roots, printed alone so a test pays for no disk walk.
     enum class action { REPORT, PRINT_ROOT, PRINT_USER_WIDE_ROOT, SET_LOCAL, SET_SHARED };
     action act{ action::REPORT };
+    // Parse scratch, one per mutually exclusive flag; folded into `act` once argv parses.
+    bool want_root{}, want_user_wide{}, want_local{}, want_shared{};
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_cache(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

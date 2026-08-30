@@ -3,12 +3,11 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 class cmd_import : public cmd {
  public:
@@ -19,7 +18,7 @@ class cmd_import : public cmd {
     std::optional<std::filesystem::path> checksums_path;
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_import(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

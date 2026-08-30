@@ -3,12 +3,11 @@
 #include "cmd.h"
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 
-namespace CLI { class App; }
-
 namespace envy {
+
+class cli_cmd;
 
 class cmd_lua : public cmd {
  public:
@@ -16,7 +15,7 @@ class cmd_lua : public cmd {
     std::filesystem::path script_path;
   };
 
-  static void register_cli(CLI::App &app, std::function<void(cfg)> on_selected);
+  static cli_cmd &register_cli(cli_cmd &app, cfg &c);
 
   cmd_lua(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root);
 

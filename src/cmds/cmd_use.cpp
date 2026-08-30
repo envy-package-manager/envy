@@ -9,7 +9,7 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include "CLI11.hpp"
+#include "cli_parse.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -87,35 +87,29 @@ std::string fetch_sums_hex(std::string const &mirror, std::string const &version
 
 }  // namespace
 
-void cmd_use::register_cli(CLI::App &app, std::function<void(cfg)> on_selected) {
-  auto *sub{ app.add_subcommand("use", "Retarget the manifest at an envy version") };
-  auto cfg_ptr{ std::make_shared<cfg>() };
-  sub->add_option("version", cfg_ptr->version, "Envy version to use, e.g. 1.2.3")
-      ->required();
-  auto *manifest_opt{
-    sub->add_option("--manifest", cfg_ptr->manifest_path, "Path to envy.lua manifest")
+cli_cmd &cmd_use::register_cli(cli_cmd &app, cfg &c) {
+  auto &sub{ app.sub("use", "Retarget the manifest at an envy version") };
+  sub.pos("version", c.version, "Envy version to use, e.g. 1.2.3").required();
+  auto const manifest_opt{
+    sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest")
   };
-  sub->add_flag("--subproject",
-                cfg_ptr->subproject,
-                "Use nearest manifest instead of walking to root")
-      ->excludes(manifest_opt);
-  sub->add_option("--mirror",
-                  cfg_ptr->mirror,
-                  "Fetch SHA256SUMS from this mirror instead of the manifest's");
-  auto *pin_opt{ sub->add_flag(
+  sub.flag("--subproject", c.subproject, "Use nearest manifest instead of walking to root")
+      .excludes(manifest_opt);
+  sub.opt("--mirror",
+          c.mirror,
+          "Fetch SHA256SUMS from this mirror instead of the manifest's");
+  auto const pin_opt{ sub.flag(
       "--pin-sums",
-      cfg_ptr->pin_sums,
+      c.pin_sums,
       "Add an @envy sha256sums pin even if the manifest has none") };
-  sub->add_flag("--no-pin-sums",
-                cfg_ptr->no_pin_sums,
-                "Drop the @envy sha256sums pin, leaving downloads unattested")
-      ->excludes(pin_opt);
-  sub->add_flag(
-      "--force",
-      cfg_ptr->force,
-      "Skip the SHA256SUMS fetch that proves the release exists (unpinned only)");
-  sub->callback(
-      [cfg_ptr, on_selected = std::move(on_selected)] { on_selected(*cfg_ptr); });
+  sub.flag("--no-pin-sums",
+           c.no_pin_sums,
+           "Drop the @envy sha256sums pin, leaving downloads unattested")
+      .excludes(pin_opt);
+  sub.flag("--force",
+           c.force,
+           "Skip the SHA256SUMS fetch that proves the release exists (unpinned only)");
+  return sub;
 }
 
 std::string use_rewrite_header(std::string_view content,
@@ -147,9 +141,7 @@ std::string use_rewrite_header(std::string_view content,
 
   // Highest offset first, so an edit that shifts the bytes after it -- inserting or
   // deleting a whole line -- cannot invalidate an offset still waiting to be spliced.
-  std::sort(edits.begin(), edits.end(), [](splice const &a, splice const &b) {
-    return a.begin > b.begin;
-  });
+  std::ranges::sort(edits, std::ranges::greater{}, &splice::begin);
 
   std::string out{ content };
   for (auto const &e : edits) { out.replace(e.begin, e.end - e.begin, e.text); }
