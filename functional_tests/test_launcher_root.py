@@ -319,6 +319,7 @@ class TestBatchLauncherRootDiscovery(EnvyTestCase):
         self._child.mkdir(parents=True)
 
         # Create the test batch script
+        # write_text emits CRLF on Windows; see the note in TestBatchCacheRootParity.
         self._script = self._temp_dir / "test_find_manifest.bat"
         self._script.write_text(self._get_batch_find_manifest_script())
 
@@ -780,6 +781,9 @@ class TestBashCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
 class TestBatchCacheRootParity(_CacheRootParityMixin, EnvyTestCase):
     def setUp(self) -> None:
         super().setUp()
+        # write_text, not write_bytes: on Windows it emits CRLF, which is what cmd.exe
+        # needs to resolve `call :quoted_value` and what stamp_bootstrap() writes. An
+        # LF-only envy.bat silently parses no @envy directives at all.
         self._script = self._temp_dir / "cache_root.bat"
         self._script.write_text(_get_batch_cache_root_script())
 

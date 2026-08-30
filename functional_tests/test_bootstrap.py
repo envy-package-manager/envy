@@ -497,11 +497,12 @@ class BootstrapIntegrationTest(EnvyTestCase):
     def _write_verbatim(path: Path, text: str) -> Path:
         """Write LF-terminated text as bytes, defeating Python's newline translation.
 
-        `write_text` would emit CRLF on Windows. Neither envy nor a checked-out repo does:
-        `bootstrap_write_script` copies the embedded resource byte for byte (LF, per
-        cmake/EmbedResource.cmake's NORMALIZE_EOL), manifests are written by envy the same
-        way, and consumer repos carry `* -text` to keep git from touching either. Anything
-        cmd.exe or `for /f` does differently with LF has to be caught here or not at all.
+        `write_text` would emit CRLF on Windows. Neither envy nor a checked-out repo does
+        for a *manifest*: envy writes them byte for byte and consumer repos carry `* -text`
+        to keep git from touching them. Anything cmd.exe or `for /f` does differently with
+        LF has to be caught here or not at all.
+
+        The launchers are the exception -- see _stamp_bootstrap.
 
         The encoding is explicit for the same reason: this helper's contract is exact bytes.
         """
@@ -538,6 +539,14 @@ class BootstrapIntegrationTest(EnvyTestCase):
             content = content.replace(
                 "@@MIN_DIRECTIVE_VERSION@@", min_directive_version
             )
+        # CRLF for envy.bat, matching what stamp_bootstrap() writes. cmd.exe resolves
+        # `goto`/`call :label` by seeking, and on an LF-only batch those offsets drift by a
+        # byte per line until the search walks past the label -- "The system cannot find the
+        # batch label specified", after which the launcher silently parses no directives.
+        # This harness stamps the template itself instead of running `envy init`, so it has
+        # to reproduce that conversion or it tests a file envy would never write.
+        if sys.platform == "win32":
+            content = content.replace("\n", "\r\n")
         self._write_verbatim(dest, content)
         if sys.platform != "win32":
             dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
