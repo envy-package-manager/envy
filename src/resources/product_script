@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 # envy-managed schema "@@ENVY_PRODUCT_SCRIPT_VERSION@@"
 ENVY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# The bin dir is a fixed fact, so a product that shells out to a sibling product finds it.
-# Every other variable here is ENVY_-prefixed: this script execs its payload, so a plain
-# name would overwrite an exported one of the caller's for the payload and everything under
-# it, and SCRIPT_DIR in particular is a name half the shell scripts in the world use.
-export PATH="$ENVY_SCRIPT_DIR:$PATH"
-# The project root is not: deploy leaves the hop empty for an '@envy root "false"' manifest,
-# whose project depends on where the tree is nested, and the caller's value stands.
-ENVY_PROJECT_ROOT_HOP="@@PROJECT_ROOT_REL@@"
+export PATH="$ENVY_SCRIPT_DIR:$PATH"  # a product shelling out to a sibling finds it
+ENVY_PROJECT_ROOT_HOP="@@PROJECT_ROOT_REL@@"  # empty under '@envy root "false"'
 if [[ -n "$ENVY_PROJECT_ROOT_HOP" ]]; then
     ENVY_PROJECT_ROOT="$(cd -P "$ENVY_SCRIPT_DIR/$ENVY_PROJECT_ROOT_HOP" && pwd -P)"
     export ENVY_PROJECT_ROOT
 fi
-# The sibling launcher injects --project with this directory, so envy resolves the project
-# this script was deployed into rather than rediscovering one from the caller's CWD.
+# The sibling launcher injects --project, so envy resolves the project this script was
+# deployed into, not one rediscovered from the caller's CWD.
 ENVY_PRODUCT="$("$ENVY_SCRIPT_DIR/envy" product "@@PRODUCT_NAME@@")" || exit $?
 if [[ -z "$ENVY_PRODUCT" ]]; then
     echo "envy: failed to resolve product '@@PRODUCT_NAME@@'" >&2

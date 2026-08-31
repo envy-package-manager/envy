@@ -23,9 +23,7 @@ if exist "!ENVY_DIR!\envy.lua" (
         set "ENVY_CANDIDATE=!ENVY_DIR!\envy.lua"
     )
 )
-REM A repository is a hard boundary, matching discover() in src/manifest.cpp. Without it a
-REM `root "false"` project inside a checkout kept walking into the parent tree, and this
-REM script and the binary picked different manifests -- so different caches. The trailing
+REM A repo is a hard boundary, matching discover() in src/manifest.cpp. The trailing
 REM backslash makes `if exist` test for a directory, as discover()'s is_directory does.
 if exist "!ENVY_DIR!\.git\" (
     if defined ENVY_CANDIDATE (
@@ -53,17 +51,9 @@ set "ENVY_STATE_DIR_REL="
 set "ENVY_MANIFEST_MIRROR="
 set "ENVY_SUMS_PIN="
 
-REM Header only, stopping at the first line of code, matching parse_envy_meta in
-REM src/manifest.cpp. No line cap: a cap both drops directives under a long preamble -- the
-REM launcher would then resolve a version or mirror the re-exec'd binary ignores -- and
-REM honors a directive-shaped comment sitting in the body under the cap. `for /f` skips
-REM blank lines on its own. No `delims=` override, so the default space+tab set applies:
-REM `for /f` strips leading delimiters, and naming space alone would leave a tab-indented
-REM comment's tab in %%a -- ending the header at a line parse_envy_meta reads straight past.
-REM `eol=` clears the default `;` comment character, which skipped a `;`-led line instead of
-REM ending the header on it; parse_envy_meta stops there like it does at any other code line.
-REM It comes last because `eol=` takes the next character as its value, so an option behind
-REM it would donate its separating space as the marker.
+REM Header only, stopping at the first code line, matching parse_envy_meta. No line cap. No
+REM `delims=` override (default space+tab keeps a tab-indented comment's tab out of %%a);
+REM `eol=` clears cmd's `;` comment char, and is last because it eats the next character.
 for /f "usebackq tokens=1,2,3,* eol=" %%a in ("!ENVY_MANIFEST!") do (
     set "ENVY_TOK=%%a"
     if not "!ENVY_TOK:~0,2!"=="--" goto :done_parse
@@ -85,21 +75,18 @@ for /f "usebackq tokens=1,2,3,* eol=" %%a in ("!ENVY_MANIFEST!") do (
 )
 :done_parse
 
-REM A sums pin names one release's checksum file, so it is meaningless against a resolved
-REM or stamped-fallback version. Captured before the resolution chain overwrites ENVY_VERSION.
+REM Captured before the resolution chain overwrites it: a pin is meaningless against a
+REM resolved version.
 set "ENVY_PINNED_VERSION=!ENVY_VERSION!"
 
-REM Fail closed before any network: a pin that silently stops verifying is worse than none,
-REM since the manifest still advertises attestation.
+REM Fail closed before any network: a pin that silently stops verifying is worse than none.
 if defined ENVY_SUMS_PIN if not defined ENVY_PINNED_VERSION (
     echo ERROR: '@envy sha256sums' requires '@envy version' in !ENVY_MANIFEST! >&2
     exit /b 1
 )
 
-REM Precedence: ENVY_MIRROR env > @envy mirror directive > envy upstream, matching the
-REM runtime resolver in src/reexec.cpp. ENVY_DEFAULT_MIRROR is always envy's own release ENVY_URL,
-REM never a copy of this project's mirror: deleting the directive must not resolve this
-REM script and the re-exec'd binary to different mirrors.
+REM Precedence: ENVY_MIRROR env > @envy mirror > upstream, matching src/reexec.cpp.
+REM ENVY_DEFAULT_MIRROR is always envy's own release URL, never a copy of the directive's.
 if defined ENVY_ENV_MIRROR (
     set "ENVY_MIRROR=!ENVY_ENV_MIRROR!"
 ) else if defined ENVY_MANIFEST_MIRROR (
@@ -108,8 +95,7 @@ if defined ENVY_ENV_MIRROR (
     set "ENVY_MIRROR=!ENVY_DEFAULT_MIRROR!"
 )
 
-REM A trailing slash would produce ".../releases//v1.2.3/...", a distinct and nonexistent
-REM s3:// key.
+REM A trailing slash makes ".../releases//v1.2.3/...", a distinct nonexistent s3:// key.
 :striptrail
 if "!ENVY_MIRROR:~-1!"=="/" (
     set "ENVY_MIRROR=!ENVY_MIRROR:~0,-1!"
@@ -119,7 +105,7 @@ if "!ENVY_MIRROR:~-1!"=="/" (
 set "ENVY_MIRROR_IS_S3="
 if /i "!ENVY_MIRROR:~0,5!"=="s3://" set "ENVY_MIRROR_IS_S3=1"
 
-REM Probe bare `aws`, not `aws.exe`: PATHEXT also resolves the aws.cmd/aws.bat shims. The
+REM Bare `aws`, not `aws.exe`: PATHEXT also resolves the aws.cmd/aws.bat shims. The
 REM curl.exe/tar.exe probes below name the exe deliberately, to stay policy-proof.
 if not defined ENVY_MIRROR_IS_S3 goto :mirror_ok
 where /q aws && goto :mirror_ok
@@ -132,20 +118,15 @@ set "ENVY_MANIFEST_DIR="
 for %%I in ("!ENVY_MANIFEST!") do set "ENVY_MANIFEST_DIR=%%~dpI"
 if "!ENVY_MANIFEST_DIR:~-1!"=="\" set "ENVY_MANIFEST_DIR=!ENVY_MANIFEST_DIR:~0,-1!"
 
-REM Cleared ahead of the tiers, which the override path below skips: setlocal copies the
-REM parent environment, so an exported ENVY_MODE would reach the candidate selection.
+REM Cleared ahead of the tiers: setlocal copies the parent environment, so an exported
+REM ENVY_MODE would reach the candidate selection.
 set "ENVY_MODE="
 set "ENVY_SHARED_CACHE="
 set "ENVY_MODE_FROM_MARKER="
 
 REM Tiers, in order, matching resolve_cache_root() in src/cache.cpp. No expansion of any
-REM kind: every value is either a literal from the manifest or a path this script joins, so
-REM there is no grammar for this script and the binary to disagree about.
-REM An override short-circuits every project tier, and is rejected rather than absolutized:
-REM the binary used to anchor a relative one to its own cwd while this script took it
-REM verbatim, so one invocation named two different trees. Flat `goto`, not an if/else block,
-REM because every comment below would otherwise sit inside parentheses -- where cmd re-parses
-REM REM lines and a stray `(`, `&` or `>` in prose silently breaks the block.
+REM kind, so this script and the binary have no grammar to disagree about. Flat `goto`, not
+REM if/else: in parens cmd re-parses REM lines and a stray `(`/`&`/`>` breaks the block.
 if not defined ENVY_CACHE_ROOT goto :resolve_project_cache
 set "ENVY_CACHE=!ENVY_CACHE_ROOT!"
 call :require_absolute
@@ -153,27 +134,24 @@ if errorlevel 1 exit /b 1
 goto :cache_resolved
 
 :resolve_project_cache
-REM The user's own cache root; src/resources/envy says what reads it. Guarded because an
-REM unguarded join yields "\envy" -- *defined*, so `if exist` takes the drive root for it.
+REM Guarded because an unguarded join yields "\envy" -- *defined*, so `if exist` takes the
+REM drive root for it.
 if defined LOCALAPPDATA set "ENVY_SHARED_CACHE=!LOCALAPPDATA!\envy"
 
-REM @envy state-dir, else the manifest's own directory -- never `.envy`, which is inside the
-REM default local tree `.envy\cache` and would let a cache wipe erase the marker.
+REM @envy state-dir, else the manifest's own directory -- never `.envy`, which sits inside
+REM the default local tree `.envy\cache` and would let a cache wipe erase the marker.
 set "ENVY_STATE_DIR=!ENVY_MANIFEST_DIR!"
 if defined ENVY_STATE_DIR_REL set "ENVY_STATE_DIR=!ENVY_MANIFEST_DIR!\!ENVY_STATE_DIR_REL!"
 
-REM Existence is the whole signal, so there is no file content for this script, bash and C++
-REM to read three different ways. Both markers at once is a state envy never writes.
+REM Existence is the whole signal -- no content for three languages to read three ways.
 if exist "!ENVY_STATE_DIR!\.envy-cache-local" if exist "!ENVY_STATE_DIR!\.envy-cache-shared" (
     echo ERROR: both .envy-cache-local and .envy-cache-shared exist in !ENVY_STATE_DIR! >&2
     echo        envy never writes both. Delete one. >&2
     exit /b 1
 )
 
-REM Naming a tree is asking for it; a cache-local needing a second directive to take effect
-REM would sit in a manifest doing nothing.
-REM A marker is recorded, not declared, so it leaves no directive for the version guard
-REM below to see -- and an envy predating the markers cannot see the choice either.
+REM Naming a tree is asking for it. A marker leaves no directive for the version guard
+REM below, so it is remembered separately.
 if exist "!ENVY_STATE_DIR!\.envy-cache-local" set "ENVY_MODE=local"
 if not defined ENVY_MODE if exist "!ENVY_STATE_DIR!\.envy-cache-shared" set "ENVY_MODE=shared"
 if defined ENVY_MODE set "ENVY_MODE_FROM_MARKER=1"
@@ -192,10 +170,8 @@ set "ENVY_CACHE=!ENVY_SHARED_CACHE!"
 goto :cache_resolved
 
 :cache_local
-REM Anchored to the manifest's directory, never the caller's cwd: one manifest names one tree
-REM from every working directory. %%~fI then normalizes, which is what keeps this equal to the
-REM binary's lexically_normal/make_preferred -- a cache-local of `out/.envy` joins as
-REM `...\out/.envy` until it runs.
+REM Anchored to the manifest dir, never the caller's cwd: one manifest, one tree. %%~fI
+REM normalizes, matching the binary's lexically_normal/make_preferred.
 set "ENVY_CACHE=!ENVY_MANIFEST_DIR!\.envy\cache"
 if defined ENVY_CACHE_LOCAL set "ENVY_CACHE=!ENVY_MANIFEST_DIR!\!ENVY_CACHE_LOCAL!"
 for %%I in ("!ENVY_CACHE!") do set "ENVY_CACHE=%%~fI"
@@ -213,8 +189,7 @@ if "!ENVY_VERSION!"=="" (
 )
 if not "!ENVY_VERSION!"=="" goto :version_resolved
 
-REM Ask the mirror first: 'envy mirror-envy' writes a `latest` file at the mirror root, so
-REM a private or air-gapped mirror answers for itself.
+REM 'envy mirror-envy' writes `latest` at the mirror root, so a private mirror answers.
 set "ENVY_LATEST_TMP=!TEMP!\envy-latest-%RANDOM%%RANDOM%.txt"
 set "ENVY_GOT="
 if defined ENVY_MIRROR_IS_S3 (
@@ -223,8 +198,8 @@ if defined ENVY_MIRROR_IS_S3 (
     where /q curl.exe && (curl.exe -fsSL --connect-timeout 10 --max-time 300 "!ENVY_MIRROR!/latest" -o "!ENVY_LATEST_TMP!" >nul 2>&1 && set "ENVY_GOT=1")
 )
 if not defined ENVY_GOT goto :latest_cleanup
-REM Trim with an unquoted for /f (a literal string, not a filename -- no usebackq), staging
-REM through ENVY_RAW so a whitespace-only file leaves ENVY_VERSION empty.
+REM Unquoted for /f (a literal, not a filename -- no usebackq), staged so a whitespace-only
+REM file leaves ENVY_VERSION empty.
 set "ENVY_RAW_VERSION="
 set /p ENVY_RAW_VERSION=<"!ENVY_LATEST_TMP!"
 for /f "tokens=1" %%v in ("!ENVY_RAW_VERSION!") do set "ENVY_VERSION=%%v"
@@ -238,17 +213,14 @@ REM GitHub serves no `latest` object, so fall back to its redirect. Skipped for 
 REM mirrors, which are never github.
 if defined ENVY_MIRROR_IS_S3 goto :version_fallback
 
-REM Prefer native curl.exe (policy-resistant); parse the tag from the end of the redirect
-REM chain, not hop 1: a repo rename inserts a hop whose last segment is `latest`. To a file
-REM behind && rather than a `for /f` backquote: --fail still writes the -w output on an
-REM HTTP error. Timeouts bound a blackholed connect.
+REM Parse the tag from the end of the redirect chain, not hop 1 (a repo rename inserts a
+REM hop ending in `latest`). To a file behind &&: --fail writes -w output on an HTTP error.
 set "ENVY_EFF_TMP=!TEMP!\envy-effective-%RANDOM%%RANDOM%.txt"
 set "ENVY_EFFECTIVE="
 set "ENVY_TAG="
 set "ENVY_GOT="
 where /q curl.exe && (curl.exe -fsSL -o nul -w "%%{url_effective}" --connect-timeout 5 --max-time 15 "!ENVY_LATEST_URL!" >"!ENVY_EFF_TMP!" 2>nul && set "ENVY_GOT=1")
-REM goto, not `if defined ENVY_GOT set /p ...`: cmd applies the redirection whether or not the
-REM `if` body runs, and ENVY_EFF_TMP is absent when curl.exe is.
+REM goto, not `if defined ... set /p`: cmd redirects whether or not the `if` body runs.
 if not defined ENVY_GOT goto :effective_cleanup
 set /p ENVY_EFFECTIVE=<"!ENVY_EFF_TMP!"
 :effective_cleanup
@@ -257,8 +229,7 @@ if defined ENVY_EFFECTIVE set "ENVY_EFFECTIVE=!ENVY_EFFECTIVE:/=\!"
 if defined ENVY_EFFECTIVE for %%a in ("!ENVY_EFFECTIVE!") do set "ENVY_TAG=%%~nxa"
 if defined ENVY_TAG set "ENVY_VERSION=!ENVY_TAG!"
 if defined ENVY_TAG if "!ENVY_TAG:~0,1!"=="v" set "ENVY_VERSION=!ENVY_TAG:~1!"
-REM PowerShell fallback for a box without curl.exe. AllowAutoRedirect defaults on, so
-REM ResponseUri is the end of the chain.
+REM PowerShell fallback: AllowAutoRedirect defaults on, so ResponseUri ends the chain.
 if "!ENVY_VERSION!"=="" (
     for /f "tokens=*" %%u in ('powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; try { $resp=[System.Net.WebRequest]::Create('!ENVY_LATEST_URL!').GetResponse(); $u=$resp.ResponseUri.AbsoluteUri; $resp.Close(); ($u -split '/')[-1] -replace '^v','' } catch {}" 2^>nul') do set "ENVY_VERSION=%%u"
 )
@@ -269,35 +240,30 @@ call :check_version
 if "!ENVY_VERSION!"=="" set "ENVY_VERSION=!ENVY_FALLBACK_VERSION!"
 :version_resolved
 
-REM An older envy silently ignores the cache directives and would resolve the *shared* cache
-REM for a manifest asking for a hermetic tree, then exit 0. Refuse before downloading it.
-REM 0.0.0 is a dev build, which reexec_should() in src/reexec.cpp also lets through: built
-REM from a working tree, so its directive support cannot be read off its version. Both shape
-REM tests matter -- an unstamped template would otherwise reach `if LSS` with
-REM '0.2.0'.
+REM An older envy silently ignores the cache directives, resolving the *shared* cache for a
+REM manifest asking for a hermetic tree and exiting 0. Refuse before downloading it. 0.0.0
+REM is a dev build, let through as in reexec_should().
 set "ENVY_USES_NEW_DIRECTIVES="
 if defined ENVY_CACHE_LOCAL set "ENVY_USES_NEW_DIRECTIVES=1"
 if defined ENVY_CACHE_MODE set "ENVY_USES_NEW_DIRECTIVES=1"
 if defined ENVY_STATE_DIR_REL set "ENVY_USES_NEW_DIRECTIVES=1"
 REM A recorded mode counts as much as a declared one.
 if defined ENVY_MODE_FROM_MARKER set "ENVY_USES_NEW_DIRECTIVES=1"
-REM The errorlevel test lives inside the guard: left outside it, it ran on every path --
-REM including every project using none of these directives, where the ERRORLEVEL it read was
-REM whatever the preceding `set`/`if` left behind rather than the guard's own.
+REM The errorlevel test lives inside the guard: outside it, it read whatever the preceding
+REM `set`/`if` left behind.
 if defined ENVY_USES_NEW_DIRECTIVES if not "!ENVY_VERSION!"=="0.0.0" (
     call :guard_directive_version
     if errorlevel 1 exit /b 1
 )
 
-REM Regular and non-empty, not just `if exist`: that accepts a directory and a zero-length
-REM file, and running either fails instead of trying the next candidate.
+REM Regular and non-empty: bare `if exist` accepts a directory or a zero-length file.
 set "ENVY_BIN=!ENVY_CACHE!\envy\!ENVY_VERSION!\envy.exe"
 set "ENVY_BIN_OK="
 if exist "!ENVY_BIN!" if not exist "!ENVY_BIN!\" for %%I in ("!ENVY_BIN!") do if not "%%~zI"=="0" set "ENVY_BIN_OK=1"
 if defined ENVY_BIN_OK goto :run
 
-REM A local tree borrows the user's own copy; src/resources/envy carries the reasoning.
-REM Above the "Downloading envy" banner, so a hit never announces a download.
+REM A local tree borrows the user's own copy. Above the "Downloading envy" banner, so a hit
+REM never announces a download.
 if not "!ENVY_MODE!"=="local" goto :no_shared_probe
 if defined ENVY_SUMS_PIN goto :no_shared_probe
 if not defined ENVY_SHARED_CACHE goto :no_shared_probe
@@ -315,10 +281,9 @@ reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v
 echo Downloading envy !ENVY_VERSION!... >&2
 set "ENVY_ARCHIVE=envy-windows-!ENVY_ARCH!.zip"
 set "ENVY_URL=!ENVY_MIRROR!/v!ENVY_VERSION!/!ENVY_ARCHIVE!"
-REM Escape single quotes for PowerShell (replace ' with '')
+REM Escape single quotes for PowerShell.
 set "ENVY_SAFE_URL=!ENVY_URL:'=''!"
-REM Claim a unique temp dir via atomic mkdir (cmd's %RANDOM% can collide across
-REM concurrent bootstraps; mkdir succeeds for exactly one owner of a given name).
+REM Atomic mkdir: %RANDOM% collides across concurrent bootstraps, mkdir does not.
 set /a ENVY_TEMP_TRIES=0
 :mktemp
 set "ENVY_TEMP_DIR=!TEMP!\envy-%RANDOM%%RANDOM%"
@@ -335,9 +300,8 @@ if defined ENVY_MIRROR_IS_S3 goto :dl_s3
 goto :dl_http
 
 :dl_s3
-REM `call` so an aws resolved to a .bat/.cmd shim returns control here and ERRORLEVEL
-REM survives. To a file, never piped into tar: cmd takes ERRORLEVEL from the right side of a
-REM pipe only, and tar exits 0 on empty input, so a failed download would look like success.
+REM `call` so an aws .bat/.cmd shim returns control here with ERRORLEVEL intact. To a file,
+REM never piped: cmd reads ERRORLEVEL from a pipe's right side, and tar exits 0 on nothing.
 call aws s3 cp --only-show-errors "!ENVY_URL!" "!ENVY_TEMP_ZIP!" && set "ENVY_OK=1"
 goto :dl_done
 
@@ -350,8 +314,7 @@ if not defined ENVY_OK (
 :dl_done
 if not defined ENVY_OK (echo ERROR: Failed to download envy from !ENVY_URL! >&2 & rmdir /s /q "!ENVY_TEMP_DIR!" 2>nul & del "!ENVY_TEMP_ZIP!" 2>nul & exit /b 1)
 
-REM Attest before extracting: an unattested archive must never be unpacked, or a hostile
-REM mirror chooses the paths written under ENVY_TEMP_DIR, from which we run envy.
+REM Attest before extracting: a hostile mirror must not choose paths we run envy from.
 if not defined ENVY_SUMS_PIN goto :attest_done
 
 set "ENVY_SUMS_URL=!ENVY_MIRROR!/v!ENVY_VERSION!/SHA256SUMS"
@@ -381,8 +344,7 @@ if /i not "!ENVY_HASH_OUT!"=="!ENVY_SUMS_PIN!" (
     rmdir /s /q "!ENVY_TEMP_DIR!" 2>nul & del "!ENVY_TEMP_ZIP!" 2>nul & exit /b 1
 )
 
-REM Match this exact archive: keying on the hash alone accepts any platform's binary, and a
-REM prefix name match accepts a longer sibling.
+REM Exact archive: hash alone accepts any platform, a prefix name a longer sibling.
 set "ENVY_WANT="
 for /f "usebackq tokens=1,2" %%h in ("!ENVY_SUMS_FILE!") do (
     set "ENVY_NAME=%%i"
@@ -410,21 +372,14 @@ if not defined ENVY_OK (
 )
 if not defined ENVY_OK (echo ERROR: Failed to extract envy >&2 & rmdir /s /q "!ENVY_TEMP_DIR!" 2>nul & del "!ENVY_TEMP_ZIP!" 2>nul & exit /b 1)
 del "!ENVY_TEMP_ZIP!" 2>nul
-REM tar succeeds on an empty archive, so a zero-length object would fall through to :run
-REM and report a missing path instead of a failed download.
+REM tar succeeds on an empty archive; without this, :run reports a missing path instead.
 if not exist "!ENVY_TEMP_DIR!\envy.exe" (echo ERROR: archive from !ENVY_URL! contained no envy binary >&2 & rmdir /s /q "!ENVY_TEMP_DIR!" 2>nul & exit /b 1)
 set "ENVY_BIN=!ENVY_TEMP_DIR!\envy.exe"
 goto :run
 
-REM :read_root -- ENVY_IS_ROOT out, manifest path in %1. Reads only the manifest header: blank
-REM lines and comments, stopping at the first line of code, the same rule parse_envy_meta
-REM applies in src/manifest.cpp. `for /f` skips blank lines on its own, so only a code line
-REM ends the scan; the default space+tab delims (no override) keep a tab-indented comment's
-REM tab out of %%a, and `eol=` clears the default `;` comment character so a `;`-led line
-REM ends the header rather than being skipped -- both as in the header scan above. A
-REM subroutine because the early-exit `goto` has to land at this scope's top level -- inside
-REM the caller's `if exist (...)` block it would tear out of the block and skip the walk's
-REM own logic. Reached only by `call`.
+REM :read_root -- ENVY_IS_ROOT out, manifest path in %1. Header-only scan, same rules as
+REM the one above. A subroutine so the early-exit `goto` lands at a scope's top level
+REM instead of tearing out of the caller's `if exist (...)` block. Reached only by `call`.
 :read_root
 set "ENVY_IS_ROOT=true"
 for /f "usebackq tokens=1,2,3,4 eol=" %%a in ("%~1") do (
@@ -439,26 +394,19 @@ for /f "usebackq tokens=1,2,3,4 eol=" %%a in ("%~1") do (
 :read_root_done
 exit /b 0
 
-REM :quoted_value -- ENVY_RAW in, ENVY_VAL out. ENVY_RAW is the `*` remainder of a directive line, so it
-REM starts at the opening quote and may carry a trailing comment. `for /f` skips leading
-REM delimiters, so with `"` as the delimiter the value is token *1*, not token 2, and it ends
-REM at the closing quote either way -- matching parse_directive_line() in src/manifest.cpp.
-REM The old `!ENVY_VAL:~1,-1!` trimmed one character from each end instead and folded any trailing
-REM comment into the value. A `\"` inside a value still splits early --
-REM already true of this parser before, and documented in docs/envy-init.md, which is why
-REM envy_release_validate_mirror rejects the one directive that could carry one.
-REM Options are caret-escaped and unquoted: `delims="` cannot be written inside quotes.
-REM Reached only by `call`.
+REM :quoted_value -- ENVY_RAW in (a directive's `*` remainder, opening quote onward),
+REM ENVY_VAL out. `for /f` skips leading delimiters, so with `"` as delimiter the value is
+REM token 1 and ends at the closing quote, matching parse_directive_line(). A `\"` inside a
+REM value still splits early -- see docs/envy-init.md. Options are caret-escaped and
+REM unquoted: `delims="` cannot be written inside quotes. Reached only by `call`.
 :quoted_value
 set "ENVY_VAL="
 for /f tokens^=1^ delims^=^" %%v in ("!ENVY_RAW!") do set "ENVY_VAL=%%v"
 if defined ENVY_VAL set "ENVY_VAL=!ENVY_VAL:\\=\!"
 exit /b 0
 
-REM :require_absolute -- ENVY_CACHE in; errorlevel 1 when it is not absolute. Rejected rather
-REM than absolutized: the binary used to anchor a relative override to its own cwd while
-REM this script took it verbatim, so one invocation named two trees. The accepted forms are
-REM the ones std::filesystem calls absolute on Windows. Reached only by `call`.
+REM :require_absolute -- ENVY_CACHE in; errorlevel 1 when not absolute. Rejected, not
+REM absolutized: the binary anchors a relative override to its own cwd. `call` only.
 :require_absolute
 if "!ENVY_CACHE:~0,2!"=="\\" exit /b 0
 if "!ENVY_CACHE:~0,2!"=="//" exit /b 0
@@ -467,10 +415,8 @@ if "!ENVY_CACHE:~1,2!"==":/" exit /b 0
 echo ERROR: ENVY_CACHE_ROOT must be an absolute path: !ENVY_CACHE! >&2
 exit /b 1
 
-REM :guard_directive_version -- ENVY_VERSION and ENVY_MIN_DIRECTIVE_VERSION in; errorlevel 1 when the
-REM resolved envy predates the cache directives this manifest uses. Field-wise integer
-REM compare, so 0.10.0 is correctly newer than 0.2.0 where a string compare is not.
-REM Reached only by `call`.
+REM :guard_directive_version -- errorlevel 1 when the resolved envy predates the cache
+REM directives this manifest uses. Field-wise integer compare: 0.10.0 > 0.2.0. `call` only.
 :guard_directive_version
 echo(!ENVY_MIN_DIRECTIVE_VERSION!|findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul 2>&1
 if errorlevel 1 exit /b 0
@@ -492,13 +438,9 @@ echo        !ENVY_MIN_DIRECTIVE_VERSION!, but resolves envy !ENVY_VERSION!. That
 echo        and would silently use the shared cache. Raise or remove the '@envy version' pin. >&2
 exit /b 1
 
-REM :check_version -- ENVY_VERSION and ENVY_VERSION_SRC in; clears ENVY_VERSION unless it is numbered
-REM MAJOR.MINOR.PATCH, the only shape an envy release takes. Clearing defers to the next
-REM tier, ultimately ENVY_FALLBACK_VERSION. A `vlatest/` ENVY_URL 404s, reported as a 403 by a bucket
-REM without s3:ListBucket. Reached only by `call`.
-REM
-REM ENVY_VERSION is delayed-expanded, so an `&` in a mirror's `latest` is data to echo, not a
-REM second command.
+REM :check_version -- ENVY_VERSION and ENVY_VERSION_SRC in; clears ENVY_VERSION unless it
+REM is MAJOR.MINOR.PATCH, deferring to the next tier. Delayed-expanded, so an `&` in a
+REM mirror's `latest` is data, not a command.
 :check_version
 if not defined ENVY_VERSION exit /b 0
 echo(!ENVY_VERSION!|findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul 2>&1
@@ -507,12 +449,9 @@ echo WARNING: ignoring implausible envy version '!ENVY_VERSION!' from !ENVY_VERS
 set "ENVY_VERSION="
 exit /b 0
 
-REM :sha256 -- ENVY_HASH_FILE in, ENVY_HASH_OUT out; empty if no hasher on this box could produce a
-REM 64-digit digest. Reached only by `call`, so control never falls into it.
-REM
-REM certutil first: a System32 binary, so it survives the PowerShell policy lockdowns that
-REM motivate the curl.exe/tar.exe preference above. It is also a known LOLBin, so hardened
-REM environments sometimes block it -- hence the Get-FileHash fallback, not a hard failure.
+REM :sha256 -- ENVY_HASH_FILE in, ENVY_HASH_OUT out; empty if no hasher produced a 64-digit
+REM digest. certutil first (System32, survives PowerShell lockdowns), but it is a known
+REM LOLBin some environments block -- hence the Get-FileHash fallback. `call` only.
 :sha256
 set "ENVY_HASH_OUT="
 where /q certutil.exe && (
@@ -530,18 +469,16 @@ if not defined ENVY_HASH_OUT (
 )
 exit /b 0
 
-REM Discard anything not exactly 64 characters: certutil writes its trailing status line to
-REM stdout too, and a localized or error line would be compared against a pin as a digest.
+REM Not exactly 64 chars: certutil writes its status line to stdout, and a localized or
+REM error line would be compared against a pin as a digest.
 :sha256_len_ok
 if not defined ENVY_HASH_OUT exit /b 0
 if "!ENVY_HASH_OUT:~63,1!"=="" set "ENVY_HASH_OUT="
 if defined ENVY_HASH_OUT if not "!ENVY_HASH_OUT:~64!"=="" set "ENVY_HASH_OUT="
 exit /b 0
 
-REM --project, injected ahead of the caller's argv: this script belongs to one project, and
-REM the binary must not rediscover a different one from whatever CWD invoked it. take_last
-REM on the option side means a hand-typed --project still wins. The trailing dot keeps
-REM %~dp0's own backslash off the closing quote.
+REM --project ahead of the caller's argv: this script belongs to one project; take_last
+REM means a hand-typed --project wins. The dot keeps %~dp0's backslash off the quote.
 REM envy sync may rewrite this script; single line ensures cmd.exe never reads past here.
 :run
 "!ENVY_BIN!" --project "%~dp0." %* & exit /b !ERRORLEVEL!

@@ -1,8 +1,7 @@
 # envy shell hook — managed by envy; do not edit
 $global:_ENVY_HOOK_VERSION = @@ENVY_HOOK_VERSION@@
 
-# Detect UTF-8 capability for emoji/unicode output. Re-evaluated on every prompt
-# (cheap) so flipping the console encoding takes effect without re-sourcing.
+# Re-evaluated every prompt (cheap), so flipping the console encoding needs no re-source.
 function _envy_detect_utf8 {
     $global:_ENVY_UTF8 = (($env:LC_ALL + $env:LC_CTYPE + $env:LANG) -match '[Uu][Tt][Ff]-?8') -or
         $(try { [Console]::OutputEncoding.WebName -eq 'utf-8' } catch { $false })
@@ -10,23 +9,14 @@ function _envy_detect_utf8 {
 }
 _envy_detect_utf8
 
-# One directive's value out of a manifest's header, $null if the header carries none. Header
-# means blank lines and comments up to the manifest's first line of code -- the rule
-# parse_envy_meta applies in src/manifest.cpp, and the one src/resources/envy walks with. No
-# line cap: the header ends where the code starts, so neither a long preamble nor a
-# directive-shaped comment in the package table can make this hook put a different project's
-# bin directory on PATH than envy itself resolves.
+# One directive's value out of a manifest's header -- blank lines and comments up to the
+# first code line, the rule parse_envy_meta and src/resources/envy both apply. No line cap.
+# Read whole: a repeated directive resolves to the last, as it does there.
 #
-# A StreamReader, not `foreach ($line in Get-Content ...)`: the foreach statement runs its
-# collection expression to completion before its first iteration, so Get-Content would read
-# and materialize the whole manifest even though this leaves at the first code line -- and it
-# runs twice per directory change, once for root and once for bin. Disposed explicitly rather
-# than leaning on [System.IO.File]::ReadLines(), whose enumerator the foreach statement is not
-# guaranteed to dispose; a leaked handle denies writes to envy.lua until GC. Both call sites
-# pass an absolute path, which .NET requires -- its working directory is not PowerShell's.
-#
-# The whole header is read even after a hit: a repeated directive resolves to the last one,
-# because parse_envy_meta overwrites on each match and src/resources/envy's read loop does too.
+# A StreamReader, not `foreach ($line in Get-Content)`: foreach runs its collection to
+# completion first, materializing the whole manifest twice per directory change. Disposed
+# explicitly -- foreach need not dispose a ReadLines() enumerator, and a leak denies writes
+# to envy.lua until GC. Both call sites pass the absolute path .NET requires.
 function _envy_header_directive($manifest, $key) {
     $re = '^\s*--\s*@envy\s+' + $key + '\s+"([^"\\]*(?:\\.[^"\\]*)*)"'
     $found = $null
@@ -82,7 +72,7 @@ function _envy_hook {
             if (Test-Path $binDir -PathType Container) {
                 $binDir = (Resolve-Path $binDir).Path
                 if ($binDir -ne $global:_ENVY_BIN_DIR) {
-                    # Leaving old project (switching)?
+                    # Leaving the old project (switching)?
                     if ($global:_ENVY_BIN_DIR) {
                         $oldName = Split-Path $env:ENVY_PROJECT_ROOT -Leaf
                         if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
@@ -99,8 +89,7 @@ function _envy_hook {
                         [Console]::Error.WriteLine("envy: entering $newName $($global:_ENVY_DASH) tools added to PATH")
                     }
                     $global:_ENVY_PROMPT_ACTIVE = $true
-                    # One-time nudge: the icon is wanted (NO_ICON unset) but the
-                    # console can't render it. Never shown if the user opted out.
+                    # One-time nudge: the icon is wanted but the console can't render it.
                     if (-not $global:_ENVY_UTF8 -and
                         $env:ENVY_SHELL_NO_ICON -ne "1" -and
                         -not $global:_ENVY_UTF8_HINTED) {
@@ -129,7 +118,6 @@ function _envy_hook {
     Remove-Item Env:\ENVY_PROJECT_ROOT -ErrorAction SilentlyContinue
 }
 
-# Wrap prompt to call hook on every prompt render
 $global:_ENVY_LAST_PWD = $null
 $global:_ENVY_BIN_DIR = $null
 $global:_ENVY_PROMPT_ACTIVE = $false
@@ -146,5 +134,4 @@ if (-not (Test-Path Function:\global:_envy_original_prompt)) {
     }
 }
 
-# Activate for current directory
 _envy_hook
