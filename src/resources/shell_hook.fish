@@ -1,7 +1,6 @@
 # envy shell hook — managed by envy; do not edit
 set -g _ENVY_HOOK_VERSION @@ENVY_HOOK_VERSION@@
 
-# Detect UTF-8 locale for emoji/unicode output
 if string match -qi '*utf-8*' -- $LC_ALL $LC_CTYPE $LANG
     set -g _ENVY_UTF8 1
     set -g _ENVY_DASH "—"
@@ -10,19 +9,10 @@ else
     set -g _ENVY_DASH "--"
 end
 
-# One directive's value out of a manifest's header, nothing if the header carries none.
-# Header means blank lines and comments up to the manifest's first line of code -- the rule
-# parse_envy_meta applies in src/manifest.cpp, and the one src/resources/envy walks with, sed
-# program included. No line cap: the header ends where the code starts, so neither a long
-# preamble nor a directive-shaped comment in the package table can make this hook put a
-# different project's bin directory on PATH than envy itself resolves. `q` bounds the read to
-# the header, so manifest size is irrelevant.
-#
-# The sed keeps scanning after a hit, so a repeated directive prints once per occurrence and
-# the last is taken -- parse_envy_meta overwrites on each match and src/resources/envy's read
-# loop does too. Indexing is what picks it: bare command substitution would hand a caller a
-# multi-element list, and fish joins those with a space inside quotes, so a doubled
-# `root "false"` would compare as `false false` and read as root=true.
+# One directive's value out of a manifest's header -- blank lines and comments up to the
+# first code line, the rule parse_envy_meta and src/resources/envy both apply. No line cap;
+# `q` bounds the read. `$vals[-1]`: a repeat resolves to the last, as it does there, and a
+# bare substitution would hand the caller a list fish joins with a space inside quotes.
 function _envy_header_directive
     set -l vals (sed -nE '
         /^[[:space:]]*$/d
@@ -79,7 +69,7 @@ end
 
 function _envy_hook --on-variable PWD
     test "$ENVY_SHELL_HOOK_DISABLE" = 1; and return
-    # Deduplicate: --on-variable PWD can fire from cd in command substitutions
+    # --on-variable PWD also fires from a cd in a command substitution.
     test "$PWD" = "$_ENVY_LAST_PWD"; and return
     set -g _ENVY_LAST_PWD "$PWD"
 
@@ -91,7 +81,7 @@ function _envy_hook --on-variable PWD
             set -l bin_dir (realpath "$manifest_dir/$bin_val" 2>/dev/null)
             if test -n "$bin_dir"
                 if test "$bin_dir" != "$_ENVY_BIN_DIR"
-                    # Leaving old project (switching)?
+                    # Leaving the old project (switching)?
                     if set -q _ENVY_BIN_DIR
                         test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: leaving "(string replace -r '.*/' '' "$ENVY_PROJECT_ROOT")" $_ENVY_DASH PATH restored" >&2
                         set -l idx (contains -i -- "$_ENVY_BIN_DIR" $PATH)
@@ -123,5 +113,4 @@ function _envy_hook --on-variable PWD
     set -e ENVY_PROJECT_ROOT
 end
 
-# Activate for current directory
 _envy_hook

@@ -1,15 +1,12 @@
 # envy shell hook — managed by envy; do not edit
 _ENVY_HOOK_VERSION=@@ENVY_HOOK_VERSION@@
 
-# Detect UTF-8 locale for emoji/unicode output
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) _ENVY_UTF8=1; _ENVY_DASH="—" ;;
   *) _ENVY_UTF8=; _ENVY_DASH="--" ;;
 esac
 
-# Prompt prefix: raccoon emoji wrapped in %{...%2G%} so zsh skips its
-# own width measurement and uses the explicit 2-column declaration.
-_ENVY_PROMPT_PREFIX="%{🦝%2G%} "
+_ENVY_PROMPT_PREFIX="%{🦝%2G%} "  # %2G: declare the width, don't let zsh measure it
 
 # p10k custom segment — called by p10k if registered; harmless when p10k absent.
 prompt_envy() {
@@ -18,29 +15,16 @@ prompt_envy() {
   p10k segment -f 208 -t '🦝'
 }
 
-# One directive's value into REPLY, empty if the manifest's header carries none. Header
-# means blank lines and comments up to the first line of code -- the rule parse_envy_meta
-# applies in src/manifest.cpp, and the one src/resources/envy walks with. No line cap: the
-# header ends where the code starts, so neither a long preamble nor a directive-shaped
-# comment in the package table can make this hook put a different project's bin directory on
-# PATH than envy itself resolves.
-#
-# Pure zsh read+regex instead of head|grep — avoids fork/exec per directory, and REPLY
-# avoids a $() subshell at the call site. `line=""` is explicit: without it, zsh's
-# NO_TYPESET_SILENT default makes `local line` print a prior value. `|| [[ -n "$line" ]]`
-# catches a manifest with no final newline, which `read` reports as a failure after
-# filling $line.
-#
-# The whole header is read even after a hit: a repeated directive resolves to the last one,
-# because parse_envy_meta overwrites on each match and src/resources/envy's read loop does
-# too. Returning on the first would hand this hook one project's bin directory while the
-# binary deployed another's.
+# One directive's value into REPLY -- blank lines and comments up to the first code line,
+# the rule parse_envy_meta and src/resources/envy both apply. No line cap. Read whole: a
+# repeated directive resolves to the last, as it does there. Pure zsh read+regex, no
+# head|grep fork per directory; REPLY avoids a $() subshell at the call site.
 _envy_header_directive() {
   emulate -L zsh
   REPLY=""
-  local line="" re=""
+  local line="" re=""  # explicit: NO_TYPESET_SILENT would print a prior value
   re='^[[:space:]]*--[[:space:]]*@envy[[:space:]]+'"$2"'[[:space:]]+"(([^"\\]|\\.)*)"'
-  while IFS= read -r line || [[ -n "$line" ]]; do
+  while IFS= read -r line || [[ -n "$line" ]]; do  # `||`: no final newline
     if [[ "$line" =~ '^[[:space:]]*$' ]]; then continue; fi
     if [[ ! "$line" =~ '^[[:space:]]*--' ]]; then break; fi
     if [[ "$line" =~ $re ]]; then REPLY="${match[1]}"; fi
@@ -72,8 +56,7 @@ _envy_parse_bin() {
 
 _envy_remove_from_path() {
   emulate -L zsh
-  # Filter zsh path array in-place — zsh auto-syncs it to $PATH, so no $() to capture.
-  path=("${(@)path:#${(b)1}}")
+  path=("${(@)path:#${(b)1}}")  # in-place; zsh auto-syncs $path to $PATH
 }
 
 _envy_set_prompt() {
@@ -82,15 +65,13 @@ _envy_set_prompt() {
   if [ "${_ENVY_UTF8:-}" != "1" ]; then return; fi
   if [ "${_ENVY_PROMPT_ACTIVE:-}" = "1" ]; then return; fi
   _ENVY_PROMPT_ACTIVE=1
-  # p10k renders via prompt_envy() segment — skip PROMPT manipulation
-  (( ${+functions[p10k]} )) && return
+  (( ${+functions[p10k]} )) && return  # p10k renders via the prompt_envy() segment
   if [[ "$PROMPT" != *"${_ENVY_PROMPT_PREFIX}"* ]]; then
     PROMPT="${_ENVY_PROMPT_PREFIX}${PROMPT}"
   fi
 }
 
-# Every icon goes, wherever it sits: another decorator may have prepended its own escapes
-# ahead of one, and a shell carrying a stack of them from an older hook still leaves clean.
+# Every icon goes, wherever it sits: another decorator may sit ahead of one.
 _envy_unset_prompt() {
   emulate -L zsh
   if [ "${_ENVY_PROMPT_ACTIVE:-}" != "1" ]; then return; fi
@@ -100,9 +81,8 @@ _envy_unset_prompt() {
   unset _ENVY_PROMPT_ACTIVE
 }
 
-# Runs before each prompt: re-applies raccoon if a theme overwrote PROMPT. Presence, not
-# position -- iTerm2/VS Code precmds re-prepend a prompt mark ahead of the icon whenever
-# PROMPT changes, and an anchored test reads that as "icon gone" once per Enter, forever.
+# Re-applies the icon if a theme overwrote PROMPT. Presence, not position: iTerm2/VS Code
+# precmds re-prepend a mark ahead of it, which an anchored test reads as "icon gone".
 _envy_precmd() {
   emulate -L zsh
   if [ "${ENVY_SHELL_NO_ICON:-}" = "1" ] || [ "${_ENVY_UTF8:-}" != "1" ]; then
@@ -110,11 +90,10 @@ _envy_precmd() {
     return
   fi
   if [ "${_ENVY_PROMPT_ACTIVE:-}" != "1" ]; then return; fi
-  # p10k renders via prompt_envy() segment — no PROMPT fixup needed
-  (( ${+functions[p10k]} )) && return
+  (( ${+functions[p10k]} )) && return  # p10k segment needs no PROMPT fixup
   if [[ "$PROMPT" != *"${_ENVY_PROMPT_PREFIX}"* ]]; then
     PROMPT="${_ENVY_PROMPT_PREFIX}${PROMPT}"
-    # Another precmd overwrote PROMPT — ensure we run last next time
+    # Another precmd overwrote PROMPT — run last next time
     if [[ "${precmd_functions[-1]}" != "_envy_precmd" ]]; then
       precmd_functions=("${(@)precmd_functions:#_envy_precmd}" _envy_precmd)
     fi
@@ -124,12 +103,9 @@ _envy_precmd() {
 _envy_hook() {
   emulate -L zsh
   if [ "${ENVY_SHELL_HOOK_DISABLE:-}" = "1" ]; then return; fi
-  # Guard against chpwd recursion: $(cd ...) in subshells inherits this local
-  if [ -n "${_ENVY_HOOK_ACTIVE:-}" ]; then return; fi
+  if [ -n "${_ENVY_HOOK_ACTIVE:-}" ]; then return; fi  # chpwd recursion via $(cd ...)
   local _ENVY_HOOK_ACTIVE=1
 
-  # Call helpers directly instead of via $() — each $() forks a subshell,
-  # and macOS fork() costs ~1-2ms each. Results come back through REPLY.
   local manifest_dir bin_val bin_dir
   if _envy_find_manifest 2>/dev/null; then
     manifest_dir="$REPLY"
@@ -137,11 +113,10 @@ _envy_hook() {
     bin_val="$REPLY"
     if [ -n "$bin_val" ]; then
       bin_dir="${manifest_dir}/${bin_val}"
-      # Resolve to real path using zsh :A modifier (no subshell)
-      bin_dir="${bin_dir:A}"
+      bin_dir="${bin_dir:A}"  # realpath via :A, no subshell
       if [ -d "$bin_dir" ]; then
         if [ "$bin_dir" != "${_ENVY_BIN_DIR:-}" ]; then
-          # Leaving old project (switching)?
+          # Leaving the old project (switching)?
           if [ -n "${_ENVY_BIN_DIR:-}" ]; then
             if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
               printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
@@ -176,7 +151,7 @@ _envy_hook() {
   unset ENVY_PROJECT_ROOT
 }
 
-# Register via chpwd (fires only on directory change — more efficient than precmd)
+# chpwd fires only on a directory change; cheaper than precmd.
 if [[ -z "${chpwd_functions[(r)_envy_hook]}" ]]; then
   chpwd_functions+=(_envy_hook)
 fi
@@ -184,7 +159,6 @@ if [[ -z "${precmd_functions[(r)_envy_precmd]}" ]]; then
   precmd_functions+=(_envy_precmd)
 fi
 
-# Auto-register p10k segment if available (raccoon appears in p10k's prompt)
 if [ "${ENVY_SHELL_NO_ICON:-}" != "1" ] && [ "${_ENVY_UTF8:-}" = "1" ] && \
    (( ${+functions[p10k]} )) && [[ -n "${POWERLEVEL9K_LEFT_PROMPT_ELEMENTS+x}" ]]; then
   if [[ -z "${POWERLEVEL9K_LEFT_PROMPT_ELEMENTS[(r)envy]}" ]]; then
@@ -193,5 +167,4 @@ if [ "${ENVY_SHELL_NO_ICON:-}" != "1" ] && [ "${_ENVY_UTF8:-}" = "1" ] && \
   fi
 fi
 
-# Activate for current directory
 _envy_hook

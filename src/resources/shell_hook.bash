@@ -1,28 +1,18 @@
 # envy shell hook — managed by envy; do not edit
 _ENVY_HOOK_VERSION=@@ENVY_HOOK_VERSION@@
 
-# Detect UTF-8 locale for emoji/unicode output
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) _ENVY_UTF8=1; _ENVY_DASH="—" ;;
   *) _ENVY_UTF8=; _ENVY_DASH="--" ;;
 esac
 
-# One directive's value out of a manifest's header, empty if the header carries none.
-# Header means blank lines and comments up to the manifest's first line of code -- the rule
-# parse_envy_meta applies in src/manifest.cpp, and the one src/resources/envy walks with.
-# No line cap: the header ends where the code starts, so neither a long preamble nor a
-# directive-shaped comment in the package table can make this hook put a different project's
-# bin directory on PATH than envy itself resolves. `|| [ -n "$line" ]` catches a manifest
-# with no final newline, which `read` reports as a failure after filling $line.
-#
-# The whole header is read even after a hit: a repeated directive resolves to the last one,
-# because parse_envy_meta overwrites on each match and src/resources/envy's read loop does
-# too. Returning on the first would hand this hook one project's bin directory while the
-# binary deployed another's.
+# One directive's value out of a manifest's header -- blank lines and comments up to the
+# first code line, the rule parse_envy_meta and src/resources/envy both apply. No line cap.
+# Read whole: a repeated directive resolves to the last, as it does there.
 _envy_header_directive() {
   local line found=""
   local re='^[[:space:]]*--[[:space:]]*@envy[[:space:]]+'"$2"'[[:space:]]+"(([^"\\]|\\.)*)"'
-  while IFS= read -r line || [ -n "$line" ]; do
+  while IFS= read -r line || [ -n "$line" ]; do  # `||`: no final newline
     if [[ "$line" =~ ^[[:space:]]*$ ]]; then continue; fi
     if [[ ! "$line" =~ ^[[:space:]]*-- ]]; then break; fi
     if [[ "$line" =~ $re ]]; then found="${BASH_REMATCH[1]}"; fi
@@ -93,7 +83,7 @@ _envy_hook() {
       bin_dir="$(cd "$manifest_dir/$bin_val" 2>/dev/null && pwd)" || true
       if [ -n "$bin_dir" ]; then
         if [ "$bin_dir" != "${_ENVY_BIN_DIR:-}" ]; then
-          # Leaving old project (switching)?
+          # Leaving the old project (switching)?
           if [ -n "${_ENVY_BIN_DIR:-}" ]; then
             if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
               printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
@@ -128,10 +118,8 @@ _envy_hook() {
   unset ENVY_PROJECT_ROOT
 }
 
-# Register via PROMPT_COMMAND
 if [[ "${PROMPT_COMMAND:-}" != *"_envy_hook"* ]]; then
   PROMPT_COMMAND="_envy_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
 
-# Activate for current directory
 _envy_hook
