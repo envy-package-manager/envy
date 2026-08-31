@@ -448,12 +448,14 @@ std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
 
   auto results{ fetch(requests, std::move(trace_spec)) };
 
-  // A finished download is the command's record of itself, so its row stays for the final
-  // render to leave at 100%. A failure has an error to speak for it, so the row goes.
+  // A finished download is the command's record of itself, so its row commits to the
+  // scrollback at 100%, above whatever the caller reports next. A failure has an error to
+  // speak for it, so the row goes.
   if (std::ranges::all_of(results, [](fetch_result_t const &r) {
         return std::holds_alternative<fetch_result>(r);
       })) {
     tracker.finish();
+    tui::section_commit(section);
   } else {
     tui::section_delete(section);
   }

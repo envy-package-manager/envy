@@ -971,4 +971,113 @@ TEST_CASE("section_delete double delete is a no-op") {
   CHECK_FALSE(envy::tui::section_has_content(h));
 }
 
+// ============================================================================
+// section_commit tests
+// ============================================================================
+
+TEST_CASE_FIXTURE(captured_output, "section_commit lands the row above what follows") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{ .label = "hash",
+                                .content =
+                                    envy::tui::static_text_data{ .text = "committed" } });
+  envy::tui::section_commit(h);
+  CHECK_FALSE(envy::tui::section_has_content(h));
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  envy::tui::info("after");
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 2);
+  CHECK(messages[0].find("hash") != std::string::npos);
+  CHECK(messages[0].find("committed") != std::string::npos);
+  CHECK(messages[1] == "after\n");
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_commit with nothing to say says nothing") {
+  envy::tui::test::g_isatty = true;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_commit(h);  // retires the row anyway: nothing left to draw
+  envy::tui::section_commit(h);  // already retired
+  envy::tui::section_commit(envy::tui::kInvalidSection);
+  envy::tui::section_commit(99999);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  envy::tui::info("only line");
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0] == "only line\n");
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_commit commits one line per row") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  for (auto const *name : { "first", "second" }) {
+    auto const h{ envy::tui::section_create() };
+    envy::tui::section_set_content(
+        h,
+        envy::tui::section_frame{ .label = "hash",
+                                  .content =
+                                      envy::tui::static_text_data{ .text = name } });
+    envy::tui::section_commit(h);
+    CHECK_FALSE(envy::tui::section_has_content(h));
+  }
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 2);
+  CHECK(messages[0].find("first") != std::string::npos);
+  CHECK(messages[1].find("second") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY renders the fallback row") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{ .label = "extract",
+                                .content =
+                                    envy::tui::static_text_data{ .text = "done" } });
+  envy::tui::section_commit(h);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0] == "[extract] done\n");
+
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY withholds a complete row") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{ .label = "import",
+                                .content =
+                                    envy::tui::static_text_data{ .text = "imported" } });
+  envy::tui::section_set_complete(h);  // the caller's own line speaks for this row
+  envy::tui::section_commit(h);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  CHECK(messages.empty());
+
+  envy::tui::test::g_isatty = true;
+}
+
 #endif  // ENVY_UNIT_TEST

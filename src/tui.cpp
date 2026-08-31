@@ -53,7 +53,12 @@ struct stdout_event {
   std::string message;
 };
 
-using log_entry = std::variant<log_event, stdout_event, envy::trace_record>;
+struct section_line_event {  // a committed progress row: pre-rendered, no prefix, stderr
+  std::string text;
+};
+
+using log_entry =
+    std::variant<log_event, stdout_event, section_line_event, envy::trace_record>;
 
 struct tui {
   std::queue<log_entry> messages;
@@ -526,6 +531,26 @@ std::string truncate_lines_to_width(std::string const &text, int width_hint) {
   return out;
 }
 
+// A frame's lines, each clamped to `width`: what the terminal can actually show.
+std::vector<std::string> frame_lines_to_width(std::string const &frame, int width) {
+  std::vector<std::string> lines;
+  std::istringstream iss{ frame };
+  std::string line;
+  while (std::getline(iss, line)) {
+    lines.push_back(truncate_to_width_ansi_aware(line, width));
+  }
+  return lines;
+}
+
+std::string truncate_frame_to_width(std::string const &frame, int width) {
+  std::string out;
+  for (auto const &line : frame_lines_to_width(frame, width)) {
+    out += line;
+    out += '\n';
+  }
+  return out;
+}
+
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
                                   std::size_t max_label_width,
                                   int last_line_count,
@@ -533,18 +558,13 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
                                   std::chrono::steady_clock::time_point now) {
   std::vector<std::string> rendered_lines;
 
-  // Render each section and split into individual lines
   for (auto const &sec : sections) {
     if (!sec.has_content) { continue; }
-    std::string frame{
+    std::string const frame{
       render_section_frame(sec.cached_frame, max_label_width, width, true, now)
     };
-
-    // Split frame into lines and truncate each to terminal width
-    std::istringstream iss{ frame };
-    std::string line;
-    while (std::getline(iss, line)) {
-      rendered_lines.push_back(truncate_to_width_ansi_aware(line, width));
+    for (auto &line : frame_lines_to_width(frame, width)) {
+      rendered_lines.push_back(std::move(line));
     }
   }
 
@@ -592,40 +612,43 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
     return std::chrono::milliseconds{ 2000 };
   }();
 
-  struct update_info {
+  struct candidate {
     unsigned handle;
     std::string output;
   };
-  std::vector<update_info> updates;
+  std::vector<candidate> candidates;
 
   for (auto const &sec : sections) {
     if (!sec.has_content || sec.complete) { continue; }
 
-    std::string const output{ render_section_frame_fallback(sec.cached_frame, now) };
+    std::string output{ render_section_frame_fallback(sec.cached_frame, now) };
 
     auto const elapsed{ now - sec.last_fallback_print_time };
     bool const due{ sec.cached_frame.terminal || elapsed >= kFallbackThrottle };
     if (output != sec.last_fallback_output && due) {
-      std::fprintf(stderr, "%s", output.c_str());
-      updates.push_back(update_info{ .handle = sec.handle, .output = output });
+      candidates.push_back(candidate{ .handle = sec.handle, .output = std::move(output) });
     }
   }
 
-  std::fflush(stderr);
-
-  // Update shared state (requires lock)
-  if (!updates.empty()) {
+  // Claim each row under the lock, then print: a section_commit landing between the print
+  // and a later write-back would see a stale last_fallback_output and queue a line that is
+  // already on the wire. A committed row is gone by then, so its print is dropped.
+  std::vector<std::string> to_print;
+  if (!candidates.empty()) {
     std::lock_guard lock{ s_tui.mutex };
-    for (auto const &upd : updates) {
-      for (auto &sec : s_progress.sections) {
-        if (sec.handle == upd.handle) {
-          sec.last_fallback_output = upd.output;
-          sec.last_fallback_print_time = now;
-          break;
-        }
-      }
+    for (auto &cand : candidates) {
+      auto const it{ std::ranges::find_if(s_progress.sections, [&cand](auto const &sec) {
+        return sec.handle == cand.handle;
+      }) };
+      if (it == s_progress.sections.end()) { continue; }
+      it->last_fallback_output = cand.output;
+      it->last_fallback_print_time = now;
+      to_print.push_back(std::move(cand.output));
     }
   }
+
+  for (auto const &output : to_print) { std::fprintf(stderr, "%s", output.c_str()); }
+  std::fflush(stderr);
 }
 
 }  // namespace
@@ -713,6 +736,13 @@ void flush_messages(std::queue<log_entry> &pending,
         handler(output);
       } else {
         if (!output.empty()) { std::fwrite(output.data(), 1, output.size(), stderr); }
+        wrote_to_stderr = true;
+      }
+    } else if (auto *row_ptr{ std::get_if<section_line_event>(&entry) }) {
+      if (handler) {
+        handler(row_ptr->text);
+      } else {
+        std::fwrite(row_ptr->text.data(), 1, row_ptr->text.size(), stderr);
         wrote_to_stderr = true;
       }
     } else if (auto *stdout_ptr{ std::get_if<stdout_event>(&entry) }) {
@@ -1149,6 +1179,44 @@ void section_set_complete(section_handle h) {
       it != s_progress.sections.end()) {
     it->complete = true;
   }
+}
+
+void section_commit(section_handle h) {
+  if (h == 0 || !s_progress.enabled) { return; }
+
+  bool const ansi{ is_ansi_supported() };
+  int const width{ get_terminal_width() };
+  auto const now{ get_now() };
+
+  {
+    std::lock_guard lock{ s_tui.mutex };
+
+    auto const it{ std::ranges::find_if(s_progress.sections, [h](auto const &sec) {
+      return sec.handle == h;
+    }) };
+    if (it == s_progress.sections.end()) { return; }
+
+    if (it->has_content) {
+      std::string text{ render_section_frame(it->cached_frame,
+                                             s_progress.max_label_width,
+                                             width,
+                                             ansi,
+                                             now) };
+      if (ansi) { text = truncate_frame_to_width(text, width); }
+
+      // Off a TTY the row is already scrollback: the fallback renderer prints each frame
+      // as it lands, and a complete row's word is spoken by its caller instead.
+      bool const already_said{ !ansi &&
+                               (it->complete || text == it->last_fallback_output) };
+      if (!already_said) {
+        s_tui.messages.push(log_entry{ section_line_event{ .text = std::move(text) } });
+      }
+    }
+
+    s_progress.sections.erase(it);  // retired: the committed line is the row's record
+  }
+
+  s_tui.cv.notify_one();
 }
 
 void sections_clear() {

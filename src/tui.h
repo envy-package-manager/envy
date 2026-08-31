@@ -123,6 +123,12 @@ section_handle section_create();
 void section_set_content(section_handle h, section_frame const &frame);
 void section_set_complete(section_handle h);
 void section_delete(section_handle h);
+
+// Land this row's current frame in the scrollback, in order with the log and stdout
+// streams, and retire the row. A finished step's last frame belongs above whatever the
+// command prints next, not pinned below it by the live region. The handle is spent, so a
+// command with a wait apiece draws a row per item rather than reusing one.
+void section_commit(section_handle h);
 bool section_has_content(section_handle h);
 
 // Drop every row, for handing the terminal to someone else: nothing may be painted back

@@ -165,6 +165,16 @@ class EnvyExtractTests(unittest.TestCase):
                 "files", rows[-1], f"progress row carries no file count: {rows[-1]}"
             )
 
+            # The bar reports work the count below has already summarized: it lands above.
+            lines = result.stderr.splitlines()
+            row_idx = max(i for i, ln in enumerate(lines) if "[extract]" in ln)
+            count_idx = min(i for i, ln in enumerate(lines) if "Extracted" in ln)
+            self.assertLess(
+                row_idx,
+                count_idx,
+                f"finished bar landed below the extraction count: {lines}",
+            )
+
     def _verify_extracted_structure(self, extract_dir: Path) -> None:
         """Verify the expected directory structure and file contents after extraction."""
         # For tar archives, the structure includes 'root/' prefix
