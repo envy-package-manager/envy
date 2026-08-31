@@ -32,14 +32,22 @@ _BASH_SHEBANG_RE = re.compile(rb"^#!.*\bbash\b")
 
 def _tracked_files() -> list[Path]:
     """Tracked files only: a scratch script in someone's tree is not envy's to police."""
-    out = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "-z"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError as e:  # no git on PATH
+        raise RuntimeError(f"cannot enumerate scripts to lint: {e}") from e
+    # Swallowing this would surface as "found almost no bash scripts" further down, which
+    # names the symptom and hides the cause.
     if out.returncode != 0:
-        return []
+        raise RuntimeError(
+            f"git ls-files failed in {ROOT} (exit {out.returncode}): "
+            f"{out.stderr.strip() or 'no stderr'}"
+        )
     return [ROOT / rel for rel in out.stdout.split("\0") if rel]
 
 

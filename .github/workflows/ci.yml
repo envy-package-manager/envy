@@ -387,7 +387,8 @@ jobs:
             cache_group: windows-arm64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
-    # Already the Windows default; naming it leaves no step running an unstated shell.
+    # One shell for the whole job, stated rather than inherited. `powershell` is Windows
+    # PowerShell 5.1, a second runtime to reason about for no benefit either step needs.
     defaults:
       run:
         shell: pwsh
@@ -424,7 +425,6 @@ jobs:
 
       - name: Build
         id: build
-        shell: powershell
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
@@ -447,7 +447,6 @@ jobs:
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
         if: matrix.shard == 'main'
-        shell: powershell
         run: |
           dir out\build\envy.exe
           # Redirect inside cmd: tui writes to stderr, and PowerShell's own 2>&1 would
