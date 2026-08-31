@@ -19,6 +19,7 @@ RUN apt-get update \
         zstd \
     && ver="$(apt-cache --names-only search '^g\+\+-[0-9]+$' \
         | cut -d' ' -f1 | cut -d- -f2 | sort -n | tail -1)" \
+    && if [ -z "$ver" ]; then echo "no g++-N package in the archive" >&2; exit 1; fi \
     && apt-get install -y --no-install-recommends "g++-${ver}" \
     && update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-${ver}" 100 \
         --slave /usr/bin/gcov gcov "/usr/bin/gcov-${ver}" \
