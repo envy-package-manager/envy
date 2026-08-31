@@ -576,13 +576,31 @@ add_custom_target(run_unit_tests ALL
 
 # Build-script unit tests (Python)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# CONFIGURE_DEPENDS so a newly added workflow or script re-runs the lint on the next build
+# rather than whenever something else happens to force a reconfigure.
+file(GLOB _envy_shell_lint_inputs CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/.github/workflows/*.yml"
+    "${PROJECT_SOURCE_DIR}/*.sh"
+    "${PROJECT_SOURCE_DIR}/test_data/archives/*.sh"
+)
+list(APPEND _envy_shell_lint_inputs
+    "${PROJECT_SOURCE_DIR}/src/resources/envy"
+    "${PROJECT_SOURCE_DIR}/src/resources/product_script"
+    "${PROJECT_SOURCE_DIR}/examples/bin/envy"
+)
+
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
     COMMAND ${Python3_EXECUTABLE}
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
+    COMMAND ${Python3_EXECUTABLE}
+        "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
     COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
     DEPENDS "${PROJECT_SOURCE_DIR}/cmake/scripts/embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
+            "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
+            ${_envy_shell_lint_inputs}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     COMMENT "Running build-script tests"
     VERBATIM

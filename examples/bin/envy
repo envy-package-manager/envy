@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # envy-managed bootstrap script - do not edit
-set -euo pipefail
+set -Eeuo pipefail
 
 ENVY_DEFAULT_MIRROR="https://github.com/envy-package-manager/envy/releases/download"
 ENVY_LATEST_URL="https://github.com/envy-package-manager/envy/releases/latest"

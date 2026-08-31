@@ -27,6 +27,11 @@ jobs:
       contents: write
     outputs:
       pushed: ${{ steps.push.outputs.pushed }}
+    # The implicit shell is `bash -e {0}`: no pipefail, so a failure anywhere but the
+    # last stage of a pipeline is discarded, and no -u, so a typo'd name expands empty.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -72,6 +77,11 @@ jobs:
     needs: [format-code, ci]
     runs-on: ubuntu-latest
     if: always()
+    # The implicit shell is `bash -e {0}`: no pipefail, so a failure anywhere but the
+    # last stage of a pipeline is discarded, and no -u, so a typo'd name expands empty.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     steps:
       - run: exit 1
         if: >-
