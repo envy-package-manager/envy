@@ -834,5 +834,172 @@ class TestAnchoredExecutionEnvironment(_AnchorTestBase):
         self.assertEqual(str(b.resolve()), marker.read_text().strip())
 
 
+class TestDeepBinDir(_AnchorTestBase):
+    """A bin dir may sit at any depth under its manifest, not only one level down.
+
+    Depth is what the stamped hop and the launcher's upward walk each encode, and the
+    two have to agree: an off-by-one in either names a directory that is not the
+    project. Everything here is the deployed artifact doing the resolving, not envy.
+    """
+
+    DEEP = "a/b/c/bin"
+    HOP = "../../../.."
+
+    def deep_project(self, products: str = '{ tool = "DEEP-tool" }', **kw) -> Path:
+        return self.project("deep", products, bin_value=self.DEEP, **kw)
+
+    @staticmethod
+    def deep_bin(root: Path) -> Path:
+        return root / "a" / "b" / "c" / "bin"
+
+    def payload(self, body: str) -> Path:
+        """An executable a product can point at, so the script's environment is visible."""
+        path = self.tree / "payload.sh"
+        path.write_text(f'#!/usr/bin/env bash\n{body}\n', encoding="utf-8")
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return path
+
+    # -- the stamp ----------------------------------------------------------
+
+    def test_the_stamped_hop_counts_every_level(self):
+        """One `..` per component of '@envy bin', however many that is."""
+        for bin_value, hop in (
+            ("tools", ".."),
+            ("build/tools", "../.."),
+            ("a/b/c/bin", "../../../.."),
+            ("a/b/c/d/e/bin", "../../../../../.."),
+        ):
+            with self.subTest(bin=bin_value):
+                name = f"depth{bin_value.count('/')}"
+                root = self.project(name, '{ tool = "T" }', bin_value=bin_value)
+                run = self.sync(root / "envy.lua", cwd=root)
+                self.assertEqual(0, run.returncode, run.stderr)
+                script = self.product(root / bin_value, "tool").read_text(
+                    encoding="utf-8"
+                )
+                self.assertNotIn("@@", script)
+                self.assertIn(self.hop_assignment(hop), script)
+
+    def test_a_deep_bin_dir_deploys_both_scripts_without_complaint(self):
+        root = self.deep_project()
+        run = self.sync(root / "envy.lua", cwd=root)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertNotIn("would resolve", run.stderr)
+        self.assertNotIn("no manifest", run.stderr)
+        self.assertTrue(self.launcher(self.deep_bin(root)).exists())
+        self.assertTrue(self.product(self.deep_bin(root), "tool").exists())
+
+    def test_bat_stamps_the_full_hop_and_joins_it_onto_dp0(self):
+        """The .bat cannot run here; assert the shape cmd.exe will be handed."""
+        root = self.deep_project()
+        run = self.sync(root / "envy.lua", "--platform", "all", cwd=root)
+        self.assertEqual(0, run.returncode, run.stderr)
+        script = (self.deep_bin(root) / "tool.bat").read_text(encoding="utf-8")
+        self.assertNotIn("@@", script)
+        self.assertIn(f'set "ENVY_PROJECT_ROOT_HOP={self.HOP}"', script)
+        # %~dp0 keeps its trailing backslash, so a four-level hop concatenates cleanly
+        # and %%~fI collapses the mixed separators into one absolute path.
+        self.assertIn(
+            'for %%I in ("%~dp0%ENVY_PROJECT_ROOT_HOP%") do '
+            'set "ENVY_PROJECT_ROOT=%%~fI"',
+            script,
+        )
+
+    # -- what the deployed scripts resolve at runtime ------------------------
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
+    def test_the_product_script_resolves_the_project_root_at_depth(self):
+        """The gap a stamp test cannot close: the hop is joined and walked for real."""
+        payload = self.payload('echo "ROOT=$ENVY_PROJECT_ROOT"')
+        env = self.seed_launcher_binary()
+        root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
+        self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
+
+        result = test_config.run(
+            [str(self.product(self.deep_bin(root), "tool"))],
+            cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        # Exact, not a containment: an off-by-one hop still contains the project root.
+        self.assertEqual(f"ROOT={root}", result.stdout.strip())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
+    def test_the_product_script_puts_the_deep_bin_dir_first_on_path(self):
+        """So a product at depth still shells out to its siblings."""
+        payload = self.payload('echo "FIRST=${PATH%%:*}"')
+        env = self.seed_launcher_binary()
+        root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
+        self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
+
+        result = test_config.run(
+            [str(self.product(self.deep_bin(root), "tool"))],
+            cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(f"FIRST={self.deep_bin(root)}", result.stdout.strip())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX launcher")
+    def test_the_launcher_walks_out_of_a_deep_bin_dir_to_its_manifest(self):
+        """Four levels of `d="${d%/*}"`, from a CWD in neither project."""
+        env = self.seed_launcher_binary()
+        root = self.deep_project()
+        self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
+
+        result = test_config.run(
+            [str(self.launcher(self.deep_bin(root))), "product", "tool"],
+            cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("DEEP-tool", result.stdout.strip())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX launcher")
+    def test_the_launcher_at_depth_is_unmoved_by_an_ancestor_of_the_caller(self):
+        """The `--project` injection, not the CWD, is what picks the project."""
+        env = self.seed_launcher_binary()
+        deep = self.deep_project()
+        other = self.project("other", '{ tool = "OTHER-tool" }')
+        self.assertEqual(0, self.sync(deep / "envy.lua", cwd=deep, env=env).returncode)
+        self.assertEqual(0, self.sync(other / "envy.lua", cwd=other, env=env).returncode)
+
+        result = test_config.run(
+            [str(self.launcher(self.deep_bin(deep))), "product", "tool"],
+            cwd=other, env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("DEEP-tool", result.stdout.strip())
+
+    # -- the round-trip check still applies at depth -------------------------
+
+    def test_a_manifest_between_the_deep_bin_dir_and_its_owner_is_refused(self):
+        """The walk stops at the nearer envy.lua, so those scripts answer for it."""
+        root = self.deep_project()
+        (root / "a" / "b" / "envy.lua").write_text(
+            '-- @envy bin "bin"\nPACKAGES = {}\n', encoding="utf-8"
+        )
+        run = self.sync(root / "envy.lua", cwd=root)
+        self.assertNotEqual(0, run.returncode)
+        self.assertPathContains(run.stderr, "a/b/envy.lua")
+
+    def test_a_root_false_manifest_between_them_defers_to_the_owner(self):
+        """'@envy root "false"' is exactly the way to nest one, so the walk continues."""
+        root = self.deep_project()
+        (root / "a" / "b" / "envy.lua").write_text(
+            '-- @envy bin "bin"\n-- @envy root "false"\nPACKAGES = {}\n',
+            encoding="utf-8",
+        )
+        run = self.sync(root / "envy.lua", cwd=root)
+        self.assertEqual(0, run.returncode, run.stderr)
+        script = self.product(self.deep_bin(root), "tool").read_text(encoding="utf-8")
+        self.assertIn(self.hop_assignment(self.HOP), script)
+
+    def test_a_git_between_the_deep_bin_dir_and_its_manifest_is_reported(self):
+        """A repo boundary halts the walk, so the scripts resolve nothing at all."""
+        root = self.deep_project()
+        (root / "a" / "b" / ".git").mkdir(parents=True, exist_ok=True)
+        run = self.sync(root / "envy.lua", cwd=root)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertIn("no manifest", run.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

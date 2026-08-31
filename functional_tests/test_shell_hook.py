@@ -46,6 +46,35 @@ _BIN_AFTER_PREAMBLE = _HEADER_PREAMBLE + '\n\t-- @envy bin "tools"\nPACKAGES = {
 _BIN_REPEATED_LAST_WINS = '-- @envy bin "stale"\n-- @envy bin "tools"\nPACKAGES = {}\n'
 
 
+# A bin dir may sit at any depth under its manifest, so every hook joins '@envy bin' onto
+# the manifest dir rather than assuming one component, and keeps walking past the
+# intermediates to find that manifest in the first place.
+_DEEP_BIN = "a/b/c/bin"
+
+
+def _real(path) -> str:
+    """A path in its physical spelling.
+
+    The four hooks disagree about symlinks -- zsh resolves the bin dir with `:A`, bash and
+    fish report the logical path -- so a raw string compare would pass or fail on macOS's
+    /var -> /private/var alone rather than on the depth under test.
+    """
+    return str(Path(path).resolve())
+
+
+def _path_entries(raw: str) -> list[str]:
+    return [_real(e) for e in raw.strip().split(os.pathsep) if e]
+
+
+def _write_deep_project(parent_dir: Path, name: str) -> tuple[Path, Path]:
+    """A project whose bin dir sits four levels under its manifest."""
+    project = parent_dir / name
+    bin_dir = project / "a" / "b" / "c" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (project / "envy.lua").write_text(f'-- @envy bin "{_DEEP_BIN}"\nPACKAGES = {{}}\n')
+    return project, bin_dir
+
+
 def _write_project(parent_dir: Path, name: str, content: str) -> Path:
     """A project directory under `parent_dir` with a `tools/` bin dir and `content`."""
     project = parent_dir / name
@@ -320,6 +349,61 @@ class TestBashHook(EnvyTestCase):
         )
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn(str(project / "my tools"), result.stdout)
+
+    def test_deep_bin_dir_reaches_path(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "bash-deep")
+        result = self._run_bash_hook_test(
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\n'
+            f'_ENVY_LAST_PWD=""\n'
+            f"_envy_hook\n"
+            f'echo "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(bin_dir), _path_entries(result.stdout)[0])
+
+    def test_deep_bin_dir_project_root_is_the_manifest_dir(self) -> None:
+        project, _ = _write_deep_project(self._temp_dir, "bash-deep-root")
+        result = self._run_bash_hook_test(
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\n'
+            f'_ENVY_LAST_PWD=""\n'
+            f"_envy_hook\n"
+            f'echo "$ENVY_PROJECT_ROOT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(project), _real(result.stdout.strip()))
+
+    def test_an_intermediate_of_a_deep_bin_dir_is_not_a_project(self) -> None:
+        """`a/b` holds no envy.lua, so the walk climbs past it to the real manifest."""
+        project, bin_dir = _write_deep_project(self._temp_dir, "bash-deep-mid")
+        result = self._run_bash_hook_test(
+            f'source "{self._hook_path}"\n'
+            f'cd "{project / "a" / "b"}"\n'
+            f'_ENVY_LAST_PWD=""\n'
+            f"_envy_hook\n"
+            f'echo "$ENVY_PROJECT_ROOT"\n'
+            f'echo "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        root, path = result.stdout.strip().split("\n")
+        self.assertEqual(_real(project), _real(root))
+        self.assertEqual(_real(bin_dir), _path_entries(path)[0])
+
+    def test_deep_bin_dir_leaves_path_on_the_way_out(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "bash-deep-out")
+        result = self._run_bash_hook_test(
+            f'source "{self._hook_path}"\n'
+            f'cd "{project}"\n'
+            f'_ENVY_LAST_PWD=""\n'
+            f"_envy_hook\n"
+            f'cd "{self._temp_dir}"\n'
+            f'_ENVY_LAST_PWD=""\n'
+            f"_envy_hook\n"
+            f'echo "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn(_real(bin_dir), _path_entries(result.stdout))
 
     def test_existing_path_entries_preserved(self) -> None:
         project = self._make_envy_project("proj-path")
@@ -622,6 +706,42 @@ class TestZshHook(EnvyTestCase):
         )
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertEqual(str(project), result.stdout.strip())
+
+    def test_deep_bin_dir_reaches_path(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "zsh-deep")
+        result = self._run_zsh_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\necho "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(bin_dir), _path_entries(result.stdout)[0])
+
+    def test_deep_bin_dir_project_root_is_the_manifest_dir(self) -> None:
+        project, _ = _write_deep_project(self._temp_dir, "zsh-deep-root")
+        result = self._run_zsh_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\necho "$ENVY_PROJECT_ROOT"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(project), _real(result.stdout.strip()))
+
+    def test_an_intermediate_of_a_deep_bin_dir_is_not_a_project(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "zsh-deep-mid")
+        result = self._run_zsh_hook_test(
+            f'source "{self._hook_path}"\ncd "{project / "a" / "b"}"\n'
+            f'echo "$ENVY_PROJECT_ROOT"\necho "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        root, path = result.stdout.strip().split("\n")
+        self.assertEqual(_real(project), _real(root))
+        self.assertEqual(_real(bin_dir), _path_entries(path)[0])
+
+    def test_deep_bin_dir_leaves_path_on_the_way_out(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "zsh-deep-out")
+        result = self._run_zsh_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\n'
+            f'cd "{self._temp_dir}"\necho "$PATH"'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn(_real(bin_dir), _path_entries(result.stdout))
 
     # --- where a manifest's header ends ---
 
@@ -1027,6 +1147,42 @@ class TestFishHook(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertEqual(str(project), result.stdout.strip())
 
+    def test_deep_bin_dir_reaches_path(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "fish-deep")
+        result = self._run_fish_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\necho $PATH[1]'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(bin_dir), _real(result.stdout.strip()))
+
+    def test_deep_bin_dir_project_root_is_the_manifest_dir(self) -> None:
+        project, _ = _write_deep_project(self._temp_dir, "fish-deep-root")
+        result = self._run_fish_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\necho $ENVY_PROJECT_ROOT'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(project), _real(result.stdout.strip()))
+
+    def test_an_intermediate_of_a_deep_bin_dir_is_not_a_project(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "fish-deep-mid")
+        result = self._run_fish_hook_test(
+            f'source "{self._hook_path}"\ncd "{project / "a" / "b"}"\n'
+            f"echo $ENVY_PROJECT_ROOT\necho $PATH[1]"
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        root, first = result.stdout.strip().split("\n")
+        self.assertEqual(_real(project), _real(root))
+        self.assertEqual(_real(bin_dir), _real(first))
+
+    def test_deep_bin_dir_leaves_path_on_the_way_out(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "fish-deep-out")
+        result = self._run_fish_hook_test(
+            f'source "{self._hook_path}"\ncd "{project}"\n'
+            f'cd "{self._temp_dir}"\necho (string join : $PATH)'
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn(_real(bin_dir), _path_entries(result.stdout))
+
     # --- where a manifest's header ends ---
 
     def test_root_false_below_the_first_code_line_is_not_a_directive(self) -> None:
@@ -1358,6 +1514,61 @@ class TestPowerShellHook(EnvyTestCase):
         )
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertEqual("root=unset", result.stdout.strip())
+
+    def test_deep_bin_dir_reaches_path(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "ps-deep")
+        result = self._run_pwsh_hook_test(
+            f'. "{self._hook_path}"\n'
+            f'Set-Location "{project}"\n'
+            f"$global:_ENVY_LAST_PWD = $null\n"
+            f"_envy_hook\n"
+            f"Write-Output ($env:PATH -split [System.IO.Path]::PathSeparator)[0]"
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(bin_dir), _real(result.stdout.strip()))
+
+    def test_deep_bin_dir_project_root_is_the_manifest_dir(self) -> None:
+        project, _ = _write_deep_project(self._temp_dir, "ps-deep-root")
+        result = self._run_pwsh_hook_test(
+            f'. "{self._hook_path}"\n'
+            f'Set-Location "{project}"\n'
+            f"$global:_ENVY_LAST_PWD = $null\n"
+            f"_envy_hook\n"
+            f"Write-Output $env:ENVY_PROJECT_ROOT"
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(_real(project), _real(result.stdout.strip()))
+
+    def test_an_intermediate_of_a_deep_bin_dir_is_not_a_project(self) -> None:
+        """`a\\b` holds no envy.lua, so the walk climbs past it to the real manifest."""
+        project, bin_dir = _write_deep_project(self._temp_dir, "ps-deep-mid")
+        result = self._run_pwsh_hook_test(
+            f'. "{self._hook_path}"\n'
+            f'Set-Location "{project / "a" / "b"}"\n'
+            f"$global:_ENVY_LAST_PWD = $null\n"
+            f"_envy_hook\n"
+            f"Write-Output $env:ENVY_PROJECT_ROOT\n"
+            f"Write-Output ($env:PATH -split [System.IO.Path]::PathSeparator)[0]"
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        root, first = result.stdout.strip().splitlines()
+        self.assertEqual(_real(project), _real(root))
+        self.assertEqual(_real(bin_dir), _real(first))
+
+    def test_deep_bin_dir_leaves_path_on_the_way_out(self) -> None:
+        project, bin_dir = _write_deep_project(self._temp_dir, "ps-deep-out")
+        result = self._run_pwsh_hook_test(
+            f'. "{self._hook_path}"\n'
+            f'Set-Location "{project}"\n'
+            f"$global:_ENVY_LAST_PWD = $null\n"
+            f"_envy_hook\n"
+            f'Set-Location "{self._temp_dir}"\n'
+            f"$global:_ENVY_LAST_PWD = $null\n"
+            f"_envy_hook\n"
+            f"Write-Output $env:PATH"
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertNotIn(_real(bin_dir), _path_entries(result.stdout))
 
     def test_missing_bin_directive_no_path_change(self) -> None:
         project = self._temp_dir / "ps-no-bin"

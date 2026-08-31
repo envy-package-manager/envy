@@ -211,5 +211,88 @@ class TestRunSentinelPosix(_RunTestBase):
         self.assertIn("script not found", result.stderr)
 
 
+class _DeepBinTestBase(_RunTestBase):
+    """A project whose bin dir sits four levels under the manifest."""
+
+    DEEP = "a/b/c/bin"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._deep = self._temp_dir / "deep"
+        self._deep_bin = self._deep / "a" / "b" / "c" / "bin"
+        self._deep_bin.mkdir(parents=True)
+        (self._deep / "envy.lua").write_text(
+            f'-- @envy bin "{self.DEEP}"\nPACKAGES = {{}}\n'
+        )
+
+
+@unittest.skipIf(sys.platform == "win32", "POSIX shell tests")
+class TestRunDeepBinDirPosix(_DeepBinTestBase):
+    """`envy run` joins '@envy bin' onto the manifest dir whatever its depth."""
+
+    def test_deep_bin_dir_on_path(self) -> None:
+        result = self._run_envy(["run", "sh", "-c", "echo $PATH"], cwd=self._deep)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        entries = result.stdout.strip().split(":")
+        self.assertEqual(str(self._deep_bin), entries[0])
+
+    def test_project_root_is_the_manifest_dir_not_an_intermediate(self) -> None:
+        result = self._run_envy(
+            ["run", "sh", "-c", "echo $ENVY_PROJECT_ROOT"], cwd=self._deep
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(str(self._deep), result.stdout.strip())
+
+    def test_a_tool_in_the_deep_bin_dir_is_found(self) -> None:
+        script = self._deep_bin / "envy-test-deep-tool-xyz"
+        script.write_text('#!/bin/sh\necho "found-deep:$ENVY_PROJECT_ROOT"\n')
+        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        self.assertIsNone(shutil.which(script.name))
+        result = self._run_envy(["run", script.name], cwd=self._deep)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(f"found-deep:{self._deep}", result.stdout.strip())
+
+    def test_a_cwd_inside_the_deep_bin_dir_still_resolves_the_owner(self) -> None:
+        """The upward walk passes three intermediates before reaching the manifest."""
+        result = self._run_envy(
+            ["run", "sh", "-c", "echo $ENVY_PROJECT_ROOT"], cwd=self._deep_bin
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(str(self._deep), result.stdout.strip())
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-specific tests")
+class TestRunDeepBinDirWindows(_DeepBinTestBase):
+    """The same, through cmd.exe: '/' in the directive joins onto a '\\' path."""
+
+    def test_deep_bin_dir_on_path(self) -> None:
+        result = self._run_envy(["run", "cmd", "/c", "echo %PATH%"], cwd=self._deep)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        entries = result.stdout.strip().split(";")
+        self.assertEqual(str(self._deep_bin), entries[0])
+
+    def test_project_root_is_the_manifest_dir_not_an_intermediate(self) -> None:
+        result = self._run_envy(
+            ["run", "cmd", "/c", "echo %ENVY_PROJECT_ROOT%"], cwd=self._deep
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(str(self._deep), result.stdout.strip())
+
+    def test_a_tool_in_the_deep_bin_dir_is_found(self) -> None:
+        bat = self._deep_bin / "envy-test-deep-tool-xyz.bat"
+        bat.write_text("@echo off\r\necho found-deep:%ENVY_PROJECT_ROOT%\r\n")
+        self.assertIsNone(shutil.which(bat.stem))
+        result = self._run_envy(["run", bat.stem], cwd=self._deep)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(f"found-deep:{self._deep}", result.stdout.strip())
+
+    def test_a_cwd_inside_the_deep_bin_dir_still_resolves_the_owner(self) -> None:
+        result = self._run_envy(
+            ["run", "cmd", "/c", "echo %ENVY_PROJECT_ROOT%"], cwd=self._deep_bin
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertEqual(str(self._deep), result.stdout.strip())
+
+
 if __name__ == "__main__":
     unittest.main()
