@@ -11,9 +11,6 @@ on:
         type: string
         default: latest
 
-env:
-  SCCACHE_DIR: ${{ github.workspace }}/.sccache
-
 # GitHub caps a repository at 10 GB of Actions cache and evicts LRU past that. Three
 # conventions below keep this matrix inside the cap; violating any one of them starves
 # every job of its compiler cache and drops hit rates to zero.
@@ -106,6 +103,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     env:
+      # Not under github.workspace: that expands to the runner's path, which does not
+      # exist in here. An absolute container path keeps sccache and the cache steps
+      # naming the same directory without either of them guessing at the mount point.
+      SCCACHE_DIR: /sccache
       # sccache defaults to a 10 GiB local cache and never prunes below it, so a namespace
       # grows without bound across restore/add/save cycles. Cap it near each group's live
       # working set instead.
@@ -130,7 +131,7 @@ jobs:
         id: sccache-cache
         uses: actions/cache/restore@v5
         with:
-          path: .sccache
+          path: /sccache
           key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
           restore-keys: sccache-${{ matrix.cache_group }}-
 
@@ -157,20 +158,26 @@ jobs:
           # Watchdog thread would make the shell tests' fork() misbehave under valgrind.
           ENVY_TEST_NO_WATCHDOG: 1
 
+      # Wrapper is assembled here rather than in env: because the suppressions path has
+      # to come from GITHUB_WORKSPACE. The github.workspace expression would resolve to
+      # the runner's copy, and valgrind aborts on a suppressions file it cannot open.
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
-        run: python3 -m functional_tests
+        run: |
+          if [[ "${{ matrix.shard }}" == func-valgrind ]]; then
+            export ENVY_TEST_WRAPPER="valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=$GITHUB_WORKSPACE/valgrind.supp"
+          fi
+          python3 -m functional_tests
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
-          ENVY_TEST_WRAPPER: ${{ matrix.shard == 'func-valgrind' && format('valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions={0}/valgrind.supp', github.workspace) || '' }}
 
       - name: Save sccache cache
         id: sccache-save
         uses: actions/cache/save@v5
         if: always() && matrix.cache_writer && github.ref == 'refs/heads/main'
         with:
-          path: .sccache
+          path: /sccache
           key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
 
       # Gated on the build rather than on always(), because out/cache is only useful when
@@ -234,6 +241,7 @@ jobs:
             cache_writer: true
     runs-on: ${{ matrix.os }}
     env:
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
       SCCACHE_CACHE_SIZE: 500M
     steps:
       - uses: actions/checkout@v5
@@ -352,6 +360,7 @@ jobs:
             cache_writer: true
     runs-on: ${{ matrix.os }}
     env:
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
       # MSVC object files are far larger than the Unix toolchains', so these groups need a
       # higher ceiling than the 500M used above to keep their live working set resident.
       SCCACHE_CACHE_SIZE: 800M
