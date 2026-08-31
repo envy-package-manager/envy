@@ -438,8 +438,9 @@ echo        !ENVY_MIN_DIRECTIVE_VERSION!, but resolves envy !ENVY_VERSION!. That
 echo        and would silently use the shared cache. Raise or remove the '@envy version' pin. >&2
 exit /b 1
 
-REM :check_version -- clears ENVY_VERSION unless it is MAJOR.MINOR.PATCH, deferring to the
-REM next tier. Delayed-expanded, so an `&` in a mirror's `latest` is data, not a command.
+REM :check_version -- ENVY_VERSION and ENVY_VERSION_SRC in; clears ENVY_VERSION unless it
+REM is MAJOR.MINOR.PATCH, deferring to the next tier. Delayed-expanded, so an `&` in a
+REM mirror's `latest` is data, not a command.
 :check_version
 if not defined ENVY_VERSION exit /b 0
 echo(!ENVY_VERSION!|findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul 2>&1

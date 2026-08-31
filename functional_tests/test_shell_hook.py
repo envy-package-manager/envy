@@ -55,9 +55,10 @@ _DEEP_BIN = "a/b/c/bin"
 def _real(path) -> str:
     """A path in its physical spelling.
 
-    The four hooks disagree about symlinks -- zsh resolves the bin dir with `:A`, bash and
-    fish report the logical path -- so a raw string compare would pass or fail on macOS's
-    /var -> /private/var alone rather than on the depth under test.
+    The four hooks disagree about symlinks -- zsh (`:A`), fish (`realpath`) and pwsh
+    (`Resolve-Path`) resolve the bin dir, bash reports the logical path -- so a raw
+    string compare would pass or fail on macOS's /var -> /private/var alone rather
+    than on the depth under test.
     """
     return str(Path(path).resolve())
 

@@ -104,7 +104,8 @@ mirror_cat() {
     fi
 }
 
-# None of the three available is a hard error, never a skip.
+# sha256 of a file, lowercase hex, no filename. No hasher at all is a hard error,
+# never a skip.
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
     elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
@@ -264,7 +265,8 @@ ENVY_BIN="$ENVY_CACHE/envy/$ENVY_VERSION/envy"
 # -f and -s too: bare -x passes a directory or a zero-length file, and exec then exits 126.
 usable_envy() { [[ -f "$1" && -s "$1" && -x "$1" ]]; }
 
-# Select, then exec once. Skipped under a sums pin (never re-hashed) and ENVY_CACHE_ROOT.
+# Select, then exec once. Skipped under a sums pin (never re-hashed) and under
+# ENVY_CACHE_ROOT, where MODE is empty.
 if ! usable_envy "$ENVY_BIN" &&
    [[ "$ENVY_MODE" == local && -z "$ENVY_SUMS_PIN" && -n "$ENVY_SHARED_CACHE" ]]; then
     ENVY_BIN="$ENVY_SHARED_CACHE/envy/$ENVY_VERSION/envy"
