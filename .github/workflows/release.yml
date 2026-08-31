@@ -12,10 +12,36 @@ concurrency:
 permissions:
   contents: write
   actions: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/envy-ci
 
 jobs:
+  # Freeze the CI image under this release's tag before anything builds. `latest` is a
+  # moving target -- the weekly rebuild picks up whatever Ubuntu shipped that week -- so
+  # without this pin, rebuilding v1.2.3 a year from now would use a different toolchain
+  # than the binaries the release actually shipped. imagetools copies the manifest list,
+  # so both arches come along and nothing is rebuilt.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pin CI image to ${{ github.ref_name }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"
+          docker buildx imagetools inspect "$IMAGE:${{ github.ref_name }}"
+
   ci:
+    needs: image
     uses: ./.github/workflows/ci.yml
+    with:
+      image_tag: ${{ github.ref_name }}
 
   release:
     needs: ci
