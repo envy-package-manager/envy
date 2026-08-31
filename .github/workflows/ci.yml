@@ -97,6 +97,12 @@ jobs:
             cache_group: linux-arm64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
+    # Container jobs default to `sh -e {0}`, where `[[` is an unknown command rather than
+    # a syntax error: as an `if` condition it just tests false, so a bashism below takes
+    # the else branch in silence. That is how tagged builds shipped unstamped as 0.0.0.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     container:
       image: ghcr.io/${{ github.repository_owner }}/envy-ci:${{ inputs.image_tag }}
       credentials:
@@ -147,9 +153,18 @@ jobs:
           fi
           ./build.sh $BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
+      # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
+      # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
         if: matrix.shard == 'main'
-        run: ls -al out/build/envy && ./out/build/envy -v
+        run: |
+          ls -al out/build/envy
+          got="$(./out/build/envy -v 2>&1)"  # tui writes to stderr, so redirect to capture
+          echo "$got"
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            want="envy version ${GITHUB_REF_NAME#v} "
+            [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
+          fi
 
       - name: Unit tests under valgrind
         if: matrix.shard == 'main'
@@ -240,6 +255,10 @@ jobs:
             cache_group: macos-x64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
+    # Spelled out for the same reason as build-linux: these steps are bash, not sh.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
       SCCACHE_CACHE_SIZE: 500M
@@ -282,9 +301,18 @@ jobs:
           fi
           ./build.sh $BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
+      # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
+      # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
         if: matrix.shard == 'main'
-        run: ls -al out/build/envy && ./out/build/envy -v
+        run: |
+          ls -al out/build/envy
+          got="$(./out/build/envy -v 2>&1)"  # tui writes to stderr, so redirect to capture
+          echo "$got"
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            want="envy version ${GITHUB_REF_NAME#v} "
+            [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
+          fi
 
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
@@ -359,6 +387,11 @@ jobs:
             cache_group: windows-arm64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
+    # One shell for the whole job, stated rather than inherited. `powershell` is Windows
+    # PowerShell 5.1, a second runtime to reason about for no benefit either step needs.
+    defaults:
+      run:
+        shell: pwsh
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
       # MSVC object files are far larger than the Unix toolchains', so these groups need a
@@ -392,7 +425,6 @@ jobs:
 
       - name: Build
         id: build
-        shell: powershell
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
@@ -411,12 +443,21 @@ jobs:
           $Arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
           & ./build.bat @Arguments
 
+      # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
+      # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
         if: matrix.shard == 'main'
-        shell: cmd
         run: |
           dir out\build\envy.exe
-          out\build\envy.exe -v
+          # Redirect inside cmd: tui writes to stderr, and PowerShell's own 2>&1 would
+          # turn those lines into ErrorRecords that $ErrorActionPreference='stop' throws on.
+          $got = (cmd /c "out\build\envy.exe -v 2>&1" | Out-String).Trim()
+          Write-Host $got
+          if ($LASTEXITCODE -ne 0) { throw "envy -v exited $LASTEXITCODE" }
+          if ($env:GITHUB_REF_NAME -match '^v') {
+            $want = "envy version " + ($env:GITHUB_REF_NAME -replace '^v', '') + " "
+            if (-not $got.StartsWith($want)) { throw "expected '$want...', got '$got'" }
+          }
 
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')

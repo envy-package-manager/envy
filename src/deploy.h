@@ -13,10 +13,9 @@ namespace envy {
 
 struct product_info;
 
-// 3: every variable a product script sets is ENVY_-prefixed. The script execs its payload,
-// so an unprefixed name overwrote an exported one of the caller's for the payload and
-// everything under it -- SCRIPT_DIR most of all.
-inline constexpr int kProductScriptVersion = 3;
+// 4: `set -Eeuo pipefail`, so a failed cd or a missing envy aborts instead of exec'ing
+// whatever the half-built path happens to name. 3 prefixed every variable with ENVY_.
+inline constexpr int kProductScriptVersion = 4;
 
 // project_root_rel is the bin dir -> manifest dir hop, generic-separator: relative so a
 // re-cloned tree still resolves, stamped because '@envy bin' can name any depth.

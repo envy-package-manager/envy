@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Create test archives without macOS metadata
-set -e
+set -Eeuo pipefail
 
 cd "$(dirname "$0")"
 

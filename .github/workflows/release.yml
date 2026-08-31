@@ -29,6 +29,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # The implicit shell is `bash -e {0}`: no pipefail, so a failure anywhere but the
+    # last stage of a pipeline is discarded, and no -u, so a typo'd name expands empty.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     steps:
       - uses: docker/login-action@v3
         with:
@@ -60,6 +65,11 @@ jobs:
   release:
     needs: ci
     runs-on: ubuntu-latest
+    # The implicit shell is `bash -e {0}`: no pipefail, so a failure anywhere but the
+    # last stage of a pipeline is discarded, and no -u, so a typo'd name expands empty.
+    defaults:
+      run:
+        shell: /usr/bin/env bash -Eeuo pipefail {0}
     steps:
       - uses: actions/checkout@v5
 

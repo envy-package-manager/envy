@@ -2,6 +2,13 @@
 
 #include "doctest.h"
 
+#include <algorithm>
+#include <string_view>
+
+#ifndef ENVY_VERSION_STR
+#error "ENVY_VERSION_STR must be defined by the build system"
+#endif
+
 namespace {
 
 using envy::version_is_newer;
@@ -90,6 +97,17 @@ TEST_CASE("version_is_newer: leading/trailing whitespace") {
 
 TEST_CASE("version_is_newer: CRLF in current") {
   CHECK(version_is_newer("2.0.0", "1.0.0\r\n"));
+}
+
+// The stamp itself, not the comparator. Nothing in-process can tell 0.0.0 from a release
+// -- that is the tag check in functional_tests/test_version_stamp.py -- but a stamp that
+// never made it through the build system is a shape, and shapes are checkable here.
+TEST_CASE("ENVY_VERSION_STR: three dotted numeric components") {
+  std::string_view const v{ ENVY_VERSION_STR };
+  REQUIRE_FALSE(v.empty());
+  CHECK(v.find("@@") == std::string_view::npos);  // unsubstituted template placeholder
+  CHECK(std::ranges::count(v, '.') == 2);
+  CHECK(std::ranges::all_of(v, [](char c) { return (c >= '0' && c <= '9') || c == '.'; }));
 }
 
 }  // namespace
