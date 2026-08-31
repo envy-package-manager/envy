@@ -276,6 +276,7 @@ void cmd_import::execute() {
                    .root };
       auto const section{ tui::section_create() };
       auto result{ import_one_archive(c, cfg_.archive_path, section) };
+      tui::section_commit(section);  // the outcome row belongs above the path it produced
       if (result.is_fetch_only) {
         tui::print_stdout("fetch-only import: %s\n", result.pkg_path.string().c_str());
       } else {

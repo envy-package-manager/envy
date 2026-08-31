@@ -50,6 +50,40 @@ class TestHash(unittest.TestCase):
         )
         self.assertIn("hashing", rows[-1], f"row does not name the work: {rows[-1]}")
 
+    def test_hash_bar_lands_above_its_digest(self):
+        """The bar is the record of work already reported; it belongs above the digest,
+        not under it. One merged stream, so the interleaving is observable."""
+        import os
+        import subprocess
+
+        test_file = Path(self.tmpdir) / "big.bin"
+        test_file.write_bytes(os.urandom(4 * 1024 * 1024))
+
+        env = test_config.get_test_env()
+        env["TERM"] = "dumb"
+        env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+        result = test_config.run(
+            [str(self.envy), "hash", str(test_file)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(0, result.returncode, f"output: {result.stdout}")
+        lines = result.stdout.splitlines()
+        rows = [i for i, ln in enumerate(lines) if "[hash]" in ln]
+        digests = [
+            i for i, ln in enumerate(lines) if "big.bin" in ln and "[hash]" not in ln
+        ]
+        self.assertTrue(rows, f"hash drew no progress row: {lines}")
+        self.assertTrue(digests, f"hash printed no digest: {lines}")
+        self.assertLess(
+            rows[-1],
+            digests[0],
+            f"finished bar landed below the digest it was drawn for: {lines}",
+        )
+
     def test_hash_binary_file_matches_external_tool(self):
         """Verify envy hash matches external SHA256 computation (ground truth)."""
         # Write test PNG to temp file

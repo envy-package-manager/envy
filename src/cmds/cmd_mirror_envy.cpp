@@ -252,9 +252,12 @@ void cmd_mirror_envy::execute() {
         "mirror-envy",
         tui_actions::byte_progress_bar(attest_section, "mirror-envy", "attesting", name));
   }
-  tui::debug("attested %zu archives against %s",
-             plan.items.size() - 1,
-             std::string{ kEnvyReleaseSumsFile }.c_str());
+  // One reused row over N archives, so no per-item line to commit it above: the row goes
+  // and the line below is the step's record, at INFO because it is the only one.
+  tui::section_delete(attest_section);
+  tui::info("attested %zu archives against %s",
+            plan.items.size() - 1,
+            std::string{ kEnvyReleaseSumsFile }.c_str());
 
   // The pin a consuming project puts in its manifest. Computed from the mirrored file, so
   // it is the value that will actually verify against this mirror -- and, because the file
@@ -311,10 +314,11 @@ void cmd_mirror_envy::execute() {
     for (auto &t : workers) { t.join(); }
   }
 
-  // Same bargain as a download row: a finished upload keeps its full bar, a failed one
+  // Same bargain as a download row: a finished upload commits its full bar, a failed one
   // yields the row to the error text below.
   if (std::ranges::all_of(errors, [](std::string const &e) { return e.empty(); })) {
     upload_tracker.finish();
+    tui::section_commit(upload_section);
   } else {
     tui::section_delete(upload_section);
   }
