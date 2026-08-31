@@ -12,7 +12,7 @@ concurrency:
 permissions:
   contents: write
   actions: write
-  packages: write
+  packages: read
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/envy-ci
@@ -25,6 +25,10 @@ jobs:
   # so both arches come along and nothing is rebuilt.
   image:
     runs-on: ubuntu-latest
+    # The only job in this workflow that writes to GHCR; everything downstream just pulls.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: docker/login-action@v3
         with:
@@ -32,10 +36,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: docker/setup-buildx-action@v3
+
+      # Written exactly once. A re-run months later would otherwise repoint the tag at
+      # whatever `latest` had become, which is the opposite of what the pin is for.
       - name: Pin CI image to ${{ github.ref_name }}
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          docker buildx imagetools create --tag "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"
-          docker buildx imagetools inspect "$IMAGE:${{ github.ref_name }}"
+          if docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$TAG is already pinned; leaving it as it is"
+          else
+            docker buildx imagetools create --tag "$IMAGE:$TAG" "$IMAGE:latest"
+          fi
+          docker buildx imagetools inspect "$IMAGE:$TAG"
 
   ci:
     needs: image
