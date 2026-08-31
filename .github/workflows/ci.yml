@@ -2,9 +2,14 @@ name: ci
 
 on:
   workflow_call:
-
-env:
-  SCCACHE_DIR: ${{ github.workspace }}/.sccache
+    inputs:
+      image_tag:
+        description: >-
+          Tag of ghcr.io/<owner>/envy-ci to build the Linux jobs in. Releases pass
+          their own version tag so the toolchain that produced a given envy binary
+          stays reproducible after `latest` has moved on.
+        type: string
+        default: latest
 
 # GitHub caps a repository at 10 GB of Actions cache and evicts LRU past that. Three
 # conventions below keep this matrix inside the cap; violating any one of them starves
@@ -12,7 +17,7 @@ env:
 #
 # `cache_group` names the set of compilations a job performs, so jobs that compile the
 # same translation units share one sccache namespace instead of hoarding private copies.
-# Within a group exactly one job sets `cache_writer` — it must be the one whose compile
+# Within a group exactly one job sets `cache_writer` -- it must be the one whose compile
 # set is a superset of its groupmates' (the shard that builds envy_functional_tester,
 # since that target recompiles ENVY_COMMON_SOURCES with ENVY_FUNCTIONAL_TESTER=1).
 # Readers restore via the shared prefix.
@@ -23,7 +28,10 @@ env:
 # Saves are confined to refs/heads/main. Tag refs get their own cache scope, so releases
 # would otherwise mint a duplicate copy of every cache they touch.
 jobs:
-  build:
+  # Split from the macOS matrix only because `container:` is per-job: every Linux shard
+  # runs inside the image built by .github/workflows/docker.yml, which is where gcc-16,
+  # python3, valgrind, and the test shells come from. Nothing here installs packages.
+  build-linux:
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -42,28 +50,6 @@ jobs:
             build_args: --no-functional-tester
             cache_group: linux-arm64-none
             deps_writer: true
-          - name: macos-arm64-main
-            os: macos-latest
-            shard: main
-            build_args: --no-functional-tester
-            cache_group: macos-arm64-none
-            deps_writer: true
-          - name: macos-arm64-func
-            os: macos-latest
-            shard: func-main
-            cache_group: macos-arm64-none
-            cache_writer: true
-          - name: macos-x64-main
-            os: macos-15-intel
-            shard: main
-            build_args: --no-functional-tester
-            cache_group: macos-x64-none
-            deps_writer: true
-          - name: macos-x64-func
-            os: macos-15-intel
-            shard: func-main
-            cache_group: macos-x64-none
-            cache_writer: true
           - name: linux-x64-asan
             os: ubuntu-latest
             shard: func-asan
@@ -111,10 +97,151 @@ jobs:
             cache_group: linux-arm64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/envy-ci:${{ inputs.image_tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
+      # Not under github.workspace: that expands to the runner's path, which does not
+      # exist in here. An absolute container path keeps sccache and the cache steps
+      # naming the same directory without either of them guessing at the mount point.
+      SCCACHE_DIR: /sccache
       # sccache defaults to a 10 GiB local cache and never prunes below it, so a namespace
       # grows without bound across restore/add/save cycles. Cap it near each group's live
       # working set instead.
+      SCCACHE_CACHE_SIZE: 500M
+    steps:
+      # The runner creates the workspace on the host as a non-root user and bind-mounts
+      # it; git in here runs as root, and refuses to touch a repo it does not own.
+      - name: Trust workspace ownership
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v5
+
+      - name: Restore third-party downloads
+        id: deps-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: out/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
+
+      - name: Restore sccache cache
+        id: sccache-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /sccache
+          key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
+          restore-keys: sccache-${{ matrix.cache_group }}-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Build
+        id: build
+        run: |
+          BUILD_ARGS="${{ matrix.build_args }}"
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            BUILD_ARGS="$BUILD_ARGS -DENVY_VERSION=${GITHUB_REF_NAME#v}"
+          fi
+          ./build.sh $BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Smoke test
+        if: matrix.shard == 'main'
+        run: ls -al out/build/envy && ./out/build/envy -v
+
+      - name: Unit tests under valgrind
+        if: matrix.shard == 'main'
+        run: valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=valgrind.supp out/build/envy_unit_tests
+        env:
+          # Watchdog thread would make the shell tests' fork() misbehave under valgrind.
+          ENVY_TEST_NO_WATCHDOG: 1
+
+      # Wrapper is assembled here rather than in env: because the suppressions path has
+      # to come from GITHUB_WORKSPACE. The github.workspace expression would resolve to
+      # the runner's copy, and valgrind aborts on a suppressions file it cannot open.
+      - name: Functional tests
+        if: startsWith(matrix.shard, 'func-')
+        run: |
+          if [[ "${{ matrix.shard }}" == func-valgrind ]]; then
+            export ENVY_TEST_WRAPPER="valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=$GITHUB_WORKSPACE/valgrind.supp"
+          fi
+          python3 -m functional_tests
+        env:
+          ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
+          ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
+
+      - name: Save sccache cache
+        id: sccache-save
+        uses: actions/cache/save@v5
+        if: always() && matrix.cache_writer && github.ref == 'refs/heads/main'
+        with:
+          path: /sccache
+          key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
+
+      # Gated on the build rather than on always(), because out/cache is only useful when
+      # complete: a build that dies mid-fetch leaves dependencies unextracted, and storing
+      # that under the current manifest hash would pin a partial tree until the manifests
+      # change. Failing tests are fine to save through -- by then out/cache is populated.
+      # .sccache needs no such gate; it starts from the restored generation, so whatever a
+      # job saves is a superset of what it read even when the build goes red.
+      - name: Save third-party downloads
+        id: deps-save
+        uses: actions/cache/save@v5
+        if: always() && matrix.deps_writer && github.ref == 'refs/heads/main' && steps.deps-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        with:
+          path: out/cache
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Purge superseded caches
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCCACHE_PREFIX: sccache-${{ matrix.cache_group }}-
+          SCCACHE_KEEP: ${{ steps.sccache-save.outcome == 'success' && steps.sccache-cache.outputs.cache-primary-key || '' }}
+          DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
+          DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
+        run: python3 .github/scripts/purge_superseded_caches.py
+
+      - name: Upload envy artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: envy-${{ matrix.name }}
+          path: out/build/envy
+          retention-days: 90
+
+  build-macos:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64-main
+            os: macos-latest
+            shard: main
+            build_args: --no-functional-tester
+            cache_group: macos-arm64-none
+            deps_writer: true
+          - name: macos-arm64-func
+            os: macos-latest
+            shard: func-main
+            cache_group: macos-arm64-none
+            cache_writer: true
+          - name: macos-x64-main
+            os: macos-15-intel
+            shard: main
+            build_args: --no-functional-tester
+            cache_group: macos-x64-none
+            deps_writer: true
+          - name: macos-x64-func
+            os: macos-15-intel
+            shard: func-main
+            cache_group: macos-x64-none
+            cache_writer: true
+    runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
       SCCACHE_CACHE_SIZE: 500M
     steps:
       - uses: actions/checkout@v5
@@ -144,12 +271,7 @@ jobs:
 
       - name: Install test dependencies
         if: startsWith(matrix.shard, 'func-')
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish valgrind
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            brew install fish
-          fi
+        run: brew install fish
 
       - name: Build
         id: build
@@ -164,24 +286,12 @@ jobs:
         if: matrix.shard == 'main'
         run: ls -al out/build/envy && ./out/build/envy -v
 
-      - name: Install valgrind
-        if: matrix.shard == 'main' && runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
-
-      - name: Unit tests under valgrind
-        if: matrix.shard == 'main' && runner.os == 'Linux'
-        run: valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=valgrind.supp out/build/envy_unit_tests
-        env:
-          # Watchdog thread would make the shell tests' fork() misbehave under valgrind.
-          ENVY_TEST_NO_WATCHDOG: 1
-
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
         run: python3.13 -m functional_tests
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
-          ENVY_TEST_WRAPPER: ${{ matrix.shard == 'func-valgrind' && format('valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions={0}/valgrind.supp', github.workspace) || '' }}
 
       - name: Save sccache cache
         id: sccache-save
@@ -191,12 +301,6 @@ jobs:
           path: .sccache
           key: ${{ steps.sccache-cache.outputs.cache-primary-key }}
 
-      # Gated on the build rather than on always(), because out/cache is only useful when
-      # complete: a build that dies mid-fetch leaves dependencies unextracted, and storing
-      # that under the current manifest hash would pin a partial tree until the manifests
-      # change. Failing tests are fine to save through -- by then out/cache is populated.
-      # .sccache needs no such gate; it starts from the restored generation, so whatever a
-      # job saves is a superset of what it read even when the build goes red.
       - name: Save third-party downloads
         id: deps-save
         uses: actions/cache/save@v5
@@ -256,6 +360,7 @@ jobs:
             cache_writer: true
     runs-on: ${{ matrix.os }}
     env:
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
       # MSVC object files are far larger than the Unix toolchains', so these groups need a
       # higher ceiling than the 500M used above to keep their live working set resident.
       SCCACHE_CACHE_SIZE: 800M
