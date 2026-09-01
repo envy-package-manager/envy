@@ -296,10 +296,10 @@ bool istarts_with(std::string_view value, std::string_view prefix) {
                     : "\n  Hint: check that the bucket policy allows public access,"
                       " or run 'aws sso login' to authenticate.");
   } else if (http_code == 501 && writing) {
-    // S3 answers an unsigned write carrying x-amz-* headers with NotImplemented. envy
-    // sends one only when the credential chain resolved nothing.
-    msg << "\n  Hint: S3 rejects unsigned writes. envy signs only when AWS credentials"
-           " resolve, so this means none did -- run 'aws sso login'.";
+    // An unsigned write draws this, but so does any endpoint asked for an operation it
+    // lacks -- S3-compatible ones included. State the possibility, not a cause.
+    msg << "\n  Hint: S3 answers unsigned writes with NotImplemented. If the session"
+           " expired mid-run, run 'aws sso login' and retry.";
   }
 
   throw std::runtime_error(msg.str());
