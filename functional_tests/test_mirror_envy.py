@@ -21,6 +21,7 @@ import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from . import test_config
 from .env import EnvyTestCase
@@ -204,9 +205,11 @@ class S3Stub:
         aws_code: str,
         message: str | None = None,
     ) -> None:
+        # Escaped: a caller-supplied message carrying & or < would otherwise emit invalid
+        # XML, and the SDK would fail to parse it for a reason the test never intended.
         body = (
-            f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{aws_code}</Code>'
-            f"<Message>{message or aws_code}</Message></Error>"
+            f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{escape(aws_code)}</Code>'
+            f"<Message>{escape(message or aws_code)}</Message></Error>"
         ).encode()
         handler.send_response(code)
         handler.send_header("Content-Type", "application/xml")
