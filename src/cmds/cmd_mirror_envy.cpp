@@ -171,6 +171,10 @@ cmd_mirror_envy::cmd_mirror_envy(cmd_mirror_envy::cfg cfg,
 void cmd_mirror_envy::execute() {
   auto const plan{ mirror_envy_make_plan(cfg_.version, cfg_.dest, cfg_.from) };
 
+  // Before a byte is downloaded, and once rather than once per object: an unusable session
+  // otherwise surfaces only at upload time, as one opaque S3 protocol error per key.
+  if (plan.dest_is_s3) { aws_credentials_require(std::nullopt, "mirror-envy"); }
+
   // For an S3 destination the archives still have to land on disk first, because the AWS
   // upload API takes a file. That scratch tree must be uniquely created rather than named
   // predictably -- otherwise another user in a shared temp dir could pre-create the path

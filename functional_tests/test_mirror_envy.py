@@ -21,6 +21,7 @@ import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from . import test_config
 from .env import EnvyTestCase
@@ -64,6 +65,8 @@ class S3Stub:
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        # (status, <Code>, <Message>) to answer every PutObject with, or None to store it.
+        self.put_error: tuple[int, str, str] | None = None
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.port = 0
@@ -135,7 +138,10 @@ class S3Stub:
                 return bytes(out)
 
             def do_PUT(self) -> None:
-                body = self._read_body()
+                body = self._read_body()  # Drained even on failure, to keep framing.
+                if parent.put_error is not None:
+                    parent._send_error(self, *parent.put_error)
+                    return
                 # Fail loudly if the stub mis-framed the body rather than silently storing
                 # an empty object, which would make byte-for-byte assertions meaningless.
                 declared = self.headers.get("x-amz-decoded-content-length")
@@ -193,10 +199,17 @@ class S3Stub:
         return self.port
 
     @staticmethod
-    def _send_error(handler: BaseHTTPRequestHandler, code: int, aws_code: str) -> None:
+    def _send_error(
+        handler: BaseHTTPRequestHandler,
+        code: int,
+        aws_code: str,
+        message: str | None = None,
+    ) -> None:
+        # Escaped: a caller-supplied message carrying & or < would otherwise emit invalid
+        # XML, and the SDK would fail to parse it for a reason the test never intended.
         body = (
-            f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{aws_code}</Code>'
-            f"<Message>{aws_code}</Message></Error>"
+            f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{escape(aws_code)}</Code>'
+            f"<Message>{escape(message or aws_code)}</Message></Error>"
         ).encode()
         handler.send_response(code)
         handler.send_header("Content-Type", "application/xml")
@@ -556,6 +569,138 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         self.assertIn("uploads failed", result.stderr)
         self.assertIn("NoSuchBucket", result.stderr)
         self.assertIn("envy never creates buckets", result.stderr)
+
+    def test_unmapped_error_body_is_quoted_rather_than_renamed(self) -> None:
+        """An error code the SDK cannot map must be reported as received.
+
+        The marshaller wraps such a body as "Unable to parse ExceptionName: <code> Message:
+        <text>", which reads like a diagnosis envy made about the request it sent.
+        """
+        stub = S3Stub()
+        port = stub.start()
+        stub.put_error = (
+            501,
+            "NotImplemented",
+            "A header you provided implies functionality that is not implemented",
+        )
+        try:
+            result = self._run(
+                [
+                    "mirror-envy",
+                    "1.2.3",
+                    "s3://test-bucket/releases",
+                    f"--from={self._from_uri()}",
+                ],
+                env_extra=self._s3_env(port),
+            )
+        finally:
+            stub.stop()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("unrecognized S3 error code NotImplemented", result.stderr)
+        self.assertIn("implies functionality that is not implemented", result.stderr)
+        self.assertNotIn("Unable to parse ExceptionName", result.stderr)
+
+    def _no_credentials_env(self, port: int) -> dict[str, str]:
+        """S3 env with every credential source the chain reads pointed somewhere empty.
+
+        Emptying the variables is what makes this hermetic: the developer running the suite
+        very likely has a working session, and the chain would find it.
+        """
+        aws_dir = self._temp / "aws"
+        aws_dir.mkdir(exist_ok=True)
+        return {
+            **self._s3_env(port),
+            "AWS_ACCESS_KEY_ID": "",
+            "AWS_SECRET_ACCESS_KEY": "",
+            "AWS_SESSION_TOKEN": "",
+            "AWS_PROFILE": "envy-test-expired",
+            "AWS_DEFAULT_PROFILE": "envy-test-expired",
+            "AWS_SHARED_CREDENTIALS_FILE": str(aws_dir / "credentials"),
+            "AWS_CONFIG_FILE": str(aws_dir / "config"),
+            "AWS_WEB_IDENTITY_TOKEN_FILE": "",
+            "AWS_ROLE_ARN": "",
+            "HOME": str(aws_dir),
+            "USERPROFILE": str(aws_dir),
+        }
+
+    def _write_expired_sso_session(self) -> None:
+        """Plant the exact state `aws sso login` refreshes: a cached token past its expiry.
+
+        The SDK finds the profile, loads the token, sees it stale, and hands back empty
+        credentials -- the shape that used to reach S3 as an unsigned write.
+        """
+        aws_dir = self._temp / "aws"
+        aws_dir.mkdir(exist_ok=True)
+        start_url = "https://envy-test.awsapps.com/start"
+        (aws_dir / "config").write_text(
+            "[profile envy-test-expired]\n"
+            f"sso_start_url = {start_url}\n"
+            "sso_region = us-east-1\n"
+            "sso_account_id = 123456789012\n"
+            "sso_role_name = EnvyTest\n"
+            "region = us-east-1\n"
+        )
+        # Path and name are the SDK's: <credentials dir>/sso/cache/<sha1(start_url)>.json.
+        cache = aws_dir / "sso" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(start_url.encode()).hexdigest()
+        (cache / f"{digest}.json").write_text(
+            '{"accessToken": "envy-test-token", "expiresAt": "2020-01-01T00:00:00Z"}'
+        )
+
+    def test_expired_sso_session_is_named_once_and_not_as_a_protocol_error(self) -> None:
+        self._write_expired_sso_session()
+        stub = S3Stub()
+        port = stub.start()
+        try:
+            result = self._run(
+                [
+                    "mirror-envy",
+                    "1.2.3",
+                    "s3://test-bucket/releases",
+                    f"--from={self._from_uri()}",
+                ],
+                env_extra=self._no_credentials_env(port),
+            )
+        finally:
+            stub.stop()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no usable AWS credentials", result.stderr)
+        self.assertIn("aws sso login", result.stderr)
+        # The SDK's own account of why, which is otherwise discarded.
+        self.assertIn("Cached Token expired at 2020-01-01T00:00:00Z", result.stderr)
+        # Once, up front -- not once per object, and never as an S3 protocol code.
+        self.assertEqual(1, result.stderr.count("no usable AWS credentials"))
+        self.assertNotIn("uploads failed", result.stderr)
+        self.assertNotIn("NotImplemented", result.stderr)
+        self.assertEqual({}, stub.objects)
+
+    def test_credentials_are_checked_before_anything_is_downloaded(self) -> None:
+        """Six archives are fetched before the first upload; the check must precede them.
+
+        An unreachable source mirror is the control: reaching the download leg at all would
+        report that instead.
+        """
+        stub = S3Stub()
+        port = stub.start()
+        try:
+            result = self._run(
+                [
+                    "mirror-envy",
+                    "1.2.3",
+                    "s3://test-bucket/releases",
+                    f"--from={(self._temp / 'no-such-mirror').as_uri()}",
+                ],
+                env_extra=self._no_credentials_env(port),
+            )
+        finally:
+            stub.stop()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no usable AWS credentials", result.stderr)
+        self.assertNotIn("failed to download", result.stderr)
 
     def test_prints_paste_ready_manifest_directives(self) -> None:
         stub = S3Stub()

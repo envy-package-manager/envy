@@ -42,6 +42,11 @@ struct s3_upload_request {
 
 void aws_s3_upload(s3_upload_request const &request);
 
+// Resolves credentials as a transfer would, throwing if none are usable and quoting the
+// SDK's account of why. Call once before writes: unsigned ones fail per object, opaquely.
+void aws_credentials_require(std::optional<std::string> const &region,
+                             std::string_view op);
+
 class aws_shutdown_guard : unmovable {
  public:
   aws_shutdown_guard() = default;
