@@ -7,15 +7,19 @@
 #include "aws/core/auth/SSOCredentialsProvider.h"
 #include "aws/core/auth/STSCredentialsProvider.h"
 #include "aws/core/client/ClientConfiguration.h"
+#include "aws/core/utils/logging/CRTLogSystem.h"
 #include "aws/core/utils/logging/LogLevel.h"
-#include "aws/core/utils/logging/NullLogSystem.h"
+#include "aws/core/utils/logging/LogSystemInterface.h"
 #include "aws/core/utils/memory/stl/AWSMap.h"
 #include "aws/core/utils/threading/PooledThreadExecutor.h"
 #include "aws/s3/S3Client.h"
 #include "aws/transfer/TransferHandle.h"
 #include "aws/transfer/TransferManager.h"
 
+#include <algorithm>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -26,6 +30,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace envy {
 namespace {
@@ -37,8 +43,81 @@ std::once_flag g_init_once;
 std::mutex g_state_mutex;
 bool g_initialized{ false };
 
-// Per-region TransferManager cache.
+// A credential failure explains itself only through the SDK's logger -- token expiry, an
+// unreadable cache file -- so keep those lines. Nothing here is ever printed on its own.
+constexpr size_t kCaptureMax{ 4 };
+std::mutex g_capture_mutex;
+std::vector<std::string> g_capture;
+
+void capture_push(char const *tag, std::string_view text) {
+  if (text.empty()) { return; }
+  std::string line{ tag ? tag : "aws" };  // Tagged: several providers fail per resolution.
+  line.append(": ").append(text);
+  std::lock_guard<std::mutex> lock{ g_capture_mutex };
+  // Deduplicated: a provider that fails is re-consulted for every credential lookup a
+  // client makes while starting up, and reports the same reason each time.
+  if (std::ranges::find(g_capture, line) != g_capture.end()) { return; }
+  if (g_capture.size() == kCaptureMax) { g_capture.erase(g_capture.begin()); }
+  g_capture.push_back(std::move(line));
+}
+
+std::vector<std::string> capture_take() {
+  std::lock_guard<std::mutex> lock{ g_capture_mutex };
+  return std::exchange(g_capture, std::vector<std::string>{});
+}
+
+class capture_log_system final : public Aws::Utils::Logging::LogSystemInterface {
+ public:
+  Aws::Utils::Logging::LogLevel GetLogLevel() const override {
+    return Aws::Utils::Logging::LogLevel::Error;
+  }
+
+  void Log(Aws::Utils::Logging::LogLevel level,
+           char const *tag,
+           char const *format,
+           ...) override {
+    va_list args;
+    va_start(args, format);
+    vaLog(level, tag, format, args);
+    va_end(args);
+  }
+
+  void vaLog(Aws::Utils::Logging::LogLevel,
+             char const *tag,
+             char const *format,
+             va_list args) override {
+    char buffer[512];
+    if (std::vsnprintf(buffer, sizeof(buffer), format, args) > 0) {
+      capture_push(tag, buffer);
+    }
+  }
+
+  void LogStream(Aws::Utils::Logging::LogLevel,
+                 char const *tag,
+                 Aws::OStringStream const &stream) override {
+    capture_push(tag, stream.str().c_str());
+  }
+
+  void Flush() override {}
+};
+
+// CRT logs are file- and socket-plumbing detail, never credential policy. Unset, the SDK
+// redirects them into the capture above, crowding out the provider reports that matter.
+class discard_crt_log_system final : public Aws::Utils::Logging::CRTLogSystemInterface {
+ public:
+  Aws::Utils::Logging::LogLevel GetLogLevel() const override {
+    return Aws::Utils::Logging::LogLevel::Off;
+  }
+
+  void SetLogLevel(Aws::Utils::Logging::LogLevel) override {}
+
+  void Log(Aws::Utils::Logging::LogLevel, char const *, char const *, va_list) override {}
+};
+
+// Per-region TransferManager cache. The provider is kept so a credential probe resolves
+// through the very chain the transfers sign with, and warms its cache for them.
 struct transfer_context {
+  std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
   std::shared_ptr<Aws::S3::S3Client> client;
   std::shared_ptr<Aws::Transfer::TransferManager> manager;
 };
@@ -58,9 +137,14 @@ std::unordered_map<std::string, progress_entry> g_progress_map;
 constexpr std::uint64_t kProgressInterval{ 1 << 17 };  // 128 KB
 
 void configure_options(Aws::SDKOptions &options) {
-  options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Off;
+  // Error, not Off: Off skips logger installation entirely, and the SDK's error log is the
+  // only place credential resolution says why it failed. capture_log_system buffers.
+  options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Error;
   options.loggingOptions.logger_create_fn = [] {
-    return Aws::MakeShared<Aws::Utils::Logging::NullLogSystem>(kAllocationTag);
+    return Aws::MakeShared<capture_log_system>(kAllocationTag);
+  };
+  options.loggingOptions.crt_logger_create_fn = [] {
+    return Aws::MakeShared<discard_crt_log_system>(kAllocationTag);
   };
 }
 
@@ -151,7 +235,7 @@ transfer_context &get_transfer_context(std::string const &region) {
 
   auto [inserted, _] = g_transfer_contexts.emplace(
       region,
-      transfer_context{ std::move(client), std::move(manager) });
+      transfer_context{ std::move(provider), std::move(client), std::move(manager) });
   return inserted->second;
 }
 
@@ -177,13 +261,24 @@ bool istarts_with(std::string_view value, std::string_view prefix) {
   auto const http_code{ static_cast<int>(error.GetResponseCode()) };
   auto const &name{ error.GetExceptionName() };
 
+  // A body the marshaller cannot map arrives wrapped as "Unable to parse ExceptionName:
+  // <name> Message: <text>". Unwrap it; the code is unrecognized, not one envy diagnosed.
+  constexpr std::string_view kUnparsed{ "Unable to parse ExceptionName: " };
+  std::string_view const body{ error.GetMessage().c_str() };
+  bool const unrecognized{ body.starts_with(kUnparsed) };
+  auto const detail{ [&]() -> std::string_view {
+    if (!unrecognized) { return body == "No response body." ? std::string_view{} : body; }
+    constexpr std::string_view kText{ " Message: " };
+    auto const pos{ body.find(kText, kUnparsed.size()) };
+    return pos == std::string_view::npos ? body : body.substr(pos + kText.size());
+  }() };
+
   std::ostringstream msg;
   msg << op << ": transfer failed";
-  if (!name.empty()) { msg << ": " << name; }
-  if (auto const &body{ error.GetMessage() };
-      !body.empty() && body != "No response body.") {
-    msg << ": " << body;
+  if (!name.empty()) {
+    msg << (unrecognized ? ": unrecognized S3 error code " : ": ") << name;
   }
+  if (!detail.empty()) { msg << ": " << detail; }
   if (http_code > 0) { msg << " (HTTP " << http_code << ")"; }
 
   if (name == "NoSuchBucket") {
@@ -200,6 +295,11 @@ bool istarts_with(std::string_view value, std::string_view prefix) {
                       " Run 'aws sso login' or check the bucket policy."
                     : "\n  Hint: check that the bucket policy allows public access,"
                       " or run 'aws sso login' to authenticate.");
+  } else if (http_code == 501 && writing) {
+    // S3 answers an unsigned write carrying x-amz-* headers with NotImplemented. envy
+    // sends one only when the credential chain resolved nothing.
+    msg << "\n  Hint: S3 rejects unsigned writes. envy signs only when AWS credentials"
+           " resolve, so this means none did -- run 'aws sso login'.";
   }
 
   throw std::runtime_error(msg.str());
@@ -358,6 +458,22 @@ std::filesystem::path aws_s3_download(s3_download_request const &request) {
   });
 
   return local;
+}
+
+void aws_credentials_require(std::optional<std::string> const &region,
+                             std::string_view op) {
+  aws_init();
+  capture_take();  // Drop anything logged earlier, so only this resolution is quoted.
+
+  auto const provider{ get_transfer_context(region.value_or("")).provider };
+  if (!provider->GetAWSCredentials().IsExpiredOrEmpty()) { return; }
+
+  std::ostringstream msg;
+  msg << op << ": no usable AWS credentials";
+  for (auto const &line : capture_take()) { msg << "\n  " << line; }
+  msg << "\n  Hint: run 'aws sso login' (honoring AWS_PROFILE), or set"
+         " AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.";
+  throw std::runtime_error(msg.str());
 }
 
 void aws_s3_upload(s3_upload_request const &request) {
