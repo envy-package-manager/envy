@@ -86,10 +86,15 @@ class capture_log_system final : public Aws::Utils::Logging::LogSystemInterface 
              char const *tag,
              char const *format,
              va_list args) override {
-    char buffer[512];
-    if (std::vsnprintf(buffer, sizeof(buffer), format, args) > 0) {
-      capture_push(tag, buffer);
-    }
+    va_list sizing;  // vsnprintf consumes args, so measure with a copy and format with it.
+    va_copy(sizing, args);
+    auto const length{ std::vsnprintf(nullptr, 0, format, sizing) };
+    va_end(sizing);
+    if (length <= 0) { return; }
+
+    std::string text(static_cast<size_t>(length), '\0');
+    std::vsnprintf(text.data(), text.size() + 1, format, args);
+    capture_push(tag, text);
   }
 
   void LogStream(Aws::Utils::Logging::LogLevel,
