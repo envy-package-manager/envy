@@ -103,6 +103,10 @@ char const *cache_root_tier_name(cache_root_tier tier) {
 
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir) {
+  // Local trees only. The user-wide cache is the default and outlives any one project, so
+  // naming it told users nothing actionable and read as a warning about normal operation.
+  if (resolved.mode != cache_mode::LOCAL) { return; }
+
   // Keyed on packages/, not on the root: the pre-dispatch self-deploy in main.cpp creates
   // <root>/envy/<version>/ before any command runs, so a root-existence test would be
   // false by the time anything could report it. packages/ is created by the first cache
@@ -118,18 +122,13 @@ void cache_announce_root_once(cache_root_resolution const &resolved,
     p /= (platform::native() == platform_id::WINDOWS) ? "envy.bat" : "envy";
     return p.make_preferred().string();
   }() };
-  bool const shared{ resolved.mode == cache_mode::SHARED };
 
   // tui::info, not print_stdout: log lines go to stderr (see the drain in tui.cpp), which
   // keeps `envy cache --root` parseable, and `-q` correctly silences a courtesy notice.
-  tui::info("caching packages in %s", resolved.root.string().c_str());
-  tui::info(shared ? "  shared with your other envy projects; deleting this project will "
-                     "not remove them"
-                   : "  inside this project, so deleting it removes them");
-  tui::info("  %s instead: %s cache --%s",
-            shared ? "keep them in this project" : "share one cache across projects",
-            launcher.c_str(),
-            shared ? "local" : "shared");
+  tui::info("Caching packages in %s", resolved.root.string().c_str());
+  tui::info("  These packages live inside the project, so deleting it deletes them.");
+  tui::info("  To share one cache across all your projects, run: %s cache --shared",
+            launcher.c_str());
 }
 
 namespace {
