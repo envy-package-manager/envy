@@ -1,5 +1,6 @@
 """Functional tests for user-managed packages (SETUP pairs)."""
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -71,9 +72,6 @@ SETUP = {
 
 class TestUserManagedPackages(EnvyTestCase):
     """Test user-managed package behavior with SETUP pairs."""
-
-    # Some cases fetch over the real network; relax the watchdog for latency.
-    envy_watchdog_timeout = 60
 
     def setUp(self):
         super().setUp()
@@ -249,12 +247,19 @@ class TestUserManagedPackages(EnvyTestCase):
 
     def test_user_managed_with_fetch_purges_all_dirs(self):
         """Cache-managed with fetch verb: fetch_dir populated, package persists."""
-        # Cache-managed package with declarative fetch and all phases
+        # A local source, not a CDN: what this case is about is that a cache-managed spec
+        # with a FETCH lands its payload in fetch_dir and persists, which no round trip to
+        # the internet makes truer. Fetching for real only made the case fail whenever a
+        # runner's connection stalled, and there is nothing to retry your way out of that.
+        readme = self.make_temp_dir("fetch_src") / "README.md"
+        readme.write_bytes(b"# ninja\n")
+        digest = hashlib.sha256(readme.read_bytes()).hexdigest()
+
         spec_with_fetch = """IDENTITY = "local.user_managed_with_fetch@v1"
 
 FETCH = {
-    source = "https://raw.githubusercontent.com/ninja-build/ninja/v1.13.2/README.md",
-    sha256 = "b31e9700c752fa214773c1b799d90efcbf3330c8062da9f45c6064e023b347b0"
+    source = "%(source)s",
+    sha256 = "%(digest)s"
 }
 
 function STAGE(fetch_dir, stage_dir, tmp_dir, options)
@@ -277,7 +282,10 @@ function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options)
     f:close()
 end
 """
-        self.write_spec("with_fetch", spec_with_fetch)
+        self.write_spec(
+            "with_fetch",
+            spec_with_fetch % {"source": readme.as_posix(), "digest": digest},
+        )
         env = {"ENVY_TEST_MARKER_WITH_FETCH": str(self.marker_with_fetch)}
 
         result = self.run_spec(

@@ -832,6 +832,43 @@ PACKAGES = {{
             (bin_dir / "allplat.bat").exists(), "allplat .bat script missing"
         )
 
+    def test_every_deployed_script_uses_its_targets_newlines(self):
+        """`.bat` is CRLF, POSIX shims are LF -- bootstrap and product shims alike.
+
+        The shims used to be written LF while bin/envy.bat was written CRLF. A project
+        cannot fix that from `.gitattributes`, because envy overwrites bin/ after checkout,
+        and git never reports the downgrade: worktree LF against index LF is a no-op
+        through the clean filter, so `git status` stays clean.
+        """
+        spec_path = self.write_spec("mixedplat", SPEC_MIXED_PLATFORM_PRODUCTS)
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.mixedplat@v1", source = "{spec_path}" }},
+}}
+""",
+            deploy=True,
+        )
+        result = self._run_deploy(manifest)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+        bin_dir = self.test_dir / "envy-bin"
+        scripts = sorted(p for p in bin_dir.iterdir() if p.is_file())
+        names = [p.name for p in scripts]
+        for expected in ("envy", "envy.bat", "allplat", "allplat.bat", "win_only.bat"):
+            self.assertIn(expected, names)
+
+        for path in scripts:
+            self.assertTargetNewlines(path)
+
+        # Byte-stable across runs: a writer that compares LF content against the CRLF on
+        # disk churns the file every deploy and never reports it unchanged.
+        before = {p.name: p.read_bytes() for p in scripts}
+        result = self._run_deploy(manifest)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        after = {p.name: p.read_bytes() for p in bin_dir.iterdir() if p.is_file()}
+        self.assertEqual(before, after)
+
     def test_cleanup_does_not_remove_other_platform_products(self):
         """Deploying twice doesn't delete platform-constrained products from prior deploy."""
         spec_path = self.write_spec("mixedplat", SPEC_MIXED_PLATFORM_PRODUCTS)

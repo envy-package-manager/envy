@@ -1,6 +1,7 @@
 #include "util.h"
 
 #include "platform.h"
+#include "tui.h"
 
 #include "zlib_compat.h"
 
@@ -571,6 +572,52 @@ std::vector<platform_id> util_parse_platform_flag(std::string const &value) {
   if (value == "all") { return { platform_id::POSIX, platform_id::WINDOWS }; }
   throw std::runtime_error("invalid --platform value '" + value +
                            "': expected posix, windows, or all");
+}
+
+void util_apply_script_eol(std::string &script, platform_id plat) {
+  if (plat != platform_id::WINDOWS) { return; }  // embed_resources NORMALIZE_EOL: LF in
+  for (size_t pos{ script.find('\n') }; pos != std::string::npos;
+       pos = script.find('\n', pos + 1)) {
+    if (pos && script[pos - 1] == '\r') { continue; }  // idempotent: never "\r\r\n"
+    script.insert(pos++, 1, '\r');
+  }
+}
+
+script_write util_write_script(std::filesystem::path const &path,
+                               std::string content,
+                               platform_id plat) {
+  namespace fs = std::filesystem;
+  util_apply_script_eol(content, plat);
+
+  auto const existing{ [&]() -> std::string {
+    std::ifstream in{ path, std::ios::binary };
+    if (!in) { return {}; }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+  }() };
+  if (existing == content) { return script_write::UNCHANGED; }
+
+  util_write_file(path, content);
+
+  // A WINDOWS-target script is data on a POSIX host -- cross-deploying one and then
+  // marking it executable only invites the shell to try to run a batch file.
+#ifndef _WIN32
+  if (plat != platform_id::WINDOWS) {
+    std::error_code ec;
+    fs::permissions(path,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    if (ec) {
+      tui::warn("Failed to set executable bit on %s: %s",
+                path.string().c_str(),
+                ec.message().c_str());
+    }
+  }
+#endif
+
+  return existing.empty() ? script_write::CREATED : script_write::UPDATED;
 }
 
 scoped_path_cleanup::scoped_path_cleanup(std::filesystem::path path)

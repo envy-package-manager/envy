@@ -4,5 +4,5 @@ src/resources/* eol=lf
 # `goto`/`call :label` by seeking and computes those offsets as if every line ended CRLF:
 # an LF-only batch drifts a byte per line until the search walks past the label -- "The
 # system cannot find the batch label specified", after which the launcher parses no @envy
-# directives at all. The template stays LF above; stamp_bootstrap() converts on the way out.
+# directives at all. The template stays LF above; util_write_script() converts on the way out.
 examples/bin/envy.bat eol=crlf

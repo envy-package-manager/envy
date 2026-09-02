@@ -570,8 +570,8 @@ PACKAGES = {{
         self.assertIn("envy-managed", content)
         self.assertIn("product", content)
 
-    def test_sync_product_scripts_have_lf_line_endings(self):
-        """Deployed product scripts must use LF line endings, never CRLF."""
+    def test_sync_product_scripts_use_their_target_newlines(self):
+        """A deployed product script's newlines follow its target, not the host."""
         product_path = self.write_spec("product_provider", SPEC_PRODUCT_PROVIDER)
 
         manifest = self.create_manifest(f"""
@@ -585,17 +585,15 @@ PACKAGES = {{
 
         bin_dir = self.test_dir / "envy-bin"
         script_name = "tool.bat" if sys.platform == "win32" else "tool"
-        raw = (bin_dir / script_name).read_bytes()
-        self.assertNotIn(b"\r", raw, "Product script contains CR bytes (CRLF line endings)")
-        self.assertIn(b"\n", raw, "Product script has no line endings at all")
+        self.assertTargetNewlines(bin_dir / script_name)
 
-    def test_sync_platform_all_scripts_have_lf_line_endings(self):
-        """Every deployed script uses LF -- except the one consumer that cannot read it.
+    def test_sync_platform_all_scripts_use_their_target_newlines(self):
+        """Every deployed script agrees: `.bat` is CRLF, POSIX shims are LF.
 
-        envy.bat is CRLF because cmd.exe resolves `goto`/`call :label` by seeking, and
-        computes those offsets as if every line ended CRLF. On an LF-only batch the search
-        drifts a byte per line until it walks past the label, and the launcher then parses
-        no @envy directives at all. Product .bat wrappers carry no labels and stay LF.
+        The bootstrap writer and the product-shim writer used to disagree, so a project
+        whose `.gitattributes` says `*.bat eol=crlf` got its shims rewritten LF on the
+        next Windows run -- invisibly, because worktree LF against index LF is a no-op
+        through git's clean filter.
         """
         product_path = self.write_spec("product_provider", SPEC_PRODUCT_PROVIDER)
 
@@ -609,20 +607,17 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
         bin_dir = self.test_dir / "envy-bin"
-        for name in ("tool", "tool.bat", "envy"):
+        for name in ("tool", "tool.bat", "envy", "envy.bat"):
             path = bin_dir / name
             self.assertTrue(path.exists(), f"{name} missing")
-            self.assertNotIn(
-                b"\r", path.read_bytes(), f"{name} contains CR bytes (CRLF line endings)"
-            )
+            self.assertTargetNewlines(path)
 
-        launcher = (bin_dir / "envy.bat").read_bytes()
-        self.assertTrue((bin_dir / "envy.bat").exists(), "envy.bat missing")
-        self.assertNotIn(b"\n", launcher.replace(b"\r\n", b""), "envy.bat has a bare LF")
-        self.assertIn(b"\r\n", launcher, "envy.bat is not CRLF")
+    def test_sync_renormalizes_an_envy_managed_script_both_directions(self):
+        """Deploy restamps a mis-terminated envy-managed script, whichever way it is wrong.
 
-    def test_sync_replaces_crlf_script_with_lf(self):
-        """Deploy overwrites an existing CRLF envy-managed script with LF."""
+        The LF-to-CRLF direction is the reported bug: a `.gitattributes eol=crlf` checkout
+        landed CRLF shims and the next envy run wrote them back as LF.
+        """
         product_path = self.write_spec("product_provider", SPEC_PRODUCT_PROVIDER)
 
         manifest = self.create_manifest(f"""
@@ -634,16 +629,17 @@ PACKAGES = {{
         bin_dir = self.test_dir / "envy-bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
 
-        script_name = "tool.bat" if sys.platform == "win32" else "tool"
-        script_path = bin_dir / script_name
-        script_path.write_bytes(b"# envy-managed OLD\r\nold content\r\n")
+        (bin_dir / "tool").write_bytes(b"# envy-managed OLD\r\nold content\r\n")
+        (bin_dir / "tool.bat").write_bytes(b"rem envy-managed OLD\nold content\n")
 
-        result = self.run_sync(manifest=manifest)
+        result = self.run_sync(manifest=manifest, platform="all")
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-        raw = script_path.read_bytes()
-        self.assertNotIn(b"\r", raw, "Rewritten script still contains CR bytes")
-        self.assertIn(b"envy-managed", raw)
+        for name in ("tool", "tool.bat"):
+            path = bin_dir / name
+            self.assertTargetNewlines(path)
+            self.assertIn(b"envy-managed", path.read_bytes())
+            self.assertNotIn(b"old content", path.read_bytes())
 
     def test_sync_updates_envy_managed_scripts(self):
         """Sync updates existing envy-managed scripts."""
