@@ -832,6 +832,57 @@ PACKAGES = {{
             (bin_dir / "allplat.bat").exists(), "allplat .bat script missing"
         )
 
+    def test_every_deployed_script_uses_its_targets_newlines(self):
+        """`.bat` is CRLF, POSIX shims are LF -- bootstrap and product shims alike.
+
+        The shims used to be written LF while bin/envy.bat was written CRLF. A project
+        cannot fix that from `.gitattributes`, because envy overwrites bin/ after checkout,
+        and git never reports the downgrade: worktree LF against index LF is a no-op
+        through the clean filter, so `git status` stays clean.
+        """
+        spec_path = self.write_spec("mixedplat", SPEC_MIXED_PLATFORM_PRODUCTS)
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.mixedplat@v1", source = "{spec_path}" }},
+}}
+""",
+            deploy=True,
+        )
+        result = self._run_deploy(manifest)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+        bin_dir = self.test_dir / "envy-bin"
+        scripts = sorted(p for p in bin_dir.iterdir() if p.is_file())
+        names = [p.name for p in scripts]
+        for expected in ("envy", "envy.bat", "allplat", "allplat.bat", "win_only.bat"):
+            self.assertIn(expected, names)
+
+        for path in scripts:
+            data = path.read_bytes()
+            self.assertIn(b"\n", data, f"{path.name}: no newlines at all")
+            if path.suffix == ".bat":
+                self.assertEqual(
+                    data.count(b"\r\n"),
+                    data.count(b"\n"),
+                    f"{path.name}: bare LF in a batch file",
+                )
+                self.assertEqual(
+                    data.count(b"\r"),
+                    data.count(b"\r\n"),
+                    f"{path.name}: stray CR in a batch file",
+                )
+            else:
+                self.assertNotIn(b"\r", data, f"{path.name}: CR in a POSIX shim")
+
+        # A writer that re-derives newlines only at write time rewrites every run, because
+        # its unchanged-comparison sees LF against the CRLF on disk.
+        before = {p.name: p.read_bytes() for p in scripts}
+        result = self._run_deploy(manifest)
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        after = {p.name: p.read_bytes() for p in bin_dir.iterdir() if p.is_file()}
+        self.assertEqual(before, after)
+
     def test_cleanup_does_not_remove_other_platform_products(self):
         """Deploying twice doesn't delete platform-constrained products from prior deploy."""
         spec_path = self.write_spec("mixedplat", SPEC_MIXED_PLATFORM_PRODUCTS)

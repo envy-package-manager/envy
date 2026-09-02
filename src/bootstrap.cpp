@@ -3,7 +3,6 @@
 #include "embedded_init_resources.h"
 #include "envy_release.h"
 #include "platform.h"
-#include "tui.h"
 #include "util.h"
 
 #include <cstring>
@@ -53,9 +52,7 @@ std::string stamp_bootstrap(platform_id platform) {
   replace_all(result, "@@LATEST_URL@@", kEnvyReleaseLatestUrl);
   replace_all(result, "@@MIN_DIRECTIVE_VERSION@@", kEnvyMinDirectiveVersion);
 
-  // cmd.exe seeks `goto`/`call :label` by offsets that assume CRLF, so an LF batch drifts
-  // a byte per line until the search misses. Converted here, not in the repo.
-  if (platform == platform_id::WINDOWS) { replace_all(result, "\n", "\r\n"); }
+  util_apply_script_eol(result, platform);  // converted here, not in the repo
   return result;
 }
 
@@ -70,24 +67,6 @@ std::string read_file_content(fs::path const &path) {
 
 fs::path bootstrap_script_path(fs::path const &bin_dir, platform_id platform) {
   return (platform == platform_id::WINDOWS) ? bin_dir / "envy.bat" : bin_dir / "envy";
-}
-
-void set_executable(fs::path const &path, platform_id platform) {
-  if (platform == platform_id::WINDOWS) { return; }
-#ifndef _WIN32
-  std::error_code ec;
-  fs::permissions(path,
-                  fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                  fs::perm_options::add,
-                  ec);
-  if (ec) {
-    tui::warn("Failed to set executable bit on %s: %s",
-              path.string().c_str(),
-              ec.message().c_str());
-  }
-#else
-  (void)path;
-#endif
 }
 
 }  // namespace
@@ -107,18 +86,8 @@ bool bootstrap_write_script(fs::path const &bin_dir, platform_id platform) {
         "' exists but is not envy-managed. Remove manually to allow envy to manage it.");
   }
 
-  // Generate new content
-  std::string const new_content{ stamp_bootstrap(platform) };
-
-  // Compare with existing
-  std::string const existing_content{ read_file_content(script_path) };
-  if (new_content == existing_content) { return false; }
-
-  // Write atomically
-  util_write_file(script_path, new_content);
-  set_executable(script_path, platform);
-
-  return true;
+  return util_write_script(script_path, stamp_bootstrap(platform), platform) !=
+         script_write::UNCHANGED;
 }
 
 }  // namespace envy

@@ -1197,6 +1197,34 @@ TEST_CASE("util_parse_platform_flag invalid value throws") {
                     doctest::Contains("invalid --platform value"));
 }
 
+TEST_CASE("util_apply_script_eol: WINDOWS expands every LF, POSIX leaves them alone") {
+  std::string win{ "@echo off\nrem x\n" };
+  envy::util_apply_script_eol(win, envy::platform_id::WINDOWS);
+  CHECK(win == "@echo off\r\nrem x\r\n");
+
+  std::string posix{ "#!/usr/bin/env bash\nexec x\n" };
+  envy::util_apply_script_eol(posix, envy::platform_id::POSIX);
+  CHECK(posix == "#!/usr/bin/env bash\nexec x\n");
+}
+
+TEST_CASE("util_apply_script_eol: idempotent, and a leading LF still converts") {
+  std::string s{ "\na\r\nb\n" };
+  envy::util_apply_script_eol(s, envy::platform_id::WINDOWS);
+  CHECK(s == "\r\na\r\nb\r\n");
+  envy::util_apply_script_eol(s, envy::platform_id::WINDOWS);
+  CHECK(s == "\r\na\r\nb\r\n");
+}
+
+TEST_CASE("util_apply_script_eol: no newlines is a no-op") {
+  std::string s{ "@echo off" };
+  envy::util_apply_script_eol(s, envy::platform_id::WINDOWS);
+  CHECK(s == "@echo off");
+
+  std::string empty;
+  envy::util_apply_script_eol(empty, envy::platform_id::WINDOWS);
+  CHECK(empty.empty());
+}
+
 TEST_CASE("util_parse_archive_filename: simple identity") {
   auto const r{ envy::util_parse_archive_filename(
       "arm.gcc@r2-darwin-arm64-blake3-abcdef0123456789") };

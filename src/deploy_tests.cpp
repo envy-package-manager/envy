@@ -83,6 +83,25 @@ TEST_CASE("deploy: stamp_product_script substitutes product name on Windows") {
   CHECK(stamped.find("schema \"") != std::string::npos);
 }
 
+TEST_CASE("deploy: stamped Windows shim is CRLF, POSIX shim is LF") {
+  // The shims and bin/envy.bat used to disagree: a project committing a CRLF bin dir got
+  // it silently rewritten to LF by the next deploy, invisibly to git's clean filter.
+  std::string const win{
+    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "..")
+  };
+  CHECK(win.find('\n') != std::string::npos);
+  for (size_t i{ 0 }; i < win.size(); ++i) {
+    if (win[i] == '\n') { CHECK(i > 0); CHECK(win[i - 1] == '\r'); }
+    if (win[i] == '\r') { CHECK(i + 1 < win.size()); CHECK(win[i + 1] == '\n'); }
+  }
+
+  std::string const posix{
+    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
+  };
+  CHECK(posix.find('\n') != std::string::npos);
+  CHECK(posix.find('\r') == std::string::npos);
+}
+
 TEST_CASE("deploy: stamp_product_script is deterministic") {
   std::string const a{
     envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")

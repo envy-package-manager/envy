@@ -114,6 +114,15 @@ enum class platform_id;
 
 std::vector<platform_id> util_parse_platform_flag(std::string const &value);
 
+// Target-keyed and idempotent: CRLF for WINDOWS (cmd.exe label seeks assume it), LF else.
+void util_apply_script_eol(std::string &script, platform_id plat);
+
+enum class script_write { UNCHANGED, CREATED, UPDATED };
+
+script_write util_write_script(std::filesystem::path const &path,
+                               std::string content,
+                               platform_id plat);
+
 // Empty constraints = match all. Checks target_os or "target_os-target_arch" membership.
 bool util_platform_matches(std::vector<std::string> const &constraints,
                            std::string_view target_os,

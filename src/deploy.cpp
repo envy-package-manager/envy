@@ -61,24 +61,6 @@ fs::path product_script_path(fs::path const &bin_dir,
              : bin_dir / product_name;
 }
 
-void set_product_executable(fs::path const &path, platform_id platform) {
-  if (platform == platform_id::WINDOWS) { return; }
-#ifndef _WIN32
-  std::error_code ec;
-  fs::permissions(path,
-                  fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                  fs::perm_options::add,
-                  ec);
-  if (ec) {
-    tui::warn("Failed to set executable bit on %s: %s",
-              path.string().c_str(),
-              ec.message().c_str());
-  }
-#else
-  (void)path;
-#endif
-}
-
 }  // namespace
 
 std::string deploy_stamp_product_script(std::string_view product_name,
@@ -87,6 +69,7 @@ std::string deploy_stamp_product_script(std::string_view product_name,
   std::string result{ get_product_script_template(platform) };
   replace_all(result, "@@PRODUCT_NAME@@", product_name);
   replace_all(result, "@@PROJECT_ROOT_REL@@", project_root_rel);
+  util_apply_script_eol(result, platform);
   return result;
 }
 
@@ -184,36 +167,29 @@ void deploy_product_scripts(fs::path const &bin_dir,
         continue;
       }
 
-      std::string const new_content{
-        deploy_stamp_product_script(product.product_name, plat, project_root_rel)
-      };
-      std::string const existing_content{ read_file_content(script_path) };
-      if (new_content == existing_content) {
-        ++unchanged;
-        ENVY_TRACE(deploy_script,
-                   "",
-                   .product = product.product_name,
-                   .platform = plat == platform_id::WINDOWS ? "windows" : "posix",
-                   .action = "unchanged");
-        continue;
-      }
+      auto const outcome{ util_write_script(
+          script_path,
+          deploy_stamp_product_script(product.product_name, plat, project_root_rel),
+          plat) };
 
-      bool const is_new{ existing_content.empty() };
-      util_write_file(script_path, new_content);
-      set_product_executable(script_path, plat);
-
-      if (is_new) {
-        ++created;
-        tui::debug("Created product script: %s", script_path.string().c_str());
-      } else {
-        ++updated;
-        tui::debug("Updated product script: %s", script_path.string().c_str());
+      switch (outcome) {
+        case script_write::UNCHANGED: ++unchanged; break;
+        case script_write::CREATED:
+          ++created;
+          tui::debug("Created product script: %s", script_path.string().c_str());
+          break;
+        case script_write::UPDATED:
+          ++updated;
+          tui::debug("Updated product script: %s", script_path.string().c_str());
+          break;
       }
       ENVY_TRACE(deploy_script,
                  "",
                  .product = product.product_name,
                  .platform = plat == platform_id::WINDOWS ? "windows" : "posix",
-                 .action = is_new ? "created" : "updated");
+                 .action = outcome == script_write::UNCHANGED ? "unchanged"
+                           : outcome == script_write::CREATED ? "created"
+                                                              : "updated");
     }
   }
 
