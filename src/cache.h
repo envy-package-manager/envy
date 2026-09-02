@@ -101,12 +101,13 @@ std::optional<std::filesystem::path> resolve_state_dir(
 char const *cache_root_tier_name(cache_root_tier tier);
 
 // Says where packages are about to land, once, while the resolved tree still holds none --
-// so a user learns before gigabytes arrive rather than after. Goes to stderr, keeping
-// `envy cache --root` machine-readable, and is never a prompt: a prompt would hang CI and
-// non-TTY stdin. No state records that it was shown; the absence of the cache's packages/
-// directory is the trigger, which makes it self-limiting and correctly brings it back
-// after a teardown or a mode switch. `bin_dir` is '@envy bin', so the suggested command
-// matches the project's own layout.
+// so a user learns before gigabytes arrive rather than after. Local trees only: the
+// user-wide cache is the default and survives the project, so announcing it was noise.
+// Goes to stderr, keeping `envy cache --root` machine-readable, and is never a prompt: a
+// prompt would hang CI and non-TTY stdin. No state records that it was shown; the absence
+// of the cache's packages/ directory is the trigger, which makes it self-limiting and
+// correctly brings it back after a teardown or a mode switch. `bin_dir` is '@envy bin', so
+// the suggested command matches the project's own layout.
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir);
 

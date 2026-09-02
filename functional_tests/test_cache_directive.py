@@ -524,26 +524,26 @@ PACKAGES = {}
             env=env,
         )
 
-    def test_notice_names_the_shared_root_and_offers_local(self):
+    def test_notice_is_silent_for_the_shared_cache(self):
+        """The user-wide cache is the default and outlives the project -- nothing to say."""
+        self.create_manifest("PACKAGES = {}\n")
+        result = self._install(self._sandbox_env())
+        self.assertNotIn("Caching packages in", result.stderr)
+        self.assertNotIn("cache --shared", result.stderr)
+
+    def test_notice_names_the_local_root_and_offers_shared(self):
         """Told, not asked: a prompt would hang CI and any non-TTY stdin.
 
         It fires before packages land, which is the only moment where knowing is useful.
         """
-        self.create_manifest("PACKAGES = {}\n")
-        result = self._install(self._sandbox_env())
-        self.assertIn("caching packages in", result.stderr)
-        self.assertIn("other envy projects", result.stderr)
-        self.assertIn("cache --local", result.stderr)
-
-    def test_notice_reverses_for_a_local_project(self):
         self.create_manifest(
             '''-- @envy cache-local "out/.envy"
 PACKAGES = {}
 '''
         )
         result = self._install(self._sandbox_env())
-        self.assertIn("caching packages in", result.stderr)
-        self.assertIn("deleting it removes them", result.stderr)
+        self.assertIn("Caching packages in", result.stderr)
+        self.assertIn("deleting it deletes them", result.stderr)
         self.assertIn("cache --shared", result.stderr)
 
     def test_notice_stops_once_the_tree_holds_packages(self):
@@ -559,11 +559,11 @@ PACKAGES = {}
 '''
         )
         env = self._sandbox_env()
-        self.assertIn("caching packages in", self._install(dict(env)).stderr)
+        self.assertIn("Caching packages in", self._install(dict(env)).stderr)
 
         # Stand in for a populated cache: the first real entry is what creates packages/.
         (self.test_dir / "out" / ".envy" / "packages").mkdir(parents=True, exist_ok=True)
-        self.assertNotIn("caching packages in", self._install(dict(env)).stderr)
+        self.assertNotIn("Caching packages in", self._install(dict(env)).stderr)
 
     def test_notice_returns_after_a_teardown(self):
         """`rm -rf` the tree and the notice is useful again, with no state to reset."""
@@ -575,10 +575,10 @@ PACKAGES = {}
         env = self._sandbox_env()
         self._install(dict(env))
         (self.test_dir / "out" / ".envy" / "packages").mkdir(parents=True, exist_ok=True)
-        self.assertNotIn("caching packages in", self._install(dict(env)).stderr)
+        self.assertNotIn("Caching packages in", self._install(dict(env)).stderr)
 
         shutil.rmtree(self.test_dir / "out")
-        self.assertIn("caching packages in", self._install(dict(env)).stderr)
+        self.assertIn("Caching packages in", self._install(dict(env)).stderr)
 
     def test_notice_never_pollutes_stdout(self):
         """`envy cache --root` is the binary half of the launcher parity test."""
@@ -590,7 +590,7 @@ PACKAGES = {}
         result = self._run_cache(["--root"], self._sandbox_env())
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertEqual(1, len(result.stdout.strip().splitlines()))
-        self.assertNotIn("caching packages", result.stdout)
+        self.assertNotIn("Caching packages", result.stdout)
 
 
     # ---- regressions -----------------------------------------------------------------
