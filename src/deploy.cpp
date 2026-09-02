@@ -69,8 +69,7 @@ std::string deploy_stamp_product_script(std::string_view product_name,
   std::string result{ get_product_script_template(platform) };
   replace_all(result, "@@PRODUCT_NAME@@", product_name);
   replace_all(result, "@@PROJECT_ROOT_REL@@", project_root_rel);
-  util_apply_script_eol(result, platform);
-  return result;
+  return result;  // LF as embedded; util_write_script owns the newline policy
 }
 
 void deploy_verify_bin_dir(fs::path const &bin_dir,
@@ -167,29 +166,30 @@ void deploy_product_scripts(fs::path const &bin_dir,
         continue;
       }
 
-      auto const outcome{ util_write_script(
-          script_path,
-          deploy_stamp_product_script(product.product_name, plat, project_root_rel),
-          plat) };
-
-      switch (outcome) {
-        case script_write::UNCHANGED: ++unchanged; break;
-        case script_write::CREATED:
-          ++created;
-          tui::debug("Created product script: %s", script_path.string().c_str());
-          break;
-        case script_write::UPDATED:
-          ++updated;
-          tui::debug("Updated product script: %s", script_path.string().c_str());
-          break;
-      }
+      // No `default`: -Wswitch is what makes a new script_write fail the build here
+      // rather than silently trace the wrong action.
+      auto const action{ [&]() -> char const * {
+        switch (util_write_script(
+            script_path,
+            deploy_stamp_product_script(product.product_name, plat, project_root_rel),
+            plat)) {
+          case script_write::UNCHANGED: ++unchanged; return "unchanged";
+          case script_write::CREATED:
+            ++created;
+            tui::debug("Created product script: %s", script_path.string().c_str());
+            return "created";
+          case script_write::UPDATED:
+            ++updated;
+            tui::debug("Updated product script: %s", script_path.string().c_str());
+            return "updated";
+        }
+        throw std::logic_error("unhandled script_write in deploy_product_scripts");
+      }() };
       ENVY_TRACE(deploy_script,
                  "",
                  .product = product.product_name,
                  .platform = plat == platform_id::WINDOWS ? "windows" : "posix",
-                 .action = outcome == script_write::UNCHANGED ? "unchanged"
-                           : outcome == script_write::CREATED ? "created"
-                                                              : "updated");
+                 .action = action);
     }
   }
 

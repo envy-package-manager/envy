@@ -22,27 +22,6 @@ from .test_config import make_manifest
 from .trace_parser import TraceParser
 
 
-def assert_target_newlines(case: unittest.TestCase, path: Path) -> None:
-    """Assert a deployed script's newlines match its target: CRLF for .bat, LF otherwise.
-
-    cmd.exe resolves `goto`/`call :label` by seeking, computing offsets as if every line
-    ended CRLF; an LF-only batch drifts a byte per line until the search walks past the
-    label. Keyed on the script's target, not the host, so a committed bin dir is identical
-    in every checkout -- and so envy never silently downgrades a CRLF one back to LF.
-    """
-    raw = path.read_bytes()
-    case.assertIn(b"\n", raw, f"{path.name} has no line endings at all")
-    if path.suffix == ".bat":
-        case.assertEqual(
-            raw.count(b"\r\n"), raw.count(b"\n"), f"{path.name} has a bare LF"
-        )
-        case.assertEqual(
-            raw.count(b"\r"), raw.count(b"\r\n"), f"{path.name} has a stray CR"
-        )
-    else:
-        case.assertNotIn(b"\r", raw, f"{path.name} contains CR bytes")
-
-
 # Test archive contents
 TEST_ARCHIVE_FILES = {
     "root/file1.txt": "Test file content\n",
@@ -606,7 +585,7 @@ PACKAGES = {{
 
         bin_dir = self.test_dir / "envy-bin"
         script_name = "tool.bat" if sys.platform == "win32" else "tool"
-        assert_target_newlines(self, bin_dir / script_name)
+        self.assertTargetNewlines(bin_dir / script_name)
 
     def test_sync_platform_all_scripts_use_their_target_newlines(self):
         """Every deployed script agrees: `.bat` is CRLF, POSIX shims are LF.
@@ -631,7 +610,7 @@ PACKAGES = {{
         for name in ("tool", "tool.bat", "envy", "envy.bat"):
             path = bin_dir / name
             self.assertTrue(path.exists(), f"{name} missing")
-            assert_target_newlines(self, path)
+            self.assertTargetNewlines(path)
 
     def test_sync_renormalizes_an_envy_managed_script_both_directions(self):
         """Deploy restamps a mis-terminated envy-managed script, whichever way it is wrong.
@@ -658,7 +637,7 @@ PACKAGES = {{
 
         for name in ("tool", "tool.bat"):
             path = bin_dir / name
-            assert_target_newlines(self, path)
+            self.assertTargetNewlines(path)
             self.assertIn(b"envy-managed", path.read_bytes())
             self.assertNotIn(b"old content", path.read_bytes())
 

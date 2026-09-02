@@ -115,6 +115,27 @@ class EnvyTestCase(unittest.TestCase):
             msg if msg is not None else f"{needle!r} not in {haystack!r}",
         )
 
+    def assertTargetNewlines(self, path: Path):
+        """Assert a deployed script's newlines match its target: CRLF for .bat, else LF.
+
+        cmd.exe resolves `goto`/`call :label` by seeking, computing offsets as if every
+        line ended CRLF, so an LF-only batch drifts a byte per line until the search walks
+        past the label. Keyed on the script's target, not the host, so a committed bin dir
+        is identical in every checkout -- and so envy never downgrades a CRLF one to LF,
+        which git cannot report: worktree LF against index LF is a clean-filter no-op.
+        """
+        raw = path.read_bytes()
+        self.assertIn(b"\n", raw, f"{path.name} has no line endings at all")
+        if path.suffix == ".bat":
+            self.assertEqual(
+                raw.count(b"\r\n"), raw.count(b"\n"), f"{path.name} has a bare LF"
+            )
+            self.assertEqual(
+                raw.count(b"\r"), raw.count(b"\r\n"), f"{path.name} has a stray CR"
+            )
+        else:
+            self.assertNotIn(b"\r", raw, f"{path.name} contains CR bytes")
+
     def assertPathEndsWith(self, path: str, suffix: str):
         """Assert `path` ends with `suffix`, ignoring separator spelling."""
         self.assertTrue(

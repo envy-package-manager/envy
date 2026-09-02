@@ -539,7 +539,7 @@ class BootstrapIntegrationTest(EnvyTestCase):
             content = content.replace(
                 "@@MIN_DIRECTIVE_VERSION@@", min_directive_version
             )
-        # CRLF, matching stamp_bootstrap(): this harness stamps the template itself rather
+        # CRLF, matching util_write_script(): this harness stamps the template itself rather
         # than running `envy init`, so it must reproduce that or test a file envy never writes.
         if sys.platform == "win32":
             content = content.replace("\n", "\r\n")

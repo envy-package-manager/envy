@@ -859,24 +859,10 @@ PACKAGES = {{
             self.assertIn(expected, names)
 
         for path in scripts:
-            data = path.read_bytes()
-            self.assertIn(b"\n", data, f"{path.name}: no newlines at all")
-            if path.suffix == ".bat":
-                self.assertEqual(
-                    data.count(b"\r\n"),
-                    data.count(b"\n"),
-                    f"{path.name}: bare LF in a batch file",
-                )
-                self.assertEqual(
-                    data.count(b"\r"),
-                    data.count(b"\r\n"),
-                    f"{path.name}: stray CR in a batch file",
-                )
-            else:
-                self.assertNotIn(b"\r", data, f"{path.name}: CR in a POSIX shim")
+            self.assertTargetNewlines(path)
 
-        # A writer that re-derives newlines only at write time rewrites every run, because
-        # its unchanged-comparison sees LF against the CRLF on disk.
+        # Byte-stable across runs: a writer that compares LF content against the CRLF on
+        # disk churns the file every deploy and never reports it unchanged.
         before = {p.name: p.read_bytes() for p in scripts}
         result = self._run_deploy(manifest)
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")

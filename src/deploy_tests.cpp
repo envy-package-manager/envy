@@ -83,13 +83,17 @@ TEST_CASE("deploy: stamp_product_script substitutes product name on Windows") {
   CHECK(stamped.find("schema \"") != std::string::npos);
 }
 
-TEST_CASE("deploy: stamped Windows shim is CRLF, POSIX shim is LF") {
-  // The shims and bin/envy.bat used to disagree: a project committing a CRLF bin dir got
-  // it silently rewritten to LF by the next deploy, invisibly to git's clean filter.
-  std::string const win{
+TEST_CASE("deploy: stamps LF for both targets; the policy is what makes .bat CRLF") {
+  // The stamper stays template-focused: util_write_script applies the newline policy, so
+  // it is the single point a future script writer cannot bypass. What the writer produces
+  // for a .bat is checked end to end in functional_tests -- here, only the composition.
+  std::string win{
     envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "..")
   };
   CHECK(win.find('\n') != std::string::npos);
+  CHECK(win.find('\r') == std::string::npos);
+
+  envy::util_apply_script_eol(win, envy::platform_id::WINDOWS);
   for (size_t i{ 0 }; i < win.size(); ++i) {
     if (win[i] == '\n') {
       CHECK(i > 0);
@@ -101,10 +105,11 @@ TEST_CASE("deploy: stamped Windows shim is CRLF, POSIX shim is LF") {
     }
   }
 
-  std::string const posix{
+  std::string posix{
     envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
   };
   CHECK(posix.find('\n') != std::string::npos);
+  envy::util_apply_script_eol(posix, envy::platform_id::POSIX);
   CHECK(posix.find('\r') == std::string::npos);
 }
 

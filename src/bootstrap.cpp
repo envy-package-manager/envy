@@ -51,9 +51,7 @@ std::string stamp_bootstrap(platform_id platform) {
   replace_all(result, "@@DOWNLOAD_URL@@", kEnvyReleaseDownloadUrl);
   replace_all(result, "@@LATEST_URL@@", kEnvyReleaseLatestUrl);
   replace_all(result, "@@MIN_DIRECTIVE_VERSION@@", kEnvyMinDirectiveVersion);
-
-  util_apply_script_eol(result, platform);  // converted here, not in the repo
-  return result;
+  return result;  // LF as embedded; util_write_script owns the newline policy
 }
 
 std::string read_file_content(fs::path const &path) {
