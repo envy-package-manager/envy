@@ -425,10 +425,14 @@ byte_progress_cb_t byte_progress_bar(tui::section_handle section,
 sha256_t sha256_tracked(std::filesystem::path const &file,
                         tui::section_handle section,
                         std::string const &row_label,
-                        std::string verb) {
-  return sha256(
-      file,
-      byte_progress_bar(section, row_label, std::move(verb), file.filename().string()));
+                        std::string verb,
+                        std::optional<std::string> item) {
+  return sha256(file,
+                byte_progress_bar(section,
+                                  row_label,
+                                  std::move(verb),
+                                  item ? std::move(*item)
+                                       : file.filename().string()));
 }
 
 // ==== run_shell_with_progress ====

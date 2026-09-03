@@ -23,8 +23,9 @@ namespace fs = std::filesystem;
 // chunk name can be a bare filename, which names the CWD as envy.loadenv reads it too.
 fs::path caller_file(lua_State *L) {
   sol::state_view lua{ L };
-  sol::table const info{ lua["debug"]["getinfo"](2, "S") };
-  sol::optional<std::string> const source{ info["source"] };
+  // Copy-init, not braces: MSVC reads a braced sol proxy as an initializer list.
+  sol::table const info = lua["debug"]["getinfo"](2, "S");
+  sol::optional<std::string> const source = info["source"];
   if (!source) {
     throw std::runtime_error("envy.import: cannot determine caller's source file");
   }
@@ -102,7 +103,7 @@ void check_version_agreement(std::optional<std::string> const &root_version,
 void lua_envy_import_install(sol::state &lua,
                              std::optional<std::string> const &root_version,
                              fs::path const &root_path) {
-  sol::table envy_table{ lua["envy"] };
+  sol::table envy_table = lua["envy"];
 
   // Files currently executing, innermost last: the root manifest plus every import
   // above this one. Membership is the cycle test.
@@ -152,7 +153,7 @@ void lua_envy_import_install(sol::state &lua,
         sol::protected_function const loadfile{ lua_view["loadfile"] };
         sol::protected_function_result load_res{ loadfile(resolved.string(), "t", env) };
         if (!load_res.valid()) {
-          sol::error const err{ load_res };
+          sol::error const err = load_res;
           throw std::runtime_error("envy.import: " + std::string{ err.what() });
         }
         sol::object const chunk{ load_res.get<sol::object>(0) };
@@ -172,7 +173,7 @@ void lua_envy_import_install(sol::state &lua,
         if (sol::protected_function_result const run{
                 chunk.as<sol::protected_function>()() };
             !run.valid()) {
-          sol::error const err{ run };
+          sol::error const err = run;
           throw std::runtime_error("envy.import: " + resolved.string() + ": " +
                                    std::string{ err.what() });
         }
