@@ -38,6 +38,12 @@ Because those scripts resolve their project by walking up from the bin dir, `dep
 
 `envy run` also infers the anchor from the script it is given (`--` sentinel, or a first argument that names an existing file); `--project` outranks both.
 
+### Bootstrap boundary
+
+The root manifest's header is the sole bootstrap authority. A manifest pulled in with `envy.import` is a file the root *reads*, not a project envy joins: its `version`, `sha256sums`, `mirror`, `cache-local`, `cache-mode`, `state-dir`, `bin`, `deploy` and `root` are inert—never read by the launchers, never re-exec, never pick a cache tree, never deploy. One tree, one cache root, one envy binary per run, all decided from the root header before any Lua runs.
+
+The one exception is advisory and in-binary: an imported `@envy version` above the root pin is an error (bootstrap already chose the binary from the root header), and any other mismatch warns. Imports are visible as `manifest_imported{path, importer}`; discovery never sees the file, so no `manifest_resolved` names it.
+
 ## Subcommands
 
 ### Meta

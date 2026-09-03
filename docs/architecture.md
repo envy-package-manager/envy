@@ -8,6 +8,8 @@ All script-global variables are uppercase: manifests export `PACKAGES`; specs de
 
 **Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.join()` to combine common and OS-specific package lists.
 
+**Composition:** `envy.import(path)` runs a subproject's manifest in a sandbox and returns its globals; its entries keep anchoring relative paths and bundle aliases on the imported manifest's directory, and it sees `ENVY_IMPORTER` so a standalone-only branch can gate on it. Imported headers are inert—see the bootstrap boundary in `docs/commands.md`.
+
 ```lua
 -- project/envy.lua
 local common = {

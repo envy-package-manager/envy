@@ -60,6 +60,7 @@ EVENT_REGISTRY = {
         "reason:str",
     ],
     "manifest_resolved": ["path:str", "anchor:str", "mode:str", "nearest:bool"],
+    "manifest_imported": ["path:str", "importer:str"],
     "depot_check": ["sha:str", "result:str"],
     "product_resolved": ["product:str", "provider:str", "via:str"],
     "deploy_script": ["product:str", "platform:str", "action:str"],

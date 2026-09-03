@@ -1840,7 +1840,8 @@ TEST_CASE("manifest::load errors on unknown bundle alias") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Bundle alias 'nonexistent' not found in BUNDLES table for spec "
+                       "Bundle alias 'nonexistent' not found in the BUNDLES table of this "
+                       "manifest or of the manifest that declared it, for spec "
                        "'arm.gcc@v2'",
                        std::runtime_error);
 }
@@ -2249,4 +2250,163 @@ TEST_CASE("DEFAULT_SHELL: a failing function reports the Lua error") {
   CHECK_THROWS_WITH_AS(m->run_default_shell_fn(nullptr),
                        doctest::Contains("DEFAULT_SHELL function failed"),
                        std::runtime_error);
+}
+
+// envy.import ------------------------------------------------------------
+
+namespace {
+
+fs::path import_root() { return test_data_root() / "import"; }
+
+// A superproject manifest runs from a string but must report a real path: import
+// anchors on its caller's chunk name, and the fixtures sit next to that path.
+std::unique_ptr<envy::manifest> load_super(std::string const &body) {
+  std::string const script{ "-- @envy bin \"tools\"\n" + body };
+  return envy::manifest::load(script.c_str(), import_root() / "envy.lua");
+}
+
+envy::pkg_cfg const *find_pkg(envy::manifest const &m, std::string_view identity) {
+  for (auto const *cfg : m.packages) {
+    if (cfg->identity == identity) { return cfg; }
+  }
+  return nullptr;
+}
+
+fs::path local_path(envy::pkg_cfg const *cfg) {
+  auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&cfg->source) };
+  REQUIRE(local != nullptr);
+  return envy::util_canonical_path(local->file_path);
+}
+
+fs::path fixture_path(fs::path const &relative) {
+  return envy::util_canonical_path(import_root() / relative);
+}
+
+}  // namespace
+
+TEST_CASE("envy.import anchors an imported entry's relative source on the imported file") {
+  auto m{ load_super(R"(
+    local sub = envy.import("sub")
+    PACKAGES = envy.extend({ { spec = "root.tool@r1", source = "root_spec.lua" } },
+                           sub.PACKAGES)
+  )") };
+
+  auto const *root_tool{ find_pkg(*m, "root.tool@r1") };
+  REQUIRE(root_tool != nullptr);
+  CHECK(local_path(root_tool) == fixture_path("root_spec.lua"));
+
+  auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
+  REQUIRE(sub_tool != nullptr);
+  CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
+}
+
+TEST_CASE("envy.import takes a manifest file path as well as a directory") {
+  auto m{ load_super(R"(PACKAGES = envy.import("sub/envy.lua").PACKAGES)") };
+
+  auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
+  REQUIRE(sub_tool != nullptr);
+  CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
+}
+
+TEST_CASE("envy.import leaves the importing project as the declarer") {
+  // The anchor moves, the declarer does not: SETUP verbs and the project root still
+  // belong to the manifest the command is operating on.
+  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+
+  auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
+  REQUIRE(sub_tool != nullptr);
+  CHECK(sub_tool->declaring_file_path == import_root() / "envy.lua");
+}
+
+TEST_CASE("envy.import resolves an imported bundle alias with no root BUNDLES") {
+  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+
+  auto const *bundled{ find_pkg(*m, "sub.bundled@r1") };
+  REQUIRE(bundled != nullptr);
+  CHECK(bundled->bundle_identity == "sub.bundle@r1");
+  REQUIRE(bundled->source_dependencies.size() == 1);
+
+  auto const *bundle_src{
+    std::get_if<envy::pkg_cfg::bundle_source>(&bundled->source_dependencies[0]->source)
+  };
+  REQUIRE(bundle_src != nullptr);
+  auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&bundle_src->fetch_source) };
+  REQUIRE(local != nullptr);
+  CHECK(envy::util_canonical_path(local->file_path) ==
+        fixture_path(fs::path{ "sub" } / "bundles" / "tools"));
+}
+
+TEST_CASE("envy.import tags stay out of an imported entry's package key") {
+  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+
+  auto const *opt{ find_pkg(*m, "sub.opt@r1") };
+  REQUIRE(opt != nullptr);
+  CHECK(opt->format_key() == "sub.opt@r1{version=\"1.0\"}");
+}
+
+TEST_CASE("envy.import errors on an unknown bundle alias naming both manifests") {
+  CHECK_THROWS_WITH_AS(
+      load_super(R"(PACKAGES = { { spec = "a.b@r1", bundle = "missing" } })"),
+      doctest::Contains("or of the manifest that declared it"),
+      std::runtime_error);
+}
+
+TEST_CASE("envy.import sets ENVY_IMPORTER in the imported manifest") {
+  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+  CHECK(find_pkg(*m, "sub.standalone@r1") == nullptr);
+}
+
+TEST_CASE("a manifest loaded on its own sees no ENVY_IMPORTER") {
+  auto m{ envy::manifest::load(import_root() / "sub" / "envy.lua") };
+  CHECK(find_pkg(*m, "sub.standalone@r1") != nullptr);
+}
+
+TEST_CASE("envy.import keeps a nested import's own anchor") {
+  auto m{ load_super(R"(PACKAGES = envy.import("nested").PACKAGES)") };
+
+  auto const *nested_tool{ find_pkg(*m, "nested.tool@r1") };
+  REQUIRE(nested_tool != nullptr);
+  CHECK(local_path(nested_tool) == fixture_path(fs::path{ "nested" } / "nested_spec.lua"));
+
+  auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
+  REQUIRE(sub_tool != nullptr);
+  CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
+}
+
+TEST_CASE("envy.import rejects an import cycle") {
+  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.import("cycle_a").PACKAGES)"),
+                       doctest::Contains("import cycle"),
+                       std::runtime_error);
+}
+
+TEST_CASE("envy.import names both the argument and the resolved path when absent") {
+  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.import("nope").PACKAGES)"),
+                       doctest::Contains("'nope' not found (resolved to "),
+                       std::runtime_error);
+}
+
+TEST_CASE("envy.import errors when the imported manifest requires a newer envy") {
+  std::string const script{
+    "-- @envy bin \"tools\"\n-- @envy version \"1.0.0\"\n"
+    "PACKAGES = envy.import(\"version_newer\").PACKAGES"
+  };
+
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script.c_str(), import_root() / "envy.lua"),
+      doctest::Contains("requires envy 9.9.9, but the root manifest pins 1.0.0"),
+      std::runtime_error);
+}
+
+TEST_CASE("envy.import accepts an imported manifest pinning an older envy") {
+  std::string const script{
+    "-- @envy bin \"tools\"\n-- @envy version \"1.0.0\"\n"
+    "PACKAGES = envy.import(\"version_older\").PACKAGES"
+  };
+
+  auto m{ envy::manifest::load(script.c_str(), import_root() / "envy.lua") };
+
+  auto const *tool{ find_pkg(*m, "old.tool@r1") };
+  REQUIRE(tool != nullptr);
+  CHECK(local_path(tool) ==
+        fixture_path(fs::path{ "version_older" } / "specs" / "tool.lua"));
 }

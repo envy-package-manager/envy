@@ -282,6 +282,7 @@ set(ENVY_BASE_SOURCES
     src/lua_ctx/lua_envy_extract.cpp
     src/lua_ctx/lua_envy_fetch.cpp
     src/lua_ctx/lua_envy_file_ops.cpp
+    src/lua_ctx/lua_envy_import.cpp
     src/lua_ctx/lua_envy_loadenv_spec.cpp
     src/lua_ctx/lua_envy_options.cpp
     src/lua_ctx/lua_envy_package.cpp

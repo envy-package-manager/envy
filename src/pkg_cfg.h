@@ -17,6 +17,24 @@ namespace envy {
 
 class pkg_cfg_pool;
 
+// What declared an entry, and what its relative paths resolve against: the two differ
+// only for an imported manifest, whose paths were written relative to itself.
+struct pkg_decl_origin {
+  std::filesystem::path declaring_file;  // provenance, project root, custom-fetch key
+  std::filesystem::path anchor;          // relative-path base; its parent dir is used
+
+  // Implicit on purpose: every declaration but an imported one anchors on its declarer.
+  pkg_decl_origin(std::filesystem::path p)
+      : declaring_file{ p }, anchor{ std::move(p) } {}
+  pkg_decl_origin(std::filesystem::path declarer, std::filesystem::path base)
+      : declaring_file{ std::move(declarer) }, anchor{ std::move(base) } {}
+};
+
+// Reserved keys an imported manifest's entries carry: the file their relative paths
+// anchor on, and the BUNDLES table their aliases resolve against.
+inline constexpr char kEnvyBaseKey[]{ "ENVY_BASE" };
+inline constexpr char kEnvyBundlesKey[]{ "ENVY_BUNDLES" };
+
 struct pkg_cfg : unmovable {
  private:
   struct ctor_tag {
@@ -108,14 +126,14 @@ struct pkg_cfg : unmovable {
 
   // Parse pkg_cfg from Sol2 object (allocates via pool)
   static pkg_cfg *parse(sol::object const &lua_val,
-                        std::filesystem::path const &base_path,
+                        pkg_decl_origin const &origin,
                         bool allow_weak_without_source = false);
 
   // Parse pkg_cfg directly from Lua stack (for tables containing functions)
   // Used primarily for testing; production code should use parse() with sol::object
   static pkg_cfg *parse_from_stack(sol::state_view lua,
                                    int index,
-                                   std::filesystem::path const &base_path,
+                                   pkg_decl_origin const &origin,
                                    bool allow_weak_without_source = false);
 
   // Parse one `source.dependencies` entry, for either a spec's source table or a
@@ -125,7 +143,7 @@ struct pkg_cfg : unmovable {
   // spec_fetch has finished, so no dependency edge could ever gate the fetch
   // function waiting on the entry.
   static pkg_cfg *parse_fetch_dependency(sol::object const &entry,
-                                         std::filesystem::path const &base_path);
+                                         pkg_decl_origin const &origin);
 
   // Serialize sol::object to canonical string for stable package option hashing
   static std::string serialize_option_table(sol::object const &val);

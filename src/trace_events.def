@@ -58,6 +58,12 @@ ENVY_TRACE_EVENT(manifest_resolved,
                  ENVY_TRACE_FIELD_STR(mode)
                  ENVY_TRACE_FIELD_BOOL(nearest))
 
+// One envy.import: the manifest read, and the file that read it. Discovery never sees
+// an imported manifest, so this is the only record that it took part in the run.
+ENVY_TRACE_EVENT(manifest_imported,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_STR(importer))
+
 // --- cache / locking ---
 
 ENVY_TRACE_EVENT(cache_hit,

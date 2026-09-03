@@ -52,7 +52,7 @@ bool contains_function(sol::object const &val) {
 
 // Parse source table (custom source fetch with dependencies)
 pkg_cfg::source_t parse_source_table(sol::table const &source_table,
-                                     std::filesystem::path const &base_path,
+                                     pkg_decl_origin const &origin,
                                      std::vector<pkg_cfg *> &out_dependencies,
                                      bool allow_weak_without_source) {
   // Check for dependencies field (need to parse as array)
@@ -64,7 +64,7 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
       has_dependencies = true;
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
         out_dependencies.push_back(
-            pkg_cfg::parse_fetch_dependency(deps_table[i], base_path));
+            pkg_cfg::parse_fetch_dependency(deps_table[i], origin));
       }
     } else {
       throw std::runtime_error("source.dependencies must be array (table)");
@@ -95,7 +95,7 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
 // Parse source string (URI-based sources)
 pkg_cfg::source_t parse_source_string(std::string const &source_uri,
                                       sol::table const &table,
-                                      std::filesystem::path const &base_path) {
+                                      std::filesystem::path const &anchor) {
   auto const info{ uri_classify(source_uri) };
 
   if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
@@ -117,7 +117,7 @@ pkg_cfg::source_t parse_source_string(std::string const &source_uri,
     std::string const resolved_uri{ [&]() -> std::string {
       if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
         std::filesystem::path p{ info.canonical };
-        p = base_path.parent_path() / p;
+        p = anchor.parent_path() / p;
         return "file://" + p.lexically_normal().string();
       } else if (info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
         return "file://" + info.canonical;
@@ -131,7 +131,7 @@ pkg_cfg::source_t parse_source_string(std::string const &source_uri,
   // Local file without SHA256, unverified
   return pkg_cfg::local_source{
     .file_path = (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE)
-                     ? (base_path.parent_path() / info.canonical).lexically_normal()
+                     ? (anchor.parent_path() / info.canonical).lexically_normal()
                      : std::filesystem::path{ info.canonical }
   };
 }
@@ -167,7 +167,7 @@ void pkg_cfg::set_pool(pkg_cfg_pool *pool) {
 pkg_cfg_pool *pkg_cfg::pool() { return pool_; }
 
 pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
-                        std::filesystem::path const &base_path,
+                        pkg_decl_origin const &origin,
                         bool const allow_weak_without_source) {
   //  "namespace.name@version" shorthand requires url or file
   if (lua_val.is<std::string>()) {
@@ -236,12 +236,12 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
     if (source_obj.is<sol::table>()) {
       sol::table source_table{ source_obj.as<sol::table>() };
       source = parse_source_table(source_table,
-                                  base_path,
+                                  origin,
                                   source_dependencies,
                                   allow_weak_without_source);
     } else if (source_obj.is<std::string>()) {
       std::string source_uri{ source_obj.as<std::string>() };
-      source = parse_source_string(source_uri, table, base_path);
+      source = parse_source_string(source_uri, table, origin.anchor);
     } else {
       throw std::runtime_error("Spec 'source' field must be string or table");
     }
@@ -275,7 +275,7 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
       throw std::runtime_error("Spec 'weak' field must be table");
     }
     // Weak fallback must be a strong cfg; do not allow nested weak-without-source here
-    pkg_cfg *weak_cfg{ pkg_cfg::parse(weak_obj, base_path, false) };
+    pkg_cfg *weak_cfg{ pkg_cfg::parse(weak_obj, origin, false) };
     if (weak_cfg->needed_by.has_value()) {
       throw std::runtime_error("weak fallback must not specify 'needed_by'");
     }
@@ -290,7 +290,7 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
                                   weak,
                                   std::move(source_dependencies),
                                   std::move(product),
-                                  base_path);
+                                  origin.declaring_file);
 }
 
 bool pkg_cfg::is_git() const { return std::holds_alternative<git_source>(source); }
@@ -436,8 +436,8 @@ std::string pkg_cfg::format_key() const {
 }
 
 pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
-                                         std::filesystem::path const &base_path) {
-  pkg_cfg *cfg{ parse(entry, base_path, true) };
+                                         pkg_decl_origin const &origin) {
+  pkg_cfg *cfg{ parse(entry, origin, true) };
   if (cfg->is_weak_reference()) {
     // A fetch prerequisite is needed at spec_fetch, but weak references resolve at
     // a resolution barrier — which waits for every spec_fetch, including that of
@@ -461,11 +461,11 @@ pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
 
 pkg_cfg *pkg_cfg::parse_from_stack(sol::state_view lua,
                                    int index,
-                                   std::filesystem::path const &base_path,
+                                   pkg_decl_origin const &origin,
                                    bool const allow_weak_without_source) {
   sol::stack_object stack_obj{ lua, index };
   sol::object cfg_val{ stack_obj };
-  return parse(cfg_val, base_path, allow_weak_without_source);
+  return parse(cfg_val, origin, allow_weak_without_source);
 }
 
 std::optional<sol::protected_function> pkg_cfg::get_source_fetch(

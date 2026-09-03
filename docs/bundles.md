@@ -158,20 +158,21 @@ end
 
 The subpath is relative to the spec/bundle root, without the `.lua` extension.
 
-**Manifest composition** (`envy.loadenv()`):
+**Manifest composition** (`envy.import()`):
 
-For composing manifests from subprojects (monorepo patterns), use `envy.loadenv()` at manifest load time:
+For composing manifests from subprojects, use `envy.import()` at manifest load time:
 
 ```lua
-local sub = envy.loadenv("libs.subproject.envy")
+local sub = envy.import("libs/subproject")   -- directory or manifest path
 PACKAGES = envy.extend(sub.PACKAGES, {
   -- additional packages...
 })
 ```
 
-`envy.loadenv()` uses Lua's `loadfile()` with a custom `_ENV` table, executing the file and returning the resulting environment. This captures all globals (`PACKAGES`, `BUNDLES`, etc.) assigned by the loaded file.
-
-Note: `envy.extend()` already exists in the codebase—no new implementation needed.
+Bundle aliases are scoped to the manifest that wrote them: an imported entry's `bundle = "x"`
+resolves against the imported `BUNDLES` first, then the root's. Re-exporting `BUNDLES` is
+unnecessary, and two projects may use the same alias for different bundles. See
+`docs/lua_api.md` for `envy.import` versus `envy.loadenv`.
 
 ### Bundle Dependencies vs Spec-from-Bundle Dependencies
 
