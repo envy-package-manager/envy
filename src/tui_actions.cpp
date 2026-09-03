@@ -431,8 +431,7 @@ sha256_t sha256_tracked(std::filesystem::path const &file,
                 byte_progress_bar(section,
                                   row_label,
                                   std::move(verb),
-                                  item ? std::move(*item)
-                                       : file.filename().string()));
+                                  item ? std::move(*item) : file.filename().string()));
 }
 
 // ==== run_shell_with_progress ====
