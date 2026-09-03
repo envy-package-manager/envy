@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -140,11 +141,13 @@ byte_progress_cb_t byte_progress_bar(tui::section_handle section,
                                      std::string item);
 
 // Hash a file with a bar on `section`: sha256() + byte_progress_bar(), for the many
-// callers that hash one file and want the wait visible.
+// callers that hash one file and want the wait visible. `item` names the row, as in
+// fetch_tracked -- pass the URL when the file is a temp whose name would say nothing.
 sha256_t sha256_tracked(std::filesystem::path const &file,
                         tui::section_handle section,
                         std::string const &row_label,
-                        std::string verb = "hashing");
+                        std::string verb = "hashing",
+                        std::optional<std::string> item = std::nullopt);
 
 // Download with a progress bar on a scratch section, for command-level and bootstrap
 // fetches that have no package row to draw on. Anything downloaded gets a bar; on success

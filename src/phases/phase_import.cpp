@@ -102,10 +102,13 @@ void run_import_phase(pkg *p, engine &eng) {
     // SHA256 verification when present (text manifests always supply it;
     // only build_from_directory without checksums omits it).
     if (location->sha256) {
+      // The URL, not the path: every depot archive lands on the same fixed temp
+      // filename, so the row would read "depot-archive.tar.zst" for every package.
       auto const actual{ tui_actions::sha256_tracked(archive_path,
                                                      p->tui_section,
                                                      p->cfg->identity,
-                                                     "verifying") };
+                                                     "verifying",
+                                                     location->url) };
       auto const actual_hex{ util_bytes_to_hex(actual.data(), actual.size()) };
       if (actual_hex != *location->sha256) {
         ENVY_TRACE(depot_check,

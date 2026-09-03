@@ -35,14 +35,16 @@ struct bundle {
   // Parse BUNDLES table from manifest into alias -> fetch config map
   // Returns empty map if bundles_obj is nil or missing
   // Throws on invalid format
+  // A declaration tagged 'ENVY_BASE' anchors on that file instead of `origin`, which
+  // is how an imported manifest's BUNDLES keep resolving against their own directory.
   static std::unordered_map<std::string, pkg_cfg::bundle_source> parse_aliases(
       sol::object const &bundles_obj,
-      std::filesystem::path const &base_path);
+      pkg_decl_origin const &origin);
 
   // Parse inline bundle = {...} declaration directly to bundle_source
   // Throws on invalid format
   static pkg_cfg::bundle_source parse_inline(sol::table const &table,
-                                             std::filesystem::path const &base_path);
+                                             pkg_decl_origin const &origin);
 
   // Bundle → BUNDLE_ONLY package cfg, memoized by bundle identity. Every
   // referenced bundle becomes a package so it rides the ordinary scheduling,

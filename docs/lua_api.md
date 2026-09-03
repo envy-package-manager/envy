@@ -374,7 +374,47 @@ local version = helpers.DEFAULT_VERSION
 local utils = envy.loadenv("lib.utils")
 ```
 
+### envy.import(path) → table
+
+Import another project's manifest into a sandboxed environment. Manifest scope only.
+
+**Arguments:**
+- `path` — manifest file or directory (a directory appends `envy.lua`), relative to the calling manifest
+
+**Returns:** Table of all globals the imported manifest assigned, `PACKAGES` and `BUNDLES` included.
+
+Unlike `envy.loadenv`, imported declarations stay tied to the file that wrote them: relative
+`source` paths resolve against the imported manifest's directory, and a `bundle = "alias"`
+resolves against *its* `BUNDLES` — so re-exporting `BUNDLES` is unnecessary. The imported file
+sees `ENVY_IMPORTER` (the importing manifest's absolute path); standalone it is `nil`.
+
+```lua
+-- superproject envy.lua
+local sub = envy.import("src/firmware-common")
+PACKAGE_DEPOTS = sub.PACKAGE_DEPOTS                  -- other globals are yours to merge
+PACKAGES = envy.extend(sub.PACKAGES, {
+  { spec = "fi.armgcc@r1", source = "vendor/armgcc.lua",   -- anchored on *this* manifest
+    options = { version = "15.2.rel1" } },
+})
+
+-- imported envy.lua
+if not ENVY_IMPORTER then                            -- the superproject pins its own
+  envy.extend(PACKAGES, { { spec = "fi.armgcc@r1", source = "envy/armgcc.lua" } })
+end
+```
+
+The imported header is inert but for one check: pinning a newer `@envy version` than the root
+manifest is an error (bootstrap already chose the binary), any other mismatch warns. See the
+bootstrap boundary in `docs/commands.md`. Cycles error; nesting is fine.
+
+**Error conditions:**
+- Called from a spec (not a manifest) → error (`envy.import` is not installed there)
+- Path missing → error naming both the argument and the resolved path
+- Import cycle → error listing the chain
+- Imported manifest requires a newer envy than the root pin → error
+
 **When to use which:**
+- `envy.import(path)` — Compose a manifest from a subproject's manifest (paths and aliases follow the imported file)
 - `envy.loadenv(module)` — Load helpers from same project/bundle (relative to current file)
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency bundle (validates dependency graph)
 - `require(module)` — Standard Lua module loading (uses package.path, cwd-relative)

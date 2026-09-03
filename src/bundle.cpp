@@ -42,9 +42,8 @@ struct bundle_decl {
 };
 
 // Parse source table for custom fetch: { fetch = function, dependencies = {...} }
-bundle_decl::source_t parse_source_table_for_bundle(
-    sol::table const &source_table,
-    std::filesystem::path const &base_path) {
+bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_table,
+                                                    pkg_decl_origin const &origin) {
   sol::object fetch_obj{ source_table["fetch"] };
   if (!fetch_obj.valid() || !fetch_obj.is<sol::function>()) {
     throw std::runtime_error("Bundle source table requires 'fetch' function");
@@ -60,15 +59,23 @@ bundle_decl::source_t parse_source_table_for_bundle(
     sol::table deps_table{ deps_obj.as<sol::table>() };
     for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
       result.dependencies.push_back(
-          pkg_cfg::parse_fetch_dependency(deps_table[i], base_path));
+          pkg_cfg::parse_fetch_dependency(deps_table[i], origin));
     }
   }
 
   return result;
 }
 
-bundle_decl parse_decl(sol::table const &table, std::filesystem::path const &base_path) {
+bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_origin) {
   bundle_decl decl;
+
+  // An imported manifest's BUNDLES entry carries its own anchor; every other one
+  // resolves against whatever declared it.
+  pkg_decl_origin const origin{ [&] {
+    auto tag{ sol_util_get_optional<std::string>(table, kEnvyBaseKey, "Bundle") };
+    return tag ? pkg_decl_origin{ caller_origin.declaring_file, std::move(*tag) }
+               : caller_origin;
+  }() };
 
   // Required: identity
   auto identity_opt{ sol_util_get_optional<std::string>(table, "identity", "Bundle") };
@@ -85,7 +92,7 @@ bundle_decl parse_decl(sol::table const &table, std::filesystem::path const &bas
 
   // Handle source as table (custom fetch with dependencies)
   if (source_obj.is<sol::table>()) {
-    decl.source = parse_source_table_for_bundle(source_obj.as<sol::table>(), base_path);
+    decl.source = parse_source_table_for_bundle(source_obj.as<sol::table>(), origin);
     return decl;
   }
 
@@ -112,7 +119,7 @@ bundle_decl parse_decl(sol::table const &table, std::filesystem::path const &bas
              info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
     std::filesystem::path resolved{ info.canonical };
     if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
-      resolved = (base_path.parent_path() / resolved).lexically_normal();
+      resolved = (origin.anchor.parent_path() / resolved).lexically_normal();
     }
     decl.source = bundle_decl::local_source{ .file_path = std::move(resolved) };
   } else {
@@ -300,7 +307,7 @@ void bundle::validate() const {
 
 std::unordered_map<std::string, pkg_cfg::bundle_source> bundle::parse_aliases(
     sol::object const &bundles_obj,
-    std::filesystem::path const &base_path) {
+    pkg_decl_origin const &origin) {
   std::unordered_map<std::string, pkg_cfg::bundle_source> result;
 
   if (!bundles_obj.valid() || bundles_obj.get_type() == sol::type::lua_nil) {
@@ -321,7 +328,7 @@ std::unordered_map<std::string, pkg_cfg::bundle_source> bundle::parse_aliases(
       throw std::runtime_error("BUNDLES['" + alias + "'] must be a table");
     }
 
-    bundle_decl decl{ parse_decl(value.as<sol::table>(), base_path) };
+    bundle_decl decl{ parse_decl(value.as<sol::table>(), origin) };
     result.emplace(std::move(alias), decl_to_source(decl));
   }
 
@@ -329,8 +336,8 @@ std::unordered_map<std::string, pkg_cfg::bundle_source> bundle::parse_aliases(
 }
 
 pkg_cfg::bundle_source bundle::parse_inline(sol::table const &table,
-                                            std::filesystem::path const &base_path) {
-  bundle_decl decl{ parse_decl(table, base_path) };
+                                            pkg_decl_origin const &origin) {
+  bundle_decl decl{ parse_decl(table, origin) };
   return decl_to_source(decl);
 }
 

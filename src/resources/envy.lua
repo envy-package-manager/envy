@@ -226,6 +226,18 @@ function envy.loadenv_spec(identity, module) end
 ---@return table env Table containing globals defined in the loaded file
 function envy.loadenv(module) end
 
+---Import another project's manifest into a sandboxed environment (manifest scope only)
+---Path is relative to the calling manifest; a directory argument appends envy.lua
+---Imported entries keep resolving their relative paths and bundle aliases against the
+---imported manifest, so a superproject can splice them into PACKAGES untouched
+---@param path string Manifest file or directory, relative to the calling manifest
+---@return table env Table containing globals defined in the imported manifest
+function envy.import(path) end
+
+---Absolute path of the manifest that imported this one; nil when run standalone
+---@type string|nil
+ENVY_IMPORTER = nil
+
 ---Validate current options against a declarative schema.
 ---Checks required, type (incl. semver), range, choices, then custom validators.
 ---Rejects unknown options not declared in the schema. Throws on validation failure.
