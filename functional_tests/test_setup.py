@@ -674,27 +674,34 @@ SETUP = {{
         self.assertEqual(entries[-1], "d")
 
     def test_unrelated_pairs_run_in_parallel(self):
-        """Two independent pairs with 2s shell installs overlap in wall-clock time.
+        """Two independent pairs must overlap: each waits for the other's marker.
 
-        INSTALL uses the shell-string form: string scripts run outside the
-        package's Lua lock, so unrelated pair nodes execute concurrently.
+        INSTALL uses the shell-string form: string scripts run outside the package's
+        Lua lock, so unrelated pair nodes execute concurrently. A rendezvous rather
+        than timestamps -- serialized pairs strand the first script until its poll
+        runs out, which fails the install outright, so neither clock resolution nor a
+        slow shell start can make the result read either way.
         """
-        # One stamp file per pair: concurrent appends to a shared file are not
-        # safe under PowerShell's Add-Content.
         if sys.platform == "win32":
-            stamp = (
-                'Add-Content stamps_{name}.txt "{edge} '
-                '$([DateTimeOffset]::Now.ToUnixTimeSeconds())"'
+            template = (
+                "New-Item -ItemType File -Force MINE | Out-Null; "
+                "foreach ($i in 1..100) { if (Test-Path THEIRS) { exit 0 }; "
+                "Start-Sleep -Milliseconds 100 }; exit 1"
             )
-            sleep = "Start-Sleep -Seconds 2"
         else:
-            stamp = 'echo "{edge} $(date +%s)" >> stamps_{name}.txt'
-            sleep = "sleep 2"
+            template = (
+                ": > MINE; for i in $(seq 1 100); do test -f THEIRS && exit 0; "
+                "sleep 0.1; done; exit 1"
+            )
 
-        def install_script(name: str) -> str:
-            return "; ".join(
-                [stamp.format(name=name, edge="start"), sleep,
-                 stamp.format(name=name, edge="end")]
+        def install_script(mine: str, theirs: str) -> str:
+            # Placeholders, not str.format: the script's own braces would trip it. The
+            # doubling is for write_spec, which formats the finished spec once more.
+            return (
+                template.replace("MINE", f"ready_{mine}")
+                .replace("THEIRS", f"ready_{theirs}")
+                .replace("{", "{{")
+                .replace("}", "}}")
             )
 
         spec = f"""IDENTITY = "local.um_parallel@v1"
@@ -703,11 +710,11 @@ USER_MANAGED = true
 SETUP = {{{{
   left = {{{{
     CHECK = function() return false end,
-    INSTALL = [[{install_script("left")}]],
+    INSTALL = [[{install_script("left", "right")}]],
   }}}},
   right = {{{{
     CHECK = function() return false end,
-    INSTALL = [[{install_script("right")}]],
+    INSTALL = [[{install_script("right", "left")}]],
   }}}},
 }}}}
 """
@@ -716,18 +723,15 @@ SETUP = {{{{
             f'PACKAGES = {{ {{ spec = "local.um_parallel@v1", source = "{spec_path}", '
             f'setup = {{ "left", "right" }} }} }}'
         )
+
+        # Both scripts exiting 0 is the overlap proof; the markers rule out the pairs
+        # having been skipped, which would otherwise pass vacuously.
         self.run_install(manifest)
-
-        events = {}
         for name in ("left", "right"):
-            for line in (self.test_dir / f"stamps_{name}.txt").read_text().splitlines():
-                edge, when = line.split()
-                events[(name, edge)] = int(when)
-
-        # Overlap: each pair starts before the other finishes. Serial execution
-        # of two 2s installs cannot satisfy both inequalities.
-        self.assertLess(events[("left", "start")], events[("right", "end")])
-        self.assertLess(events[("right", "start")], events[("left", "end")])
+            self.assertTrue(
+                (self.test_dir / f"ready_{name}").exists(),
+                f"{name} pair never ran",
+            )
 
     def test_platform_filtered_depends_still_satisfies_dependents(self):
         """A DEPENDS target filtered out by PLATFORMS skips but unblocks dependents."""
