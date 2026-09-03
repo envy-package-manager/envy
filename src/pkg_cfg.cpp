@@ -63,8 +63,7 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
       sol::table deps_table{ deps_obj.as<sol::table>() };
       has_dependencies = true;
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
-        out_dependencies.push_back(
-            pkg_cfg::parse_fetch_dependency(deps_table[i], origin));
+        out_dependencies.push_back(pkg_cfg::parse_fetch_dependency(deps_table[i], origin));
       }
     } else {
       throw std::runtime_error("source.dependencies must be array (table)");

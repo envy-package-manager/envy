@@ -24,8 +24,7 @@ struct pkg_decl_origin {
   std::filesystem::path anchor;          // relative-path base; its parent dir is used
 
   // Implicit on purpose: every declaration but an imported one anchors on its declarer.
-  pkg_decl_origin(std::filesystem::path p)
-      : declaring_file{ p }, anchor{ std::move(p) } {}
+  pkg_decl_origin(std::filesystem::path p) : declaring_file{ p }, anchor{ std::move(p) } {}
   pkg_decl_origin(std::filesystem::path declarer, std::filesystem::path base)
       : declaring_file{ std::move(declarer) }, anchor{ std::move(base) } {}
 };

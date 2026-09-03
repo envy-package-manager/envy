@@ -86,9 +86,7 @@ sol::table imported_bundles_list(sol::state_view lua) {
 void check_version_agreement(std::optional<std::string> const &root_version,
                              envy_meta const &imported,
                              fs::path const &resolved) {
-  if (!root_version || !imported.version || *imported.version == *root_version) {
-    return;
-  }
+  if (!root_version || !imported.version || *imported.version == *root_version) { return; }
   if (envy_release_version_less(*root_version, *imported.version)) {
     throw std::runtime_error("envy.import: " + resolved.string() + " requires envy " +
                              *imported.version + ", but the root manifest pins " +
@@ -139,11 +137,11 @@ void lua_envy_import_install(sol::state &lua,
         }
 
         auto const content{ util_load_file(resolved) };
-        check_version_agreement(root_version,
-                                parse_envy_meta({ reinterpret_cast<char const *>(
-                                                      content.data()),
-                                                  content.size() }),
-                                resolved);
+        check_version_agreement(
+            root_version,
+            parse_envy_meta(
+                { reinterpret_cast<char const *>(content.data()), content.size() }),
+            resolved);
 
         // Sandbox with the stdlib visible, as envy.loadenv builds: assigned globals
         // land here rather than in the importing manifest's.
@@ -160,10 +158,10 @@ void lua_envy_import_install(sol::state &lua,
         }
         sol::object const chunk{ load_res.get<sol::object>(0) };
         if (!chunk.is<sol::protected_function>()) {
-          throw std::runtime_error(
-              "envy.import: cannot load " + resolved.string() + ": " +
-              (load_res.return_count() > 1 ? load_res.get<std::string>(1)
-                                           : std::string{ "unknown error" }));
+          throw std::runtime_error("envy.import: cannot load " + resolved.string() + ": " +
+                                   (load_res.return_count() > 1
+                                        ? load_res.get<std::string>(1)
+                                        : std::string{ "unknown error" }));
         }
 
         chain->push_back(resolved);

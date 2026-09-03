@@ -2326,9 +2326,8 @@ TEST_CASE("envy.import resolves an imported bundle alias with no root BUNDLES") 
   CHECK(bundled->bundle_identity == "sub.bundle@r1");
   REQUIRE(bundled->source_dependencies.size() == 1);
 
-  auto const *bundle_src{
-    std::get_if<envy::pkg_cfg::bundle_source>(&bundled->source_dependencies[0]->source)
-  };
+  auto const *bundle_src{ std::get_if<envy::pkg_cfg::bundle_source>(
+      &bundled->source_dependencies[0]->source) };
   REQUIRE(bundle_src != nullptr);
   auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&bundle_src->fetch_source) };
   REQUIRE(local != nullptr);
