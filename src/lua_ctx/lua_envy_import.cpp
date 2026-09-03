@@ -18,8 +18,9 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// The Lua file that called us. Level 2 is the caller of a C function (level 1 being
-// the C function itself), the same walk envy.abspath makes.
+// The Lua file that called us, absolute. Level 2 is the caller of a C function (level
+// 1 being the C function itself), the same walk envy.abspath makes. Absolute because a
+// chunk name can be a bare filename, which names the CWD as envy.loadenv reads it too.
 fs::path caller_file(lua_State *L) {
   sol::state_view lua{ L };
   sol::table const info{ lua["debug"]["getinfo"](2, "S") };
@@ -30,12 +31,7 @@ fs::path caller_file(lua_State *L) {
 
   std::string_view s{ *source };
   if (!s.empty() && s.front() == '@') { s.remove_prefix(1); }  // file-source prefix
-  fs::path const path{ s };
-  if (path.parent_path().empty()) {
-    throw std::runtime_error("envy.import: cannot determine caller's directory: " +
-                             std::string{ s });
-  }
-  return path;
+  return util_canonical_path(s);
 }
 
 bool has_field(sol::table const &t, char const *key) {
@@ -47,9 +43,12 @@ bool has_field(sol::table const &t, char const *key) {
 // superproject can splice the entries into its PACKAGES untouched. Set-if-absent, so
 // a nested import's inner tags survive being re-tagged by the outer one.
 void tag_declarations(sol::table const &env, std::string const &base) {
-  sol::object const bundles{ env["BUNDLES"] };
+  // Raw: the sandbox falls through to the importing manifest's globals, so a fragment
+  // that assigns neither would otherwise get its importer's tables stamped.
+  sol::object const bundles{ env.raw_get<sol::object>("BUNDLES") };
 
-  if (sol::object const pkgs{ env["PACKAGES"] }; pkgs.is<sol::table>()) {
+  if (sol::object const pkgs{ env.raw_get<sol::object>("PACKAGES") };
+      pkgs.is<sol::table>()) {
     sol::table const t{ pkgs.as<sol::table>() };
     for (size_t i{ 1 }, n{ t.size() }; i <= n; ++i) {
       sol::object const e{ t[i] };
@@ -114,7 +113,7 @@ void lua_envy_import_install(sol::state &lua,
       "import",
       [chain, root_version](sol::this_state L, std::string const &arg) -> sol::table {
         sol::state_view lua_view{ L };
-        fs::path const importer{ util_canonical_path(caller_file(L)) };
+        fs::path const importer{ caller_file(L) };
 
         fs::path const resolved{ [&] {
           fs::path const arg_path{ arg };
@@ -179,7 +178,8 @@ void lua_envy_import_install(sol::state &lua,
         }
 
         tag_declarations(env, util_normalized_path(resolved));
-        if (sol::object const bundles{ env["BUNDLES"] }; bundles.is<sol::table>()) {
+        if (sol::object const bundles{ env.raw_get<sol::object>("BUNDLES") };
+            bundles.is<sol::table>()) {
           sol::table list{ imported_bundles_list(lua_view) };
           list[list.size() + 1] = bundles;
         }

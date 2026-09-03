@@ -2372,6 +2372,44 @@ TEST_CASE("envy.import keeps a nested import's own anchor") {
   CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
 }
 
+TEST_CASE("envy.import never stamps the importing manifest's own declarations") {
+  // The sandbox reads globals through __index, so a fragment that assigns no PACKAGES
+  // or BUNDLES must not resolve to -- and get tagged with -- the importer's.
+  auto m{ load_super(R"(
+    BUNDLES = { tools = { identity = "root.bundle@r1", source = "bundles/tools" } }
+    PACKAGES = {
+      { spec = "root.tool@r1", source = "root_spec.lua" },
+      { spec = "root.bundled@r1", bundle = "tools" },
+    }
+    PACKAGE_DEPOTS = envy.import("depots_only").PACKAGE_DEPOTS
+  )") };
+
+  auto const *root_tool{ find_pkg(*m, "root.tool@r1") };
+  REQUIRE(root_tool != nullptr);
+  CHECK(local_path(root_tool) == fixture_path("root_spec.lua"));
+
+  auto const *bundled{ find_pkg(*m, "root.bundled@r1") };
+  REQUIRE(bundled != nullptr);
+  REQUIRE(bundled->source_dependencies.size() == 1);
+  auto const *bundle_src{
+    std::get_if<envy::pkg_cfg::bundle_source>(&bundled->source_dependencies[0]->source)
+  };
+  REQUIRE(bundle_src != nullptr);
+  auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&bundle_src->fetch_source) };
+  REQUIRE(local != nullptr);
+  CHECK(envy::util_canonical_path(local->file_path) ==
+        fixture_path(fs::path{ "bundles" } / "tools"));
+}
+
+TEST_CASE("envy.import works from a manifest path with no directory component") {
+  std::string const script{ "-- @envy bin \"tools\"\nPACKAGES = envy.import(\"" +
+                            (import_root() / "sub").generic_string() + "\").PACKAGES" };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path{ "envy.lua" }) };
+
+  CHECK(find_pkg(*m, "sub.tool@r1") != nullptr);
+}
+
 TEST_CASE("envy.import rejects an import cycle") {
   CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.import("cycle_a").PACKAGES)"),
                        doctest::Contains("import cycle"),
