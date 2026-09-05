@@ -1,6 +1,4 @@
-<img src="artwork/Ruckus.png" alt="Ruckus the raccoon, envy's mascot" align="right" width="105">
-
-# envy
+# <img src="artwork/Ruckus.png" alt="Ruckus the raccoon, envy's mascot" width="88"> envy
 
 An unopinionated serverless per-project package manager.
 
