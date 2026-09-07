@@ -24,6 +24,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1290,9 +1291,13 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
 
   std::vector<pkg_cfg const *> targets;
   for (auto const &query : queries) {
-    std::vector<pkg_cfg const *> matches;
+    // Distinct packages, not entries: envy.import can splice two declarations of one
+    // key, which ensure_pkg treats as one package. Sorted so the message is reproducible.
+    std::map<std::string, pkg_cfg const *> matches;
     for (auto const *pkg : packages) {
-      if (pkg_key const key{ *pkg }; key.matches(query)) { matches.push_back(pkg); }
+      if (pkg_key const key{ *pkg }; key.matches(query)) {
+        matches.try_emplace(key.canonical(), pkg);
+      }
     }
 
     if (matches.empty()) {
@@ -1300,28 +1305,25 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
     }
 
     // First-wins would pick whichever entry the manifest happened to list first;
-    // make the author say which one. Sorted so the message is reproducible.
+    // make the author say which one.
     if (matches.size() > 1) {
-      std::vector<std::string> names;
-      names.reserve(matches.size());
-      for (auto const *m : matches) { names.push_back(pkg_key{ *m }.canonical()); }
-      std::ranges::sort(names);
       std::ostringstream oss;
       oss << cmd_name << ": query '" << query << "' is ambiguous: ";
-      for (size_t i{ 0 }; i < names.size(); ++i) {
-        if (i) { oss << ", "; }
-        oss << names[i];
+      for (auto it{ matches.begin() }; it != matches.end(); ++it) {
+        if (it != matches.begin()) { oss << ", "; }
+        oss << it->first;
       }
       throw std::runtime_error(oss.str());
     }
 
-    if (!util_platform_matches(matches[0]->platforms,
+    pkg_cfg const *const target{ matches.begin()->second };
+    if (!util_platform_matches(target->platforms,
                                platform::os_name(),
                                platform::arch_name())) {
       throw std::runtime_error(cmd_name + ": '" + query +
                                "' is not available on this platform");
     }
-    targets.push_back(matches[0]);
+    targets.push_back(target);
   }
 
   return targets;
