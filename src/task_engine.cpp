@@ -132,7 +132,9 @@ void task_engine::wait_on(task *t,
   std::unique_lock lock(mutex_);
   wait_record rec{ waiter, step, &key, watermark, nullptr };
   wait_locked(
-      lock, [t, watermark] { return t->completed >= watermark || t->failed; }, rec);
+      lock,
+      [t, watermark] { return t->completed >= watermark || t->failed; },
+      rec);
 
   // A satisfied watermark outlives a later failure: a dependent that only
   // needed setup must not fail because its dependency died in export.
@@ -356,7 +358,10 @@ void task_engine::run_worker(task *t) {
     }
 
     while (!failed && t->completed < t->cfg.step_count) {
-      if (t->failed) { failed = true; break; }
+      if (t->failed) {
+        failed = true;
+        break;
+      }
       int const done{ t->completed };
 
       if (done >= t->target) {  // reached target: wait for extension
@@ -364,7 +369,10 @@ void task_engine::run_worker(task *t) {
           std::unique_lock lock(t->mutex);
           t->cv.wait(lock, [t, done] { return t->target > done || t->failed; });
         }
-        if (t->failed) { failed = true; break; }
+        if (t->failed) {
+          failed = true;
+          break;
+        }
         // target_extended fires from ratchet_target, where the extension is
         // deterministic; a worker may never park here if the extension lands
         // before its target check.

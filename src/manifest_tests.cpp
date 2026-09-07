@@ -684,10 +684,10 @@ TEST_CASE("manifest::load errors on invalid spec identity format") {
     PACKAGES = { { spec = "invalid-no-at-sign", source = "/fake/r.lua" } }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       doctest::Contains(
-                           "Invalid spec identity format: invalid-no-at-sign"),
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Invalid spec identity format: invalid-no-at-sign"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load errors on identity missing namespace") {
@@ -1863,10 +1863,10 @@ TEST_CASE("manifest::load errors on package with both source and bundle") {
     }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       doctest::Contains(
-                           "Package cannot specify both 'source' and 'bundle' fields"),
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Package cannot specify both 'source' and 'bundle' fields"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load errors on bundle package without spec") {
@@ -1882,10 +1882,10 @@ TEST_CASE("manifest::load errors on bundle package without spec") {
     }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       doctest::Contains(
-                           "Package with 'bundle' field requires 'spec' field"),
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Package with 'bundle' field requires 'spec' field"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load parses package with bundle and options") {
@@ -2321,10 +2321,9 @@ TEST_CASE("manifest::load rejects an unknown key on a bundle package entry") {
     PACKAGES = { { spec = "arm.gcc@v2", bundle = "tc", sha256 = "abc" } }
   )" };
 
-  CHECK_THROWS_WITH_AS(
-      envy::manifest::load(script, fs::path("/fake/envy.lua")),
-      doctest::Contains("Package with 'bundle': unknown key 'sha256'"),
-      std::runtime_error);
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("Package with 'bundle': unknown key 'sha256'"),
+                       std::runtime_error);
 }
 
 TEST_CASE("manifest::load rejects source on a bundle package entry") {
@@ -2362,10 +2361,9 @@ TEST_CASE("manifest::load rejects an unknown key on a BUNDLES declaration") {
     PACKAGES = {}
   )" };
 
-  CHECK_THROWS_WITH_AS(
-      envy::manifest::load(script, fs::path("/fake/envy.lua")),
-      doctest::Contains("Bundle declaration: unknown key 'spec'"),
-      std::runtime_error);
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("Bundle declaration: unknown key 'spec'"),
+                       std::runtime_error);
 }
 
 TEST_CASE("manifest::load prefixes a PACKAGES parse error with file and index") {

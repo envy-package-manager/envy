@@ -175,7 +175,7 @@ class task_engine : unmovable {
   // One blocked thread, so the watchdog can name who is stuck on what and tell
   // a wedged wait from one that is merely late to wake.
   struct wait_record {
-    task *waiter{ nullptr };            // null: a caller thread, not a worker
+    task *waiter{ nullptr };  // null: a caller thread, not a worker
     int step{ -1 };
     std::string const *dep{ nullptr };  // null: wait_global's condition
     int watermark{ 0 };
@@ -206,8 +206,8 @@ class task_engine : unmovable {
 
   observer observer_;
   std::unordered_map<std::string, std::unique_ptr<task>> tasks_;
-  std::vector<wait_record const *> waits_;  // guarded by mutex_; size = waiter count
-  std::atomic<int> running_{ 0 };           // workers inside on_start/step
+  std::vector<wait_record const *> waits_;    // guarded by mutex_; size = waiter count
+  std::atomic<int> running_{ 0 };             // workers inside on_start/step
   std::atomic<std::uint64_t> progress_{ 0 };  // bumped by anything that can unwedge
   std::atomic_bool all_to_done_{ false };
   std::atomic_bool failed_all_{ false };

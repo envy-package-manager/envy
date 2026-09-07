@@ -201,11 +201,10 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
 
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
 // set lives with pkg_cfg::parse, which owns that table.
-constexpr std::string_view kBundlePackageKeys[]{ kEnvyBaseKey, kEnvyBundlesKey,
-                                                 "bundle",    "needed_by",
-                                                 "options",   "platforms",
-                                                 "product",   "setup",
-                                                 "spec" };
+constexpr std::string_view kBundlePackageKeys[]{
+  kEnvyBaseKey, kEnvyBundlesKey, "bundle", "needed_by", "options",
+  "platforms",  "product",       "setup",  "spec"
+};
 
 // Parse a single package entry that may reference a bundle
 pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) {
@@ -711,8 +710,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
     try {
       m->packages.push_back(parse_package_entry(packages_table[i], parse_ctx));
     } catch (std::exception const &e) {
-      throw std::runtime_error(manifest_path.string() + ": PACKAGES[" +
-                               std::to_string(i) + "]: " + e.what());
+      throw std::runtime_error(manifest_path.string() + ": PACKAGES[" + std::to_string(i) +
+                               "]: " + e.what());
     }
   }
 

@@ -51,21 +51,17 @@ bool contains_function(sol::object const &val) {
 
 // Every key one entry shape's parser reads, sorted so the error message is stable.
 // A key absent here is silently inert today, which is the whole reason to reject it.
-constexpr std::string_view kManifestPackageKeys[]{ kEnvyBaseKey, kEnvyBundlesKey,
-                                                   "needed_by", "options",
-                                                   "platforms", "product",
-                                                   "ref",       "setup",
-                                                   "sha256",    "source",
-                                                   "spec" };
+constexpr std::string_view kManifestPackageKeys[]{
+  kEnvyBaseKey, kEnvyBundlesKey, "needed_by", "options", "platforms", "product",
+  "ref",        "setup",         "sha256",    "source",  "spec"
+};
 constexpr std::string_view kDependencyKeys[]{ "needed_by", "options", "product",
                                               "ref",       "setup",   "sha256",
                                               "source",    "spec",    "weak" };
-constexpr std::string_view kFetchDependencyKeys[]{ "options", "product", "ref",
-                                                   "sha256",  "source",  "spec",
-                                                   "weak" };
-constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options", "product",
-                                                "ref",       "sha256",  "source",
-                                                "spec" };
+constexpr std::string_view kFetchDependencyKeys[]{ "options", "product", "ref", "sha256",
+                                                   "source",  "spec",    "weak" };
+constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options", "product", "ref",
+                                                "sha256",    "source",  "spec" };
 
 // What one entry shape may say. `fetch_function_runs` is false where nothing could find
 // the closure again: no parent Lua state (manifest), or no `source` to look on (weak).
@@ -681,10 +677,8 @@ void pkg_cfg_reject_option_variants(std::vector<pkg_cfg *> const &deps,
 }
 
 pkg_source_match bundle_source_compare(pkg_cfg::bundle_source const &lhs,
-                                          pkg_cfg::bundle_source const &rhs) {
-  if (lhs.bundle_identity != rhs.bundle_identity) {
-    return pkg_source_match::DIFFERENT;
-  }
+                                       pkg_cfg::bundle_source const &rhs) {
+  if (lhs.bundle_identity != rhs.bundle_identity) { return pkg_source_match::DIFFERENT; }
   if (lhs.fetch_source.index() != rhs.fetch_source.index()) {
     return pkg_source_match::DIFFERENT;
   }

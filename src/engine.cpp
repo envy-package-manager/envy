@@ -819,8 +819,8 @@ package_depot_index const *engine::depot_index_for(pkg *p) {
   ENVY_TRACE(depot_wait,
              p->cfg->identity,
              .duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::steady_clock::now() - wait_start)
-                 .count(),
+                                std::chrono::steady_clock::now() - wait_start)
+                                .count(),
              .result = bootstrap ? "bootstrap" : (failed ? "failed" : "ready"));
 
   if (bootstrap) { return nullptr; }
@@ -1172,17 +1172,16 @@ void engine::run_default_shell_step() {
   // path as everyone else's. It is deliberately absent from packages_ — never
   // scheduled, matched, or reported — and sits at completion because this task's own
   // edges have already carried every DEPENDS entry through setup.
-  pkg_cfg const *const consumer_cfg{
-    pkg_cfg::pool()->emplace(kDefaultShellConsumerIdentity,
-                             pkg_cfg::source_t{ pkg_cfg::weak_ref{} },
-                             std::string{},
-                             std::optional<pkg_phase>{},
-                             nullptr,
-                             nullptr,
-                             std::vector<pkg_cfg *>{},
-                             std::optional<std::string>{},
-                             manifest_->manifest_path)
-  };
+  pkg_cfg const *const consumer_cfg{ pkg_cfg::pool()->emplace(
+      kDefaultShellConsumerIdentity,
+      pkg_cfg::source_t{ pkg_cfg::weak_ref{} },
+      std::string{},
+      std::optional<pkg_phase>{},
+      nullptr,
+      nullptr,
+      std::vector<pkg_cfg *>{},
+      std::optional<std::string>{},
+      manifest_->manifest_path) };
 
   default_shell_consumer_ = make_pkg(consumer_cfg, tui::kInvalidSection, {});
   default_shell_consumer_->current_phase = pkg_phase::completion;
@@ -1202,10 +1201,10 @@ void engine::run_default_shell_step() {
   default_shell_ = manifest_->run_default_shell_fn(&ctx);
   default_shell_state_ = task_state::READY;
 
-  ENVY_TRACE(default_shell_resolved,
-             kDefaultShellConsumerIdentity,
-             .shell = std::string{ shell_kind_name(shell_resolve_default(
-                 &default_shell_)) });
+  ENVY_TRACE(
+      default_shell_resolved,
+      kDefaultShellConsumerIdentity,
+      .shell = std::string{ shell_kind_name(shell_resolve_default(&default_shell_)) });
 }
 
 resolved_shell pkg_default_shell(pkg *p) {

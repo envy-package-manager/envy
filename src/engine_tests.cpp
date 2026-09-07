@@ -1001,9 +1001,10 @@ TEST_CASE("run_full: a bootstrap task reports its failure exactly once") {
   namespace fs = std::filesystem;
   fs::path const cache_root{ fs::temp_directory_path() / "envy-run-full-shell-failure" };
   cache c{ cache_root };
-  auto m{ manifest::load("-- @envy bin-dir \"tools\"\nPACKAGES = {}\n"
-                         "DEFAULT_SHELL = function() error(\"shell refused\") end\n",
-                         fs::path("test_data/specs/string_verb_setup.lua")) };
+  auto m{ manifest::load(
+      "-- @envy bin-dir \"tools\"\nPACKAGES = {}\n"
+      "DEFAULT_SHELL = function() error(\"shell refused\") end\n",
+      fs::path("test_data/specs/string_verb_setup.lua")) };
   engine eng{ c, m.get() };
 
   pkg_cfg *p{ make_local_cfg("local.string_verb_setup@r0",
@@ -1199,9 +1200,8 @@ TEST_CASE("default_shell: a member of any bootstrap closure gets the built-in") 
   engine eng{ c, m.get() };
 
   int i{ 0 };
-  for (auto const kind : { pkg_closure::depot_bootstrap,
-                           pkg_closure::fetch,
-                           pkg_closure::default_shell }) {
+  for (auto const kind :
+       { pkg_closure::depot_bootstrap, pkg_closure::fetch, pkg_closure::default_shell }) {
     pkg *p{ eng.ensure_pkg(make_local_cfg("local.m" + std::to_string(i++) + "@r0",
                                           "test_data/specs/simple_uv.lua")) };
     eng.mark_closure(p, kind);

@@ -56,10 +56,10 @@ static std::set<std::string> run_pkg_from_file(std::string const &identity,
 
 TEST_CASE("weak reference resolves to an existing provider") {
   fs::path const spec_path{ "test_data/specs/weak_consumer_ref_only.lua" };
-  auto const found{ run_pkg_from_file("local.weak_consumer_ref_only@v1",
-                                      spec_path,
-                                      { "local.weak_consumer_ref_only@v1",
-                                        "local.weak_provider@v1" }) };
+  auto const found{ run_pkg_from_file(
+      "local.weak_consumer_ref_only@v1",
+      spec_path,
+      { "local.weak_consumer_ref_only@v1", "local.weak_provider@v1" }) };
 
   CHECK(found.contains("local.weak_consumer_ref_only@v1"));
   CHECK(found.contains("local.weak_provider@v1"));
@@ -67,10 +67,10 @@ TEST_CASE("weak reference resolves to an existing provider") {
 
 TEST_CASE("weak dependency uses fallback when no match exists") {
   fs::path const spec_path{ "test_data/specs/weak_consumer_fallback.lua" };
-  auto const found{ run_pkg_from_file("local.weak_consumer_fallback@v1",
-                                      spec_path,
-                                      { "local.weak_consumer_fallback@v1",
-                                        "local.weak_fallback@v1" }) };
+  auto const found{ run_pkg_from_file(
+      "local.weak_consumer_fallback@v1",
+      spec_path,
+      { "local.weak_consumer_fallback@v1", "local.weak_fallback@v1" }) };
 
   CHECK(found.contains("local.weak_consumer_fallback@v1"));
   CHECK(found.contains("local.weak_fallback@v1"));

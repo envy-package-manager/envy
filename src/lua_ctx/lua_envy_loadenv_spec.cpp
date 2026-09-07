@@ -141,8 +141,8 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
     if (auto const rel{ full_path.lexically_relative(root) };
         rel.empty() || *rel.begin() == "..") {
       throw std::runtime_error("envy.loadenv_spec: module '" + module_path +
-                               "' resolves outside dependency '" + identity + "': " +
-                               full_path.string());
+                               "' resolves outside dependency '" + identity +
+                               "': " + full_path.string());
     }
 
     if (!std::filesystem::exists(full_path)) {

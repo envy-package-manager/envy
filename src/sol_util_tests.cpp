@@ -399,8 +399,7 @@ TEST_CASE("sol_util_reject_unknown_keys accepts only the listed string keys") {
       envy::sol_util_reject_unknown_keys((*lua)["positional"], allowed, "Entry"));
 
   lua->script("bad = { spec = 'a.b@v1', sourc = 's' }");
-  CHECK_THROWS_WITH_AS(
-      envy::sol_util_reject_unknown_keys((*lua)["bad"], allowed, "Entry"),
-      "Entry: unknown key 'sourc'; allowed keys are source, spec",
-      std::runtime_error);
+  CHECK_THROWS_WITH_AS(envy::sol_util_reject_unknown_keys((*lua)["bad"], allowed, "Entry"),
+                       "Entry: unknown key 'sourc'; allowed keys are source, spec",
+                       std::runtime_error);
 }

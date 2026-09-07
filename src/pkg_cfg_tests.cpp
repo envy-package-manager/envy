@@ -1001,9 +1001,10 @@ TEST_CASE("pkg_cfg::parse rejects weak on a manifest entry") {
   // can never do anything here: name the rule instead of "must specify 'source'",
   // and keep it out of the allowed-key list the sweep prints verbatim.
   sol::state lua;
-  auto lua_val{ lua_eval("result = { spec = 'arm.gcc@v2', "
-                         "weak = { spec = 'arm.gcc@v1', source = '/fake/r.lua' } }",
-                         lua) };
+  auto lua_val{ lua_eval(
+      "result = { spec = 'arm.gcc@v2', "
+      "weak = { spec = 'arm.gcc@v1', source = '/fake/r.lua' } }",
+      lua) };
 
   CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
                                             fs::path("/fake"),
@@ -1011,9 +1012,10 @@ TEST_CASE("pkg_cfg::parse rejects weak on a manifest entry") {
                        doctest::Contains("manifest PACKAGES entries cannot be weak"),
                        std::runtime_error);
 
-  auto unknown{ lua_eval("result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', "
-                         "platfoms = { 'darwin' } }",
-                         lua) };
+  auto unknown{ lua_eval(
+      "result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', "
+      "platfoms = { 'darwin' } }",
+      lua) };
   try {
     envy::pkg_cfg::parse(unknown,
                          fs::path("/fake"),

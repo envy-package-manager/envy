@@ -69,7 +69,10 @@ bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_tab
 
 // Keys a bundle declaration reads, whether it came from a BUNDLES alias or from an
 // inline `bundle = {...}` table.
-constexpr std::string_view kBundleDeclKeys[]{ kEnvyBaseKey, "identity", "ref", "sha256",
+constexpr std::string_view kBundleDeclKeys[]{ kEnvyBaseKey,
+                                              "identity",
+                                              "ref",
+                                              "sha256",
                                               "source" };
 
 bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_origin) {

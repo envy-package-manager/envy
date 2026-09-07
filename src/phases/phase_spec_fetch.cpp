@@ -475,9 +475,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 
       // The child's own options, built in the parent's state but never stored there:
       // ENVY_OPTIONS_RIDX belongs to the parent and its own phases still read it.
-      sol::object const options_obj{
-        deserialize_options(parent_lua_view, cfg.serialized_options)
-      };
+      sol::object const options_obj{ deserialize_options(parent_lua_view,
+                                                         cfg.serialized_options) };
 
       // The context names the child: source.dependencies are wired onto it, so its
       // edges authorize envy.package/envy.product. Only the interpreter is the parent's.
@@ -672,8 +671,8 @@ using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 // pairs") wins over the generic sweep.
 constexpr std::string_view kPureBundleDepKeys[]{ "bundle", "needed_by", "ref",
                                                  "setup",  "sha256",    "source" };
-constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle", "needed_by", "options",
-                                                     "product", "setup",    "spec" };
+constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle",  "needed_by", "options",
+                                                     "product", "setup",     "spec" };
 
 // Parse a pure bundle dependency: {bundle = "identity", source = "...", ref = "..."}
 // Returns bundle_source if this is a pure bundle dep, nullopt otherwise
@@ -1500,8 +1499,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   for (auto *dep_cfg : p->owned_dependency_cfgs) { dep_cfg->parent = p->cfg; }
 
   try {  // Store options in Lua registry
-    lua->registry()[ENVY_OPTIONS_RIDX] =
-        deserialize_options(*lua, cfg.serialized_options);
+    lua->registry()[ENVY_OPTIONS_RIDX] = deserialize_options(*lua, cfg.serialized_options);
   } catch (std::runtime_error const &e) {
     throw std::runtime_error(e.what() + std::string(" for ") + cfg.identity);
   }

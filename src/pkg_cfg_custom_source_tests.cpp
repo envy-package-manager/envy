@@ -509,11 +509,10 @@ std::optional<sol::protected_function> find_spec(sol::state &lua,
                                      .serialized_options = std::move(options) });
 }
 
-std::optional<sol::protected_function> find_bundle(sol::state &lua,
-                                                   std::string identity) {
-  return envy::find_fetch_function(lua,
-                                   { .what = envy::fetch_fn_query::kind::BUNDLE,
-                                     .identity = std::move(identity) });
+std::optional<sol::protected_function> find_bundle(sol::state &lua, std::string identity) {
+  return envy::find_fetch_function(
+      lua,
+      { .what = envy::fetch_fn_query::kind::BUNDLE, .identity = std::move(identity) });
 }
 
 }  // namespace
