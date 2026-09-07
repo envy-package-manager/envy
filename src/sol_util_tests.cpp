@@ -3,6 +3,7 @@
 #include "doctest.h"
 
 #include <stdexcept>
+#include <string_view>
 
 TEST_CASE("sol_util_make_lua_state creates state with standard libraries") {
   auto lua = envy::sol_util_make_lua_state();
@@ -383,4 +384,23 @@ TEST_CASE("type_name_for_error returns correct names") {
   CHECK(envy::detail::type_name_for_error<double>() == "number");
   CHECK(envy::detail::type_name_for_error<long>() == "number");
   CHECK(envy::detail::type_name_for_error<float>() == "number");
+}
+
+TEST_CASE("sol_util_reject_unknown_keys accepts only the listed string keys") {
+  auto lua = envy::sol_util_make_lua_state();
+  static constexpr std::string_view allowed[]{ "source", "spec" };
+
+  lua->script("ok = { spec = 'a.b@v1', source = 's', absent = nil }");
+  CHECK_NOTHROW(envy::sol_util_reject_unknown_keys((*lua)["ok"], allowed, "Entry"));
+
+  // Positional values carry no key to check, so an array-shaped table passes.
+  lua->script("positional = { 'x', 'y' }");
+  CHECK_NOTHROW(
+      envy::sol_util_reject_unknown_keys((*lua)["positional"], allowed, "Entry"));
+
+  lua->script("bad = { spec = 'a.b@v1', sourc = 's' }");
+  CHECK_THROWS_WITH_AS(
+      envy::sol_util_reject_unknown_keys((*lua)["bad"], allowed, "Entry"),
+      "Entry: unknown key 'sourc'; allowed keys are source, spec",
+      std::runtime_error);
 }

@@ -8,6 +8,7 @@ namespace envy {
 inline constexpr int ENVY_OPTIONS_RIDX = 100;    // Options table for phase execution
 inline constexpr int ENVY_PHASE_CTX_RIDX = 103;  // Phase context pointer for envy.* APIs
 inline constexpr int ENVY_IMPORTS_RIDX = 104;    // BUNDLES tables of imported manifests
+inline constexpr int ENVY_IMPORT_ENVS_RIDX = 105;  // {path, env} of every import
 
 // Install envy globals, platform constants, and custom functions into Lua state
 void lua_envy_install(sol::state &lua);

@@ -33,7 +33,9 @@ TEST_CASE("pkg_cfg::parse rejects string shorthand") {
   sol::state lua;
   auto lua_val{ lua_eval("result = 'arm.gcc@v2'", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        doctest::Contains("shorthand string syntax requires table"),
                        std::runtime_error);
 }
@@ -42,7 +44,9 @@ TEST_CASE("pkg_cfg::parse rejects table without source") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'gnu.binutils@v3' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        doctest::Contains("must specify 'source' field"),
                        std::runtime_error);
 }
@@ -51,7 +55,9 @@ TEST_CASE("pkg_cfg::parse allows reference-only dependency when enabled") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'python' }", lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+  auto const *cfg{
+    envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+  };
 
   CHECK(cfg->identity == "python");
   CHECK(cfg->is_weak_reference());
@@ -65,7 +71,9 @@ TEST_CASE("pkg_cfg::parse allows weak dependency with fallback when enabled") {
       "'/fake/python.lua' } }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+  auto const *cfg{
+    envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+  };
 
   CHECK(cfg->identity == "python");
   CHECK(cfg->is_weak_reference());
@@ -81,7 +89,9 @@ TEST_CASE("pkg_cfg::parse parses table with remote source") {
       "'abc123' }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   CHECK(cfg->identity == "arm.gcc@v2");
 
@@ -97,7 +107,9 @@ TEST_CASE("pkg_cfg::parse parses table with local source") {
     lua_eval("result = { spec = 'local.tool@v1', source = './specs/tool.lua' }", lua)
   };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/project/envy.lua")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/project/envy.lua"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   CHECK(cfg->identity == "local.tool@v1");
 
@@ -112,7 +124,9 @@ TEST_CASE("pkg_cfg::parse resolves relative file paths") {
     lua_eval("result = { spec = 'local.tool@v1', source = '../sibling/tool.lua' }", lua)
   };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/project/sub/envy.lua")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/project/sub/envy.lua"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&cfg->source) };
   REQUIRE(local != nullptr);
@@ -127,7 +141,9 @@ TEST_CASE("pkg_cfg::parse parses table with options") {
       "'arm-none-eabi' } }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   CHECK(cfg->identity == "arm.gcc@v2");
 
@@ -145,7 +161,9 @@ TEST_CASE("pkg_cfg::parse parses table with empty options") {
     lua_eval("result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', options = {} }", lua)
   };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   CHECK(cfg->identity == "arm.gcc@v2");
   CHECK(cfg->serialized_options == "{}");
@@ -159,7 +177,9 @@ TEST_CASE("pkg_cfg::parse parses table with all fields") {
       "options = { version = '13.2.0' } }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   CHECK(cfg->identity == "arm.gcc@v2");
 
@@ -183,7 +203,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
         "'/fake/provider.lua' }",
         lua) };
 
-    auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+    auto const *cfg{
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+    };
 
     CHECK(cfg->product.has_value());
     CHECK(*cfg->product == "tool");
@@ -197,7 +219,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
         "'vendor.tool@v1', source = '/fake/tool.lua' } }",
         lua) };
 
-    auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+    auto const *cfg{
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+    };
 
     CHECK(cfg->product.has_value());
     CHECK(cfg->is_weak_reference());
@@ -210,7 +234,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
     auto lua_val{ lua_eval("result = { product = 'tool' }",  // No spec field
                            lua) };
 
-    auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+    auto const *cfg{
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+    };
 
     CHECK(cfg->product.has_value());
     CHECK(*cfg->product == "tool");
@@ -224,7 +250,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
     auto lua_val{ lua_eval("result = { spec = 'local.consumer@v1', product = 'tool' }",
                            lua) };
 
-    auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake"), true) };
+    auto const *cfg{
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY)
+    };
 
     CHECK(cfg->product.has_value());
     CHECK(*cfg->product == "tool");
@@ -239,7 +267,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
       lua_eval("result = { spec = 'foo@v1', product = 42, source = '/fake/foo.lua' }", lua)
     };
 
-    CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+    CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                              fs::path("/fake"),
+                                              envy::pkg_entry_shape::MANIFEST_PACKAGE),
                          doctest::Contains("product"),
                          std::runtime_error);
   }
@@ -250,7 +280,9 @@ TEST_CASE("pkg_cfg::parse parses product dependency fields") {
       lua_eval("result = { spec = 'foo@v1', product = '', source = '/fake/foo.lua' }", lua)
     };
 
-    CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+    CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                              fs::path("/fake"),
+                                              envy::pkg_entry_shape::MANIFEST_PACKAGE),
                          doctest::Contains("cannot be empty"),
                          std::runtime_error);
   }
@@ -264,7 +296,9 @@ TEST_CASE("pkg_cfg::parse errors on invalid identity format") {
     lua_eval("result = { spec = 'invalid-no-at-sign', source = '/fake/r.lua' }", lua)
   };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: invalid-no-at-sign",
                        std::runtime_error);
 }
@@ -273,7 +307,9 @@ TEST_CASE("pkg_cfg::parse errors on identity missing namespace") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'gcc@v2', source = '/fake/r.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: gcc@v2",
                        std::runtime_error);
 }
@@ -282,7 +318,9 @@ TEST_CASE("pkg_cfg::parse errors on identity missing name") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'arm.@v2', source = '/fake/r.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: arm.@v2",
                        std::runtime_error);
 }
@@ -291,7 +329,9 @@ TEST_CASE("pkg_cfg::parse errors on identity missing version") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'arm.gcc@', source = '/fake/r.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: arm.gcc@",
                        std::runtime_error);
 }
@@ -300,7 +340,9 @@ TEST_CASE("pkg_cfg::parse errors on identity missing @ sign") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'arm.gcc', source = '/fake/r.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: arm.gcc",
                        std::runtime_error);
 }
@@ -309,7 +351,9 @@ TEST_CASE("pkg_cfg::parse errors on identity missing dot") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'armgcc@v2', source = '/fake/r.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Invalid spec identity format: armgcc@v2",
                        std::runtime_error);
 }
@@ -318,7 +362,9 @@ TEST_CASE("pkg_cfg::parse errors on non-string and non-table value") {
   sol::state lua;
   auto lua_val{ lua_eval("result = 123", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec entry must be string or table",
                        std::runtime_error);
 }
@@ -327,7 +373,9 @@ TEST_CASE("pkg_cfg::parse errors on table missing spec field") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { source = 'https://example.com/foo.lua' }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec table missing required 'spec' field",
                        std::runtime_error);
 }
@@ -336,7 +384,9 @@ TEST_CASE("pkg_cfg::parse errors on non-string spec field") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 123 }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec: spec must be a string",
                        std::runtime_error);
 }
@@ -349,7 +399,9 @@ TEST_CASE("pkg_cfg::parse allows url without sha256 (permissive mode)") {
       "result = { spec = 'arm.gcc@v2', source = 'https://example.com/gcc.lua' }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
   CHECK(cfg->identity == "arm.gcc@v2");
   CHECK(cfg->is_remote());
   auto const *remote{ std::get_if<envy::pkg_cfg::remote_source>(&cfg->source) };
@@ -363,7 +415,9 @@ TEST_CASE("pkg_cfg::parse errors on non-string source") {
   auto lua_val{ lua_eval("result = { spec = 'arm.gcc@v2', source = 123, sha256 = 'abc' }",
                          lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec 'source' field must be string or table",
                        std::runtime_error);
 }
@@ -376,7 +430,9 @@ TEST_CASE("pkg_cfg::parse errors on non-string sha256") {
       "}",
       lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec source: sha256 must be a string",
                        std::runtime_error);
 }
@@ -385,7 +441,9 @@ TEST_CASE("pkg_cfg::parse errors on non-string source (local)") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'local.tool@v1', source = 123 }", lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec 'source' field must be string or table",
                        std::runtime_error);
 }
@@ -397,7 +455,9 @@ TEST_CASE("pkg_cfg::parse errors on non-table options") {
       "}",
       lua) };
 
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake")),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Spec 'options' field must be table",
                        std::runtime_error);
 }
@@ -410,7 +470,9 @@ TEST_CASE("pkg_cfg::parse accepts non-string option values") {
       "debug = true, nested = { key = 'value' } } }",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   // Deserialize and check
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
@@ -434,7 +496,9 @@ TEST_CASE("pkg_cfg::parse errors on function in options") {
     }
   )",
                          lua) };
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::current_path()),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::current_path(),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Unsupported Lua type: function",
                        std::runtime_error);
 }
@@ -455,7 +519,9 @@ TEST_CASE("pkg_cfg::parse errors on function nested in options") {
     }
   )",
                          lua) };
-  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val, fs::current_path()),
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::current_path(),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
                        "Unsupported Lua type: function",
                        std::runtime_error);
 }
@@ -467,7 +533,9 @@ TEST_CASE("pkg_cfg::parse serializes simple string array") {
                     options = { packages = { "neovim", "bat", "pv" } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   // Deserialize and check
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
@@ -487,7 +555,9 @@ TEST_CASE("pkg_cfg::parse serializes integer array") {
                     options = { ports = { 8080, 8081, 8082 } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -506,7 +576,9 @@ TEST_CASE("pkg_cfg::parse serializes mixed-type array") {
                     options = { mixed = { "str", 42, true, "end" } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -526,7 +598,9 @@ TEST_CASE("pkg_cfg::parse serializes float array") {
                     options = { values = { 1.5, 2.5, 3.5 } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -545,7 +619,9 @@ TEST_CASE("pkg_cfg::parse preserves array order") {
                     options = { items = { "z", "a", "m", "b" } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -566,7 +642,9 @@ TEST_CASE("pkg_cfg::parse serializes nested arrays") {
                     options = { matrix = { { 1, 2 }, { 3, 4 } } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -588,7 +666,9 @@ TEST_CASE("pkg_cfg::parse serializes table containing arrays") {
                     options = { config = { flags = { "-Wall", "-O2" }, level = 3 } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -608,7 +688,9 @@ TEST_CASE("pkg_cfg::parse serializes array containing tables") {
                     options = { items = { { name = "foo" }, { name = "bar" } } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -621,22 +703,66 @@ TEST_CASE("pkg_cfg::parse serializes array containing tables") {
   CHECK(item2["name"].get<std::string>() == "bar");
 }
 
-TEST_CASE("pkg_cfg::parse serializes sparse table as table not array") {
+TEST_CASE("pkg_cfg::parse rejects a sparse integer-keyed option table") {
+  // It used to serialize as "{}": both entries silently dropped, so two different
+  // option sets collided on one cache key. The message names the offending key path.
   sol::state lua;
   auto lua_val{ lua_eval(
       R"(result = { spec = 'local.test@r0', source = '/fake/r.lua',
                     options = { sparse = { [1] = "a", [3] = "c" } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse(lua_val,
+                           fs::path("/fake"),
+                           envy::pkg_entry_shape::MANIFEST_PACKAGE),
+      doctest::Contains("option 'options.sparse': integer-keyed table must be a "
+                        "contiguous 1..n sequence"),
+      std::runtime_error);
+}
+
+TEST_CASE("pkg_cfg::parse rejects a mixed-key option table") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      R"(result = { spec = 'local.test@r0', source = '/fake/r.lua',
+                    options = { mixed = { "a", [true] = "b" } } })",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse(lua_val,
+                           fs::path("/fake"),
+                           envy::pkg_entry_shape::MANIFEST_PACKAGE),
+      doctest::Contains("option 'options.mixed': table keys must be all strings or a "
+                        "contiguous 1..n sequence"),
+      std::runtime_error);
+}
+
+TEST_CASE("serialize_option_table round-trips keys Lua cannot spell bare") {
+  // The serialized form is re-executed by deserialize_options ("return " + s),
+  // so a hyphenated key, a reserved word and a control byte all have to survive it.
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      R"(result = { spec = 'local.test@r0', source = '/fake/r.lua',
+                    options = { ["my-key"] = "v", ["end"] = 1,
+                                note = "a\nb\tc\r", nested = { ["a b"] = { "x" } } } })",
+      lua) };
+
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
+  CHECK(cfg->serialized_options ==
+        "{[\"end\"]=1,[\"my-key\"]=\"v\",[\"nested\"]={[\"a b\"]={\"x\"}},"
+        "[\"note\"]=\"a\\010b\\009c\\013\"}");
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
   sol::table opts = opts_result;
-  sol::table sparse = opts["sparse"];
-  // Sparse table should not serialize as array - only string keys preserved
-  // Since numeric keys aren't strings, they'll be dropped by current table logic
-  CHECK(sparse.size() == 0);
+  CHECK(opts["my-key"].get<std::string>() == "v");
+  CHECK(opts["end"].get<int>() == 1);
+  CHECK(opts["note"].get<std::string>() == "a\nb\tc\r");
+  sol::table nested = opts["nested"];
+  sol::table inner = nested["a b"];
+  CHECK(inner[1].get<std::string>() == "x");
 }
 
 TEST_CASE("pkg_cfg::parse serializes single-element array") {
@@ -646,7 +772,9 @@ TEST_CASE("pkg_cfg::parse serializes single-element array") {
                     options = { singleton = { "only" } } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -667,7 +795,9 @@ TEST_CASE("pkg_cfg::parse serializes complex real-world options") {
                     } })",
       lua) };
 
-  auto const *cfg{ envy::pkg_cfg::parse(lua_val, fs::path("/fake")) };
+  auto const *cfg{ envy::pkg_cfg::parse(lua_val,
+                                        fs::path("/fake"),
+                                        envy::pkg_entry_shape::MANIFEST_PACKAGE) };
 
   auto opts_result{ lua.safe_script("return " + cfg->serialized_options) };
   REQUIRE(opts_result.valid());
@@ -760,56 +890,65 @@ TEST_CASE("local_source equality compares the path") {
 TEST_CASE("bundle_source_compare: identical declarations are SAME") {
   CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz", "aa"),
                                     remote_bundle("a.b@v1", "https://x/b.tgz", "aa")) ==
-        envy::bundle_source_match::SAME);
+        envy::pkg_source_match::SAME);
   CHECK(envy::bundle_source_compare(git_bundle("a.b@v1", "git://x/b.git", "main"),
                                     git_bundle("a.b@v1", "git://x/b.git", "main")) ==
-        envy::bundle_source_match::SAME);
+        envy::pkg_source_match::SAME);
   CHECK(envy::bundle_source_compare(local_bundle("a.b@v1", "/a/b"),
                                     local_bundle("a.b@v1", "/a/b")) ==
-        envy::bundle_source_match::SAME);
+        envy::pkg_source_match::SAME);
 }
 
 TEST_CASE("bundle_source_compare: a differing payload is DIFFERENT") {
   CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz"),
                                     remote_bundle("a.b@v1", "https://y/b.tgz")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz", "aa"),
                                     remote_bundle("a.b@v1", "https://x/b.tgz", "bb")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(git_bundle("a.b@v1", "git://x/b.git", "main"),
                                     git_bundle("a.b@v1", "git://x/b.git", "v2")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(local_bundle("a.b@v1", "/a/b"),
                                     local_bundle("a.b@v1", "/a/c")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
 }
 
 TEST_CASE("bundle_source_compare: mismatched source kinds are DIFFERENT") {
   auto const remote{ remote_bundle("a.b@v1", "https://x/b.tgz") };
 
   CHECK(envy::bundle_source_compare(remote, git_bundle("a.b@v1", "git://x/b.git", "m")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(remote, local_bundle("a.b@v1", "/a/b")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   // A closure versus a URL is decidable, unlike closure versus closure.
   CHECK(envy::bundle_source_compare(remote, custom_bundle("a.b@v1")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), remote) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
 }
 
 TEST_CASE("bundle_source_compare: a differing bundle identity is DIFFERENT") {
   // Two specs pulling one spec identity out of unrelated bundles.
   CHECK(envy::bundle_source_compare(remote_bundle("a.b@v1", "https://x/b.tgz"),
                                     remote_bundle("a.c@v1", "https://x/b.tgz")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
   CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), custom_bundle("a.c@v1")) ==
-        envy::bundle_source_match::DIFFERENT);
+        envy::pkg_source_match::DIFFERENT);
+}
+
+TEST_CASE("bundle_source_compare: one declaration reached twice is SAME") {
+  // What a spec naming a bundle in a dependency and again in a spec-from-bundle entry
+  // produces: two copies of one parsed declaration, not two declarations.
+  auto const decl{ custom_bundle("a.b@v1") };
+  CHECK(envy::bundle_source_compare(decl, decl) == envy::pkg_source_match::SAME);
+  CHECK(envy::bundle_source_compare(decl, envy::pkg_cfg::bundle_source{ decl }) ==
+        envy::pkg_source_match::SAME);
 }
 
 TEST_CASE("bundle_source_compare: two fetch closures are INCOMPARABLE") {
   CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1"), custom_bundle("a.b@v1")) ==
-        envy::bundle_source_match::INCOMPARABLE);
+        envy::pkg_source_match::INCOMPARABLE);
 
   // Dependency lists are per-parse cfg pointers, so they cannot settle it either way.
   auto *dep{ envy::pkg_cfg::pool()->emplace("a.dep@v1",
@@ -823,7 +962,7 @@ TEST_CASE("bundle_source_compare: two fetch closures are INCOMPARABLE") {
                                             fs::path("/fake")) };
   CHECK(envy::bundle_source_compare(custom_bundle("a.b@v1", { dep }),
                                     custom_bundle("a.b@v1")) ==
-        envy::bundle_source_match::INCOMPARABLE);
+        envy::pkg_source_match::INCOMPARABLE);
 }
 
 TEST_CASE("bundle_source_compare is symmetric") {
@@ -836,5 +975,172 @@ TEST_CASE("bundle_source_compare is symmetric") {
       CHECK(envy::bundle_source_compare(lhs, rhs) ==
             envy::bundle_source_compare(rhs, lhs));
     }
+  }
+}
+
+// ==== entry-shape key sets and per-shape source rules ====
+//
+// A key no parser reads does nothing at all, silently. Each shape lists what it reads
+// and refuses the rest, so a typo or a key borrowed from another shape is an error.
+
+TEST_CASE("pkg_cfg::parse rejects an unknown key on a manifest entry") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', platfoms = { 'darwin' } }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
+                       doctest::Contains("Package: unknown key 'platfoms'"),
+                       std::runtime_error);
+}
+
+TEST_CASE("pkg_cfg::parse rejects weak on a manifest entry") {
+  // A manifest entry must carry a source, and source + weak is refused, so the key
+  // can never do anything here: name the rule instead of "must specify 'source'",
+  // and keep it out of the allowed-key list the sweep prints verbatim.
+  sol::state lua;
+  auto lua_val{ lua_eval("result = { spec = 'arm.gcc@v2', "
+                         "weak = { spec = 'arm.gcc@v1', source = '/fake/r.lua' } }",
+                         lua) };
+
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
+                       doctest::Contains("manifest PACKAGES entries cannot be weak"),
+                       std::runtime_error);
+
+  auto unknown{ lua_eval("result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', "
+                         "platfoms = { 'darwin' } }",
+                         lua) };
+  try {
+    envy::pkg_cfg::parse(unknown,
+                         fs::path("/fake"),
+                         envy::pkg_entry_shape::MANIFEST_PACKAGE);
+    CHECK_MESSAGE(false, "expected an unknown-key error");
+  } catch (std::runtime_error const &e) {
+    CHECK(std::string{ e.what() }.find("weak") == std::string::npos);
+  }
+}
+
+TEST_CASE("pkg_cfg::parse accepts platforms and setup on a manifest entry") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', "
+      "platforms = { 'darwin' }, setup = { 'main' }, ENVY_BASE = '/x/envy.lua' }",
+      lua) };
+
+  CHECK_NOTHROW(envy::pkg_cfg::parse(lua_val,
+                                     fs::path("/fake"),
+                                     envy::pkg_entry_shape::MANIFEST_PACKAGE));
+}
+
+TEST_CASE("pkg_cfg::parse rejects platforms on a dependency entry") {
+  // Only manifest entries are platform-filtered; on a dependency it was dropped.
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'arm.gcc@v2', source = '/fake/r.lua', platforms = { 'darwin' } }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY),
+      doctest::Contains("Dependency cannot specify 'platforms'"),
+      std::runtime_error);
+}
+
+TEST_CASE("pkg_cfg::parse rejects setup and platforms on a weak fallback") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'python', weak = { spec = 'vendor.python@r4', "
+      "source = '/fake/p.lua', setup = { 'main' } } }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY),
+      doctest::Contains("weak fallback: unknown key 'setup'"),
+      std::runtime_error);
+}
+
+TEST_CASE("parse_fetch_dependency rejects an unknown key") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'tools.jf@r1', source = '/fake/jf.lua', setup = { 'main' } }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse_fetch_dependency(lua_val, fs::path("/fake")),
+                       doctest::Contains("source.dependencies entry: unknown key 'setup'"),
+                       std::runtime_error);
+}
+
+TEST_CASE("parse_fetch_dependency rejects needed_by") {
+  // A fetch prerequisite is wired at spec_fetch and nowhere else, so needed_by could
+  // only ever describe an ordering the entry does not get.
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'tools.jf@r1', source = '/fake/jf.lua', needed_by = 'build' }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse_fetch_dependency(lua_val, fs::path("/fake")),
+      doctest::Contains("source.dependencies entry cannot specify 'needed_by'"),
+      std::runtime_error);
+}
+
+TEST_CASE("pkg_cfg::parse refuses a fetch function a manifest entry could never run") {
+  // The closure is looked up in the parent spec's Lua state; a manifest root has none.
+  sol::state lua;
+  auto lua_val{
+    lua_eval("result = { spec = 'arm.gcc@v2', source = { fetch = function() end } }", lua)
+  };
+
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
+                       doctest::Contains("Package 'source' cannot be a { fetch = ... }"),
+                       std::runtime_error);
+}
+
+TEST_CASE("pkg_cfg::parse refuses a fetch function inside a weak fallback") {
+  // The lookup matches the consumer's own DEPENDENCIES entry, which carries no source.
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'python', weak = { spec = 'vendor.python@r4', "
+      "source = { fetch = function() end } } }",
+      lua) };
+
+  CHECK_THROWS_WITH_AS(
+      envy::pkg_cfg::parse(lua_val, fs::path("/fake"), envy::pkg_entry_shape::DEPENDENCY),
+      doctest::Contains("weak fallback 'source' cannot be a { fetch = ... }"),
+      std::runtime_error);
+}
+
+// ==== whole-source comparison ====
+
+TEST_CASE("pkg_cfg_source_compare covers every alternative pairing") {
+  envy::pkg_cfg::source_t const remote{ envy::pkg_cfg::remote_source{ .url = "u" } };
+  envy::pkg_cfg::source_t const remote2{ envy::pkg_cfg::remote_source{ .url = "v" } };
+  envy::pkg_cfg::source_t const local{ envy::pkg_cfg::local_source{ .file_path = "/a" } };
+  envy::pkg_cfg::source_t const git{ envy::pkg_cfg::git_source{ .url = "g", .ref = "r" } };
+  envy::pkg_cfg::source_t const fetch{ envy::pkg_cfg::fetch_function{} };
+  envy::pkg_cfg::source_t const weak{ envy::pkg_cfg::weak_ref{} };
+  envy::pkg_cfg::source_t const bundle{ remote_bundle("a.b@v1", "https://x/b.tgz") };
+
+  CHECK(envy::pkg_cfg_source_compare(remote, remote) == envy::pkg_source_match::SAME);
+  CHECK(envy::pkg_cfg_source_compare(remote, remote2) ==
+        envy::pkg_source_match::DIFFERENT);
+  CHECK(envy::pkg_cfg_source_compare(remote, local) == envy::pkg_source_match::DIFFERENT);
+  CHECK(envy::pkg_cfg_source_compare(local, local) == envy::pkg_source_match::SAME);
+  CHECK(envy::pkg_cfg_source_compare(git, git) == envy::pkg_source_match::SAME);
+  CHECK(envy::pkg_cfg_source_compare(git, remote) == envy::pkg_source_match::DIFFERENT);
+  CHECK(envy::pkg_cfg_source_compare(bundle, bundle) == envy::pkg_source_match::SAME);
+  CHECK(envy::pkg_cfg_source_compare(bundle, remote) == envy::pkg_source_match::DIFFERENT);
+
+  // Two closures are opaque; a reference-only entry agrees with anything.
+  CHECK(envy::pkg_cfg_source_compare(fetch, fetch) ==
+        envy::pkg_source_match::INCOMPARABLE);
+  for (auto const &other : { remote, local, git, fetch, weak, bundle }) {
+    CHECK(envy::pkg_cfg_source_compare(weak, other) == envy::pkg_source_match::SAME);
+    CHECK(envy::pkg_cfg_source_compare(other, weak) == envy::pkg_source_match::SAME);
   }
 }

@@ -1,72 +1,27 @@
 #include "lua_envy_dep_util.h"
 
+#include <mutex>
+
 namespace envy {
 
-bool identity_matches(std::string const &dep_id, std::string const &query) {
-  if (dep_id == query) { return true; }
-  pkg_key const key{ dep_id };
-  return key.matches(query);
-}
+std::optional<direct_dependency> find_direct_dependency(pkg *from,
+                                                        std::string const &query) {
+  std::optional<direct_dependency> best;
 
-namespace {
-
-// Snapshot a node's dependency edges under its deps_mutex so traversal never holds
-// two pkg locks and never races the engine's weak-resolution wiring.
-std::vector<std::pair<std::string, pkg::dependency_info>> dependency_edges(pkg *from) {
+  // One node, one lock, no recursion: the whole answer is in this map.
   std::lock_guard const deps_lock(from->deps_mutex);
-  return { from->dependencies.begin(), from->dependencies.end() };
-}
+  for (auto const &[dep_id, dep_info] : from->dependencies) {
+    if (!dep_info.p) { continue; }
+    if (dep_id != query && !dep_info.p->key.matches(query)) { continue; }
 
-}  // namespace
-
-bool dependency_reachable(pkg *from,
-                          std::string const &query,
-                          std::unordered_set<pkg *> &visited) {
-  if (!visited.insert(from).second) { return false; }
-
-  for (auto const &[dep_id, dep_info] : dependency_edges(from)) {
-    pkg *child{ dep_info.p };
-    if (!child) { continue; }
-    if (identity_matches(dep_id, query)) { return true; }
-    if (dependency_reachable(child, query, visited)) { return true; }
+    // Ties broken by identity so an unordered map still gives one answer.
+    if (!best || dep_info.needed_by < best->needed_by ||
+        (dep_info.needed_by == best->needed_by && dep_id < best->identity)) {
+      best = direct_dependency{ dep_info.p, dep_id, dep_info.needed_by };
+    }
   }
 
-  return false;
-}
-
-bool strong_reachable(pkg *from,
-                      std::string const &query,
-                      pkg_phase &first_hop_needed_by,
-                      std::optional<std::string> &matched_identity) {
-  bool found{ false };
-
-  for (auto const &[dep_id, dep_info] : dependency_edges(from)) {
-    pkg *child{ dep_info.p };
-    if (!child) { continue; }
-
-    bool reachable{ identity_matches(dep_id, query) };
-    if (!reachable) {
-      std::unordered_set<pkg *> visited;
-      reachable = dependency_reachable(child, query, visited);
-    }
-
-    if (!reachable) { continue; }
-
-    if (!found || dep_info.needed_by < first_hop_needed_by) {
-      first_hop_needed_by = dep_info.needed_by;
-      matched_identity = dep_id;
-    }
-    found = true;
-  }
-
-  return found;
-}
-
-bool strong_reachable(pkg *from,
-                      std::string const &query,
-                      pkg_phase &first_hop_needed_by) {
-  std::optional<std::string> matched;
-  return strong_reachable(from, query, first_hop_needed_by, matched);
+  return best;
 }
 
 }  // namespace envy

@@ -8,6 +8,7 @@
 #include "pkg_phase.h"
 #include "shell.h"
 #include "task_engine.h"
+#include "tui.h"
 #include "util.h"
 
 #include <atomic>
@@ -16,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -33,14 +35,6 @@ enum class pkg_type {
   USER_MANAGED,   // Package managed by user (has check/install, no cache artifacts)
   BUNDLE_ONLY     // Pure bundle dependency (no spec, just bundle for envy.loadenv_spec())
 };
-
-struct pkg_result {
-  pkg_type type;
-  std::string result_hash;  // BLAKE3(format_key()) if cache-managed, empty otherwise
-  std::filesystem::path pkg_path;  // Path to pkg/ dir (empty if user-managed/unknown)
-};
-
-using pkg_result_map_t = std::unordered_map<std::string, pkg_result>;
 
 struct export_phase_config {
   std::filesystem::path output_dir;
@@ -75,11 +69,20 @@ class engine : unmovable {
   pkg *find_product_provider(std::string const &product_name) const;
   std::vector<product_info> collect_all_products() const;
 
+  // The only place pkg::dependencies gains an entry. Under mutex_ (so two workers
+  // cannot both pass the check and then both insert): refuses an edge whose target
+  // already reaches `parent`, naming the cycle path; refuses an identity already
+  // bound to a different package, since the map and the Lua API are identity-keyed;
+  // otherwise inserts, or merges `needed_by` downward. Then carries `parent`'s
+  // closure memberships to `dep`. `kind` prefixes the cycle message.
+  void wire_dependency(pkg *parent,
+                       pkg *dep,
+                       pkg_phase needed_by,
+                       std::string_view kind = "Dependency");
+
   // Start the package's worker (idempotent) and ratchet its target so it runs
   // through `run_through` inclusive.
-  void start_pkg_thread(pkg *p,
-                        pkg_phase run_through,
-                        std::vector<std::string> ancestor_chain = {});
+  void start_pkg_thread(pkg *p, pkg_phase run_through);
 
   // Ratchet a package's target to full completion (no wait).
   void extend_to_completion(pkg_key const &key);
@@ -88,27 +91,29 @@ class engine : unmovable {
   void wait_for_completion(pkg_key const &key);
 
   // Spawn one single-step task per selected SETUP pair of `parent` (sibling
-  // DEPENDS become edges), wait for all of them, and aggregate failures into
-  // one exception. Called by the parent's setup phase.
+  // DEPENDS become edges), wait for all of them, and re-throw the first failure
+  // verbatim (each pair stores its own). Called by the parent's setup phase.
   void run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pair_names);
 
   // Shell for `p`'s string verbs. A DEFAULT_SHELL function is evaluated on first
   // use — never at construction, where no package exists to own the interpreter
-  // dependency — and the result memoized for the run. The first caller drives
-  // DEFAULT_SHELL.DEPENDS to completion and blocks here until they land, so the
-  // interpreter is installed before any string verb runs. Members of the
-  // default-shell closure get the platform built-in: they supply the shell and
-  // cannot be its consumers. Throws the evaluation failure to every caller.
+  // dependency — by the single-step "#default_shell" task, whose edges hold it
+  // until DEPENDS is installed; the result is published once for the run. A null
+  // `p`, or one in ANY bootstrap closure, gets the platform built-in instead:
+  // that work runs before the manifest shell can exist. Throws the evaluation
+  // failure to every caller.
   resolved_shell default_shell(pkg *p);
 
-  // High-level execution
-  pkg_result_map_t run_full(std::vector<pkg_cfg const *> const &roots);
+  // High-level execution: resolve, run every package to completion, throw the
+  // aggregated failures. The engine's own state is the record of what happened.
+  void run_full(std::vector<pkg_cfg const *> const &roots);
 
   void resolve_graph(std::vector<pkg_cfg const *> const &roots);
 
   struct weak_resolution_result {
     size_t resolved{ 0 };
     size_t fallbacks_started{ 0 };
+    size_t unresolved{ 0 };
     std::vector<std::string> missing_without_fallback;
   };
   weak_resolution_result resolve_weak_references();
@@ -135,14 +140,14 @@ class engine : unmovable {
   // index is published. Returns nullptr when no depot is configured, depot is
   // ignored, or `p` is in the depot's DEPENDS closure (depot_bootstrap —
   // bootstrap packages never consult the depot). Throws if the depot task or a
-  // depot dependency failed.
+  // depot dependency failed. Mirrors default_shell()'s handshake exactly.
   package_depot_index const *depot_index_for(pkg *p);
 
   // Flag `p` and its dependency closure as a member of `kind`. Idempotent. Throws
-  // if any member already holds an unresolved weak reference: neither closure
-  // overlaps the resolution barrier, so such a reference could only resolve after
-  // the phase that needed it. depot_bootstrap additionally wakes blocked depot
-  // waits, since membership exempts a package from consulting the depot at all.
+  // if any member already holds an unresolved weak reference: no closure overlaps
+  // the resolution barrier, so such a reference could only resolve after the phase
+  // that needed it. Every newly flagged member wakes the global condition: the bit
+  // is what releases a package already parked in a depot or default-shell wait.
   void mark_closure(pkg *p, pkg_closure kind);
 
   // Carry every closure membership from a package to a dependency just wired to it.
@@ -166,23 +171,26 @@ class engine : unmovable {
   // is watermark int(p)+1 (task_engine watermark N = first N steps completed).
   static constexpr int watermark_through(pkg_phase p) { return static_cast<int>(p) + 1; }
 
+  std::unique_ptr<pkg> make_pkg(pkg_cfg const *cfg,
+                                tui::section_handle section,
+                                std::string canonical_identity_hash);
   task_engine::task_config make_pkg_task_config(pkg *p);
   task_engine::observer make_trace_observer();
   std::string trace_display(std::string const &key) const;
   void process_fetch_dependencies(pkg *p);
 
-  // Intern DEFAULT_SHELL.DEPENDS, flag the closure, and start each package toward
-  // completion. Idempotent, and must run before any worker exists: a member's own
-  // string verbs need the carve-out in place, or the interpreter waits on itself.
-  void start_default_shell_deps();
+  // Every failed task's message, deduplicated and sorted, newline-joined. A
+  // dependent re-stores its dependency's message verbatim, so the raw list repeats.
+  std::string aggregated_failures() const;
 
-  // Whether `p` supplies the default shell rather than consuming it. Flags `p` when
-  // it answers yes by graph reachability rather than by an already-set closure bit.
-  bool is_default_shell_member(pkg *p);
+  // Intern DEFAULT_SHELL.DEPENDS and flag the closure. resolve_graph calls it before
+  // any worker exists, so a member's own string verbs see the carve-out without
+  // racing; the #default_shell task repeats it (a no-op) and is what starts them.
+  void intern_default_shell_deps();
 
-  // Wait for those packages, then evaluate the SHELL function against the
-  // bootstrap consumer. Called once, under default_shell_once_.
-  void resolve_default_shell_fn();
+  // Whether `p` is exempt from the manifest shell: no package at all, or one in a
+  // bootstrap closure. Pure atomic reads — a wait predicate calls it.
+  bool builtin_shell_only(pkg const *p) const;
 
   // Publish `p`'s PRODUCTS into the project-wide registry, called by p's own
   // worker the instant its spec is known. Eager (not barrier-batched) so a
@@ -195,30 +203,36 @@ class engine : unmovable {
   void extend_dependencies_recursive(pkg *p, std::unordered_set<pkg_key> &visited);
   void wait_for_resolution_phase();
   void on_spec_fetch_start();
-  void on_spec_fetch_complete(std::string const &pkg_identity);
+  void on_spec_fetch_complete();
 
-  enum class depot_state : int { NOT_READY, READY, FAILED };
+  // Both bootstrap tasks publish through the same three-state handshake: the value
+  // is written before the atomic flips, and waiters read it after.
+  enum class task_state : int { NOT_READY, READY, FAILED };
 
   static constexpr char kDepotTaskKey[]{ "#depot" };
+  static constexpr char kDefaultShellTaskKey[]{ "#default_shell" };
 
   void ensure_depot_task_started();
   std::vector<pkg *> spawn_depot_dependencies();  // #depot on_start (worker thread)
   void run_depot_step();                          // #depot step 0 (worker thread)
 
+  void ensure_default_shell_task_started();
+  void run_default_shell_step();  // #default_shell step 0 (worker thread)
+
   cache &cache_;
   manifest const *manifest_{ nullptr };  // For bundle fetch function lookup
 
   // DEFAULT_SHELL: the declaration is parsed at construction (so a malformed one
-  // fails the run early), the function form evaluated at most once on first use.
-  // default_shell_error_ is written before the once_flag retires, read after.
+  // fails the run early), the function form evaluated by the #default_shell task.
+  // Callers block on the global condition until READY/FAILED (or their own closure
+  // membership lands). default_shell_deps_ is written once, before any worker can
+  // read it; the value and the error are written before the state flips.
   default_shell_decl default_shell_decl_;
-  std::once_flag default_shell_deps_once_;
-  std::vector<pkg *> default_shell_deps_;  // written under default_shell_deps_once_
-  std::once_flag default_shell_once_;
-  std::atomic_bool default_shell_ready_{ false };  // retires the reachability re-check
+  std::vector<pkg *> default_shell_deps_;
+  std::once_flag default_shell_task_once_;
+  std::atomic<task_state> default_shell_state_{ task_state::NOT_READY };
   default_shell_cfg_t default_shell_;
   std::string default_shell_error_;
-  pkg_cfg const *default_shell_consumer_cfg_{ nullptr };
   std::unique_ptr<pkg> default_shell_consumer_;
 
   // Depot state machine: importers block on the global condition until READY/
@@ -226,7 +240,7 @@ class engine : unmovable {
   // by the #depot worker (or set_depot_index) strictly before READY publishes.
   std::once_flag depot_task_once_;
   std::optional<package_depot_index> depot_index_;
-  std::atomic<depot_state> depot_state_{ depot_state::NOT_READY };
+  std::atomic<task_state> depot_state_{ task_state::NOT_READY };
   std::string depot_error_;  // written by #depot worker before FAILED publishes
   std::atomic_bool depot_pre_set_{ false };
   std::atomic_bool depot_ignored_{ false };
@@ -273,13 +287,5 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
     std::vector<pkg_cfg *> const &packages,
     std::vector<std::string> const &queries,
     std::string const &cmd_name);
-
-// Validate that adding candidate_identity as a dependency doesn't create a cycle
-// Checks for self-loops and cycles in ancestor_chain, throws on detection
-// dependency_type used for error messages (e.g., "Dependency" or "Fetch dependency")
-void engine_validate_dependency_cycle(std::string const &candidate_identity,
-                                      std::vector<std::string> const &ancestor_chain,
-                                      std::string const &current_identity,
-                                      std::string const &dependency_type);
 
 }  // namespace envy

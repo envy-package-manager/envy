@@ -500,8 +500,9 @@ IDENTITY = "local.needed_by_chain_a@v1"
 
 DEPENDENCIES = {{
   {{ spec = "local.needed_by_chain_b@v1", source = "{SPECS_DIR}/needed_by_chain_b.lua", needed_by = "stage" }},
-  -- Must declare transitive dependency C if we access it
-  {{ spec = "local.needed_by_chain_c@v1", source = "{SPECS_DIR}/needed_by_chain_c.lua" }}
+  -- C is accessed here at stage, so A's own edge on it must say so: B's edge gates
+  -- B's payload, never C's, however early B needs C.
+  {{ spec = "local.needed_by_chain_c@v1", source = "{SPECS_DIR}/needed_by_chain_c.lua", needed_by = "stage" }}
 }}
 
 FETCH = {{
@@ -511,10 +512,13 @@ FETCH = {{
 
 STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
   envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
-  -- Can access chain_b in stage phase
   envy.package("local.needed_by_chain_b@v1")
-  -- Can access chain_c (transitively available)
-  envy.package("local.needed_by_chain_c@v1")
+  -- Each query answers with its own package: asking for C used to hand back B's
+  -- directory, because the walk matched C through B and then looked up B.
+  local c = envy.package("local.needed_by_chain_c@v1")
+  if not string.find(c, "needed_by_chain_c", 1, true) then
+    error("envy.package('...chain_c@v1') returned " .. c)
+  end
 end
 """,
         )

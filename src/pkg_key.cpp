@@ -74,11 +74,13 @@ bool pkg_key::matches(std::string_view query) const {
   //   "name@revision"      -> match any namespace (unusual but valid)
   //   "namespace.name@rev" -> exact identity match (already checked above)
 
-  size_t const query_dot{ query.find('.') };
-  bool const query_has_namespace{ (query_dot != std::string_view::npos) };
-
   size_t const query_at{ query.find('@') };
   bool const query_has_revision{ (query_at != std::string_view::npos) };
+
+  // Only a dot before '@' is the namespace separator: a dotted revision ("gcc@13.2.0")
+  // is not a namespace, and reading it as one made the query match nothing at all.
+  size_t const query_dot{ query.substr(0, query_at).find('.') };
+  bool const query_has_namespace{ (query_dot != std::string_view::npos) };
 
   if (!query_has_namespace && !query_has_revision) {
     return query == name_;  // Query is just "name"

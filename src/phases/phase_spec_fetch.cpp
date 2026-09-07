@@ -254,6 +254,23 @@ sol_state_ptr create_lua_state() {
   return lua;
 }
 
+// A serialized option table back into a live Lua value. The state is whichever one
+// will see the options, not necessarily the package that owns them: a custom fetch
+// runs in its parent's interpreter and is handed the child's table.
+sol::object deserialize_options(sol::state_view lua,
+                                std::string const &serialized_options) {
+  sol::protected_function_result opts_result{
+    lua.safe_script("return " + serialized_options, sol::script_pass_on_error)
+  };
+
+  if (!opts_result.valid()) {
+    sol::error err = opts_result;
+    throw std::runtime_error("Failed to deserialize options: " + std::string(err.what()));
+  }
+
+  return opts_result.get<sol::object>();
+}
+
 int load_spec_script(sol::state &lua,
                      std::filesystem::path const &spec_path,
                      std::string const &identity) {
@@ -281,8 +298,9 @@ int load_spec_script(sol::state &lua,
 // a different entry rather than yesterday's content under today's declaration.
 //
 // A custom fetch function is the exception -- a Lua closure has no fingerprint, so
-// its entries key on the file that declares it. Editing the function body in place
-// still reuses the entry; move it, or bump the identity, to force a refetch.
+// its entries key on the file that declares it, plus the options it is handed: one
+// function drives down a different path per option set. Editing the function body in
+// place still reuses the entry; move it, or bump the identity, to force a refetch.
 std::string source_key(pkg_cfg::remote_source const &r) {
   return "remote\n" + r.url + "\n" + r.sha256;
 }
@@ -296,7 +314,8 @@ std::string source_key(pkg_cfg::local_source const &l) {
 }
 
 std::string custom_fetch_source_key(pkg_cfg const &cfg) {
-  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity;
+  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity +
+         "\n" + cfg.serialized_options;
 }
 
 // Every download this phase makes — a spec file, a git spec repo, a bundle payload —
@@ -432,6 +451,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
     std::filesystem::path const tmp_dir{ cache_result.lock->work_dir() / "tmp" };
     std::filesystem::create_directories(tmp_dir);
 
+    // Sibling custom fetches serialize here, on one non-recursive mutex per Lua state.
+    // It cannot be released around the call: closure, upvalues and options all live in it.
     auto const parent_acc{ parent->lua.lock() };
 
     if (!parent_acc) {
@@ -442,18 +463,26 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
     {
       sol::state_view parent_lua_view{ *parent_acc };
 
-      auto fetch_func_opt{ pkg_cfg::get_source_fetch(parent_lua_view, cfg.identity) };
+      auto fetch_func_opt{ find_fetch_function(
+          parent_lua_view,
+          { .what = fetch_fn_query::kind::SPEC,
+            .identity = cfg.identity,
+            .serialized_options = cfg.serialized_options }) };
       if (!fetch_func_opt) {
-        throw std::runtime_error("Failed to lookup fetch function for: " + cfg.identity);
+        throw std::runtime_error("Failed to lookup fetch function for: " +
+                                 cfg.format_key());
       }
 
-      sol::object options_obj{ parent_lua_view.registry()[ENVY_OPTIONS_RIDX] };
+      // The child's own options, built in the parent's state but never stored there:
+      // ENVY_OPTIONS_RIDX belongs to the parent and its own phases still read it.
+      sol::object const options_obj{
+        deserialize_options(parent_lua_view, cfg.serialized_options)
+      };
 
-      // Set up phase context with lock so envy.commit_fetch can access paths.
-      // The inline source.fetch runs in parent's Lua state, so we pass the lock
-      // explicitly rather than through parent->lock.
+      // The context names the child: source.dependencies are wired onto it, so its
+      // edges authorize envy.package/envy.product. Only the interpreter is the parent's.
       phase_context_guard ctx_guard{ &eng,
-                                     parent,
+                                     p,
                                      parent_lua_view.lua_state(),
                                      tmp_dir,
                                      cache_result.lock.get() };
@@ -468,19 +497,20 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
       }
     }
 
-    // Custom fetch creates spec.lua in fetch_dir via envy.commit_fetch.
-    // The lock destructor will clean up fetch_dir, so move spec.lua to install_dir.
+    // envy.commit_fetch lands everything in fetch_dir, which the lock destructor
+    // scrubs; the whole committed tree is the spec's directory, so move all of it.
     std::filesystem::path const fetch_dir{ cache_result.lock->fetch_dir() };
     std::filesystem::path const install_dir{ cache_result.lock->install_dir() };
-    std::filesystem::path const spec_src{ fetch_dir / "spec.lua" };
     std::filesystem::path const spec_dst{ install_dir / "spec.lua" };
 
-    if (!std::filesystem::exists(spec_src)) {
+    if (!std::filesystem::exists(fetch_dir / "spec.lua")) {
       throw std::runtime_error("Custom fetch did not create spec.lua for: " +
                                cfg.identity);
     }
 
-    std::filesystem::rename(spec_src, spec_dst);
+    for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
+      std::filesystem::rename(entry.path(), install_dir / entry.path().filename());
+    }
 
     return { spec_dst, std::move(cache_result.lock) };
   }
@@ -637,6 +667,14 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
 using bundle_alias_map = std::unordered_map<std::string, pkg_cfg::bundle_source>;
 using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 
+// Keys each DEPENDENCIES entry shape that names a bundle reads. `setup` is listed on
+// the pure form only so its own message ("bundle dependencies cannot select setup
+// pairs") wins over the generic sweep.
+constexpr std::string_view kPureBundleDepKeys[]{ "bundle", "needed_by", "ref",
+                                                 "setup",  "sha256",    "source" };
+constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle", "needed_by", "options",
+                                                     "product", "setup",    "spec" };
+
 // Parse a pure bundle dependency: {bundle = "identity", source = "...", ref = "..."}
 // Returns bundle_source if this is a pure bundle dep, nullopt otherwise
 std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
@@ -652,6 +690,9 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
   if (!source_obj.valid() || source_obj.get_type() == sol::type::lua_nil) {
     return std::nullopt;  // No source = not a pure bundle dep (might be spec-from-bundle)
   }
+
+  pkg_cfg_reject_platforms(table, "Bundle dependency");
+  sol_util_reject_unknown_keys(table, kPureBundleDepKeys, "Bundle dependency");
 
   // bundle field must be string (the bundle identity)
   if (!bundle_obj.is<std::string>()) {
@@ -738,6 +779,11 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
                                     bundle_alias_map const &declared_bundles,
                                     pkg_cfg const *declaring_spec,
                                     bundle_pkg_map &bundle_pkgs) {
+  pkg_cfg_reject_platforms(table, "Spec-from-bundle dependency");
+  sol_util_reject_unknown_keys(table,
+                               kSpecFromBundleDepKeys,
+                               "Spec-from-bundle dependency");
+
   // Get spec identity (required for spec-from-bundle)
   std::string const spec_identity{ [&] {
     auto opt{ sol_util_get_optional<std::string>(table, "spec", "Dependency") };
@@ -835,102 +881,119 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
 
   sol::table deps_table{ deps_obj.as<sol::table>() };
   for (size_t i{ 1 }; i <= deps_table.size(); ++i) {
-    sol::object entry{ deps_table[i] };
+    // One wrapper for the whole loop: every throw below names its own problem, and
+    // this is the only place that knows which entry of which spec raised it.
+    try {
+      sol::object entry{ deps_table[i] };
 
-    if (!entry.is<sol::table>()) {
-      // Non-table entries use standard parsing
-      pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, true) };
-      if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
-        throw std::runtime_error("non-local spec '" + cfg.identity +
-                                 "' cannot depend on local spec '" + dep_cfg->identity +
-                                 "'");
+      if (!entry.is<sol::table>()) {
+        // Non-table entries use standard parsing
+        pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
+        if (!cfg.identity.starts_with("local.") &&
+            dep_cfg->identity.starts_with("local.")) {
+          throw std::runtime_error("non-local spec '" + cfg.identity +
+                                   "' cannot depend on local spec '" + dep_cfg->identity +
+                                   "'");
+        }
+        parsed_deps.push_back(dep_cfg);
+        continue;
       }
-      parsed_deps.push_back(dep_cfg);
-      continue;
-    }
 
-    sol::table table{ entry.as<sol::table>() };
+      sol::table table{ entry.as<sol::table>() };
 
-    // Optional 'setup' selection: spec authors may demand host-state pairs from
-    // their dependencies. Merged (union) with all other referrers' selections.
-    auto const dep_setup{ [&]() -> std::optional<std::vector<std::string>> {
-      sol::object setup_obj{ table["setup"] };
-      if (!setup_obj.valid() || setup_obj.get_type() == sol::type::lua_nil) {
-        return std::nullopt;
-      }
-      if (setup_obj.get_type() != sol::type::table) {
-        throw std::runtime_error(
-            "Dependency 'setup' field must be a table of pair "
-            "names (spec '" +
-            cfg.identity + "')");
-      }
-      std::vector<std::string> names;
-      sol::table t{ setup_obj.as<sol::table>() };
-      for (size_t j{ 1 }; j <= t.size(); ++j) {
-        sol::object elem{ t[j] };
-        if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
+      // Optional 'setup' selection: spec authors may demand host-state pairs from
+      // their dependencies. Merged (union) with all other referrers' selections.
+      auto const dep_setup{ [&]() -> std::optional<std::vector<std::string>> {
+        sol::object setup_obj{ table["setup"] };
+        if (!setup_obj.valid() || setup_obj.get_type() == sol::type::lua_nil) {
+          return std::nullopt;
+        }
+        if (setup_obj.get_type() != sol::type::table) {
           throw std::runtime_error(
-              "Dependency 'setup' entries must be non-empty "
-              "strings (spec '" +
+              "Dependency 'setup' field must be a table of pair "
+              "names (spec '" +
               cfg.identity + "')");
         }
-        names.push_back(elem.as<std::string>());
+        std::vector<std::string> names;
+        sol::table t{ setup_obj.as<sol::table>() };
+        for (size_t j{ 1 }; j <= t.size(); ++j) {
+          sol::object elem{ t[j] };
+          if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
+            throw std::runtime_error(
+                "Dependency 'setup' entries must be non-empty "
+                "strings (spec '" +
+                cfg.identity + "')");
+          }
+          names.push_back(elem.as<std::string>());
+        }
+        return names;
+      }() };
+
+      // Check for pure bundle dependency: {bundle = "id", source = "..."}
+      if (auto pure_bundle{ try_parse_pure_bundle_dep(table, spec_path) }) {
+        if (dep_setup.has_value()) {
+          throw std::runtime_error(
+              "Bundle dependencies cannot select 'setup' pairs "
+              "(spec '" +
+              cfg.identity + "')");
+        }
+        std::string const bundle_id{ pure_bundle->bundle_identity };
+
+        // Register this bundle for identity-based lookups
+        declared_bundles[bundle_id] = *pure_bundle;
+
+        // Parse needed_by for pure bundle deps
+        std::optional<pkg_phase> needed_by;
+        auto needed_by_str{
+          sol_util_get_optional<std::string>(table, "needed_by", "Bundle dependency")
+        };
+        if (needed_by_str.has_value()) {
+          needed_by = pkg_phase_parse_needed_by(*needed_by_str, "Bundle dependency");
+        }
+
+        // Same bundle package a spec-from-bundle entry would depend on, so declaring
+        // both forms of the bundle in one spec still yields one package and one row.
+        pkg_cfg *bundle_cfg{
+          bundle::ensure_pkg_cfg(*pure_bundle, spec_path, &cfg, bundle_pkgs)
+        };
+        bundle_cfg->needed_by = needed_by;
+        parsed_deps.push_back(bundle_cfg);
+        continue;
       }
-      return names;
-    }() };
 
-    // Check for pure bundle dependency: {bundle = "id", source = "..."}
-    if (auto pure_bundle{ try_parse_pure_bundle_dep(table, spec_path) }) {
-      if (dep_setup.has_value()) {
-        throw std::runtime_error(
-            "Bundle dependencies cannot select 'setup' pairs "
-            "(spec '" +
-            cfg.identity + "')");
+      // Both strong and weak deps may select 'setup'. Strong deps merge through
+      // ensure_pkg; weak deps carry the selection on their weak_reference record
+      // and merge it into whatever package they resolve to (see
+      // wire_dependency_graph / engine::resolve_*_ref). Existence of the selected
+      // pairs is validated post-resolution.
+      auto const apply_dep_setup{ [&](pkg_cfg *dep_cfg) {
+        if (!dep_setup.has_value()) { return; }
+        dep_cfg->setup = dep_setup;
+      } };
+
+      // Check for spec-from-bundle: {spec = "id", bundle = "ref"}
+      sol::object bundle_obj{ table["bundle"] };
+      if (bundle_obj.valid() && bundle_obj.get_type() != sol::type::lua_nil) {
+        pkg_cfg *dep_cfg{ parse_spec_from_bundle_dep(table,
+                                                     spec_path,
+                                                     aliases,
+                                                     declared_bundles,
+                                                     &cfg,
+                                                     bundle_pkgs) };
+
+        if (!cfg.identity.starts_with("local.") &&
+            dep_cfg->identity.starts_with("local.")) {
+          throw std::runtime_error("non-local spec '" + cfg.identity +
+                                   "' cannot depend on local spec '" + dep_cfg->identity +
+                                   "'");
+        }
+        apply_dep_setup(dep_cfg);
+        parsed_deps.push_back(dep_cfg);
+        continue;
       }
-      std::string const bundle_id{ pure_bundle->bundle_identity };
 
-      // Register this bundle for identity-based lookups
-      declared_bundles[bundle_id] = *pure_bundle;
-
-      // Parse needed_by for pure bundle deps
-      std::optional<pkg_phase> needed_by;
-      auto needed_by_str{
-        sol_util_get_optional<std::string>(table, "needed_by", "Bundle dependency")
-      };
-      if (needed_by_str.has_value()) {
-        needed_by = pkg_phase_parse_needed_by(*needed_by_str, "Bundle dependency");
-      }
-
-      // Same bundle package a spec-from-bundle entry would depend on, so declaring
-      // both forms of the bundle in one spec still yields one package and one row.
-      pkg_cfg *bundle_cfg{
-        bundle::ensure_pkg_cfg(*pure_bundle, spec_path, &cfg, bundle_pkgs)
-      };
-      bundle_cfg->needed_by = needed_by;
-      parsed_deps.push_back(bundle_cfg);
-      continue;
-    }
-
-    // Both strong and weak deps may select 'setup'. Strong deps merge through
-    // ensure_pkg; weak deps carry the selection on their weak_reference record
-    // and merge it into whatever package they resolve to (see
-    // wire_dependency_graph / engine::resolve_*_ref). Existence of the selected
-    // pairs is validated post-resolution.
-    auto const apply_dep_setup{ [&](pkg_cfg *dep_cfg) {
-      if (!dep_setup.has_value()) { return; }
-      dep_cfg->setup = dep_setup;
-    } };
-
-    // Check for spec-from-bundle: {spec = "id", bundle = "ref"}
-    sol::object bundle_obj{ table["bundle"] };
-    if (bundle_obj.valid() && bundle_obj.get_type() != sol::type::lua_nil) {
-      pkg_cfg *dep_cfg{ parse_spec_from_bundle_dep(table,
-                                                   spec_path,
-                                                   aliases,
-                                                   declared_bundles,
-                                                   &cfg,
-                                                   bundle_pkgs) };
-
+      // Standard dependency (no bundle field)
+      pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
       if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
         throw std::runtime_error("non-local spec '" + cfg.identity +
                                  "' cannot depend on local spec '" + dep_cfg->identity +
@@ -938,35 +1001,14 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       }
       apply_dep_setup(dep_cfg);
       parsed_deps.push_back(dep_cfg);
-      continue;
+    } catch (std::exception const &e) {
+      throw std::runtime_error("spec '" + cfg.identity + "': DEPENDENCIES[" +
+                               std::to_string(i) + "]: " + e.what());
     }
-
-    // Standard dependency (no bundle field)
-    pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, true) };
-    if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
-      throw std::runtime_error("non-local spec '" + cfg.identity +
-                               "' cannot depend on local spec '" + dep_cfg->identity +
-                               "'");
-    }
-    apply_dep_setup(dep_cfg);
-    parsed_deps.push_back(dep_cfg);
   }
 
+  pkg_cfg_reject_option_variants(parsed_deps, "spec '" + cfg.identity + "' DEPENDENCIES");
   return parsed_deps;
-}
-
-sol::object store_options_in_registry(sol::state &lua,
-                                      std::string const &serialized_options) {
-  sol::protected_function_result opts_result{
-    lua.safe_script("return " + serialized_options, sol::script_pass_on_error)
-  };
-
-  if (!opts_result.valid()) {
-    sol::error err = opts_result;
-    throw std::runtime_error("Failed to deserialize options: " + std::string(err.what()));
-  }
-
-  return opts_result.get<sol::object>();
 }
 
 void run_options(pkg *p, sol::state &lua) {
@@ -1025,12 +1067,6 @@ void wire_dependency_graph(pkg *p, engine &eng) {
     bool const is_pure_bundle_dep{ dep_cfg->bundle_identity.has_value() &&
                                    dep_cfg->identity == *dep_cfg->bundle_identity };
 
-    engine_validate_dependency_cycle(
-        dep_cfg->identity,
-        p->ancestor_chain,
-        p->cfg->identity,
-        is_pure_bundle_dep ? "Bundle dependency" : "Dependency");
-
     pkg_phase const needed_by_phase{ dep_cfg->needed_by.has_value()
                                          ? static_cast<pkg_phase>(*dep_cfg->needed_by)
                                          : pkg_phase::pkg_build };
@@ -1061,13 +1097,8 @@ void wire_dependency_graph(pkg *p, engine &eng) {
     }
 
     if (dep_cfg->is_weak_reference()) {
-      // No closure overlaps the window where the weak pass can satisfy a reference:
-      // depot bootstrap runs after the resolution loop has finished; a
-      // source.dependencies closure runs while the barrier is held shut by the
-      // consumer waiting on it; a DEFAULT_SHELL closure is started at
-      // target=completion before any worker exists, so it reaches its own string
-      // verbs well ahead of the barrier. Same refusal in every case, named by the
-      // closure.
+      // No closure overlaps the weak pass's window: a member runs before it (fetch) or
+      // after it (depot_bootstrap, default_shell). Same refusal, named by the closure.
       //
       // Checked in the same critical section as the append, against the same mutex
       // engine::mark_closure scans under. Checking outside it would leave a window
@@ -1075,9 +1106,7 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       // package joins a closure holding a reference nothing can resolve: either the
       // mark observes this append, or this observes the mark.
       std::lock_guard const deps_lock(p->deps_mutex);
-      for (auto const kind : { pkg_closure::depot_bootstrap,
-                               pkg_closure::fetch,
-                               pkg_closure::default_shell }) {
+      for (auto const kind : kAllClosures) {
         if (p->in_closure(kind)) {
           throw std::runtime_error(
               std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
@@ -1095,66 +1124,23 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       continue;
     }
 
-    if (is_product_dep) {
-      // Strong product dependency (has source) - wire directly, no weak resolution needed
-      pkg *dep{ eng.ensure_pkg(dep_cfg) };
-
-      {
-        std::lock_guard const deps_lock(p->deps_mutex);
-        p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
-        auto &pd{ p->product_dependencies.at(*dep_cfg->product) };
-        pd.provider = dep;
-        pd.constraint_identity = dep_cfg->identity;
-      }
-      eng.propagate_closures(p, dep);
-      ENVY_TRACE(dependency_added,
-                 p->cfg->identity,
-                 .dependency = dep_cfg->identity,
-                 .needed_by = needed_by_phase);
-
-      std::vector<std::string> child_chain{ p->ancestor_chain };
-      child_chain.push_back(p->cfg->identity);
-      eng.start_pkg_thread(dep, pkg_phase::spec_fetch, std::move(child_chain));
-
-      continue;
-    }
-
-    // Handle pure bundle dependencies specially
-    if (is_pure_bundle_dep) {
-      // Pure bundle deps fetch the bundle but don't execute spec phases
-      pkg *dep{ eng.ensure_pkg(dep_cfg) };
-      {
-        std::lock_guard const deps_lock(p->deps_mutex);
-        p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
-      }
-      eng.propagate_closures(p, dep);
-      ENVY_TRACE(dependency_added,
-                 p->cfg->identity,
-                 .dependency = dep_cfg->identity,
-                 .needed_by = needed_by_phase);
-
-      std::vector<std::string> child_chain{ p->ancestor_chain };
-      child_chain.push_back(p->cfg->identity);
-      eng.start_pkg_thread(dep, pkg_phase::spec_fetch, std::move(child_chain));
-      continue;
-    }
-
+    // Strong: wire directly, no weak resolution needed. A pure bundle dep is the
+    // same edge — the dependency just stops after spec_fetch, having materialized
+    // the bundle — so only the error wording and the product pin differ.
     pkg *dep{ eng.ensure_pkg(dep_cfg) };
+    eng.wire_dependency(p,
+                        dep,
+                        needed_by_phase,
+                        is_pure_bundle_dep ? "Bundle dependency" : "Dependency");
 
-    // Store dependency info in parent's map for ctx.pkg() lookup and phase coordination
-    {
+    if (is_product_dep) {
       std::lock_guard const deps_lock(p->deps_mutex);
-      p->dependencies[dep_cfg->identity] = { dep, needed_by_phase };
+      auto &pd{ p->product_dependencies.at(*dep_cfg->product) };
+      pd.provider = dep;
+      pd.constraint_identity = dep_cfg->identity;
     }
-    eng.propagate_closures(p, dep);
-    ENVY_TRACE(dependency_added,
-               p->cfg->identity,
-               .dependency = dep_cfg->identity,
-               .needed_by = needed_by_phase);
 
-    std::vector<std::string> child_chain{ p->ancestor_chain };
-    child_chain.push_back(p->cfg->identity);
-    eng.start_pkg_thread(dep, pkg_phase::spec_fetch, std::move(child_chain));
+    eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
   }
 }
 
@@ -1279,16 +1265,19 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
                 }
                 sol::state_view parent_lua{ *parent_acc };
 
-                auto fetch_func_opt{ pkg_cfg::get_bundle_fetch(parent_lua, bundle_id) };
+                auto fetch_func_opt{ find_fetch_function(
+                    parent_lua,
+                    { .what = fetch_fn_query::kind::BUNDLE, .identity = bundle_id }) };
                 if (!fetch_func_opt) {
                   throw std::runtime_error(
                       "Bundle custom fetch function not found in parent spec for: " +
                       bundle_id);
                 }
 
-                // Set up phase context in parent's Lua state
+                // Same split as a spec's custom fetch: the bundle package owns the
+                // declared dependencies, the declaring spec only lends its interpreter.
                 phase_context_guard ctx_guard{ &eng,
-                                               parent,
+                                               p,
                                                parent_lua.lua_state(),
                                                tmp_dir,
                                                cache_result.lock.get() };
@@ -1310,7 +1299,13 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
                                            bundle_id);
                 }
 
-                phase_context ctx{ &eng, p, tmp_dir, cache_result.lock.get() };
+                // The manifest Lua lock is held for this whole call, so envy.run
+                // inside it gets the platform built-in rather than re-entering it.
+                phase_context ctx{ .eng = &eng,
+                                   .p = p,
+                                   .run_dir = tmp_dir,
+                                   .lock = cache_result.lock.get(),
+                                   .builtin_shell = true };
                 tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
 
                 auto err{ m->run_bundle_fetch(bundle_id, &ctx, tmp_dir) };
@@ -1506,20 +1501,12 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
 
   try {  // Store options in Lua registry
     lua->registry()[ENVY_OPTIONS_RIDX] =
-        store_options_in_registry(*lua, cfg.serialized_options);
+        deserialize_options(*lua, cfg.serialized_options);
   } catch (std::runtime_error const &e) {
     throw std::runtime_error(e.what() + std::string(" for ") + cfg.identity);
   }
 
   run_options(p, *lua);
-
-  {  // Extract dependency identities for ctx.pkg() validation
-    std::lock_guard const deps_lock(p->deps_mutex);
-    p->declared_dependencies.reserve(p->owned_dependency_cfgs.size());
-    for (auto const *dep_cfg : p->owned_dependency_cfgs) {
-      p->declared_dependencies.push_back(dep_cfg->identity);
-    }
-  }
 
   p->lua.set(std::move(lua));
 

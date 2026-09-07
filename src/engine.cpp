@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -72,6 +73,30 @@ constexpr bool is_setup_pair_key(std::string_view key) {
   return key.find("#setup:") != std::string_view::npos;
 }
 
+// Engine-owned task keys ("#depot", "#default_shell"): not packages, and pkg_key
+// throws on them. A SETUP pair key is "<canonical>#setup:<name>", so it never leads.
+constexpr bool is_engine_task_key(std::string_view key) { return key.starts_with('#'); }
+
+// The synthetic package a manifest-wide DEFAULT_SHELL function authorizes against.
+constexpr char kDefaultShellConsumerIdentity[]{ "envy.DEFAULT_SHELL@v1" };
+
+// Machine-stable kind for the trace: which built-in, or which custom form.
+constexpr std::string_view shell_kind_name(resolved_shell const &shell) {
+  return std::visit(
+      match{ [](shell_choice c) -> std::string_view {
+              switch (c) {
+                case shell_choice::bash: return "bash";
+                case shell_choice::sh: return "sh";
+                case shell_choice::cmd: return "cmd";
+                case shell_choice::powershell: return "powershell";
+              }
+              return "unknown";
+            },
+             [](custom_shell_file const &) -> std::string_view { return "file"; },
+             [](custom_shell_inline const &) -> std::string_view { return "inline"; } },
+      shell);
+}
+
 // Walk `root` and everything reachable through its dependencies, calling `visit`
 // once per package. One worklist serves the whole traversal, so this does not copy a
 // node's dependency list per node; a node's lock is held only long enough to append
@@ -80,10 +105,6 @@ constexpr bool is_setup_pair_key(std::string_view key) {
 // skipped, which also makes this terminate on a dependency cycle and cheap to call
 // repeatedly. A package may be in several closures at once, so the bits are
 // independent — marking one never re-walks or clears another.
-constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap,
-                                      pkg_closure::fetch,
-                                      pkg_closure::default_shell };
-
 template <typename Fn>
 void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
   auto const bit{ static_cast<uint8_t>(kind) };
@@ -100,98 +121,105 @@ void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
   }
 }
 
-bool has_dependency_path(pkg const *from, pkg const *to) {
-  if (from == to) { return true; }
+// The edge path from → … → to, or empty when `to` is unreachable. Each node's lock
+// is held only long enough to snapshot its edges, so no two pkg locks ever nest.
+std::vector<pkg *> dependency_path(pkg *from, pkg *to) {
+  if (from == to) { return { from }; }
 
-  // DFS to find if 'to' is reachable from 'from' via dependencies
-  std::unordered_set<pkg const *> visited;
-  std::vector<pkg const *> stack{ from };
+  std::unordered_map<pkg *, pkg *> came_from{ { from, nullptr } };
+  std::vector<pkg *> stack{ from };
 
   while (!stack.empty()) {
-    pkg const *current{ stack.back() };
+    pkg *const current{ stack.back() };
     stack.pop_back();
 
-    if (visited.contains(current)) { continue; }
-    visited.insert(current);
+    auto const children{ [current] {
+      std::lock_guard const deps_lock(current->deps_mutex);
+      std::vector<pkg *> c;
+      c.reserve(current->dependencies.size());
+      for (auto const &[_, dep_info] : current->dependencies) { c.push_back(dep_info.p); }
+      return c;
+    }() };
 
-    std::lock_guard const deps_lock(current->deps_mutex);
-    for (auto const &[dep_identity, dep_info] : current->dependencies) {
-      if (dep_info.p == to) { return true; }
-      if (!visited.contains(dep_info.p)) { stack.push_back(dep_info.p); }
+    for (pkg *child : children) {
+      if (!came_from.emplace(child, current).second) { continue; }
+      if (child != to) {
+        stack.push_back(child);
+        continue;
+      }
+      std::vector<pkg *> path{ child };
+      for (pkg *at{ current }; at; at = came_from.at(at)) { path.push_back(at); }
+      std::ranges::reverse(path);
+      return path;
     }
   }
 
-  return false;
+  return {};
 }
 
-// Two cfgs collapsed onto one pkg_key, and both name a bundle. The key is identity
-// plus options — never the source — so the cfg that happened to win the insert would
-// silently decide which payload gets fetched. Refuse when the declarations provably
-// disagree; warn when they cannot be compared at all.
-void validate_bundle_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) {
-  auto const *a{ std::get_if<pkg_cfg::bundle_source>(&winner->source) };
-  auto const *b{ std::get_if<pkg_cfg::bundle_source>(&other->source) };
-  if (!a || !b) { return; }
-
+// Two cfgs on one pkg_key: the key is identity plus options, never the source, so the cfg
+// that won the insert would silently decide what gets fetched. Refuse a provable
+// disagreement; warn when two Lua closures make the pair incomparable.
+void validate_source_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) {
   auto const where{ [](pkg_cfg const *cfg) {
     return cfg->declaring_file_path.empty() ? std::string{ "<unknown>" }
                                             : cfg->declaring_file_path.string();
   } };
 
-  switch (bundle_source_compare(*a, *b)) {
-    case bundle_source_match::SAME: return;
+  auto const *a{ std::get_if<pkg_cfg::bundle_source>(&winner->source) };
+  auto const *b{ std::get_if<pkg_cfg::bundle_source>(&other->source) };
+  bool const bundles{ a && b };
+  std::string const what{ bundles ? "bundle" : "spec" };
+  std::string const subject{ bundles ? a->bundle_identity : winner->identity };
 
-    case bundle_source_match::INCOMPARABLE:
-      // Custom fetch closures: both were written to produce this bundle, so run the
+  switch (pkg_cfg_source_compare(winner->source, other->source)) {
+    case pkg_source_match::SAME: return;
+
+    case pkg_source_match::INCOMPARABLE:
+      // Custom fetch closures: both were written to produce this payload, so run the
       // winner rather than failing, but say which declaration lost.
       tui::warn(
-          "bundle '%s' declares a custom fetch function in both %s and %s; the one in "
-          "%s will run",
-          a->bundle_identity.c_str(),
+          "%s '%s' declares a custom fetch function in both %s and %s; the one in %s "
+          "will run",
+          what.c_str(),
+          subject.c_str(),
           where(winner).c_str(),
           where(other).c_str(),
           where(winner).c_str());
       return;
 
-    case bundle_source_match::DIFFERENT:
-      if (a->bundle_identity != b->bundle_identity) {
+    case pkg_source_match::DIFFERENT:
+      if (bundles && a->bundle_identity != b->bundle_identity) {
         throw std::runtime_error(
             "spec '" + winner->identity + "' is requested from two different bundles: '" +
             a->bundle_identity + "' (" + where(winner) + ") and '" + b->bundle_identity +
             "' (" + where(other) + "); one declaration must be corrected");
       }
-      throw std::runtime_error("bundle '" + a->bundle_identity +
+      throw std::runtime_error(what + " '" + subject +
                                "' is declared with conflicting sources in " +
-                               where(winner) + " and " + where(other) +
-                               "; a bundle identity must name one payload");
-  }
-}
-
-void wire_dependency(pkg *parent, pkg *dep, pkg_phase needed_by) {
-  std::lock_guard const deps_lock(parent->deps_mutex);
-
-  if (!parent->dependencies.contains(dep->cfg->identity)) {
-    parent->dependencies[dep->cfg->identity] = { dep, needed_by };
-    ENVY_TRACE(dependency_added,
-               parent->cfg->identity,
-               .dependency = dep->cfg->identity,
-               .needed_by = needed_by);
-  }
-
-  if (std::ranges::find(parent->declared_dependencies, dep->cfg->identity) ==
-      parent->declared_dependencies.end()) {
-    parent->declared_dependencies.push_back(dep->cfg->identity);
+                               where(winner) + " and " + where(other) + "; a " + what +
+                               " identity must name one payload");
   }
 }
 
 // Merge a weak reference's SETUP selection into the package it resolved to
-// (union with all other referrers). Weak resolution wires to an existing
-// package without an ensure_pkg call, so the selection is merged here instead.
-// Runs during graph resolution, strictly before any setup phase executes, so
-// the consumed guard never fires in practice — kept for symmetry with
-// ensure_pkg and to catch a pathologically late resolution. Locks only `dep`.
+// (union with all other referrers). Weak resolution wires to an existing package
+// without an ensure_pkg call, so the selection is merged here instead. A closure
+// member is refused outright: its setup phase runs either before the weak pass
+// (fetch) or after it (depot_bootstrap, default_shell), so the selection would land
+// too late or not at all — refuse deterministically instead of dropping pairs.
 void merge_setup_selection(pkg *dep, std::vector<std::string> const &names) {
   if (names.empty()) { return; }
+
+  for (auto const kind : kAllClosures) {
+    if (!dep->in_closure(kind)) { continue; }
+    throw std::runtime_error(
+        "SETUP selection for " + dep->cfg->identity +
+        " cannot come from a weak dependency: it is in the " +
+        std::string{ pkg_closure_name(kind) } +
+        ", whose setup phase runs outside the window where weak references resolve");
+  }
+
   std::lock_guard const deps_lock(dep->deps_mutex);
   size_t const before{ dep->setup_selected.size() };
   dep->setup_selected.insert(names.begin(), names.end());
@@ -203,8 +231,31 @@ void merge_setup_selection(pkg *dep, std::vector<std::string> const &names) {
   }
 }
 
+// Record `provider` as the answer to `wr`, under `p`'s lock: the provider's key
+// joins the hash input here rather than in a post-resolution sweep, so a closure
+// member that hashes mid-resolution already sees it.
+void record_resolution(pkg *p, pkg::weak_reference *wr, pkg *provider) {
+  std::lock_guard const deps_lock(p->deps_mutex);
+  wr->resolved = provider;
+
+  auto const key{ provider->key.canonical() };
+  auto &keys{ p->resolved_weak_dependency_keys };
+  if (auto const at{ std::ranges::lower_bound(keys, key) };
+      at == keys.end() || *at != key) {
+    keys.insert(at, key);
+  }
+
+  if (!wr->is_product) { return; }
+  auto const it{ p->product_dependencies.find(wr->query) };
+  if (it == p->product_dependencies.end()) { return; }
+  it->second.provider = provider;
+  if (!wr->constraint_identity.empty()) {
+    it->second.constraint_identity = wr->constraint_identity;
+  }
+}
+
 // Log + trace a resolved product dependency. No-op for non-product references.
-// `via` is one of "identity" | "registry" | "fallback".
+// `via` is one of "registry" | "fallback".
 void trace_product_resolution(pkg const *consumer,
                               pkg::weak_reference const *wr,
                               pkg const *provider,
@@ -228,39 +279,24 @@ void resolve_identity_ref(pkg *p,
                           engine::weak_resolution_result &result,
                           std::vector<std::string> &ambiguity_messages,
                           engine &eng) {
-  auto const matches{ eng.find_matches(wr->query) };
+  auto matches{ eng.find_matches(wr->query) };
 
   if (matches.size() == 1) {
     pkg *dep{ matches[0] };
-
-    if (has_dependency_path(dep, p)) {
-      throw std::runtime_error("Weak dependency cycle detected: " + p->cfg->identity +
-                               " -> " + dep->cfg->identity +
-                               " (which already depends on " + p->cfg->identity + ")");
-    }
-
-    wire_dependency(p, dep, wr->needed_by);
+    eng.wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    eng.propagate_closures(p, dep);
-    {
-      std::lock_guard const deps_lock(p->deps_mutex);
-      wr->resolved = dep;
-      if (wr->is_product) {
-        auto const it{ p->product_dependencies.find(wr->query) };
-        if (it != p->product_dependencies.end()) {
-          it->second.provider = dep;
-          if (it->second.constraint_identity.empty()) {
-            it->second.constraint_identity = wr->constraint_identity;
-          }
-        }
-      }
-    }
-    trace_product_resolution(p, wr, dep, "identity");
+    // A match can be interned but unstarted (DEFAULT_SHELL.DEPENDS is), and an edge
+    // only ratchets a target — it never spawns the worker that would satisfy it.
+    eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
+    record_resolution(p, wr, dep);
     ++result.resolved;
     return;
   }
 
   if (matches.size() > 1) {
+    // find_matches walks an unordered map; sort so one graph always reports one
+    // message.
+    std::ranges::sort(matches, {}, [](pkg const *m) { return m->key.canonical(); });
     std::ostringstream oss;
     oss << "Reference '" << wr->query << "' in spec '" << p->cfg->identity
         << "' is ambiguous: ";
@@ -276,28 +312,10 @@ void resolve_identity_ref(pkg *p,
     wr->fallback->parent = p->cfg;
 
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
-    wire_dependency(p, dep, wr->needed_by);
+    eng.wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    eng.propagate_closures(p, dep);
-
-    std::vector<std::string> child_chain{ p->ancestor_chain };
-    child_chain.push_back(p->cfg->identity);
-    eng.start_pkg_thread(dep, pkg_phase::spec_fetch, std::move(child_chain));
-
-    {
-      std::lock_guard const deps_lock(p->deps_mutex);
-      wr->resolved = dep;
-      if (wr->is_product) {
-        auto const it{ p->product_dependencies.find(wr->query) };
-        if (it != p->product_dependencies.end()) {
-          it->second.provider = dep;
-          if (it->second.constraint_identity.empty()) {
-            it->second.constraint_identity = wr->constraint_identity;
-          }
-        }
-      }
-    }
-    trace_product_resolution(p, wr, dep, "fallback");
+    eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
+    record_resolution(p, wr, dep);
     ++result.fallbacks_started;
   }
 }
@@ -310,18 +328,6 @@ void resolve_product_ref(pkg *p,
                          engine::weak_resolution_result &result,
                          pkg *registry_provider,
                          engine &eng) {
-  auto set_product_provider = [&](pkg *provider) {
-    std::lock_guard const deps_lock(p->deps_mutex);
-    wr->resolved = provider;
-    auto const it{ p->product_dependencies.find(wr->query) };
-    if (it != p->product_dependencies.end()) {
-      it->second.provider = provider;
-      if (!wr->constraint_identity.empty()) {
-        it->second.constraint_identity = wr->constraint_identity;
-      }
-    }
-  };
-
   if (registry_provider) {
     pkg *dep{ registry_provider };
 
@@ -332,16 +338,9 @@ void resolve_product_ref(pkg *p,
                                "', but provider is '" + dep->cfg->identity + "'");
     }
 
-    if (has_dependency_path(dep, p)) {
-      throw std::runtime_error("Weak dependency cycle detected: " + p->cfg->identity +
-                               " -> " + dep->cfg->identity +
-                               " (which already depends on " + p->cfg->identity + ")");
-    }
-
-    wire_dependency(p, dep, wr->needed_by);
+    eng.wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    eng.propagate_closures(p, dep);
-    set_product_provider(dep);
+    record_resolution(p, wr, dep);
     trace_product_resolution(p, wr, dep, "registry");
     ++result.resolved;
     return;
@@ -351,15 +350,10 @@ void resolve_product_ref(pkg *p,
     wr->fallback->parent = p->cfg;
 
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
-    wire_dependency(p, dep, wr->needed_by);
+    eng.wire_dependency(p, dep, wr->needed_by);
     merge_setup_selection(dep, wr->setup);
-    eng.propagate_closures(p, dep);
-
-    std::vector<std::string> child_chain{ p->ancestor_chain };
-    child_chain.push_back(p->cfg->identity);
-    eng.start_pkg_thread(dep, pkg_phase::spec_fetch, std::move(child_chain));
-
-    set_product_provider(dep);
+    eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
+    record_resolution(p, wr, dep);
     trace_product_resolution(p, wr, dep, "fallback");
     ++result.fallbacks_started;
   }
@@ -385,26 +379,49 @@ bool pkg_provides_product(pkg *root, std::string const &product_name) {
 
 }  // namespace
 
-void engine_validate_dependency_cycle(std::string const &candidate_identity,
-                                      std::vector<std::string> const &ancestor_chain,
-                                      std::string const &current_identity,
-                                      std::string const &dependency_type) {
-  if (current_identity == candidate_identity) {  // Check for self-loop
-    throw std::runtime_error(dependency_type + " cycle detected: " + current_identity +
-                             " -> " + candidate_identity);
-  }
+void engine::wire_dependency(pkg *parent,
+                             pkg *dep,
+                             pkg_phase needed_by,
+                             std::string_view kind) {
+  {
+    // mutex_ spans check and insert (order mutex_ → deps_mutex, never reversed):
+    // two workers must not both find no cycle and then both add their edge.
+    std::lock_guard const lock(mutex_);
 
-  for (size_t i = 0; i < ancestor_chain.size(); ++i) {  // cycle in ancestor chain
-    if (ancestor_chain[i] == candidate_identity) {
-      std::ostringstream oss;
-      oss << dependency_type << " cycle detected: " << ancestor_chain[i];
-      for (size_t j{ i + 1 }; j < ancestor_chain.size(); ++j) {
-        oss << " -> " << ancestor_chain[j];
-      }
-      oss << " -> " << current_identity << " -> " << candidate_identity;
-      throw std::runtime_error(oss.str());
+    // Reachability, not the spawn path: an edge closes a cycle exactly when its
+    // target already reaches the parent, however it got there.
+    if (auto const path{ dependency_path(dep, parent) }; !path.empty()) {
+      std::string msg{ std::string{ kind } + " cycle detected: " + parent->cfg->identity };
+      for (pkg const *node : path) { msg += " -> " + node->cfg->identity; }
+      throw std::runtime_error(msg);
+    }
+
+    std::lock_guard const deps_lock(parent->deps_mutex);
+    auto const [it, inserted]{ parent->dependencies.try_emplace(
+        dep->cfg->identity,
+        pkg::dependency_info{ .p = dep, .needed_by = needed_by }) };
+
+    // Neither this map nor the Lua API that reads it can express two option
+    // variants of one identity, so the second one is an error rather than a
+    // silent overwrite.
+    if (!inserted && it->second.p != dep) {
+      throw std::runtime_error("spec '" + parent->cfg->identity + "' depends on '" +
+                               dep->cfg->identity + "' twice with different options: '" +
+                               it->second.p->key.canonical() + "' and '" +
+                               dep->key.canonical() + "'");
+    }
+
+    bool const tightened{ !inserted && needed_by < it->second.needed_by };
+    if (tightened) { it->second.needed_by = needed_by; }
+    if (inserted || tightened) {
+      ENVY_TRACE(dependency_added,
+                 parent->cfg->identity,
+                 .dependency = dep->cfg->identity,
+                 .needed_by = it->second.needed_by);
     }
   }
+
+  propagate_closures(parent, dep);
 }
 
 engine::engine(cache &cache, manifest const *manifest)
@@ -416,7 +433,7 @@ engine::engine(cache &cache, manifest const *manifest)
 engine::~engine() = default;  // core_ (declared last) fails + joins workers first
 
 std::string engine::trace_display(std::string const &key) const {
-  if (is_setup_pair_key(key)) { return key; }
+  if (is_setup_pair_key(key) || is_engine_task_key(key)) { return key; }
   std::lock_guard const lock(mutex_);
   auto const it{ packages_.find(pkg_key{ key }) };
   return it != packages_.end() ? it->second->cfg->identity : key;
@@ -435,7 +452,7 @@ task_engine::observer engine::make_trace_observer() {
             .blocked_at_phase = pair ? pkg_phase::pkg_setup : static_cast<pkg_phase>(step),
             .waiting_for = trace_display(dep),
             .target_phase =
-                pair ? pkg_phase::completion : static_cast<pkg_phase>(watermark));
+                pair ? pkg_phase::completion : phase_from_watermark(watermark));
       };
   obs.unblocked = [this](std::string const &key, int step, std::string const &dep) {
     if (!tui::g_trace_enabled) { return; }
@@ -501,7 +518,7 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
       // the time anyone can legally read this package's products.
       register_products(p);
       p->spec_fetch_completed = true;
-      on_spec_fetch_complete(p->cfg->identity);
+      on_spec_fetch_complete();
 
       // BUNDLE_ONLY packages stop after spec_fetch — no lua state to execute — but
       // they still report through the completion phase, so a bundle gets the same
@@ -515,10 +532,31 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
   };
 
   cfg.on_failed = [this, p] {
-    if (!p->spec_fetch_completed) { on_spec_fetch_complete(p->cfg->identity); }
+    if (!p->spec_fetch_completed) { on_spec_fetch_complete(); }
   };
 
   return cfg;
+}
+
+std::unique_ptr<pkg> engine::make_pkg(pkg_cfg const *cfg,
+                                      tui::section_handle section,
+                                      std::string canonical_identity_hash) {
+  return std::unique_ptr<pkg>(
+      new pkg{ .key = pkg_key{ *cfg },
+               .cfg = cfg,
+               .cache_ptr = &cache_,
+               .eng = this,
+               .tui_section = section,
+               .lua = nullptr,
+               .lock = nullptr,
+               .canonical_identity_hash = std::move(canonical_identity_hash),
+               .pkg_path = std::filesystem::path{},
+               .result_hash = {},
+               .type = pkg_type::UNKNOWN,
+               .owned_dependency_cfgs = {},
+               .dependencies = {},
+               .product_dependencies = {},
+               .weak_references = {} });
 }
 
 pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
@@ -529,25 +567,14 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
   {
     std::lock_guard const lock(mutex_);
 
-    auto p{ std::unique_ptr<pkg>(new pkg{ .key = key,
-                                          .cfg = cfg,
-                                          .cache_ptr = &cache_,
-                                          .eng = this,
-                                          .tui_section = tui::section_create(),
-                                          .lua = nullptr,
-                                          .lock = nullptr,
-                                          .canonical_identity_hash = key.canonical(),
-                                          .pkg_path = std::filesystem::path{},
-                                          .result_hash = {},
-                                          .type = pkg_type::UNKNOWN,
-                                          .declared_dependencies = {},
-                                          .owned_dependency_cfgs = {},
-                                          .dependencies = {},
-                                          .product_dependencies = {},
-                                          .weak_references = {} }) };
-
-    auto const [it, was_inserted]{ packages_.try_emplace(key, std::move(p)) };
-    inserted = was_inserted;
+    // Look before constructing: a duplicate call would otherwise build a whole
+    // package and a TUI row only to throw them away.
+    auto it{ packages_.find(key) };
+    if (it == packages_.end()) {
+      it = packages_.emplace(key, make_pkg(cfg, tui::section_create(), key.canonical()))
+               .first;
+      inserted = true;
+    }
     result = it->second.get();
 
     if (inserted) { ENVY_TRACE(spec_registered, cfg->identity, .key = key.canonical()); }
@@ -555,7 +582,7 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
     // A second cfg for an existing key: the source is not part of the key, so make
     // sure the two declarations agree about what to fetch.
     if (!inserted && result->cfg != cfg) {
-      validate_bundle_redeclaration(result->cfg, cfg);
+      validate_source_redeclaration(result->cfg, cfg);
     }
 
     if (cfg->setup.has_value() && !cfg->setup->empty()) {
@@ -607,6 +634,16 @@ std::vector<product_info> engine::collect_all_products() const {
     std::lock_guard const lock(mutex_);
 
     for (auto const &[key, package] : packages_) {
+      // type is written during spec_fetch and pkg_path across check/import/install:
+      // read each only once its own worker has published the step that writes it
+      // (the atomic completed count is the happens-before), or a still-running
+      // closure member is a data race.
+      int const done{ core_.completed(key.canonical()) };
+      pkg_type const type{ done >= 1 ? package->type : pkg_type::UNKNOWN };
+      auto const pkg_path{ done >= kDependencySatisfiedWatermark
+                               ? package->pkg_path
+                               : std::filesystem::path{} };
+
       // products/resolved_platforms are deps_mutex-guarded; mutex_ → deps_mutex
       // matches the resolution loop's order.
       std::lock_guard const deps_lock(package->deps_mutex);
@@ -621,8 +658,8 @@ std::vector<product_info> engine::collect_all_products() const {
             .product_name = prod_name,
             .value = prod_entry.value,
             .provider_canonical = package->key.canonical(),
-            .type = package->type,
-            .pkg_path = package->pkg_path,
+            .type = type,
+            .pkg_path = pkg_path,
             .script = prod_entry.script,
             .platforms = std::move(plats),
         });
@@ -646,18 +683,12 @@ std::vector<pkg *> engine::find_matches(std::string_view query) const {
   return matches;
 }
 
-void engine::start_pkg_thread(pkg *p,
-                              pkg_phase run_through,
-                              std::vector<std::string> ancestor_chain) {
-  // before_spawn runs exactly once, before the worker exists: the ancestor
-  // chain must be visible to the worker, and the spec-fetch counter must rise
-  // before the worker can decrement it.
-  core_.start_task(p->key.canonical(),
-                   watermark_through(run_through),
-                   [this, p, &ancestor_chain] {
-                     p->ancestor_chain = std::move(ancestor_chain);
-                     on_spec_fetch_start();
-                   });
+void engine::start_pkg_thread(pkg *p, pkg_phase run_through) {
+  // before_spawn runs exactly once, before the worker exists: the spec-fetch
+  // counter must rise before the worker can decrement it.
+  core_.start_task(p->key.canonical(), watermark_through(run_through), [this] {
+    on_spec_fetch_start();
+  });
 }
 
 void engine::extend_to_completion(pkg_key const &key) {
@@ -712,18 +743,17 @@ void engine::run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pa
   // Edges are baked into each config, so start order is irrelevant.
   for (auto const &name : pair_names) { core_.start_task(key_of.at(name), 1); }
 
-  // Wait for every pair and aggregate failures so one bad pair doesn't mask
-  // the others; unrelated in-flight pairs run to completion.
-  std::string errors;
+  // Wait for every pair so one bad pair doesn't mask the others, but re-throw only the
+  // first verbatim: joining them would store a third string nothing can dedup against.
+  std::string first_error;
   for (auto const &name : pair_names) {
     try {
       core_.wait_at(key_of.at(name), 1);
     } catch (std::exception const &e) {
-      errors += errors.empty() ? "" : "\n";
-      errors += e.what();
+      if (first_error.empty()) { first_error = e.what(); }
     }
   }
-  if (!errors.empty()) { throw std::runtime_error(errors); }
+  if (!first_error.empty()) { throw std::runtime_error(first_error); }
 }
 
 void engine::extend_dependencies_to_completion(pkg *p) {
@@ -774,16 +804,27 @@ package_depot_index const *engine::depot_index_for(pkg *p) {
 
   ensure_depot_task_started();
 
+  auto const wait_start{ std::chrono::steady_clock::now() };
+
   // The #depot worker broadcasts the global condition on completion/failure;
   // mark_closure broadcasts when this package's exemption flips late
   // (it was wired into the depot's DEPENDS closure after blocking here).
   core_.wait_global([this, p] {
-    return depot_state_ != depot_state::NOT_READY ||
+    return depot_state_ != task_state::NOT_READY ||
            p->in_closure(pkg_closure::depot_bootstrap);
   });
 
-  if (p->in_closure(pkg_closure::depot_bootstrap)) { return nullptr; }
-  if (depot_state_ == depot_state::FAILED) { throw std::runtime_error(depot_error_); }
+  bool const bootstrap{ p->in_closure(pkg_closure::depot_bootstrap) };
+  bool const failed{ !bootstrap && depot_state_ == task_state::FAILED };
+  ENVY_TRACE(depot_wait,
+             p->cfg->identity,
+             .duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - wait_start)
+                 .count(),
+             .result = bootstrap ? "bootstrap" : (failed ? "failed" : "ready"));
+
+  if (bootstrap) { return nullptr; }
+  if (failed) { throw std::runtime_error(depot_error_); }
   return depot_index_ ? &*depot_index_ : nullptr;
 }
 
@@ -797,7 +838,7 @@ void engine::ensure_depot_task_started() {
         depot_edge_deps_ = spawn_depot_dependencies();
       } catch (std::exception const &e) {
         depot_error_ = std::string{ "package depot: " } + e.what();
-        throw;
+        throw std::runtime_error(depot_error_);  // task and waiters store one message
       }
     };
     cfg.edges = [this](int) {
@@ -814,14 +855,16 @@ void engine::ensure_depot_task_started() {
       try {
         run_depot_step();
       } catch (std::exception const &e) {
+        // Throw what the waiters get: a bare rethrow would store the unprefixed
+        // message here and defeat aggregated_failures' dedup.
         depot_error_ = std::string{ "package depot: " } + e.what();
-        throw;
+        throw std::runtime_error(depot_error_);
       }
       return false;
     };
     cfg.on_failed = [this] {
       if (depot_error_.empty()) { depot_error_ = "package depot: dependency failed"; }
-      depot_state_ = depot_state::FAILED;
+      depot_state_ = task_state::FAILED;
     };
 
     if (!core_.ensure_task(std::move(cfg))) {
@@ -892,7 +935,8 @@ void engine::run_depot_step() {
       phase_context ctx{ .eng = this,
                          .p = nullptr,
                          .run_dir = depot_tmp,
-                         .lock = nullptr };
+                         .lock = nullptr,
+                         .builtin_shell = true };
       auto const result{
         manifest_->run_depot_fetch(lua_index, &ctx, depot_tmp, dep_paths)
       };
@@ -914,7 +958,7 @@ void engine::run_depot_step() {
     }
 
     depot_index_ = std::move(merged);
-    depot_state_ = depot_state::READY;
+    depot_state_ = task_state::READY;
   } catch (...) {
     fs::remove_all(depot_tmp, ec);
     throw;
@@ -943,9 +987,9 @@ void engine::mark_closure(pkg *p, pkg_closure kind) {
                                "resolve");
     }
 
-    if (kind == pkg_closure::depot_bootstrap) {
-      core_.notify_global();  // Wake a depot wait this package may be blocked in
-    }
+    // The bit is what releases a member already parked in a bootstrap wait, so
+    // every kind wakes them; kAllClosures grows without another special case here.
+    core_.notify_global();
   });
 }
 
@@ -983,18 +1027,8 @@ bundle *engine::find_bundle(std::string const &identity) const {
 void engine::extend_dependencies_recursive(pkg *p, std::unordered_set<pkg_key> &visited) {
   if (!visited.insert(p->key).second) { return; }  // Already visited (cycle detection)
 
-  // Extend this package's target to completion
-  std::string const canonical{ p->key.canonical() };
-  int const old_target{ core_.target(canonical) };
-
-  if (old_target < core_.step_count(canonical)) {
-    ENVY_TRACE(target_extended,
-               p->cfg->identity,
-               .old_target = phase_from_watermark(old_target),
-               .new_target = pkg_phase::completion);
-  }
-
-  core_.extend_to_done(canonical);
+  // The observer traces the extension; doing it here too would double-report it.
+  core_.extend_to_done(p->key.canonical());
 
   // Recursively extend all dependencies (snapshot: no nested pkg locks)
   auto const deps{ [&] {
@@ -1019,26 +1053,14 @@ void engine::wait_for_resolution_phase() {
 
 void engine::on_spec_fetch_start() { pending_spec_fetches_.fetch_add(1); }
 
-void engine::on_spec_fetch_complete(std::string const &) {
+void engine::on_spec_fetch_complete() {
   if (pending_spec_fetches_.fetch_sub(1) - 1 == 0) { core_.notify_global(); }
 }
 
-bool engine::is_default_shell_member(pkg *p) {
-  if (p->in_closure(pkg_closure::default_shell)) { return true; }
-
-  // The bit is the whole answer once the shell has resolved: there is no wait left to
-  // deadlock against, and propagate_closures has long since caught up. Before that it
-  // can be stale — a package the interpreter depends on may have started its own
-  // worker before the interpreter's spec_fetch wired the edge that flags it, and that
-  // package is exactly who default_shell()'s wait would deadlock against. So ask the
-  // graph directly in that window, and flag what it finds to keep the next call cheap.
-  if (default_shell_ready_.load()) { return false; }
-
-  start_default_shell_deps();
-  for (pkg *dep : default_shell_deps_) {
-    if (!has_dependency_path(dep, p)) { continue; }
-    mark_closure(p, pkg_closure::default_shell);
-    return true;
+bool engine::builtin_shell_only(pkg const *p) const {
+  if (!p) { return true; }
+  for (auto const kind : kAllClosures) {
+    if (p->in_closure(kind)) { return true; }
   }
   return false;
 }
@@ -1048,93 +1070,125 @@ resolved_shell engine::default_shell(pkg *p) {
     return shell_resolve_default(&default_shell_decl_.value);
   }
 
-  // The interpreter's own closure cannot run its string verbs through the shell it
-  // supplies, so it never reaches the evaluation below.
-  if (p && is_default_shell_member(p)) { return shell_resolve_default(nullptr); }
+  // Bootstrap work runs before the manifest shell can exist — every closure member
+  // is either supplying that shell or running outside the window where it could —
+  // and the manifest Lua state is one non-recursive mutex, so evaluating the shell
+  // can never nest inside itself either (phase_context::builtin_shell covers that).
+  if (builtin_shell_only(p)) { return shell_resolve_default(nullptr); }
 
-  std::call_once(default_shell_once_, [this] {
-    try {
-      resolve_default_shell_fn();
-    } catch (std::exception const &e) { default_shell_error_ = e.what(); }
-    default_shell_ready_ = true;  // failed or not: nothing waits on it after this
+  ensure_default_shell_task_started();
+
+  // The #default_shell worker broadcasts on publish/failure; mark_closure broadcasts
+  // when this package's exemption flips late (it was wired into a bootstrap closure
+  // after blocking here). Atomic reads only: the watchdog evaluates this too.
+  core_.wait_global([this, p] {
+    return default_shell_state_.load() != task_state::NOT_READY || builtin_shell_only(p);
   });
 
-  if (!default_shell_error_.empty()) { throw std::runtime_error(default_shell_error_); }
+  if (builtin_shell_only(p)) { return shell_resolve_default(nullptr); }
+  if (default_shell_state_ == task_state::FAILED) {
+    throw std::runtime_error(default_shell_error_);
+  }
   return shell_resolve_default(&default_shell_);
 }
 
-void engine::start_default_shell_deps() {
-  std::call_once(default_shell_deps_once_, [this] {
-    if (!default_shell_decl_.is_function || default_shell_decl_.depends.empty()) {
-      return;
+void engine::intern_default_shell_deps() {
+  if (!default_shell_decl_.is_function || default_shell_decl_.depends.empty()) { return; }
+  if (!default_shell_deps_.empty()) { return; }  // the identities never change
+
+  // DEPENDS names packages the manifest already declares, as PACKAGE_DEPOTS does.
+  auto const cfgs{ engine_resolve_targets(manifest_->packages,
+                                          default_shell_decl_.depends,
+                                          "DEFAULT_SHELL") };
+
+  std::vector<pkg *> deps;
+  deps.reserve(cfgs.size());
+  for (auto const *cfg : cfgs) {
+    pkg *dep{ ensure_pkg(cfg) };
+    mark_closure(dep, pkg_closure::default_shell);
+    deps.push_back(dep);
+  }
+  default_shell_deps_ = std::move(deps);
+}
+
+void engine::ensure_default_shell_task_started() {
+  std::call_once(default_shell_task_once_, [this] {
+    task_engine::task_config cfg;
+    cfg.key = kDefaultShellTaskKey;
+    cfg.step_count = 1;
+    // Started here, not in resolve_graph, so a run that never asks for a shell never
+    // builds the interpreter; to completion, since nothing else ratchets these.
+    cfg.on_start = [this] {
+      try {
+        intern_default_shell_deps();  // no-op after resolve_graph, which does it first
+        ENVY_TRACE(default_shell_resolving,
+                   kDefaultShellConsumerIdentity,
+                   .depends = static_cast<std::int64_t>(default_shell_deps_.size()));
+        for (pkg *dep : default_shell_deps_) {
+          start_pkg_thread(dep, pkg_phase::completion);
+        }
+      } catch (std::exception const &e) {
+        default_shell_error_ = std::string{ "DEFAULT_SHELL: " } + e.what();
+        throw std::runtime_error(default_shell_error_);  // one message, task and waiters
+      }
+    };
+    cfg.edges = [this](int) {
+      std::vector<task_engine::edge> edges;
+      edges.reserve(default_shell_deps_.size());
+      for (pkg *dep : default_shell_deps_) {
+        edges.push_back({ dep->key.canonical(),
+                          kDependencySatisfiedWatermark,
+                          kDependencyRunThroughWatermark });
+      }
+      return edges;
+    };
+    cfg.step = [this](int) {
+      try {
+        run_default_shell_step();
+      } catch (std::exception const &e) {
+        // Throw what the waiters get, so task and waiter store one string (see #depot).
+        default_shell_error_ = std::string{ "DEFAULT_SHELL: " } + e.what();
+        throw std::runtime_error(default_shell_error_);
+      }
+      return false;
+    };
+    cfg.on_failed = [this] {
+      if (default_shell_error_.empty()) {
+        default_shell_error_ = "DEFAULT_SHELL: dependency failed";
+      }
+      default_shell_state_ = task_state::FAILED;
+    };
+
+    if (!core_.ensure_task(std::move(cfg))) {
+      throw std::runtime_error("DEFAULT_SHELL task key collides with existing task");
     }
-
-    // DEPENDS names packages the manifest already declares, as PACKAGE_DEPOTS does.
-    auto const cfgs{ engine_resolve_targets(manifest_->packages,
-                                            default_shell_decl_.depends,
-                                            "DEFAULT_SHELL") };
-
-    default_shell_deps_.reserve(cfgs.size());
-    for (auto const *cfg : cfgs) {
-      pkg *dep{ ensure_pkg(cfg) };
-      mark_closure(dep, pkg_closure::default_shell);
-      default_shell_deps_.push_back(dep);
-    }
-
-    // Started only once every member carries the carve-out, and to full completion:
-    // the first shell request can land before or after the resolution loop, so
-    // nothing else is guaranteed to ratchet these.
-    for (pkg *dep : default_shell_deps_) { start_pkg_thread(dep, pkg_phase::completion); }
+    core_.start_task(kDefaultShellTaskKey, 1);
   });
 }
 
-void engine::resolve_default_shell_fn() {
-  start_default_shell_deps();  // no-op after resolve_graph; covers callers without one
-  for (pkg *dep : default_shell_deps_) { wait_for_completion(dep->key); }
-
+void engine::run_default_shell_step() {
   // A manifest-wide shell has no package of its own to authorize against, so it gets
-  // one: a consumer holding an edge to each DEPENDS entry. It is deliberately absent
-  // from packages_ — it is never scheduled, matched, or reported — and sits at
-  // completion because every edge it holds is already satisfied by the waits above.
-  default_shell_consumer_cfg_ =
-      pkg_cfg::pool()->emplace("envy.DEFAULT_SHELL@v1",
-                               pkg_cfg::source_t{ pkg_cfg::weak_ref{} },
-                               std::string{},
-                               std::optional<pkg_phase>{},
-                               nullptr,
-                               nullptr,
-                               std::vector<pkg_cfg *>{},
-                               std::optional<std::string>{},
-                               manifest_->manifest_path);
+  // one: a consumer holding an edge to each DEPENDS entry, wired through the same
+  // path as everyone else's. It is deliberately absent from packages_ — never
+  // scheduled, matched, or reported — and sits at completion because this task's own
+  // edges have already carried every DEPENDS entry through setup.
+  pkg_cfg const *const consumer_cfg{
+    pkg_cfg::pool()->emplace(kDefaultShellConsumerIdentity,
+                             pkg_cfg::source_t{ pkg_cfg::weak_ref{} },
+                             std::string{},
+                             std::optional<pkg_phase>{},
+                             nullptr,
+                             nullptr,
+                             std::vector<pkg_cfg *>{},
+                             std::optional<std::string>{},
+                             manifest_->manifest_path)
+  };
 
-  default_shell_consumer_.reset(new pkg{ .key = pkg_key{ *default_shell_consumer_cfg_ },
-                                         .cfg = default_shell_consumer_cfg_,
-                                         .cache_ptr = &cache_,
-                                         .eng = this,
-                                         .tui_section = tui::kInvalidSection,
-                                         .lua = nullptr,
-                                         .lock = nullptr,
-                                         .canonical_identity_hash = {},
-                                         .pkg_path = std::filesystem::path{},
-                                         .result_hash = {},
-                                         .type = pkg_type::UNKNOWN,
-                                         .declared_dependencies = {},
-                                         .owned_dependency_cfgs = {},
-                                         .dependencies = {},
-                                         .product_dependencies = {},
-                                         .weak_references = {} });
+  default_shell_consumer_ = make_pkg(consumer_cfg, tui::kInvalidSection, {});
   default_shell_consumer_->current_phase = pkg_phase::completion;
 
-  // Flagged, not walked: it is not a graph node, but it is the one package that most
-  // obviously supplies the shell rather than consuming it. Without the bit, an
-  // envy.run() inside the SHELL function would ask this same engine for a shell and
-  // re-enter the call_once this thread is holding — a self-deadlock. It gets the
-  // platform built-in, which is what the function ran under before it had a context.
-  default_shell_consumer_->closures = static_cast<uint8_t>(pkg_closure::default_shell);
-
   for (pkg *dep : default_shell_deps_) {
-    default_shell_consumer_->dependencies[dep->cfg->identity] = { dep,
-                                                                  pkg_phase::spec_fetch };
+    wire_dependency(default_shell_consumer_.get(), dep, pkg_phase::spec_fetch);
   }
 
   // The manifest's directory, not the CWD: DEFAULT_SHELL belongs to the project, and a
@@ -1143,8 +1197,15 @@ void engine::resolve_default_shell_fn() {
   phase_context ctx{ .eng = this,
                      .p = default_shell_consumer_.get(),
                      .run_dir = manifest_->manifest_path.parent_path(),
-                     .lock = nullptr };
+                     .lock = nullptr,
+                     .builtin_shell = true };
   default_shell_ = manifest_->run_default_shell_fn(&ctx);
+  default_shell_state_ = task_state::READY;
+
+  ENVY_TRACE(default_shell_resolved,
+             kDefaultShellConsumerIdentity,
+             .shell = std::string{ shell_kind_name(shell_resolve_default(
+                 &default_shell_)) });
 }
 
 resolved_shell pkg_default_shell(pkg *p) {
@@ -1167,11 +1228,6 @@ void engine::process_fetch_dependencies(pkg *p) {
       fetch_dep_cfg->parent = p->cfg;  // Set parent pointer for custom fetch lookup
     }
 
-    engine_validate_dependency_cycle(fetch_dep_cfg->identity,
-                                     p->ancestor_chain,
-                                     p->cfg->identity,
-                                     "Fetch dependency");
-
     // pkg_cfg::parse_fetch_dependency rejects weak fetch prerequisites, so every
     // entry here has a source. Programmatic construction bypasses that parse, so
     // assert it rather than fall through to ensure_pkg with no source.
@@ -1188,38 +1244,28 @@ void engine::process_fetch_dependencies(pkg *p) {
     // wire_dependency_graph sees the flag.
     mark_closure(fetch_dep, pkg_closure::fetch);
 
-    // Add to dependencies map - the edge query will block spec_fetch on it.
+    // The edge query will block spec_fetch on it.
+    wire_dependency(p, fetch_dep, pkg_phase::spec_fetch, "Fetch dependency");
+
     // An explicit `product` on the entry additionally pins the name to this
     // provider, so envy.product reports a mismatch instead of silently reading
     // whichever package the registry happens to hold.
-    {
+    if (fetch_dep_cfg->product.has_value()) {
       std::lock_guard const deps_lock(p->deps_mutex);
-      p->dependencies[fetch_dep_cfg->identity] = { fetch_dep, pkg_phase::spec_fetch };
-      if (fetch_dep_cfg->product.has_value()) {
-        auto const [it, inserted]{ p->product_dependencies.emplace(
-            *fetch_dep_cfg->product,
-            pkg::product_dependency{ .name = *fetch_dep_cfg->product,
-                                     .needed_by = pkg_phase::spec_fetch,
-                                     .provider = fetch_dep,
-                                     .constraint_identity = fetch_dep_cfg->identity }) };
-        if (!inserted && it->second.provider != fetch_dep) {
-          throw std::runtime_error("Duplicate product dependency '" +
-                                   *fetch_dep_cfg->product + "' in spec '" +
-                                   p->cfg->identity + "'");
-        }
+      auto const [it, inserted]{ p->product_dependencies.emplace(
+          *fetch_dep_cfg->product,
+          pkg::product_dependency{ .name = *fetch_dep_cfg->product,
+                                   .needed_by = pkg_phase::spec_fetch,
+                                   .provider = fetch_dep,
+                                   .constraint_identity = fetch_dep_cfg->identity }) };
+      if (!inserted && it->second.provider != fetch_dep) {
+        throw std::runtime_error("Duplicate product dependency '" +
+                                 *fetch_dep_cfg->product + "' in spec '" +
+                                 p->cfg->identity + "'");
       }
     }
-    propagate_closures(p, fetch_dep);
-    ENVY_TRACE(dependency_added,
-               p->cfg->identity,
-               .dependency = fetch_dep_cfg->identity,
-               .needed_by = pkg_phase::spec_fetch);
 
-    // Build child ancestor chain (local to this thread path)
-    std::vector<std::string> child_chain{ p->ancestor_chain };
-    child_chain.push_back(p->cfg->identity);
-
-    start_pkg_thread(fetch_dep, pkg_phase::completion, std::move(child_chain));
+    start_pkg_thread(fetch_dep, pkg_phase::completion);
   }
 }
 
@@ -1245,29 +1291,60 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
 
   std::vector<pkg_cfg const *> targets;
   for (auto const &query : queries) {
-    bool found{ false };
+    std::vector<pkg_cfg const *> matches;
     for (auto const *pkg : packages) {
-      if (pkg_key const key{ *pkg }; key.matches(query)) {
-        if (!util_platform_matches(pkg->platforms,
-                                   platform::os_name(),
-                                   platform::arch_name())) {
-          throw std::runtime_error(cmd_name + ": '" + query +
-                                   "' is not available on this platform");
-        }
-        targets.push_back(pkg);
-        found = true;
-        break;
-      }
+      if (pkg_key const key{ *pkg }; key.matches(query)) { matches.push_back(pkg); }
     }
-    if (!found) {
+
+    if (matches.empty()) {
       throw std::runtime_error(cmd_name + ": query '" + query + "' not found in manifest");
     }
+
+    // First-wins would pick whichever entry the manifest happened to list first;
+    // make the author say which one. Sorted so the message is reproducible.
+    if (matches.size() > 1) {
+      std::vector<std::string> names;
+      names.reserve(matches.size());
+      for (auto const *m : matches) { names.push_back(pkg_key{ *m }.canonical()); }
+      std::ranges::sort(names);
+      std::ostringstream oss;
+      oss << cmd_name << ": query '" << query << "' is ambiguous: ";
+      for (size_t i{ 0 }; i < names.size(); ++i) {
+        if (i) { oss << ", "; }
+        oss << names[i];
+      }
+      throw std::runtime_error(oss.str());
+    }
+
+    if (!util_platform_matches(matches[0]->platforms,
+                               platform::os_name(),
+                               platform::arch_name())) {
+      throw std::runtime_error(cmd_name + ": '" + query +
+                               "' is not available on this platform");
+    }
+    targets.push_back(matches[0]);
   }
 
   return targets;
 }
 
-pkg_result_map_t engine::run_full(std::vector<pkg_cfg const *> const &roots) {
+std::string engine::aggregated_failures() const {
+  std::vector<std::string> msgs;
+  for (auto const &[key, msg] : core_.collect_failures()) {
+    msgs.push_back(msg.empty() ? "Package failed: " + key : msg);
+  }
+  std::ranges::sort(msgs);
+  msgs.erase(std::ranges::unique(msgs).begin(), msgs.end());
+
+  std::string out;
+  for (auto const &msg : msgs) {
+    if (!out.empty()) { out += '\n'; }
+    out += msg;
+  }
+  return out;
+}
+
+void engine::run_full(std::vector<pkg_cfg const *> const &roots) {
   auto const filtered{ engine_filter_host_platform(roots) };
 
   try {
@@ -1281,25 +1358,9 @@ pkg_result_map_t engine::run_full(std::vector<pkg_cfg const *> const &roots) {
   core_.extend_all_to_done();  // Launch all tasks running to completion
   core_.join_all();            // Tolerates pair tasks spawned while joining
 
-  if (auto const failures{ core_.collect_failures() }; !failures.empty()) {
-    auto const &[key, msg]{ failures.front() };
-    throw std::runtime_error(msg.empty() ? "Package failed: " + key : msg);
+  if (auto const failures{ aggregated_failures() }; !failures.empty()) {
+    throw std::runtime_error(failures);
   }
-
-  auto const results{ [&] {
-    pkg_result_map_t r;
-    std::lock_guard lock(mutex_);
-    for (auto const &[key, package] : packages_) {
-      pkg_type const result_type{ core_.failed(key.canonical()) ? pkg_type::UNKNOWN
-                                                                : package->type };
-      r[package->key.canonical()] = { result_type,
-                                      package->result_hash,
-                                      package->pkg_path };
-    }
-    return r;
-  }() };
-
-  return results;
 }
 
 void engine::register_products(pkg *p) {
@@ -1339,6 +1400,9 @@ void engine::validate_product_fallbacks() {
   {
     std::lock_guard const lock(mutex_);
     for (auto &[_, package] : packages_) {
+      // weak_references is deps_mutex-guarded; hold it while iterating, like the
+      // sibling validators do.
+      std::lock_guard const deps_lock(package->deps_mutex);
       for (auto &wr : package->weak_references) {
         if (wr.is_product && wr.fallback && wr.resolved) {
           to_validate.emplace_back(package.get(), &wr);
@@ -1350,7 +1414,6 @@ void engine::validate_product_fallbacks() {
   std::vector<std::string> errors;
 
   for (auto const &[p, wr] : to_validate) {
-    std::unordered_set<pkg const *> visited;
     if (!pkg_provides_product(wr->resolved, wr->query)) {
       errors.push_back("Fallback for product '" + wr->query + "' in spec '" +
                        p->cfg->identity + "' resolved to '" + wr->resolved->cfg->identity +
@@ -1431,21 +1494,23 @@ void engine::validate_setup_selections() {
 engine::weak_resolution_result engine::resolve_weak_references() {
   weak_resolution_result result{};
 
-  auto collect_unresolved = [this]() {
-    std::vector<std::pair<pkg *, pkg::weak_reference *>> unresolved;
+  // One scan: anything spawned by this pass belongs to the next wave anyway, and
+  // resolve_graph only consults the counts below when this pass changed nothing.
+  auto const unresolved{ [this] {
+    std::vector<std::pair<pkg *, pkg::weak_reference *>> out;
     std::lock_guard const lock(mutex_);
     for (auto &[key, package] : packages_) {
       std::lock_guard const deps_lock(package->deps_mutex);
       for (auto &wr : package->weak_references) {
-        if (!wr.resolved) { unresolved.emplace_back(package.get(), &wr); }
+        if (!wr.resolved) { out.emplace_back(package.get(), &wr); }
       }
     }
-    return unresolved;
-  };
+    return out;
+  }() };
 
   std::vector<std::string> ambiguity_messages;
 
-  for (auto [p, wr] : collect_unresolved()) {
+  for (auto [p, wr] : unresolved) {
     if (wr->is_product) {
       resolve_product_ref(p, wr, result, find_product_provider(wr->query), *this);
     } else {
@@ -1453,28 +1518,18 @@ engine::weak_resolution_result engine::resolve_weak_references() {
     }
   }
 
-  // If we spawned any fallback threads, wait for their spec_fetch to complete
-  // before checking for still-unresolved references
+  // Wait for the fallbacks' spec_fetch, then re-check. The snapshot's raw pointers hold:
+  // only wire_dependency_graph appends, once per package, inside a completed spec_fetch.
   if (result.fallbacks_started > 0) { wait_for_resolution_phase(); }
 
-  // Final validation: any unresolved without fallback is an error
-  std::vector<std::string> const missing_messages{ [&] {
-    std::vector<std::string> msgs;
-    for (auto [p, wr] : collect_unresolved()) {
-      if (!wr->resolved && !wr->fallback) {
-        if (wr->is_product) {
-          msgs.push_back("Product '" + wr->query + "' in spec '" + p->cfg->identity +
-                         "' was not found");
-        } else {
-          msgs.push_back("Reference '" + wr->query + "' in spec '" + p->cfg->identity +
-                         "' was not found");
-        }
-      }
-    }
-    return msgs;
-  }() };
-
-  result.missing_without_fallback = missing_messages;
+  for (auto [p, wr] : unresolved) {
+    if (wr->resolved) { continue; }
+    ++result.unresolved;
+    if (wr->fallback) { continue; }
+    result.missing_without_fallback.push_back(
+        (wr->is_product ? "Product '" : "Reference '") + wr->query + "' in spec '" +
+        p->cfg->identity + "' was not found");
+  }
 
   if (!ambiguity_messages.empty()) {
     core_.fail_all();
@@ -1498,91 +1553,44 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
 
   // After root registration (its ensure_pkg calls may name the same packages) but
   // before any worker exists, so no string verb can outrun the shell's carve-out.
-  start_default_shell_deps();
+  // Interning only: the #default_shell task is what starts them, so a command that
+  // never runs a string verb never builds the interpreter.
+  intern_default_shell_deps();
 
   for (size_t i{ 0 }; i < root_pkgs.size(); ++i) {
     start_pkg_thread(root_pkgs[i], pkg_phase::spec_fetch);
   }
-
-  auto const count_unresolved{ [this]() {
-    std::lock_guard const lock(mutex_);
-    size_t count{ 0 };
-    for (auto &[_, package] : packages_) {
-      std::lock_guard const deps_lock(package->deps_mutex);
-      for (auto &wr : package->weak_references) {
-        if (!wr.resolved) { ++count; }
-      }
-    }
-    return count;
-  } };
-
-  auto const collect_failed{ [this]() {
-    std::vector<std::string> errors;
-    for (auto const &[key, msg] : core_.collect_failures()) {
-      errors.push_back(msg.empty() ? "Package failed: " + key : msg);
-    }
-    return errors;
-  } };
 
   size_t iteration{ 0 };
   while (true) {
     ++iteration;
     wait_for_resolution_phase();
 
-    if (auto const errors{ collect_failed() }; !errors.empty()) {
+    if (auto const errors{ aggregated_failures() }; !errors.empty()) {
       core_.fail_all();
-      std::ostringstream oss;
-      for (size_t i{ 0 }; i < errors.size(); ++i) {
-        if (i) { oss << "\n"; }
-        oss << errors[i];
-      }
-      throw std::runtime_error(oss.str());
+      throw std::runtime_error(errors);
     }
 
     // No registry sweep here: register_products publishes at each package's own
     // spec_fetch completion, so by this barrier the registry already holds
-    // everything a sweep would have found.
+    // everything a sweep would have found. Nor a resolved-weak-key sweep:
+    // record_resolution appends each key the moment the reference resolves, which
+    // is what a closure member hashing mid-resolution needs.
     weak_resolution_result const resolution{ resolve_weak_references() };
 
-    if (resolution.resolved == 0 && resolution.fallbacks_started == 0) {
-      size_t const unresolved{ count_unresolved() };
-      if (!resolution.missing_without_fallback.empty()) {
-        core_.fail_all();
-        std::ostringstream oss;
-        for (size_t i{ 0 }; i < resolution.missing_without_fallback.size(); ++i) {
-          if (i) { oss << "\n"; }
-          oss << resolution.missing_without_fallback[i];
-        }
-        oss << "\nDependency resolution made no progress at iteration " << iteration
-            << " with " << unresolved << " unresolved references";
-        throw std::runtime_error(oss.str());
-      }
-      if (unresolved > 0) {
-        core_.fail_all();
-        throw std::runtime_error("Dependency resolution made no progress at iteration " +
-                                 std::to_string(iteration) + " with " +
-                                 std::to_string(unresolved) + " unresolved references");
-      }
-      break;
-    }
+    if (resolution.resolved || resolution.fallbacks_started) { continue; }
+    if (resolution.unresolved == 0) { break; }
+
+    core_.fail_all();
+    std::ostringstream oss;
+    for (auto const &msg : resolution.missing_without_fallback) { oss << msg << "\n"; }
+    oss << "Dependency resolution made no progress at iteration " << iteration << " with "
+        << resolution.unresolved << " unresolved references";
+    throw std::runtime_error(oss.str());
   }
 
   validate_product_fallbacks();
   validate_setup_selections();
-
-  {  // Cache resolved weak dependency keys for thread-safe hash computation
-    std::lock_guard const lock(mutex_);
-    for (auto &[_, package] : packages_) {
-      std::lock_guard const deps_lock(package->deps_mutex);
-      package->resolved_weak_dependency_keys.clear();
-      for (auto const &wr : package->weak_references) {
-        if (wr.resolved) {
-          package->resolved_weak_dependency_keys.push_back(wr.resolved->key.canonical());
-        }
-      }
-      std::ranges::sort(package->resolved_weak_dependency_keys);
-    }
-  }
 }
 
 }  // namespace envy

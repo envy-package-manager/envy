@@ -175,6 +175,69 @@ class TestImport(EnvyTestCase):
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertIn(f"pins envy {OLDER_VERSION}", run.stderr)
 
+    def _super_importing(self, sub_extra: str) -> Path:
+        """A superproject over a subproject that also declares `sub_extra`."""
+        self.write_sub()
+        sub = self.sub / "envy.lua"
+        sub.write_text(sub.read_text(encoding="utf-8") + sub_extra, encoding="utf-8")
+        return self.write_super()
+
+    def test_imported_default_shell_is_refused(self):
+        """Only the root manifest's DEFAULT_SHELL is ever read; say so, do not drop it."""
+        run = self.sync(
+            self._super_importing("DEFAULT_SHELL = ENVY_SHELL.SH\n")
+        )
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("DEFAULT_SHELL", run.stderr)
+        self.assertPathContains(run.stderr, "sub/envy.lua")
+
+    def test_imported_package_depots_is_refused(self):
+        """PACKAGE_DEPOTS is root-only for the same reason, and was as silent."""
+        run = self.sync(
+            self._super_importing('PACKAGE_DEPOTS = { "https://example.com/d.txt" }\n')
+        )
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("PACKAGE_DEPOTS", run.stderr)
+        self.assertPathContains(run.stderr, "sub/envy.lua")
+
+    def test_a_conflict_between_two_imports_names_both_subproject_manifests(self):
+        """Provenance is the file that wrote the entry, not the root that spliced it in.
+
+        Two subprojects declare one bundle identity from different URLs. The root
+        never mentions the bundle, so naming it would tell the author nothing.
+        """
+        for name, url in (("one", "https://example.com/a.zip"),
+                          ("two", "https://example.com/b.zip")):
+            sub = self.tree / name
+            sub.mkdir()
+            (sub / "envy.lua").write_text(
+                '-- @envy bin "bin"\n'
+                '-- @envy root "false"\n'
+                "BUNDLES = {\n"
+                f'  tc = {{ identity = "shared.tc@v1", source = "{url}" }},\n'
+                "}\n"
+                'PACKAGES = {\n'
+                f'  {{ spec = "sub.{name}@v1", bundle = "tc" }},\n'
+                "}\n",
+                encoding="utf-8",
+            )
+
+        manifest = self.tree / "envy.lua"
+        manifest.write_text(
+            '-- @envy bin "envy-bin"\n'
+            'PACKAGES = envy.extend(envy.import("one").PACKAGES,\n'
+            '                       envy.import("two").PACKAGES)\n',
+            encoding="utf-8",
+        )
+        run = self.sync(manifest)
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("conflicting sources", run.stderr)
+        self.assertPathContains(run.stderr, "one/envy.lua")
+        self.assertPathContains(run.stderr, "two/envy.lua")
+
     def test_a_missing_import_names_the_argument_and_the_resolved_path(self):
         manifest = self.tree / "envy.lua"
         manifest.write_text(

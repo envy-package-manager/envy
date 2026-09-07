@@ -94,7 +94,8 @@ void lua_envy_run_install(sol::table &envy_table) {
     // Get phase context for default shell, run_dir, engine
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *p{ ctx ? ctx->p : nullptr };
-    resolved_shell shell{ pkg_default_shell(p) };
+    resolved_shell shell{ ctx && ctx->builtin_shell ? shell_resolve_default(nullptr)
+                                                    : pkg_default_shell(p) };
 
     std::optional<std::filesystem::path> cwd;
     shell_env_t env{ shell_getenv() };

@@ -6,6 +6,7 @@
 #include "lua_ctx/lua_phase_context.h"
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
+#include "manifest.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "platform.h"
@@ -37,12 +38,15 @@ sol::object make_pkg_dir_arg(sol::state_view lua, pkg *p) {
 
 // Run a pair CHECK shell command; exit 0 = satisfied. Non-zero is normal flow
 // (work needed), not an error.
-bool run_pair_check_command(pkg *p, std::string_view cmd, std::string const &context) {
+bool run_pair_check_command(pkg *p,
+                            std::string_view cmd,
+                            std::string const &context,
+                            std::filesystem::path const &project_root) {
   shell_run_cfg cfg;
   cfg.env = shell_getenv();
   cfg.on_stdout_line = [](std::string_view) {};
   cfg.on_stderr_line = [](std::string_view) {};
-  cfg.cwd = pkg_cfg::compute_project_root(p->cfg);
+  cfg.cwd = project_root;
   cfg.shell = pkg_default_shell(p);
 
   shell_result const result{ [&] {
@@ -61,6 +65,15 @@ bool run_pair_check_command(pkg *p, std::string_view cmd, std::string const &con
   return result.exit_code == 0;
 }
 
+// cwd for pair verbs: the project this run operates on. An imported entry declares its own
+// file, so the resolved manifest names it; the cfg walk covers a run with no manifest.
+std::filesystem::path pair_project_root(engine const &eng, pkg const *p) {
+  manifest const *m{ eng.get_manifest() };
+  return (m && !m->manifest_path.empty())
+             ? util_canonical_path(m->manifest_path).parent_path()
+             : pkg_cfg::compute_project_root(p->cfg);
+}
+
 }  // namespace
 
 // Run a pair's CHECK verb. Returns true when the host state is already satisfied.
@@ -71,6 +84,7 @@ bool run_pair_check_command(pkg *p, std::string_view cmd, std::string const &con
 bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
   std::string const context{ "SETUP." + name + ".CHECK" };
 
+  std::filesystem::path const project_root{ pair_project_root(eng, p) };
   std::optional<bool> verdict;
   std::optional<std::string> cmd;
   {
@@ -84,7 +98,6 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
       throw std::runtime_error(context + " must be a function or string for " +
                                p->cfg->identity);
     } else {
-      std::filesystem::path const project_root{ pkg_cfg::compute_project_root(p->cfg) };
       phase_context_guard ctx_guard{ &eng, p, lua.lua_state(), project_root };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
 
@@ -104,7 +117,7 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
     }
   }
 
-  return verdict ? *verdict : run_pair_check_command(p, *cmd, context);
+  return verdict ? *verdict : run_pair_check_command(p, *cmd, context, project_root);
 }
 
 // Run a pair's INSTALL verb against the host (cwd = project_root). Shell output
@@ -118,7 +131,7 @@ void run_pair_install(pkg *p,
                       tui::section_handle section,
                       std::string const &log_identity) {
   std::string const context{ "SETUP." + name + ".INSTALL" };
-  std::filesystem::path const project_root{ pkg_cfg::compute_project_root(p->cfg) };
+  std::filesystem::path const project_root{ pair_project_root(eng, p) };
 
   std::optional<std::string> script;
   {

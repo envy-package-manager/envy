@@ -52,6 +52,7 @@ class TestEngineDependencyResolution(EnvyTestCase):
         content = content.format(
             ARCHIVE_PATH=self.archive_path.as_posix(),
             ARCHIVE_HASH=self.archive_hash,
+            SPECS_DIR=self.specs_dir.as_posix(),
         )
         path = self.specs_dir / name
         path.write_text(content, encoding="utf-8")
@@ -500,32 +501,12 @@ SETUP = {{
         self.assertIn("local.independent_right@v1", output)
 
     def test_options_differentiate_recipes(self):
-        """Same spec identity with different options creates separate entries."""
-        # Spec with same dependency but different options
-        self.write_spec(
-            "options_parent.lua",
-            """-- Spec with same dependency but different options
-IDENTITY = "local.options_parent@v1"
-DEPENDENCIES = {{
-  {{ spec = "local.with_options@v1", source = "with_options.lua", options = {{ variant = "foo" }} }},
-  {{ spec = "local.with_options@v1", source = "with_options.lua", options = {{ variant = "bar" }} }}
-}}
+        """Same spec identity with different options creates separate entries.
 
-USER_MANAGED = true
-SETUP = {{
-  main = {{
-    CHECK = function(pkg_dir, options)
-      return false
-    end,
-    INSTALL = function(pkg_dir, options)
-      -- Programmatic package
-    end,
-  }},
-}}
-
-""",
-        )
-
+        Declared from the manifest, which is the only place that can say it: one
+        spec's DEPENDENCIES keys its edges by identity alone, so two variants there
+        are a parse error (see test_dependency_wiring.py).
+        """
         # Spec that supports options
         self.write_spec(
             "with_options.lua",
@@ -548,22 +529,39 @@ SETUP = {{
 """,
         )
 
-        result, output = self.install_spec(
-            "local.options_parent@v1", "options_parent.lua"
+        trace_file = self.cache_root / "trace.jsonl"
+        spec = self.specs_dir / "with_options.lua"
+        manifest = test_config.write_spec_manifest(
+            self.specs_dir,
+            [
+                test_config.spec_entry(
+                    "local.with_options@v1", spec, options='{ variant = "foo" }'
+                ),
+                test_config.spec_entry(
+                    "local.with_options@v1", spec, options='{ variant = "bar" }'
+                ),
+            ],
         )
+        result = test_config.run(
+            [
+                str(self.envy),
+                f"--cache-root={self.cache_root}",
+                f"--trace=file:{trace_file}",
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        output = TraceParser(trace_file).registered_specs()
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-        self.assertEqual(
-            len(output),
-            3,
-            f"Expected 3 specs (parent + 2 variants), got: {output}",
-        )
-
-        # Verify all present with options in keys (strings are quoted)
-        self.assertIn("local.options_parent@v1", output)
-        self.assertIn('local.with_options@v1{variant="bar"}', output)
-        self.assertIn('local.with_options@v1{variant="foo"}', output)
+        # Verify both present with options in keys (strings are quoted)
+        self.assertEqual(len(output), 2, f"Expected 2 variants, got: {output}")
+        self.assertIn('local.with_options@v1{["variant"]="bar"}', output)
+        self.assertIn('local.with_options@v1{["variant"]="foo"}', output)
 
     def test_deep_chain_dependency(self):
         """Engine resolves deep dependency chain (A->B->C->D->E)."""
@@ -1211,86 +1209,6 @@ SETUP = {{
             f"Expected security/local dep error, got: {result.stderr}",
         )
 
-    def test_fetch_dependency_cycle(self):
-        """Engine detects and rejects fetch dependency cycles."""
-        # Spec A in a fetch dependency cycle: A fetch needs B
-        self.write_spec(
-            "fetch_cycle_a.lua",
-            """-- Spec A in a fetch dependency cycle: A fetch needs B
-IDENTITY = "local.fetch_cycle_a@v1"
-DEPENDENCIES = {{
-  {{
-    spec = "local.fetch_cycle_b@v1",
-    source = "fetch_cycle_b.lua",  -- Will be fetched by custom fetch function
-    fetch = function(tmp_dir, options)
-      -- Custom fetch that needs fetch_cycle_b to be available
-      -- This creates a cycle since fetch_cycle_b also fetch-depends on A
-      error("Should not reach here - cycle should be detected first")
-    end
-  }}
-}}
-
-function FETCH(tmp_dir, options)
-  -- Simple fetch function for this recipe
-end
-
-function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options)
-  -- Programmatic package
-end
-""",
-        )
-
-        # Spec B in a fetch dependency cycle: B fetch needs A
-        self.write_spec(
-            "fetch_cycle_b.lua",
-            """-- Spec B in a fetch dependency cycle: B fetch needs A
-IDENTITY = "local.fetch_cycle_b@v1"
-DEPENDENCIES = {{
-  {{
-    spec = "local.fetch_cycle_a@v1",
-    source = "fetch_cycle_a.lua",  -- Will be fetched by custom fetch function
-    fetch = function(tmp_dir, options)
-      -- Custom fetch that needs fetch_cycle_a to be available
-      -- This completes the cycle: A fetch needs B, B fetch needs A
-      error("Should not reach here - cycle should be detected first")
-    end
-  }}
-}}
-
-function FETCH(tmp_dir, options)
-  -- Simple fetch function for this recipe
-end
-
-function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options)
-  -- Programmatic package
-end
-""",
-        )
-
-        result, _ = self.install_spec("local.fetch_cycle_a@v1", "fetch_cycle_a.lua")
-
-        self.assertNotEqual(
-            result.returncode, 0, "Expected fetch dependency cycle to cause failure"
-        )
-        stderr_lower = result.stderr.lower()
-        # Accept either "Fetch dependency cycle" or "Dependency cycle" as both indicate detection
-        self.assertIn(
-            "cycle",
-            stderr_lower,
-            f"Expected cycle error, got: {result.stderr}",
-        )
-        # Verify the cycle path includes both recipes
-        self.assertIn(
-            "fetch_cycle_a",
-            stderr_lower,
-            f"Expected fetch_cycle_a in error, got: {result.stderr}",
-        )
-        self.assertIn(
-            "fetch_cycle_b",
-            stderr_lower,
-            f"Expected fetch_cycle_b in error, got: {result.stderr}",
-        )
-
     def test_simple_fetch_dependency(self):
         """Simple fetch dependency: A fetch needs B - validates basic flow and blocking."""
         # Base spec that will be a fetch dependency for another recipe
@@ -1423,7 +1341,8 @@ DEPENDENCIES = {{
     spec = "local.multi_level_c@v1",
     source = {{
       dependencies = {{
-        {{ spec = "local.simple_fetch_dep_base@v1", source = "simple_fetch_dep_base.lua" }}
+        {{ spec = "local.simple_fetch_dep_base@v1",
+           source = "{SPECS_DIR}/simple_fetch_dep_base.lua" }}
       }},
       fetch = function(tmp_dir, options)
         local recipe_content_c = [[

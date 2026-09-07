@@ -268,12 +268,39 @@ ENVY_SHELL = {}
 ---@type string
 IDENTITY = ""
 
----Spec dependencies array
----@alias envy.dependency { spec: string, source?: string, needed_by?: "fetch"|"stage"|"build"|"install"|"check", product?: string, weak?: boolean, options?: table }
+---The phase of *this* spec an edge blocks. Default "build"; spec_fetch is not
+---selectable (a fetch prerequisite goes in source.dependencies instead).
+---@alias envy.needed_by "check"|"import"|"fetch"|"stage"|"build"|"install"
+
+---A custom fetch: the function plus the packages that must be installed before it can
+---run. Legal in a spec's DEPENDENCIES and in any BUNDLES declaration; never on a
+---manifest PACKAGES entry or a weak fallback, where nothing could call it.
+---@alias envy.source_table { fetch: fun(tmp_dir: string, options: table), dependencies?: envy.fetch_dependency[] }
+
+---One source.dependencies entry. Strong only, and always needed by the declarer's
+---spec_fetch, so it carries no needed_by.
+---@alias envy.fetch_dependency { spec: string, source: string|envy.source_table, options?: table, product?: string, sha256?: string, ref?: string }
+
+---A bundle declaration: a BUNDLES alias's value, or an inline table on an entry.
+---@alias envy.bundle_decl { identity: string, source: string|envy.source_table, sha256?: string, ref?: string }
+
+---The fallback under `weak = {...}`: a complete strong declaration. It inherits the
+---weak entry's needed_by and may not restate it.
+---@alias envy.weak_fallback { spec: string, source: string, options?: table, product?: string, sha256?: string, ref?: string }
+
+---Spec dependencies array. Every key an entry may carry is listed: an unknown one is
+---an error, not an inert field.
+---@alias envy.dependency
+---| { spec: string, source?: string|envy.source_table, options?: table, needed_by?: envy.needed_by, product?: string, weak?: envy.weak_fallback, setup?: string[], sha256?: string, ref?: string }
+---| { product: string, weak?: envy.weak_fallback, options?: table, needed_by?: envy.needed_by }
+---| { bundle: string|envy.bundle_decl, source: string|envy.source_table, needed_by?: envy.needed_by, sha256?: string, ref?: string }
+---| { spec: string, bundle: string|envy.bundle_decl, options?: table, needed_by?: envy.needed_by, product?: string, setup?: string[] }
 ---@type envy.dependency[]
 DEPENDENCIES = {}
 
----Spec platform constraints. Empty/absent = all platforms.
+---Platforms this spec's PRODUCTS may be deployed for, intersected with each product's
+---own `platforms`. Empty/absent = all. Which hosts run the package at all is decided by
+---the manifest entry's `platforms`, not here.
 ---Values: OS names ("darwin", "linux", "windows") or OS-arch combos ("darwin-arm64").
 ---@type string[]?
 PLATFORMS = nil
@@ -350,19 +377,34 @@ EXPORTABLE = nil
 -- Manifest Globals
 --------------------------------------------------------------------------------
 
----@alias envy.package_spec string|{ spec: string, source?: string, options?: table, needed_by?: string, product?: string, weak?: boolean, platforms?: string[], setup?: string[] }
+---One PACKAGES entry: always a table (there is no bare-string shorthand), naming a
+---payload with `source` or a bundle with `bundle`. Unknown keys are errors.
+---@alias envy.package_spec
+---| { spec: string, source: string, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[], sha256?: string, ref?: string }
+---| { spec: string, bundle: string|envy.bundle_decl, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[] }
 
 ---Manifest packages array
 ---@type envy.package_spec[]
 PACKAGES = {}
 
+---Bundle aliases for this file: each key is a short name `bundle = "..."` may use in
+---this manifest's PACKAGES (or this spec's DEPENDENCIES); each value names the real
+---bundle identity. Aliases are resolved at parse time and discarded.
+---@type table<string, envy.bundle_decl>
+BUNDLES = nil
+
 ---A shell function takes no arguments. It is evaluated on first use, so it may call
 ---envy.product()/envy.package() to name an interpreter listed in DEPENDS.
 ---@alias envy.default_shell_fn fun(): integer|envy.shell_config
 
----Default shell configuration for all phases. DEPENDS lists PACKAGES identities that
----install before any other package's first string verb; they run their own string
----verbs under the platform built-in.
+---Default shell configuration for all phases. DEPENDS lists PACKAGES identities,
+---installed lazily on the first string verb that needs a shell and before it runs;
+---the table form requires SHELL to be a function, since only a function can name a
+---package that does not exist yet. Root manifest only: an imported manifest that
+---declares DEFAULT_SHELL is an error unless the root adopts the value.
+---Bootstrap code always gets the platform built-in instead: anything in a DEPENDS or
+---source.dependencies closure, and Lua running in the manifest itself (a manifest
+---bundle's source.fetch, a PACKAGE_DEPOTS FETCH, this SHELL function).
 ---@type integer|envy.shell_config|envy.default_shell_fn|{ DEPENDS?: string[], SHELL: integer|envy.shell_config|envy.default_shell_fn }
 DEFAULT_SHELL = nil
 

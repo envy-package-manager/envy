@@ -51,7 +51,6 @@ struct formatter_test_fixture {
                                       .spec_file_path = std::nullopt,
                                       .result_hash = {},
                                       .type = pkg_type::UNKNOWN,
-                                      .declared_dependencies = {},
                                       .owned_dependency_cfgs = {},
                                       .dependencies = {},
                                       .product_dependencies = {},

@@ -3,6 +3,7 @@
 #include "doctest.h"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <random>
@@ -51,6 +52,17 @@ task_engine::task_config simple_task(std::string key, int steps, step_log &log) 
     return false;
   };
   return cfg;
+}
+
+// Bounded wait: a hang-shaped bug must fail an assertion, never wedge the run.
+bool spin_until(std::function<bool()> const &pred,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds{ 2000 }) {
+  auto const deadline{ std::chrono::steady_clock::now() + timeout };
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (pred()) { return true; }
+    std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+  }
+  return pred();
 }
 
 }  // namespace
@@ -355,10 +367,9 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   REQUIRE(te.ensure_task(std::move(b)));
 
   te.start_task("a", 1);
-  te.wait_at("a", 1);
-  te.extend_target("a", 2);  // wakes the paused worker -> target_extended fires
+  te.wait_at("a", 1);  // a parks at 1; b's edge wants 2, so b must really block
   te.start_task("b", 1);
-  te.wait_at("b", 1);
+  te.wait_at("b", 1);  // b's own wait ratchets a to 2 -> target_extended fires
   te.join_all();
 
   CHECK(blocked == 1);
@@ -1033,6 +1044,255 @@ TEST_CASE("task_engine: stress - mid-graph failure fails all dependents") {
       CHECK_THROWS_WITH(te.wait_at(key_of(i), 1), "n7 deliberate failure");
     }
   }
+}
+
+TEST_CASE("task_engine: extend_all_to_done latches for later tasks") {
+  step_log log;
+  task_engine te;
+  te.extend_all_to_done();  // latches: every task from here on runs to done
+
+  REQUIRE(te.ensure_task(simple_task("late", 3, log)));
+  te.start_task("late", 1);  // partial target: without the latch it parks at 1 forever
+
+  CHECK(spin_until([&te] { return te.completed("late") == 3; }));
+  te.extend_all_to_done();  // unwedges the parked worker if the latch regressed
+  te.join_all();
+  CHECK(te.completed("late") == 3);
+}
+
+TEST_CASE("task_engine: the run-to-done latch ends with join_all") {
+  step_log log;
+  task_engine te;
+  REQUIRE(te.ensure_task(simple_task("a", 2, log)));
+  te.start_task("a", 2);
+  te.extend_all_to_done();
+  te.join_all();  // teardown over: a later wave targets what its caller asked for
+
+  REQUIRE(te.ensure_task(simple_task("b", 3, log)));
+  te.start_task("b", 1);
+  te.wait_at("b", 1);
+  CHECK(te.completed("b") == 1);
+  CHECK(te.target("b") == 1);
+}
+
+TEST_CASE("task_engine: fail_all fires on_failed for a parked worker") {
+  step_log log;
+  std::atomic_int hook_calls{ 0 };
+
+  task_engine te;
+  auto cfg{ simple_task("stuck", 5, log) };
+  cfg.on_failed = [&hook_calls] { ++hook_calls; };
+  REQUIRE(te.ensure_task(std::move(cfg)));
+
+  te.start_task("stuck", 1);
+  te.wait_at("stuck", 1);  // parked at its target, mid-task
+
+  te.fail_all();  // real cancellation: the worker owes its failure hook
+  te.join_all();
+  CHECK(hook_calls == 1);
+  CHECK(te.failed("stuck"));
+}
+
+TEST_CASE("task_engine: tasks interned after fail_all are born failed") {
+  task_engine te;
+  te.fail_all();
+
+  std::atomic_int starts{ 0 };
+  std::atomic_int steps{ 0 };
+  std::atomic_int hook_calls{ 0 };
+
+  task_engine::task_config cfg;
+  cfg.key = "late";
+  cfg.step_count = 1;
+  cfg.on_start = [&starts] { ++starts; };
+  cfg.step = [&steps](int) {
+    ++steps;
+    return false;
+  };
+  cfg.on_failed = [&hook_calls] { ++hook_calls; };
+  REQUIRE(te.ensure_task(std::move(cfg)));
+  CHECK(te.failed("late"));
+
+  te.start_task("late", 1);
+  te.join_all();
+  CHECK(starts == 0);  // nothing spawned mid-teardown may run host-side work
+  CHECK(steps == 0);
+  CHECK(hook_calls == 1);
+  CHECK_THROWS_AS(te.wait_at("late", 1), std::runtime_error);
+}
+
+TEST_CASE("task_engine: a satisfied watermark survives the dep's later failure") {
+  step_log log;
+  task_engine te;
+
+  task_engine::task_config dep;
+  dep.key = "dep";
+  dep.step_count = 2;
+  dep.step = [](int step) -> bool {
+    if (step == 1) { throw std::runtime_error("late boom"); }
+    return false;
+  };
+  REQUIRE(te.ensure_task(std::move(dep)));
+
+  auto consumer{ simple_task("consumer", 1, log) };
+  consumer.edges = [](int) { return std::vector<task_engine::edge>{ { "dep", 1 } }; };
+  REQUIRE(te.ensure_task(std::move(consumer)));
+
+  te.start_task("dep", 2);
+  REQUIRE(spin_until([&te] { return te.failed("dep"); }));
+  REQUIRE(te.completed("dep") == 1);  // step 0 landed before step 1 threw
+
+  CHECK_NOTHROW(te.wait_at("dep", 1));  // the watermark it needed is satisfied
+  te.start_task("consumer", 1);
+  CHECK(spin_until([&te] { return te.completed("consumer") == 1; }));
+  CHECK_FALSE(te.failed("consumer"));
+  te.join_all();
+}
+
+TEST_CASE("task_engine: observer stays silent on already-satisfied edges") {
+  std::atomic_int blocked{ 0 };
+  std::atomic_int unblocked{ 0 };
+
+  task_engine::observer obs;
+  obs.blocked = [&blocked](std::string const &, int, std::string const &, int) {
+    ++blocked;
+  };
+  obs.unblocked = [&unblocked](std::string const &, int, std::string const &) {
+    ++unblocked;
+  };
+
+  step_log log;
+  task_engine te{ std::move(obs) };
+  REQUIRE(te.ensure_task(simple_task("a", 1, log)));
+  auto b{ simple_task("b", 1, log) };
+  b.edges = [](int) { return std::vector<task_engine::edge>{ { "a", 1 } }; };
+  REQUIRE(te.ensure_task(std::move(b)));
+
+  te.start_task("a", 1);
+  te.wait_at("a", 1);  // a is done before b's worker ever queries its edges
+  te.start_task("b", 1);
+  te.wait_at("b", 1);
+  te.join_all();
+
+  CHECK(blocked == 0);
+  CHECK(unblocked == 0);
+}
+
+TEST_CASE("task_engine: worker spawn failure settles the task instead of spinning") {
+  // Heap-allocated, deleted only on success: if this regresses, join_all
+  // rescans forever and the joiner below must not outlive the engine.
+  auto *te{ new task_engine{} };
+  task_engine::task_config cfg;
+  cfg.key = "t";
+  cfg.step_count = 1;
+  cfg.step = [](int) { return false; };
+  REQUIRE(te->ensure_task(std::move(cfg)));
+
+  te->spawn_failure_hook = [] { throw std::runtime_error("spawn boom"); };
+  CHECK_THROWS_WITH(te->start_task("t", 1), "spawn boom");
+  CHECK(te->failed("t"));  // waiters must see an error, not a task that can never run
+
+  std::atomic_bool joined{ false };
+  std::thread joiner{ [te, &joined] {
+    te->join_all();
+    joined = true;
+  } };
+  bool const settled{ spin_until([&joined] { return joined.load(); }) };
+  CHECK(settled);  // a started task whose spawn never settles spins join_all
+  if (!settled) {
+    joiner.detach();  // engine deliberately leaked: the spin still touches it
+    return;
+  }
+  joiner.join();
+  auto const failures{ te->collect_failures() };
+  REQUIRE(failures.size() == 1);
+  CHECK(failures.front().second == "spawn boom");
+  delete te;
+}
+
+TEST_CASE("task_engine: watchdog sees a wait nested inside a step") {
+  // a's step waits on b while b's edge waits on a. Both threads are blocked
+  // inside the engine, so neither may count as running. Heap-allocated,
+  // deleted only on success (see above).
+  auto *te{ new task_engine{} };
+  te->set_watchdog_interval(std::chrono::milliseconds{ 25 });
+
+  task_engine::task_config a;
+  a.key = "a";
+  a.step_count = 1;
+  a.step = [te](int) {
+    te->wait_at("b", 1);  // blocked inside a step: waiting, not running
+    return false;
+  };
+  REQUIRE(te->ensure_task(std::move(a)));
+
+  task_engine::task_config b;
+  b.key = "b";
+  b.step_count = 1;
+  b.step = [](int) { return false; };
+  b.edges = [](int) { return std::vector<task_engine::edge>{ { "a", 1 } }; };
+  REQUIRE(te->ensure_task(std::move(b)));
+
+  te->start_task("a", 1);
+  te->start_task("b", 1);
+
+  bool const fired{ spin_until([te] { return te->failed("a") && te->failed("b"); }) };
+  CHECK(fired);  // an in-step wait must not suppress the watchdog
+  if (!fired) { return; }
+
+  te->join_all();
+  auto const failures{ te->collect_failures() };
+  REQUIRE(failures.size() == 2);
+  for (auto const &[key, msg] : failures) {
+    CHECK(msg.find("a step 0 waits for b@1") != std::string::npos);
+    CHECK(msg.find("b step 0 waits for a@1") != std::string::npos);
+  }
+  delete te;
+}
+
+TEST_CASE("task_engine: watchdog turns an edge cycle into a failure") {
+  // a and b each block on the other's first step: nothing runs, everything
+  // waits. Heap-allocated, deleted only on success (see above).
+  auto *te{ new task_engine{} };
+  te->set_watchdog_interval(std::chrono::milliseconds{ 25 });
+
+  for (auto const *key : { "a", "b" }) {
+    task_engine::task_config cfg;
+    cfg.key = key;
+    cfg.step_count = 1;
+    cfg.step = [](int) { return false; };
+    cfg.edges = [dep = std::string{ key } == "a" ? "b" : "a"](int) {
+      return std::vector<task_engine::edge>{ { dep, 1 } };
+    };
+    REQUIRE(te->ensure_task(std::move(cfg)));
+  }
+  te->start_task("a", 1);
+  te->start_task("b", 1);
+
+  std::atomic_bool done{ false };
+  std::string message;
+  std::thread waiter{ [te, &done, &message] {
+    try {
+      te->wait_at("a", 1);
+    } catch (std::exception const &e) { message = e.what(); }
+    done = true;
+  } };
+
+  bool const fired{ spin_until([&done] { return done.load(); }) };
+  CHECK(fired);  // without the watchdog the cycle simply hangs
+  if (!fired) {
+    waiter.detach();
+    return;
+  }
+  waiter.join();
+  CHECK(message.find("Deadlock") != std::string::npos);
+  CHECK(message.find("a step 0") != std::string::npos);
+  CHECK(message.find("b step 0") != std::string::npos);
+
+  te->join_all();
+  CHECK(te->failed("a"));
+  CHECK(te->failed("b"));
+  delete te;
 }
 
 }  // namespace envy

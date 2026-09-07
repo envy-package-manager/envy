@@ -1,10 +1,17 @@
-# Spec Spec Ownership Refactor Plan
+# pkg_cfg ownership
 
-Goal: centralize ownership of `recipe_spec` instances in a stable, pointer-safe pool (deque), eliminate ad-hoc cloning, and keep callers using raw non-owning pointers with clear lifetimes.
+`pkg_cfg` is parsed once and then referred to by raw pointer from packages, dependency
+lists, weak fallbacks and bundle declarations. Those pointers must outlive every worker,
+so ownership is deliberately trivial:
 
-## Proposed Design
+- One process-wide arena, `pkg_cfg::pool()`, backed by a mutex-guarded `std::deque`.
+  Deque, not vector: emplacing never moves an existing element, so a pointer handed out
+  during parsing stays valid for the run.
+- `pkg_cfg` is `unmovable` and constructed only through `pkg_cfg_pool::emplace`
+  (`ctor_tag` enforces it), so no caller can copy or relocate one.
+- Nothing is ever freed. A run's cfgs are bounded by the manifest and the specs it
+  reaches, and the arena dies with the process — reclaiming them would buy nothing and
+  cost every holder a lifetime question.
 
-- Introduce a `recipe_spec_pool` that owns a `std::deque<recipe_spec>`, guarded by a mutex.
-- `recipe_spec` remains uncopyable/unmovable; add a constructor that takes full parsed state so specs are emplaced directly into the deque under lock.
-- All creation sites (manifest parse, spec deps, fetch deps, weak fallbacks, nested fetch deps) obtain specs via the pool and receive raw non-owning pointers.
-- The pool is scoped (owned by `engine` or test harness) and set via a static setter on `recipe_spec` to avoid global leakage across tests/runs.
+There is no per-engine or per-test pool. A test that parses cfgs leaves them in the
+arena; they are inert, and keying anything by pointer identity is therefore safe.

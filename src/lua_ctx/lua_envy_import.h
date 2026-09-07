@@ -24,4 +24,11 @@ void lua_envy_import_install(sol::state &lua,
 // manifest's fetch-function lookup searches these after its own.
 std::vector<sol::table> lua_envy_import_bundle_tables(sol::state_view lua);
 
+// Throw if an imported manifest declared a root-only global -- one read only from the
+// root state, DEFAULT_SHELL or PACKAGE_DEPOTS -- that the root globals did not end up
+// holding. A superproject may splice such a declaration up (`DEFAULT_SHELL =
+// envy.import("sub").DEFAULT_SHELL`); leaving it in the sandbox drops it silently.
+// Call once, after the root chunk has run.
+void lua_envy_import_validate_root_globals(sol::state_view lua);
+
 }  // namespace envy

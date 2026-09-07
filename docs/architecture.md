@@ -2,11 +2,11 @@
 
 ## Project Manifests
 
-All script-global variables are uppercase: manifests export `PACKAGES`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, and `PRODUCTS`.
+All script-global variables are uppercase: manifests export `PACKAGES`, plus optional `BUNDLES`, `DEFAULT_SHELL` and `PACKAGE_DEPOTS`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, `BUNDLES`, `PRODUCTS`, `OPTIONS`, `PLATFORMS`, `USER_MANAGED` and `EXPORTABLE`.
 
-**Syntax:** Shorthand `"namespace.name@version"` expands to `{ spec = "namespace.name@version" }`. Table syntax supports `source`, `sha256`, `file`, `fetch`, `options`, `dependencies`, `needed_by`, `setup`.
+**Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `options`, `platforms`, `needed_by`, `product`, `setup`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
 
-**Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.join()` to combine common and OS-specific package lists.
+**Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.extend()` to combine common and OS-specific package lists.
 
 **Composition:** `envy.import(path)` runs a subproject's manifest in a sandbox and returns its globals; its entries keep anchoring relative paths and bundle aliases on the imported manifest's directory, and it sees `ENVY_IMPORTER` so a standalone-only branch can gate on it. Imported headers are inert—see the bootstrap boundary in `docs/commands.md`.
 
@@ -21,59 +21,69 @@ local common = {
     },
     {  -- Git repository
         spec = "vendor.openocd@v3",
-        source = "git://github.com/vendor/openocd-recipe.git",
+        source = "git://github.com/vendor/openocd-specs.git",
         ref = "a1b2c3d4e5f6...",  -- Commit SHA
         options = { target = "arm" },
     },
-    {  -- Custom fetch (JFrog example)
+    {  -- A spec whose SETUP pair this host opts into; a custom fetch is declared by
+       -- the spec that needs it, never here: a manifest entry has no Lua state anything
+       -- could find the closure in again, so `source = { fetch = ... }` is rejected.
         spec = "corporate.toolchain@v1",
-        FETCH = function(tmp_dir, options)
-            local jfrog = envy.asset("jfrog.cli@v2")
-            envy.run(jfrog .. "/bin/jfrog rt download specs/toolchain.lua " .. tmp_dir .. "/recipe.lua")
-            envy.commit_fetch({filename = "recipe.lua", sha256 = "sha256_here..."})
-        end,
-        DEPENDENCIES = {
-            { spec = "jfrog.cli@v2", source = "...", sha256 = "...", needed_by = "recipe_fetch" }
-        }
+        source = "https://corp.example/specs/toolchain.lua",
+        sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        setup = { "license" },
     },
-    {  -- Project-local (development)
+    {  -- Project-local (development): read in place, never cached
         spec = "local.wrapper@v1",
-        file = "./envy/specs/wrapper.lua",
+        source = "./envy/specs/wrapper.lua",
         options = { base = "arm.gcc@v2" },
     },
 }
 
 local darwin_packages = {
-    "envy.homebrew@v4",
+    { spec = "envy.homebrew@v4", source = "specs/homebrew.lua" },
 }
 
 local linux_packages = {
-    "system.apt@v1",
+    { spec = "system.apt@v1", source = "specs/apt.lua", platforms = { "linux" } },
 }
 
-PACKAGES = ENVY_PLATFORM == "darwin" and envy.join(common, darwin_packages)
-        or ENVY_PLATFORM == "linux" and envy.join(common, linux_packages)
+PACKAGES = envy.PLATFORM == "darwin" and envy.extend(common, darwin_packages)
+        or envy.PLATFORM == "linux" and envy.extend(common, linux_packages)
         or common
 ```
 
 **Field semantics:**
-- `identity` — Spec identity declaration (**required in all spec files**, no exemptions)
-- `source` — URL (http/https/s3/git/file) or Git repo for declarative fetch
-- `ref` — Git commit SHA or committish (required for git sources)
-- `sha256` — Expected hash for verification (**optional**, permissive by default; future strict mode will require for non-`local.*`)
-- `fetch` — Custom Lua function for exotic sources (JFrog, authenticated APIs); mutually exclusive with `source`
-- `file` — Project-local spec path (never cached; `local.*` namespace only)
-- `subdir` — Subdirectory within archive or git repo containing spec entry point
-- `options` — Recipe-specific configuration (passed to phase functions as `options` parameter)
-- `setup` — Names of the spec's `SETUP` pairs to run on this host (manifest entries only; never hashed into the package key)
-- `dependencies` — Transitive dependencies (specs this spec needs)
-  - **Strong:** full spec spec with `source` (or manifest-provided source)
-  - **Weak:** partial `recipe` plus `weak = { ... }` fallback spec
-  - **Reference-only:** partial `recipe` with no `source`/`weak` (must be satisfied by some other provider)
-  - **Nested fetch prerequisites:** inside `source.dependencies`; must be strong (weak/reference-only is rejected)
-- `needed_by` — Phase dependency annotation (default: `"fetch"`, custom: `"recipe_fetch"`, `"build"`, etc.)
+- `spec` — the identity this entry declares; the spec file's own `IDENTITY` must match it
+- `source` — URL (http/https/s3/ftp/git/file) or a path relative to the declaring file; a
+  local path is loaded in place and never enters the cache
+- `ref` — git commit SHA or committish (required for git sources)
+- `sha256` — expected hash (**optional**, permissive by default; a future strict mode will
+  require it for non-`local.*`). On a local path it makes the entry verified *and* cached
+- `options` — spec configuration, passed to every phase function and hashed into the
+  package key; two option sets of one identity are two packages
+- `platforms` — the hosts this entry applies to (`"linux"`, `"darwin-arm64"`); a
+  non-matching entry is dropped before anything is interned
+- `setup` — names of the spec's `SETUP` pairs to run on this host (never hashed)
+- `bundle` — a `BUNDLES` alias or an inline declaration; excludes `source`
+- `product` — treat this entry as the provider of a named product (`docs/products.md`)
+- `needed_by` — the phase of the *dependent* an edge blocks; meaningful on a spec's
+  `DEPENDENCIES` entries, where the dependent exists
 
-**Uniqueness validation:** Envy validates manifests post-execution. Duplicate recipe+options combinations error (deep comparison—string `"foo@v1"` matches `{ spec = "foo@v1" }`). Same spec with conflicting sources (different `source`/`sha256`/`file`/`fetch`) errors. Same recipe+options from identical sources is duplicate. Different options yield different deployments—allowed.
+Dependencies are declared by specs, in `DEPENDENCIES`; a manifest entry names direct
+needs only:
+- **Strong:** `spec` plus a `source` (or `bundle`) — interned and started immediately
+- **Weak:** a query plus a `weak = { ... }` fallback, spawned only if nothing matches
+- **Reference-only:** a query with neither `source` nor `weak`; some other package must
+  provide it, or resolution fails after convergence
+- **Fetch prerequisites:** `source.dependencies` of a custom fetch. Strong only, and
+  always needed by the declarer's `spec_fetch`, so they may not carry `needed_by`
+
+**One package per (identity, options):** the key holds no source, so every declaration of
+one key must agree on what to fetch. A provable disagreement—different URL, `sha256`,
+path, `ref`, or bundle—is an error naming both declaring files. Two custom fetch closures
+are undecidable: the first wins and warns, unless both are copies of one declaration (an
+alias named twice), which is silent. Different options are different packages, always.
 
 ### Package Depots
 
@@ -112,7 +122,7 @@ Manifests can specify a `DEFAULT_SHELL` global to control how `envy.run()` execu
 - **Inline mode:** `{inline = {"/path/to/exe", "-c"}}`
   - Script content passed as final argument (no temp file)
 
-**Dynamic shell selection (function):** takes no arguments; returns a constant or custom-shell table. Wrap it in `{DEPENDS, SHELL}`—mirroring `PACKAGE_DEPOTS`—to name an envy-managed interpreter. `DEPENDS` lists identities from `PACKAGES`; they install before any other package's first string verb, and are what `envy.product`/`envy.package` authorize against.
+**Dynamic shell selection (function):** takes no arguments; returns a constant or custom-shell table. Wrap it in `{DEPENDS, SHELL}`—mirroring `PACKAGE_DEPOTS`—to name an envy-managed interpreter. `DEPENDS` lists identities from `PACKAGES`, installed before the first string verb that needs the shell; `SHELL` must then be a function, since only a function is evaluated late enough to name a package.
 
 ```lua
 DEFAULT_SHELL = {
@@ -124,10 +134,13 @@ DEFAULT_SHELL = {
 **Use case:** Express all build scripts in a custom language (Python, Tcl, Ruby) without assuming it's pre-installed.
 
 **Semantics:**
-- Value forms (constant, custom table) resolve at manifest load; a function is evaluated once, on first use by a verb needing a shell, and memoized for the run. Evaluating at load is impossible—no package exists yet to own the interpreter dependency.
-- The `DEPENDS` closure gets the platform built-in for its own string verbs: it supplies the shell and cannot consume it. Bootstrap specs (Python itself) need no annotation—membership is enough.
+- Value forms (constant, custom table) resolve at manifest load; a function is evaluated once, by a single-step `#default_shell` engine task mirroring `#depot`—it starts on the first request that needs it, its edges hold it until `DEPENDS` is installed, and it publishes the result for the run. Evaluating at load is impossible—no package exists yet to own the interpreter dependency.
+- **Bootstrap-shell rule:** the platform built-in is used wherever the manifest shell cannot exist yet—no package context at all, a package in *any* bootstrap closure (`DEFAULT_SHELL` `DEPENDS`, `PACKAGE_DEPOTS` `DEPENDS`, `source.dependencies`), and any Lua running in the manifest state (a manifest bundle's `source.fetch`, a depot `FETCH`, the `SHELL` function itself). One rule, not three carve-outs: bootstrap work runs before the shell exists, and evaluating the shell needs the manifest's single non-recursive Lua lock, so it can never nest inside itself. Bootstrap specs need no annotation—membership is enough.
+- Lazy: `DEPENDS` starts on the first request for a shell, so a run that executes no string verb never fetches the interpreter—`envy deploy` and a bare `envy product` listing resolve only, and ask for one just if a custom fetch runs a string verb. `DEPENDS` is interned during resolution regardless, so a bad identity still fails early.
 - `DEPENDS` is a strong-only closure, like `source.dependencies`; a weak reference in it is an error. `DEPENDS` without a function `SHELL` is rejected.
-- The function authorizes against a synthetic consumer, `envy.DEFAULT_SHELL@v1`, holding one edge per `DEPENDS` entry—so it appears in the access traces and in errors.
+- Root manifest only: an imported manifest that declares `DEFAULT_SHELL` (or `PACKAGE_DEPOTS`) is an error unless the root adopts the value—see the bootstrap boundary in `docs/commands.md`.
+- The function authorizes against a synthetic consumer, `envy.DEFAULT_SHELL@v1`, holding one edge per `DEPENDS` entry—wired through the same `wire_dependency` path as every other edge, so it appears in the access traces and in errors.
+- Traced as `default_shell_resolving{depends}` then `default_shell_resolved{shell}`; a package's block on the depot is `depot_wait{duration_ms, result}`.
 
 ## Specs
 
@@ -136,19 +149,19 @@ DEFAULT_SHELL = {
 **Identity:** Specs are namespaced with version: `arm.gcc@v2`, `gnu.binutils@v3`. The `@` symbol denotes **spec version**, not asset version. Asset versions come from `options` in manifest. Multiple spec versions coexist; `local.*` namespace reserved for project-local specs.
 
 **Sources:**
-- **Declarative:** `source` field with URL (http/https/s3/file) or git repo; verified via `sha256` (URL) or `ref` (git); cached
-- **Custom fetch:** `fetch` function with verification enforced at API boundary (`envy.fetch`, `envy.commit_fetch`); cached
-- **Project-local:** `file` path in project tree; never cached; `local.*` namespace only
-- **Fetch prerequisites (nested):** `source.dependencies` declares specs that must reach completion before this recipe’s fetch runs. Strong only — weak resolution happens at a barrier that waits for every spec_fetch, including that of the consumer whose fetch function is waiting, so nothing weak can be ordered in time.
+- **Declarative:** `source` field with a URL (http/https/s3/ftp) or git repo; verified via `sha256` (URL) or `ref` (git); cached
+- **Custom fetch:** `source = { fetch = ..., dependencies = ... }` on the entry that depends on the spec, with verification enforced at the API boundary (`envy.fetch`, `envy.commit_fetch`); cached, keyed on declaring file + identity + options
+- **Project-local:** a `source` path in the project tree; loaded in place and never cached. Any namespace may do this; what `local.*` controls is who may depend on it (see **Security** below)
+- **Fetch prerequisites (nested):** `source.dependencies` declares specs that must reach completion before this spec's fetch runs. Strong only — weak resolution happens at a barrier that waits for every spec_fetch, including that of the consumer whose fetch function is waiting, so nothing weak can be ordered in time.
 
 **Formats:**
 - **Single-file:** `.lua` file (declarative sources only)
-- **Multi-file:** Directory with `recipe.lua` entry point (custom fetch, archives, git repos)
+- **Multi-file:** directory with a `spec.lua` entry point (custom fetch, archives, git repos). A custom fetch commits whatever it likes; the whole committed tree becomes the spec directory, so siblings are reachable via `envy.loadenv` and `require`
 
 **Integrity:** Two orthogonal checks:
 
 1. **Identity validation** (ALL specs, always required):
-   - Spec must declare `identity = "..."` matching referrer's expectation
+   - Spec must declare `IDENTITY = "..."` matching referrer's expectation
    - Catches typos, stale references, copy-paste errors
    - No namespace exemptions
 
@@ -158,31 +171,30 @@ DEFAULT_SHELL = {
   - If SHA256 provided, verification happens at fetch time; mismatch causes hard failure
   - Never re-verified from cache
   - **Permissive by default**: SHA256 optional for all specs
-  - **Namespace rule**: `local.*` specs never require SHA256 (files are local/trusted)
-  - **Future strict mode**: Will require SHA256 for all non-`local.*` specs
+  - **Future strict mode**: will require SHA256 for all non-`local.*` specs
 
 ### Dependency Semantics (strong, weak, reference-only)
 
 - **Strong dependencies** provide a complete spec (manifest or explicit `source`). They are instantiated immediately and run toward their target phase.
-- **Weak dependencies** specify a query (`spec = "name"` or partial identity) plus a fallback spec in `weak = { ... }`. The engine tries to satisfy the query from existing/manifest/other strong nodes; if no match, it spawns the fallback. Ambiguities raise errors with all candidates listed.
+- **Weak dependencies** specify a query (`spec = "name"` or partial identity) plus a fallback spec in `weak = { ... }`. The engine tries to satisfy the query from packages already in the graph; if no match, it spawns the fallback. Ambiguity is an error listing every candidate, sorted. Which package a weak reference resolved to is hashed into the consumer's cache key—different provider, different package.
 - **Reference-only dependencies** provide only a query (no `source`/`weak`). They must be satisfied by some other spec in the graph; otherwise resolution fails after convergence.
-- **Nested fetch prerequisites** live in `source.dependencies` and follow the same rules, except that they must be strong. They must complete (typically to `completion`) before the parent’s `recipe_fetch` runs — and because the whole closure therefore runs during resolution, nothing in it may hold a weak reference either.
-- Resolution is iterative: the engine waits for all active specs to reach their target phases, runs weak-resolution passes (matching or spawning fallbacks), and repeats while progress is made. Progress accounts for newly spawned fallbacks even when unresolved counts stay flat.
+- **Nested fetch prerequisites** live in `source.dependencies` and follow the same rules, except that they must be strong. They must complete before the parent's `spec_fetch` runs — and because the whole closure therefore runs during resolution, nothing in it may hold a weak reference either.
+- Resolution is iterative: the engine waits for every in-flight `spec_fetch`, runs one weak-resolution pass (matching or spawning fallbacks), and repeats while progress is made. Progress accounts for newly spawned fallbacks even when unresolved counts stay flat.
 
 ### Verbs
 
 Specs define verbs describing how to acquire, validate, and install packages:
 
 - **`fetch`** — Acquire source materials. Can be:
-  - String: `fetch = "https://..."` (no verification)
-  - Single file: `fetch = {url="...", sha256="..."}` (optional verification)
-  - Multiple files: `fetch = {{url="..."}, {url="..."}}` (concurrent, optional verification per-file)
+  - String: `FETCH = "https://..."` (no verification)
+  - Single file: `FETCH = {source="...", sha256="..."}` (optional verification)
+  - Multiple files: `FETCH = {{source="..."}, {source="..."}}` (concurrent, optional verification per-file)
   - Custom function: `FETCH = function(tmp_dir, options) envy.fetch(...) end` (imperative with `envy.fetch()` API)
   - Function returning declarative: `FETCH = function(tmp_dir, options) return "https://..." end` (enables templating with options; return value can be any declarative form: string, table, array; can mix with imperative `envy.fetch()` calls)
   - **Transport retry:** http, ftp and git retry transient transport failures 3 times with jittered exponential backoff (~1s, ~4s, ±50%); the jitter keeps a batch of threads off a single bad mirror. Retryable: connect/DNS failure, mid-body read failure, stall timeout, 5xx, 429. Not retryable: 4xx except 429, sha256 mismatch, callback abort. Safe because fetches are idempotent GETs and payloads are verified after transport. `ENVY_FETCH_ATTEMPTS` (default 3, 1 disables) and `ENVY_FETCH_RETRY_BASE_MS` (default 1000) tune it; s3 is excluded because the AWS SDK retries internally. Transports are bounded on both platforms—curl by `LOW_SPEED_LIMIT`/`LOW_SPEED_TIME`, WinINet by connect/send/receive timeouts—so a mirror that accepts and then stops sending fails in ~60s instead of hanging.
 - **`stage`** — Prepare staging area from fetched content. Default extracts archives; custom functions can manipulate source tree. Declarative form takes `strip` and `only`—`STAGE = {strip = 1, only = {"bin/clang-*", "lib/**/include/*.h"}}` extracts only matching paths (a directory takes its subtree), matched post-`strip`; the rest of the archive is never decompressed. Globs: `*`/`?` within a component, `**` across, `[a-z]` classes. An `only` entry nothing in the fetch dir provides is a hard error.
 - **`build`** — Compile or process staged content. Specs access staging directory, dependency artifacts, and install directory.
-- **`install`** — Write final artifacts to install directory. On success, envy atomically renames to asset directory and marks complete.
+- **`install`** — Write final artifacts into the entry's `pkg/` directory. On a clean return the lock destructor drops the ephemeral dirs and touches `envy-complete`, which is what makes the entry a cache hit ever after.
 - **`setup`** — Named host-side CHECK/INSTALL pairs (`SETUP = { name = { CHECK, INSTALL, PLATFORMS?, DEPENDS? } }`). Run after install, check-gated every invocation, never cached or hashed. Explicit-only selection; selected pairs run as parallel tasks. See below.
 
 ### SETUP Pairs: Host State Beside (or Instead of) the Cache
@@ -204,8 +216,8 @@ Specs declare their mode via top-level `USER_MANAGED` (boolean or function-retur
 
 **Cache-Managed Packages** (`USER_MANAGED = false` or absent):
 - Artifacts stored in cache—hash-based lookup via `cache::ensure_pkg()`
-- Install writes to `install_dir`; on successful return, envy auto-marks complete
-- Lock destructor renames `install/` → `pkg/`, touches `envy-complete`
+- Install writes into the entry's `pkg/` directory (the `install_dir` phase argument)
+- Lock destructor drops `work/` (and `fetch/` unless preserved), then touches `envy-complete`
 - Subsequent runs: cache hit skips payload phases; selected SETUP pairs still evaluate
 - Full pipeline: FETCH → STAGE → BUILD → INSTALL (+ optional SETUP pairs)
 - Example: toolchains, libraries, build tools
@@ -222,7 +234,7 @@ Top-level `CHECK` is invalid everywhere — CHECK/INSTALL pairs live only inside
 - Resolution: `resolve_user_managed()` reads `USER_MANAGED` once during `phase_spec_fetch`; sets `p->type`. Function form is called with no args and must return a boolean.
 - `phase_setup.cpp` computes the selection closure and calls `engine::run_setup_pairs_for()`, which spawns one single-step task per pair and waits for all of them — pairs never masquerade as packages. `phase_check.cpp` does hash lookup for cache-managed only (user-managed acquires no package lock, so payload phases no-op).
 - A selection merging in after a package's setup phase snapshots it (only reachable via exotic fetch-dependency ordering) is a hard error, not a silent drop.
-- Lock destructor: `if (user_managed_) { purge_entry_dir(); }` vs `if (completed_) { rename_install_to_pkg(); }` — pair locks always take the ephemeral branch.
+- Lock destructor: completed → mark `envy-complete`; user-managed → purge the whole entry; otherwise → drop the partial install. Pair locks always take the user-managed branch, so host state leaves no entry behind.
 - Validation: `phase_spec_fetch.cpp::validate_phases()` + `parse_setup_table()` enforce the rules above at spec load.
 
 **Example: System Package Wrapper**
@@ -299,14 +311,15 @@ Specs declare dependencies; transitive resolution is automatic. Manifest authors
 DEPENDENCIES = {
   {
     spec = "arm.gcc@v2",
-    url = "https://github.com/arm/specs/gcc-v2.lua",
+    source = "https://github.com/arm/specs/gcc-v2.lua",
     sha256 = "a1b2c3d4...",
     options = { version = "13.2.0" },
+    needed_by = "build",  -- the default; "check".."install" are the choices
   },
 }
 
 BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
-  local gcc_root = envy.asset("arm.gcc@v2")
+  local gcc_root = envy.package("arm.gcc@v2")
   envy.run("./configure --prefix=" .. install_dir .. " CC=" .. gcc_root .. "/bin/arm-none-eabi-gcc")
   envy.run("make -j$(nproc)")
 end
@@ -316,9 +329,9 @@ INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
 end
 ```
 
-**Resolution:** Topological sort ensures dependencies deploy before dependents. Cycles error (must be DAG). Dependencies specify exact spec versions—same spec version always uses same deps (reproducible builds).
+**Resolution:** an edge holds the dependent's `needed_by` phase until the dependency finishes `setup`, so host state is in place before anyone builds against it. Cycles are refused where the edge would be added, with the path printed. Dependencies name exact spec revisions—one revision always resolves the same way.
 
-**Security:** Non-local specs cannot depend on `local.*` specs. Envy enforces at load time.
+**Security:** a non-`local.*` spec cannot depend on a `local.*` spec—a published spec must not reach into someone's working tree. Enforced while parsing `DEPENDENCIES`, naming both identities.
 
 ## Unified DAG Execution Model
 
@@ -328,17 +341,22 @@ Envy builds a dependency graph and executes packages in parallel via worker thre
 
 ### Phase Model
 
-Each DAG node represents `(recipe_identity, options)` with up to seven verb phases:
+One task per `(identity, options)`, whose steps are a fixed ladder. A phase with no verb
+to run costs one no-op step, so there is nothing to declare or infer:
 
-- **`recipe_fetch`** — Load spec Lua file(s) into cache; discover dependencies; add child nodes to graph
-- **`check`** — Test if asset already satisfied (skip remaining phases if true)
-- **`fetch`** — Download/acquire source materials into `fetch/`
-- **`stage`** — Prepare build staging area from fetched content
-- **`build`** — Compile or process staged content
-- **`install`** — Write final artifacts to install directory
-- **`deploy`** — Post-install actions (env setup, capability registration)
+- **`spec_fetch`** — acquire and load the spec; parse `DEPENDENCIES`, `PRODUCTS`, `SETUP`; wire edges and spawn the packages they name
+- **`check`** — compute the package key and test the cache; a hit skips the payload phases
+- **`import`** — take a prebuilt artifact from a package depot, if one matches the key
+- **`fetch`** — download source materials into `fetch/`
+- **`stage`** — prepare the staging area from fetched content
+- **`build`** — compile or process staged content
+- **`install`** — write final artifacts; on success the entry is marked complete
+- **`setup`** — run the selected `SETUP` pairs as their own tasks (host state, never cached)
+- **`export`** — write the package's export artifact when one was asked for
+- **`completion`** — report the outcome row
 
-**Node optimization:** Only declared/inferred phases create nodes. Minimal specs (just `source` field) infer `recipe_fetch` → `fetch` → `stage`, skip `build`/`install`/`deploy`. Spec without `build` verb omits build node. Zero-verb overhead for simple cases.
+A dependency edge is satisfied once the dependency finishes `setup`; the edge still
+ratchets it through `export`, so export overlaps dependents' builds.
 
 **Phase execution:** Scheduling lives in `task_engine` (src/task_engine.h), a domain-agnostic threaded executor: keyed tasks, linear steps, ratcheting target watermarks, per-step edges, dynamic task creation. `engine` adapts envy onto it — each package is one task whose steps are the phase ladder; SETUP pairs are single-step tasks. Inter-package dependencies become task edges via `needed_by` annotation (see below).
 
@@ -348,56 +366,37 @@ Each DAG node represents `(recipe_identity, options)` with up to seven verb phas
 ```lua
 -- vendor.lib@v1 spec file
 IDENTITY = "vendor.lib@v1"
-
--- local.wrapper@v1 spec file
-IDENTITY = "local.wrapper@v1"
-
--- Rest of recipe...
 ```
 Envy validates declared identity matches requested identity. This prevents typos, stale references, copy-paste errors, and malicious substitution. No namespace exemptions—all specs require identity declaration.
 
-**Declarative sources** (common case):
+**Declarative sources** (common case), the spec's own payload:
 ```lua
--- String shorthand (no verification)
-FETCH = "https://example.com/gcc.tar.gz"
-
--- Single file with verification
-FETCH = {url = "https://example.com/lib.lua", sha256 = "abc..."}
-
--- Multiple files (concurrent download)
-FETCH = {
-  {url = "https://example.com/gcc.tar.gz", sha256 = "abc..."},
-  {url = "https://example.com/gcc.tar.gz.sig", sha256 = "def..."}
+FETCH = "https://example.com/gcc.tar.gz"                                -- no verification
+FETCH = { source = "https://example.com/lib.tar.gz", sha256 = "abc..." }
+FETCH = {                                                    -- concurrent, verified apiece
+  { source = "https://example.com/gcc.tar.gz", sha256 = "abc..." },
+  { source = "https://example.com/gcc.tar.gz.sig" },
 }
-
--- Git repository
-FETCH = {url = "git://github.com/vendor/lib.git", ref = "a1b2c3d4..."}
-
--- S3 (first-class support)
-FETCH = {url = "s3://bucket/lib.lua", sha256 = "ghi..."}
+FETCH = { source = "git://github.com/vendor/lib.git", ref = "a1b2c3d4..." }
+FETCH = { source = "s3://bucket/lib.tar.gz", sha256 = "ghi..." }        -- first-class
 ```
 
-**Custom fetch functions** (exotic cases—JFrog, authenticated APIs, custom tools):
+**Custom *spec* fetch** (exotic cases—JFrog, authenticated APIs, custom tools) is a
+`source` table on the entry that *depends* on the spec, because the closure has to live
+in a file envy has already loaded:
 ```lua
-{
-  spec = "corporate.toolchain@v1",
-  FETCH = function(tmp_dir, options)
-    local jfrog = envy.asset("jfrog.cli@v2")  -- Access installed dependency
-
-    -- Download files concurrently with verification
-    envy.fetch({
-      {source = "https://internal.com/recipe.lua", sha256 = "abc..."},
-      {source = "https://internal.com/helpers.lua", sha256 = "def..."}
-    })
-    envy.commit_fetch({"recipe.lua", "helpers.lua"})
-  end,
-  DEPENDENCIES = {
-    { spec = "jfrog.cli@v2", source = "...", sha256 = "...", needed_by = "recipe_fetch" }
-  }
-}
+-- in some spec's DEPENDENCIES (or a BUNDLES declaration)
+{ spec = "corporate.toolchain@v1", source = {
+    dependencies = { { spec = "jfrog.cli@v2", source = "jfrog.lua" } },
+    fetch = function(tmp_dir, options)
+      envy.run(envy.product("jf") .. " rt dl specs/toolchain " .. tmp_dir)
+      envy.commit_fetch({ "spec.lua", "lib" })   -- the whole tree becomes the spec dir
+    end } }
 ```
+`source.dependencies` are wired at `needed_by = spec_fetch` and installed before the
+closure runs, which is what makes `envy.product("jf")` legal inside it.
 
-**Fetch phase signature:** `FETCH(tmp_dir, options)` — tmp_dir is ephemeral workspace; options passed from manifest.
+**Fetch phase signature:** `FETCH(tmp_dir, options)` — tmp_dir is an ephemeral workspace; options come from the entry that declared the package.
 
 **Fetch behavior:**
 - **Polymorphic API**: Single file `envy.fetch({source="..."})` or batch `envy.fetch({{source="..."}, ...})`
@@ -407,101 +406,90 @@ FETCH = {url = "s3://bucket/lib.lua", sha256 = "ghi..."}
 
 **Verification:** SHA256 is **optional**. If `sha256` field present, Envy verifies after download. If absent, download proceeds without verification (permissive mode). Custom fetch functions cannot bypass—all downloads go through `envy.fetch()` API. Future "strict mode" will require SHA256 for all non-`local.*` specs.
 
-**Cache layout:** Custom fetch → multi-file cache directory with `recipe.lua` entry point:
+**Cache layout:** a custom fetch produces a multi-file spec directory. The entry point
+`spec.lua` is required; every other committed file lands beside it, so `require` and
+`envy.loadenv` reach them:
 ```
-~/.cache/envy/specs/
-└── corporate.toolchain@v1/
-    ├── envy-complete
-    ├── recipe.lua           # Entry point (required)
-    ├── helpers.lua
-    ├── fetch/               # Downloaded files moved here after verification
-    │   └── envy-complete
-    └── work/
-        └── tmp/             # Temp directory for envy.fetch() (cleaned after)
+~/.cache/envy/specs/corporate.toolchain@v1/blake3-{source_hash}/
+├── envy-complete           # written only once the spec loads with the right IDENTITY
+├── pkg/
+│   ├── spec.lua            # Entry point (required)
+│   └── lib/helpers.lua     # Anything else the fetch committed
+├── fetch/                  # Committed files land here first
+└── work/tmp/               # tmp_dir handed to the fetch function (cleaned after)
 ```
+
+A custom fetch's cache entry is keyed by the declaring file, the identity, and the
+options—a closure has no fingerprint. Editing the function body in place reuses the
+entry; move it, or bump the revision, to force a refetch.
 
 ### Phase Dependencies via `needed_by`
 
-**Default behavior:** Spec A depends on spec B → A's `fetch` phase waits for B's last declared phase (usually `deploy`).
+**Semantics:** `needed_by` names the phase of the *dependent* that the edge blocks. The
+dependency must finish `setup` before that phase starts, whatever phases it declares.
 
-**Custom phase dependencies:** Use `needed_by` annotation to couple specific phases:
+**Valid phases:** `check`, `import`, `fetch`, `stage`, `build`, `install`. The default is
+`build`—the phase that usually needs a toolchain in place. `spec_fetch` is deliberately
+not selectable: a dependency needed that early is a *fetch prerequisite*, and belongs in
+`source.dependencies`, where it is a strong reference by construction.
+
 ```lua
+-- vendor.openocd@v3
 DEPENDENCIES = {
-  { spec = "jfrog.cli@v2", url = "...", sha256 = "...", needed_by = "recipe_fetch" }
+  { spec = "corp.pkgconf@r1", source = "pkgconf.lua", needed_by = "stage" },
+  { spec = "arm.gcc@v2", source = "gcc.lua" },              -- build, the default
 }
 ```
 
-**Semantics:** Dependency must complete its last declared phase before this node's specified phase starts. If `needed_by = "recipe_fetch"`, jfrog.cli's `deploy` completes before this recipe's `recipe_fetch` begins (spec cannot be fetched until tool is installed).
-
-**Concrete example (corporate JFrog workflow):**
-```lua
--- Manifest packages
-{
-  {
-    spec = "corporate.toolchain@v1",
-    FETCH = function(tmp_dir, options)
-      local jfrog = envy.asset("jfrog.cli@v2")  -- Tool must be installed first
-      -- ... fetch using jfrog CLI ...
-    end,
-    DEPENDENCIES = {
-      {
-        spec = "jfrog.cli@v2",
-        source = "https://public.com/jfrog-cli-recipe.lua",
-        sha256 = "...",
-        needed_by = "recipe_fetch"  -- Block corporate.toolchain recipe_fetch until jfrog.cli deployed
-      }
-    }
-  }
-}
+**Graph topology** (`corp.pkgconf@r1` gates the earlier phase, so it lands first):
+```
+[corp.pkgconf@r1 …setup] ─┐
+                          ├→ [vendor.openocd@v3 stage] → [build] → [install] → …
+[arm.gcc@v2 …setup] ──────┘  (gcc only has to be there by build)
 ```
 
-**Graph topology:**
-```
-[jfrog.cli recipe_fetch] → [jfrog.cli fetch] → [jfrog.cli install] → [jfrog.cli deploy]
-                                                                           ↓
-                                              [corporate.toolchain recipe_fetch] → ...
-```
-
-**Valid `needed_by` phases:** `recipe_fetch`, `check`, `fetch`, `stage`, `build`, `install`, `deploy`. Omitting `needed_by` defaults to blocking on `fetch` (standard transitive dependency).
+Repeat declarations of one identity merge into a single edge carrying the *earliest*
+`needed_by` any of them asked for.
 
 ### Dynamic Graph Expansion
 
-**Memoization:** Nodes keyed by `"identity{key1=val1,key2=val2}"` (canonical string, options sorted lexicographically). First thread to request a node allocates it; later threads reuse existing node.
+**Memoization:** nodes are keyed by the canonical string `identity{["key"]=value,…}`—options as a Lua table literal, keys quoted and sorted, so the key round-trips and cannot collide. The first thread to ask for a node allocates it; the rest reuse it.
 
 **Expansion process:**
-1. Manifest roots seed graph with initial `recipe_fetch` nodes
-2. `recipe_fetch` node executes: fetch spec file(s), load Lua, evaluate `dependencies` field
-3. For each dependency: ensure memoized node exists, add edges based on `needed_by`
-4. Child `recipe_fetch` nodes execute, discover their dependencies, add more nodes
-5. Graph grows until all transitive dependencies discovered
-6. `task_engine::join_all()` reaps every worker, tolerating tasks created mid-join
+1. Manifest roots seed the graph, each started toward `spec_fetch`
+2. `spec_fetch` fetches the spec file(s), loads the Lua, and reads `DEPENDENCIES`
+3. Each dependency is interned (memoized key), wired with its `needed_by`, and started
+4. Their `spec_fetch` steps discover more, and so on until the graph stops growing
+5. `task_engine::join_all()` reaps every worker, tolerating tasks created mid-join
 
-**Cycle detection:** Must catch cycles during graph construction. Example illegal cycle:
+**Cycle detection:** an edge that would close a cycle is refused where it would be added.
+Example illegal cycle:
 ```lua
--- Spec A
-{ spec = "A@v1", FETCH = function(tmp_dir, opts) envy.asset("B@v1") end,
-  DEPENDENCIES = { { spec = "B@v1", needed_by = "recipe_fetch" } } }
+-- local.a@v1 spec: needs B installed to build
+DEPENDENCIES = { { spec = "local.b@v1", source = "b.lua", needed_by = "build" } }
 
--- Spec B
-{ spec = "B@v1", dependencies = { { spec = "A@v1", needed_by = "recipe_fetch" } } }
+-- local.b@v1 spec: needs A's payload to stage
+DEPENDENCIES = { { spec = "local.a@v1", source = "a.lua", needed_by = "stage" } }
 ```
-Both specs need each other for `recipe_fetch` → deadlock. Envy detects via reachability check before adding edges; errors with cycle path.
+Each waits for the other's `setup` → deadlock. `engine::wire_dependency` — the only place an edge is added — refuses an edge whose target already reaches the parent and prints the path it found ("Dependency cycle detected: local.b@v1 -> local.a@v1 -> local.b@v1"). Reachability, not the spawn path, so a back edge from a second manifest root, a weak fallback, or a `source.dependencies` prerequisite is caught too. Repeat declarations of one identity merge into one edge at the earliest `needed_by`; two option variants of it in one dependency list are a parse error.
 
 ### Command Execution Model
 
-Commands implement `bool execute()` returning success/failure.
+Commands implement `void execute()`; failure is an exception, which the CLI turns into an error line and a non-zero exit.
 
 **Simple commands:** Synchronous work, no parallelism needed.
 
-**Package commands:** Create engine, execute packages in parallel via worker threads:
+**Package commands:** create an engine over the loaded manifest and hand it the targets;
+failure is an exception carrying every package's message, deduplicated and sorted.
 ```cpp
-bool cmd_install::execute() {
-  engine eng{ cache_, manifest_->packages() };
-  eng.execute();  // Spawns worker threads, waits for completion
-  print_summary(eng.roots());
-  return true;
+void cmd_install::execute() {
+  auto const [m, c]{ cmd_startup_load("install", cfg_.manifest_path, ...) };
+  engine eng{ *c, m.get() };
+  eng.run_full(targets);  // spawns workers, joins them, throws on any failure
 }
 ```
+`run_full` runs the whole ladder; `resolve_graph` stops at `spec_fetch`, which is what
+the query commands (`deploy`, `product`, `package`, `export`) build on.
 
 **Parallelism:** Each task (package or SETUP pair) gets its own `std::thread` worker. Workers block on dependency watermarks via condition variables — legal because workers are plain threads, not pooled. Dependency edges wait to "setup complete" while ratcheting the dependency through export, so export overlaps dependents' builds.
 
@@ -515,25 +503,26 @@ Cache layout, locking, verification, and recovery live in `docs/cache.md`.
 
 Specs run only on host platform—no cross-deployment. Single spec file adapts via platform variables envy provides. Authors structure platform logic however they want.
 
-**Envy-provided globals:**
-- `ENVY_PLATFORM` — `"darwin"`, `"linux"`, `"windows"`
-- `ENVY_ARCH` — `"arm64"`, `"x86_64"`
-- `ENVY_PLATFORM_ARCH` — Combined: `"darwin-arm64"`, `"linux-x86_64"`
-- `ENVY_OS_VERSION` — `"14.0"` (macOS), `"22.04"` (Ubuntu)
+**Envy-provided values** (fields of the `envy` table, available everywhere):
+- `envy.PLATFORM` — `"darwin"`, `"linux"`, `"windows"`
+- `envy.ARCH` — `"arm64"`, `"x86_64"`
+- `envy.PLATFORM_ARCH` — combined: `"darwin-arm64"`, `"linux-x86_64"`
+- `envy.EXE_EXT` — `""`, or `".exe"` on Windows
+
+`ENVY_SHELL` (the shell constants) and `ENVY_IMPORTER` are the only bare globals envy
+installs.
 
 **Single-file with conditionals:**
 ```lua
-FETCH = function(tmp_dir, options)
+FETCH = function(tmp_dir, options)          -- returning a declarative form is enough
   local version = options.version or "13.2.0"
   local hashes = {
-    ["13.2.0"] = {
-      ["darwin-arm64"] = "a1b2...", ["linux-x86_64"] = "c3d4...",
-    },
+    ["13.2.0"] = { ["darwin-arm64"] = "a1b2...", ["linux-x86_64"] = "c3d4..." },
   }
 
   return {
     source = string.format("https://arm.com/gcc-%s-%s-%s.tar.xz",
-                       version, envy.PLATFORM, envy.ARCH),
+                           version, envy.PLATFORM, envy.ARCH),
     sha256 = hashes[version][envy.PLATFORM_ARCH],
   }
 end
@@ -549,25 +538,27 @@ end
 **Multi-file with platform modules:**
 ```
 arm.gcc@v2/
-├── recipe.lua
+├── spec.lua
 ├── darwin.lua
 ├── linux.lua
 └── checksums.lua
 ```
 
 ```lua
--- recipe.lua
-local impl = require(ENVY_PLATFORM)  -- Loads darwin.lua or linux.lua
-FETCH = function(ctx) return impl.fetch(ctx, require("checksums")) end
+-- spec.lua
+local impl = envy.loadenv(envy.PLATFORM)  -- loads darwin.lua or linux.lua beside this file
+FETCH = function(tmp_dir, options) return impl.fetch(options, envy.loadenv("checksums")) end
 STAGE = impl.stage
 INSTALL = impl.install
 ```
 
-**Platform validation:**
+**Platform constraints:** a spec's `PLATFORMS` narrows the platforms its *products* are
+deployed for (intersected with each product's own `platforms`); which hosts run the
+package at all is the manifest entry's `platforms`. A spec that cannot run here at all
+says so directly:
 ```lua
-local SUPPORTED = { darwin = { arm64 = true }, linux = { x86_64 = true } }
-assert(SUPPORTED[ENVY_PLATFORM] and SUPPORTED[ENVY_PLATFORM][ENVY_ARCH],
-       "Unsupported platform: " .. ENVY_PLATFORM_ARCH)
+PLATFORMS = { "darwin-arm64", "linux-x86_64" }             -- product constraint
+assert(envy.PLATFORM_ARCH ~= "windows-arm64", "unsupported: " .. envy.PLATFORM_ARCH)
 ```
 
 ## Bundles
@@ -585,17 +576,17 @@ SPECS = {
 }
 ```
 
-**Cache layout:**
+**Cache layout:** a bundle is a spec entry like any other—`specs/`, keyed on its source—
+and is never unpacked into per-spec directories:
 ```
-~/.cache/envy/bundles/
-└── acme.toolchain@v1/
-    ├── envy-bundle.lua
-    ├── specs/
-    │   ├── gcc.lua
-    │   ├── binutils.lua
-    │   └── helpers.lua
-    └── lib/
-        └── common.lua    # Shared helpers
+~/.cache/envy/specs/acme.toolchain@v1/blake3-{source_hash}/pkg/
+├── envy-bundle.lua
+├── specs/
+│   ├── gcc.lua
+│   ├── binutils.lua
+│   └── helpers.lua
+└── lib/
+    └── common.lua    # Shared helpers, reachable by require() from any spec in the bundle
 ```
 
 **Referencing bundles from manifests:**
@@ -622,23 +613,22 @@ BUNDLES = {
 }
 ```
 
-**Inter-spec dependencies within bundles:**
-Specs use `envy.loadenv_spec(identity, module)` to load Lua code from declared bundle dependencies. Uses Lua dot syntax for module paths (e.g., `"lib.common"` → `lib/common.lua`). Requires `needed_by` annotation.
+**Using another bundle's helpers:** depend on the bundle itself—`bundle` plus its own
+`source`, which is what distinguishes it from a spec-from-bundle entry—and read code out
+of it with `envy.loadenv_spec(identity, module)`, dot syntax for the path. Its own
+siblings a spec just `require`s: the bundle root is on `package.path`.
 
 ```lua
--- acme.gcc@v2 spec (within bundle)
+-- vendor.mytool@v1, in some other bundle or standalone
 DEPENDENCIES = {
-  {
-    bundle = "acme.toolchain@v1",  -- Depend on own bundle for helpers
-    needed_by = "fetch",
-  },
+  { bundle = "acme.toolchain@v1", source = "git://github.com/acme/specs", ref = "a1b2c3d",
+    needed_by = "fetch" },     -- the access is checked against this, and build is too late
 }
 
 FETCH = function(tmp_dir, options)
-  -- Load helper from bundle (fuzzy match: "toolchain" matches "acme.toolchain@v1")
+  -- Fuzzy match: "toolchain" matches "acme.toolchain@v1"
   local common = envy.loadenv_spec("toolchain", "lib.common")
-  local url = common.build_download_url("gcc", options.version)
-  return {source = url, sha256 = options.sha256}
+  return { source = common.build_download_url("gcc", options.version) }
 end
 ```
 
@@ -745,11 +735,11 @@ namespace envy::tui {
 
 **REPL mode** (`envy lua`): TUI runs in interactive mode—logs bypass queue, go straight to stderr via `fprintf`. No render loop, no progress bars.
 
-**Spec process execution:** Three modes via `ctx` API:
+**Spec process execution:** one verb, `envy.run(script, opts)`, in three modes:
 
-- **`run_capture(cmd, args)`** — Stdout/stderr piped to string, returned to Lua. Stdin closed. No TUI interaction (silent checks like `brew list | grep foo`).
-- **`run(cmd, args)`** — Stdout/stderr piped line-by-line to `tui::info()`. Stdin closed. No TUI pause (build output appears as logs).
-- **`run_interactive(cmd, args)`** — Stdin/stdout/stderr inherited. TUI calls `pause_rendering()`, clears progress bars, waits for subprocess exit, calls `resume_rendering()`. Render loop idles on atomic flag.
+- default — stdout/stderr piped line-by-line to `tui::info()`, stdin closed; build output appears as logs
+- `capture = true` — stdout/stderr collected into the returned `{ exit_code, stdout, stderr }`; pair with `check = false` for silent probes like `brew list | grep foo`
+- `interactive = true` — stdin/stdout/stderr inherited. TUI calls `pause_rendering()`, clears progress bars, waits for the child, then `resume_rendering()`; the render loop idles on an atomic flag
 
 **Platform abstraction:** Unix uses `fork()`/`execvp()`/`pipe()`/`dup2()`. Windows uses `CreateProcess()`/`STARTUPINFO` with redirected handles. Both hide behind `envy::process` interface. Terminal control via `isatty()`/`_isatty()` + ANSI escape codes (Windows 10+ `ENABLE_VIRTUAL_TERMINAL_PROCESSING` via `SetConsoleMode`).
 

@@ -5,7 +5,9 @@
 #include "sol_util.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -77,7 +79,9 @@ envy::pkg_cfg *create_spec_with_custom_fetch(
   }
 
   sol::object spec_val = result;
-  return envy::pkg_cfg::parse(spec_val, fs::current_path());
+  return envy::pkg_cfg::parse(spec_val,
+                              fs::current_path(),
+                              envy::pkg_entry_shape::DEPENDENCY);
 }
 
 // Helper: Call a pkg_cfg's custom fetch function and return result
@@ -170,9 +174,15 @@ TEST_CASE("pkg_cfg - multiple specs have correct functions") {
   sol::object val_bar = deps_table[2];
   sol::object val_baz = deps_table[3];
 
-  envy::pkg_cfg *cfg_foo{ envy::pkg_cfg::parse(val_foo, fs::current_path()) };
-  envy::pkg_cfg *cfg_bar{ envy::pkg_cfg::parse(val_bar, fs::current_path()) };
-  envy::pkg_cfg *cfg_baz{ envy::pkg_cfg::parse(val_baz, fs::current_path()) };
+  envy::pkg_cfg *cfg_foo{
+    envy::pkg_cfg::parse(val_foo, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY)
+  };
+  envy::pkg_cfg *cfg_bar{
+    envy::pkg_cfg::parse(val_bar, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY)
+  };
+  envy::pkg_cfg *cfg_baz{
+    envy::pkg_cfg::parse(val_baz, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY)
+  };
 
   // Verify each has a function
   CHECK(cfg_foo->has_fetch_function());
@@ -234,7 +244,7 @@ TEST_CASE("pkg_cfg - error on dependencies without fetch") {
       [&]() {
         auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
         sol::object val = result;
-        envy::pkg_cfg::parse(val, fs::current_path());
+        envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY);
       }(),
       "source.dependencies requires source.fetch function");
 }
@@ -259,7 +269,7 @@ TEST_CASE("pkg_cfg - error on fetch not a function") {
       [&]() {
         auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
         sol::object val = result;
-        envy::pkg_cfg::parse(val, fs::current_path());
+        envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY);
       }(),
       "source.fetch must be a function");
 }
@@ -282,7 +292,7 @@ TEST_CASE("pkg_cfg - error on dependencies not array") {
       [&]() {
         auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
         sol::object val = result;
-        envy::pkg_cfg::parse(val, fs::current_path());
+        envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY);
       }(),
       "source.dependencies must be array (table)");
 }
@@ -302,9 +312,9 @@ TEST_CASE("pkg_cfg - error on empty source table") {
       [&]() {
         auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
         sol::object val = result;
-        envy::pkg_cfg::parse(val, fs::current_path());
+        envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY);
       }(),
-      "source table must have either URL string or dependencies+fetch function");
+      doctest::Contains("source table must declare a 'fetch' function"));
 }
 
 TEST_CASE("pkg_cfg - error on parse without lua_State") {
@@ -324,7 +334,8 @@ TEST_CASE("pkg_cfg - error on parse without lua_State") {
   sol::object val = result;
 
   // Verify parsing with lua_State works for custom source.fetch
-  CHECK_NOTHROW(envy::pkg_cfg::parse(val, fs::current_path()));
+  CHECK_NOTHROW(
+      envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY));
 }
 
 TEST_CASE("pkg_cfg - no function without source table") {
@@ -340,7 +351,9 @@ TEST_CASE("pkg_cfg - no function without source table") {
 
   auto result{ lua.safe_script(lua_code, sol::script_pass_on_error) };
   sol::object val = result;
-  envy::pkg_cfg *cfg{ envy::pkg_cfg::parse(val, fs::current_path()) };
+  envy::pkg_cfg *cfg{
+    envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY)
+  };
 
   CHECK(cfg->identity == "local.normal@v1");
   CHECK_FALSE(cfg->has_fetch_function());
@@ -464,6 +477,136 @@ TEST_CASE("parse_fetch_dependency: source.dependencies rejects a bare product en
   REQUIRE(result.valid());
   sol::object val = result;
 
-  CHECK_THROWS_WITH(envy::pkg_cfg::parse(val, fs::current_path()),
-                    doctest::Contains("must be a strong reference"));
+  CHECK_THROWS_WITH(
+      envy::pkg_cfg::parse(val, fs::current_path(), envy::pkg_entry_shape::DEPENDENCY),
+      doctest::Contains("must be a strong reference"));
+}
+
+// -- one fetch-function lookup ----------------------------------------------
+//
+// Every declaration shape that can carry a `source = { fetch = ... }` funnels
+// through find_fetch_function: a spec's DEPENDENCIES entry, an inline `bundle = {...}`
+// table on a DEPENDENCIES or PACKAGES entry, and a BUNDLES alias. A non-matching
+// entry is skipped, never mistaken for the answer.
+
+namespace {
+
+// Every lookup here calls the function it found and compares the string it returns,
+// so a test proves it got *that* closure rather than merely some closure.
+std::string call_found(std::optional<sol::protected_function> const &fn) {
+  REQUIRE(fn.has_value());
+  auto result{ (*fn)() };
+  REQUIRE(result.valid());
+  return result.template get<std::string>();
+}
+
+std::optional<sol::protected_function> find_spec(sol::state &lua,
+                                                 std::string identity,
+                                                 std::string options = "{}") {
+  return envy::find_fetch_function(lua,
+                                   { .what = envy::fetch_fn_query::kind::SPEC,
+                                     .identity = std::move(identity),
+                                     .serialized_options = std::move(options) });
+}
+
+std::optional<sol::protected_function> find_bundle(sol::state &lua,
+                                                   std::string identity) {
+  return envy::find_fetch_function(lua,
+                                   { .what = envy::fetch_fn_query::kind::BUNDLE,
+                                     .identity = std::move(identity) });
+}
+
+}  // namespace
+
+TEST_CASE("find_fetch_function: scans past a same-identity entry with a URL source") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  lua.safe_script(R"(
+    DEPENDENCIES = {
+      { spec = "local.foo@v1", source = "file:///tmp/foo.lua" },
+      { spec = "local.foo@v1", source = { fetch = function() return "hit" end } },
+    }
+  )");
+
+  CHECK(call_found(find_spec(lua, "local.foo@v1")) == "hit");
+}
+
+TEST_CASE("find_fetch_function: a spec query discriminates option variants") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  lua.safe_script(R"(
+    DEPENDENCIES = {
+      { spec = "local.foo@v1", options = { v = "1" },
+        source = { fetch = function() return "one" end } },
+      { spec = "local.foo@v1", options = { v = "2" },
+        source = { fetch = function() return "two" end } },
+      { spec = "local.bare@v1", source = { fetch = function() return "bare" end } },
+    }
+  )");
+
+  CHECK(call_found(find_spec(lua, "local.foo@v1", R"({["v"]="1"})")) == "one");
+  CHECK(call_found(find_spec(lua, "local.foo@v1", R"({["v"]="2"})")) == "two");
+  CHECK(call_found(find_spec(lua, "local.bare@v1")) == "bare");
+  CHECK_FALSE(find_spec(lua, "local.foo@v1").has_value());  // options are part of the key
+}
+
+TEST_CASE("find_fetch_function: bundle shapes a spec state can declare") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  lua.safe_script(R"(
+    BUNDLES = {
+      tc = { identity = "corp.alias@r1",
+             source = { fetch = function() return "alias" end } },
+    }
+    DEPENDENCIES = {
+      { spec = "local.unrelated@v1", source = "file:///tmp/u.lua" },
+      { bundle = "corp.pure@r1", source = { fetch = function() return "pure" end } },
+      { spec = "corp.member@r1",
+        bundle = { identity = "corp.inline@r1",
+                   source = { fetch = function() return "inline" end } } },
+    }
+  )");
+
+  CHECK(call_found(find_bundle(lua, "corp.alias@r1")) == "alias");
+  CHECK(call_found(find_bundle(lua, "corp.pure@r1")) == "pure");
+  CHECK(call_found(find_bundle(lua, "corp.inline@r1")) == "inline");
+  CHECK_FALSE(find_bundle(lua, "corp.absent@r1").has_value());
+}
+
+TEST_CASE("find_fetch_function: bundle shapes a manifest state can declare") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  lua.safe_script(R"(
+    BUNDLES = {
+      tc = { identity = "corp.alias@r1",
+             source = { fetch = function() return "alias" end } },
+    }
+    PACKAGES = {
+      { spec = "local.plain@v1", source = "file:///tmp/p.lua" },
+      { spec = "corp.member@r1", bundle = "tc" },
+      { spec = "corp.other@r1",
+        bundle = { identity = "corp.inline@r1",
+                   source = { fetch = function() return "inline" end } } },
+    }
+  )");
+
+  CHECK(call_found(find_bundle(lua, "corp.alias@r1")) == "alias");
+  CHECK(call_found(find_bundle(lua, "corp.inline@r1")) == "inline");
+}
+
+TEST_CASE("find_fetch_function: a bundle declared without a fetch function is no match") {
+  auto lua_state{ envy::sol_util_make_lua_state() };
+  sol::state &lua{ *lua_state };
+
+  lua.safe_script(R"(
+    BUNDLES = {
+      tc = { identity = "corp.remote@r1", source = "https://example.com/b.zip" },
+    }
+  )");
+
+  CHECK_FALSE(find_bundle(lua, "corp.remote@r1").has_value());
 }

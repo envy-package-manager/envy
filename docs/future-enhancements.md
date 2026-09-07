@@ -12,30 +12,26 @@ Allow manifests to override spec sources globally. Useful for pointing to mirror
 
 ```lua
 -- project/envy.lua
-PACKAGES = { "vendor.gcc@v2" }
+PACKAGES = { { spec = "vendor.gcc@v2", source = "specs/gcc.lua" } }
 
-overrides = {
-  ["vendor.gcc@v2"] = {
-    url = "https://internal-mirror.company/gcc.lua",
-    sha256 = "abc123...",
-  },
-  ["local.wrapper@v1"] = {
-    file = "./envy/specs/wrapper.lua",  -- local override
-  },
+OVERRIDES = {
+  ["vendor.gcc@v2"] = { source = "https://internal-mirror.company/gcc.lua",
+                        sha256 = "abc123..." },
+  ["local.wrapper@v1"] = { source = "./envy/specs/wrapper.lua" },  -- local override
 }
 ```
 
 **Semantics:**
 - Overrides apply to all spec references (manifest packages + transitive dependencies)
-- Override specifies alternate source (url+sha256 or file); options remain from original cfg
+- An override names an alternate `source` (with `sha256`/`ref`); options stay with the
+  original entry
 - Applied before fetching/loading, affects cache key for remote specs
 - Non-local specs cannot override to local sources (security boundary)
 
 **Implementation notes:**
-- `manifest` struct gains `std::unordered_map<std::string, recipe_override>` member
-- `recipe_override = std::variant<recipe::cfg::remote_source, recipe::cfg::local_source>`
-- Resolver consults override map when processing each `recipe::cfg`, substitutes source before fetch
-- Parse override table during `manifest::load`, validate identity format
+- `manifest` gains `std::unordered_map<std::string, pkg_cfg::source_t>`
+- `ensure_pkg` consults it when interning a cfg, substituting the source before fetch
+- Parsed during `manifest::load`, validating each key as an identity
 
 ## Manifest Transform Hooks
 
@@ -43,40 +39,35 @@ Beyond declarative overrides, allow manifests to programmatically transform spec
 
 ```lua
 -- project/envy.lua
-function transform_recipe(spec)
-  -- Redirect all specs to internal mirror
-  if spec.url and spec.url:match("^https://example.com/") then
-    spec.url = spec.url:gsub("^https://example.com/", "https://internal-mirror.company/")
+function TRANSFORM_ENTRY(entry)
+  if entry.source then                              -- redirect everything to a mirror
+    entry.source = entry.source:gsub("^https://example.com/",
+                                     "https://internal-mirror.company/")
   end
-
-  -- Force specific version for security
-  if spec.spec == "openssl.lib@v3" then
-    spec.options = spec.options or {}
-    spec.options.version = "3.0.12"  -- Known secure version
+  if entry.spec == "openssl.lib@v3" then            -- pin a known-good version
+    entry.options = entry.options or {}
+    entry.options.version = "3.0.12"
   end
-
-  return spec
+  return entry
 end
-
-PACKAGES = { "openssl.lib@v3", "curl.tool@v2" }
 ```
 
-**Considerations:** Hook executes during manifest validation. Applied to all spec specs (packages + transitive dependencies) before override resolution. Must be pure function (no side effects). Ordering: transform → override → validation.
+**Considerations:** the hook runs during manifest load, over every entry (packages and transitive dependencies) before override resolution. It must be pure. Ordering: transform → override → validation.
 
 ## Spec Version Ranges
 
 Support semver ranges for spec dependencies to reduce churn when spec bugs are fixed. Spec versions must be semver-compliant to enable ranges.
 
 ```lua
-depends = { "vendor.library@^2.0.0" }  -- Any 2.x spec version
+DEPENDENCIES = { { spec = "vendor.library@^2.0.0", source = "lib.lua" } }  -- any 2.x
 ```
 
-## Multi-File Specs from Git Repositories
+## Spec Subdirectories
 
-Fetch multi-file specs directly from Git repos instead of requiring pre-packaged archives. Requires Git runtime dependency.
+`pkg_cfg`'s source structs carry a `subdir`, but nothing parses one: a git repo or archive holding several specs must be one spec per source today. Accept `subdir` on an entry and resolve the entry point beneath it.
 
 ```lua
-{ spec = "vendor.gcc@v2", git = "https://github.com/vendor/specs.git", ref = "v2.0" }
+{ spec = "vendor.gcc@v2", source = "git://github.com/vendor/specs.git", ref = "v2.0", subdir = "gcc" }
 ```
 
 ## S3 Region Selection
@@ -84,7 +75,7 @@ Fetch multi-file specs directly from Git repos instead of requiring pre-packaged
 Nothing in envy selects an S3 region — not `envy fetch`, not spec `FETCH` URIs, not `mirror-envy`. Region comes from `AWS_REGION`/profile, and the SDK silently defaults to `us-east-1`, so a bucket elsewhere fails as a redirect rather than as "region not set". Put it in the URI so every fetch benefits, not just mirrors.
 
 ```lua
-FETCH = { url = "s3://my-bucket/tool.tar.gz?region=eu-west-1" }
+FETCH = { source = "s3://my-bucket/tool.tar.gz?region=eu-west-1" }
 ```
 
 ## Spec Mirroring and Offline Support
@@ -92,7 +83,7 @@ FETCH = { url = "s3://my-bucket/tool.tar.gz?region=eu-west-1" }
 Configure alternate download locations for air-gapped environments. Similar to npm registry mirrors or Go module proxies.
 
 ```lua
-recipe_mirrors = { ["https://public.com/specs/"] = "https://internal.corp/specs/" }
+SPEC_MIRRORS = { ["https://public.com/specs/"] = "https://internal.corp/specs/" }
 ```
 
 ## Spec Deprecation Metadata
@@ -321,7 +312,7 @@ end
 -- Result: registered as alias "python3.13"
 ```
 
-**Implementation:** Function evaluated during recipe_fetch phase after loading spec Lua. Takes `options` table from recipe_spec (not full ctx—aliases needed before asset phases). Cached per spec instance. String result must be unique (enforced at registration time).
+**Implementation:** function evaluated during `spec_fetch` after the spec Lua loads, taking the entry's `options` (aliases are needed before any payload phase). Cached per package. The result must be unique, enforced at registration.
 
 ## `.luarc.json` Merge Logic
 
@@ -388,3 +379,34 @@ setopt(CURLOPT_RESUME_FROM_LARGE, partial_bytes);  // 206 -> append; 200 -> trun
 ## Trace Coverage for Bootstrap/Bundle/AWS
 
 Machinery trace events (`src/trace_events.def`) cover the scheduler, cache/lock, fetch, git-resolve, depot, and deploy paths but not `bootstrap.cpp`, `bundle.cpp`, or `aws_util.cpp`. Add events there if those subsystems need production diagnostics (e.g., `bundle_parsed`, `s3_request`).
+
+## Deferred from the Dependency-System Audit
+
+Each was designed and rejected for now, not overlooked.
+
+- **Early ratchet of weak-free packages.** A package with no weak references could pass
+  `spec_fetch` during resolution, overlapping payload work with fetch closures. Real
+  speedup, but it moves when SETUP selection is snapshotted: `start_pkg_thread(p, fetch)`
+  before the barrier changes what a late `merge_setup_selection` may still do.
+- **Per-task condvar for `wait_at`.** Every watermark wait shares one `cv_`, so each
+  step's `notify_global()` wakes every blocked waiter to re-test its predicate: O(N²)
+  wakeups. A condvar per waited-on task is the fix; the broadcast is simple and N is
+  small. `notify_global()` → `dep->cv.notify_all()`.
+- **Edge-vector caching.** `cfg.edges(step)` rebuilds a package's edge list at each step,
+  under its `deps_mutex`. Cache it per step and invalidate on `wire_dependency`; the
+  invalidation is the hard part, since edges are added while the owner is blocked.
+- **Fetch closures on `pkg_cfg`.** Storing `sol::protected_function` would delete
+  `find_fetch_function`'s scan, but a cfg outlives the Lua state that owns the closure —
+  a registry reference into a dead state. `cfg->fetch_fn` would need the state's lifetime.
+- **Canonical-keyed dependency map.** `pkg::dependencies` keys on identity, so two option
+  variants of one identity in one list are a parse error rather than two edges. Keying on
+  the canonical string would allow both, at the price of `envy.package("gcc")` becoming
+  ambiguous — the Lua API is identity-shaped for the same reason.
+- **`-Wall -Wextra`.** Not enabled; the third-party trees in the same build would need
+  per-target suppression first. `target_compile_options(envy PRIVATE -Wall -Wextra)`.
+
+## Carried from retired plan docs
+
+- **POSIX custom CA chains**: mbedTLS does not discover system CA stores; stock HTTPS works, corporate CAs are untested. Honor `SSL_CERT_FILE`/`CURL_CA_BUNDLE` or `CURLOPT_CAINFO`. Windows already uses the certificate store via WinINet.
+- **`envy describe <identity>`**: print spec/bundle metadata; add an optional `DESCRIPTION` field to specs to feed it. `envy describe arm.gcc@v2` → identity, source, products, bundle.
+- **Windows bootstrap `!` detection**: `envy.bat` silently corrupts `@envy` values containing `!` or `\"`. Pre-scan with delayed expansion off and fail with a clear error. `-- @envy mirror "s3://x!y"` → `ERROR: @envy directive contains '!'`.

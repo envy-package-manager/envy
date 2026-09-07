@@ -251,6 +251,57 @@ PACKAGES = {{
             f"Expected dependency error, got: {result.stderr}",
         )
 
+    def test_loadenv_spec_rejects_a_module_path_that_escapes(self):
+        """A module path is Lua dot syntax, so anything that could escape is refused.
+
+        Dots become separators, and a leading one makes an absolute path that
+        `operator/` adopts wholesale -- so `.etc.passwd` read /etc/passwd.lua. The
+        refusal names the module and the dependency, not the path it would have built.
+        """
+        bundle_path = self.create_bundle_with_helper(
+            "test.helpers@v1",
+            {"test.dummy@v1": "specs/dummy.lua"},
+            "lib/helper.lua",
+            'HELPER_VERSION = "1.0.0"\n',
+        )
+
+        spec_content = f"""IDENTITY = "local.escaper@v1"
+DEPENDENCIES = {{
+  {{
+    bundle = "test.helpers@v1",
+    source = "{self.lua_path(bundle_path)}",
+    needed_by = "check",
+  }},
+}}
+
+USER_MANAGED = true
+SETUP = {{
+  main = {{
+    CHECK = function(pkg_dir, options)
+      envy.loadenv_spec("test.helpers@v1", ".etc.passwd")
+      return true
+    end,
+    INSTALL = function(pkg_dir, options)
+    end,
+  }},
+}}
+"""
+        spec_path = self.create_spec("escaper", spec_content)
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.escaper@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
+}}
+"""
+        )
+
+        result = self.run_sync(manifest=manifest)
+
+        self.assertNotEqual(result.returncode, 0, "escaping module path must be refused")
+        self.assertIn("invalid module path '.etc.passwd'", result.stderr)
+        self.assertIn("test.helpers@v1", result.stderr)
+
     def test_loadenv_spec_fuzzy_matching(self):
         """envy.loadenv_spec() supports fuzzy identity matching."""
         # Create bundle with helper

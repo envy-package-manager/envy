@@ -249,4 +249,27 @@ TEST_CASE("pkg_key: version with multiple @ symbols") {
   CHECK(key.matches("python@r4@special"));
 }
 
+// A dotted revision used to be read as a namespace separator, so every query carrying
+// one matched nothing at all. Only a dot before '@' separates a namespace.
+TEST_CASE("pkg_key: a dotted revision matches under every query shape") {
+  pkg_key const key("arm.gcc@13.2.0");
+
+  CHECK(key.matches("gcc"));             // name only
+  CHECK(key.matches("arm.gcc"));         // namespace.name
+  CHECK(key.matches("gcc@13.2.0"));      // name@revision
+  CHECK(key.matches("arm.gcc@13.2.0"));  // full identity
+
+  CHECK_FALSE(key.matches("gcc@13.2.1"));
+  CHECK_FALSE(key.matches("llvm.gcc"));
+  CHECK_FALSE(key.matches("clang@13.2.0"));
+}
+
+TEST_CASE("pkg_key: a dotted revision matches with options on the key") {
+  pkg_key const key("arm.gcc@13.2.0{[\"opt\"]=1}");
+
+  CHECK(key.matches("gcc@13.2.0"));
+  CHECK(key.matches("arm.gcc@13.2.0"));
+  CHECK(key.matches("arm.gcc"));
+}
+
 }  // namespace envy
