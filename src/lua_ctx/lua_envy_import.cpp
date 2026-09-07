@@ -216,7 +216,8 @@ void lua_envy_import_validate_root_globals(sol::state_view lua) {
     sol::object const e{ list[i] };
     if (!e.is<sol::table>()) { continue; }
     sol::table const entry{ e.as<sol::table>() };
-    sol::table const env{ entry.get<sol::table>("env") };  // MSVC: proxy brace-init is ambiguous
+    sol::table const env{ entry.get<sol::table>(
+        "env") };  // MSVC: proxy brace-init is ambiguous
 
     for (char const *name : kRootOnlyGlobals) {
       sol::object const declared{ env.raw_get<sol::object>(name) };
