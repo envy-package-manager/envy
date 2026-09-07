@@ -1236,7 +1236,9 @@ TEST_CASE("engine_resolve_targets: duplicate declarations of one key are one tar
     make_local_cfg("local.tool@v1", "dummy.lua"),
   };
 
-  auto const targets{ engine_resolve_targets(packages, { "local.tool" }, "DEFAULT_SHELL") };
+  auto const targets{
+    engine_resolve_targets(packages, { "local.tool" }, "DEFAULT_SHELL")
+  };
   REQUIRE(targets.size() == 1);
   CHECK(pkg_key{ *targets[0] }.canonical() == "local.tool@v1");
 }
