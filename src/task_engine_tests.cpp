@@ -391,9 +391,9 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
       // assertion throws, and the engine would catch that and report a task failure
       // instead of the assertion.
       std::unique_lock lock(gate_mutex);
-      auto const opened{ gate_cv.wait_for(lock,
-                                          std::chrono::seconds{ 10 },
-                                          [&] { return gate_open; }) };
+      auto const opened{ gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] {
+        return gate_open;
+      }) };
       if (!opened) { gate_timed_out = true; }
     }
     log.record("a:" + std::to_string(step));
