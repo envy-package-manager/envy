@@ -343,12 +343,7 @@ void cmd_init::execute() {
     tui::info("Created %s", (bin_dir / name).string().c_str());
   }
 
-  write_manifest(cfg_.project_dir,
-                 bin_dir,
-                 cfg_.mirror,
-                 cfg_.deploy,
-                 cfg_.root,
-                 sums_pin);
+  write_manifest(cfg_.project_dir, bin_dir, cfg_.mirror, cfg_.deploy, cfg_.root, sums_pin);
   extract_lua_ls_types(c->root());
   write_luarc(cfg_.project_dir, envy_meta{});
   ensure_gitignore_entries(cfg_.project_dir);
