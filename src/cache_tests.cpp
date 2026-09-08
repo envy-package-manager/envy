@@ -703,6 +703,27 @@ TEST_CASE("validate_project_relative_path rejects absolute and escaping paths") 
   CHECK(envy::validate_project_relative_path("out//envy").has_value());
 }
 
+TEST_CASE("validate_unrooted_path keeps '.' and '..' legal") {
+  // '@envy bin "."' is a flat layout, and a non-root manifest's bin dir may sit above it;
+  // deploy judges the escape, root-aware, so this validator must not.
+  CHECK_FALSE(envy::validate_unrooted_path(".").has_value());
+  CHECK_FALSE(envy::validate_unrooted_path("..").has_value());
+  CHECK_FALSE(envy::validate_unrooted_path("../sibling/tools").has_value());
+  CHECK_FALSE(envy::validate_unrooted_path("tools").has_value());
+  CHECK_FALSE(envy::validate_unrooted_path("build/tools").has_value());
+}
+
+TEST_CASE("validate_unrooted_path rejects roots and the removed expansion forms") {
+  CHECK(envy::validate_unrooted_path("").has_value());
+  CHECK(envy::validate_unrooted_path("/opt/tools").has_value());
+  CHECK(envy::validate_unrooted_path("\\opt\\tools").has_value());
+  CHECK(envy::validate_unrooted_path("C:\\tools").has_value());
+  CHECK(envy::validate_unrooted_path("C:/tools").has_value());
+  CHECK(envy::validate_unrooted_path("~/bin").has_value());
+  CHECK(envy::validate_unrooted_path("$HOME/bin").has_value());
+  CHECK(envy::validate_unrooted_path("%LOCALAPPDATA%/bin").has_value());
+}
+
 TEST_CASE("resolve_cache_root: override outranks every project tier") {
   cache_root_request req{ .cli_override = kAbsRoot / "cli" / "override",
                           .cache_local = "out/.envy",

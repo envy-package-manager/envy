@@ -217,6 +217,21 @@ void ensure_gitignore_entries(fs::path const &project_dir) {
   tui::info("Updated %s", path.string().c_str());
 }
 
+// <bin-dir> names a directory of the project being created, so a relative one resolves
+// against <project-dir>, never the cwd: `envy init proj bin` from proj's parent has to
+// write proj/bin, not a sibling of proj.
+fs::path resolve_bin_dir(fs::path const &project_dir, fs::path const &bin_dir) {
+  // Normalized because every message init prints names this path: 'proj/../bin' is the
+  // same directory as 'bin', and only one of the two reads as one.
+  return (bin_dir.is_absolute() ? bin_dir : project_dir / bin_dir).lexically_normal();
+}
+
+bool bin_dir_inside_project(fs::path const &project_dir, fs::path const &bin_dir) {
+  auto const rel{ fs::absolute(bin_dir).lexically_normal().lexically_relative(
+      fs::absolute(project_dir).lexically_normal()) };
+  return !rel.empty() && *rel.begin() != "..";
+}
+
 void write_manifest(fs::path const &project_dir,
                     fs::path const &bin_dir,
                     std::optional<std::string> const &mirror,
@@ -230,14 +245,15 @@ void write_manifest(fs::path const &project_dir,
     return;
   }
 
-  // Compute relative path from project_dir to bin_dir
-  auto const abs_project{ fs::absolute(project_dir) };
-  auto const abs_bin{ fs::absolute(bin_dir) };
-  auto const relative_bin{ fs::relative(abs_bin, abs_project) };
+  auto const abs_project{ fs::absolute(project_dir).lexically_normal() };
+  auto const abs_bin{ fs::absolute(bin_dir).lexically_normal() };
+  // generic_string: the directive is read on every platform, so it carries '/' even when
+  // the host builds the path with '\'.
+  auto const relative_bin{ abs_bin.lexically_relative(abs_project).generic_string() };
 
   std::string const content{ stamp_manifest_placeholders(get_manifest_template(),
                                                          mirror,
-                                                         relative_bin.string(),
+                                                         relative_bin,
                                                          deploy,
                                                          root,
                                                          sums_pin) };
@@ -280,6 +296,20 @@ void cmd_init::execute() {
     }
   }
 
+  fs::path const bin_dir{ resolve_bin_dir(cfg_.project_dir, cfg_.bin_dir) };
+
+  // Deploy owns the verdict -- it walks up from the bin dir and only refuses when that
+  // lands on a *different* envy.lua -- so this is a warning, not a refusal. Worth saying
+  // here anyway: the stamped directive escapes, and init is where the layout is chosen.
+  if (cfg_.root.value_or(true) && !bin_dir_inside_project(cfg_.project_dir, bin_dir)) {
+    tui::warn(
+        "init: bin directory %s is outside the project %s; scripts written there "
+        "resolve whichever project encloses them, not this one. A nested tree that "
+        "means to defer to its parent says so with '--root false'.",
+        bin_dir.string().c_str(),
+        cfg_.project_dir.string().c_str());
+  }
+
   // Also before creating anything: --pin-sums needs the network, and failing after having
   // written a manifest and two scripts would leave a project half-initialized and
   // unattested. A dev build (0.0.0) has no published release, so this is where that
@@ -298,23 +328,23 @@ void cmd_init::execute() {
     }
   }
 
-  if (!fs::exists(cfg_.bin_dir)) {
-    fs::create_directories(cfg_.bin_dir, ec);
+  if (!fs::exists(bin_dir)) {
+    fs::create_directories(bin_dir, ec);
     if (ec) {
-      throw std::runtime_error("init: failed to create bin directory " +
-                               cfg_.bin_dir.string() + ": " + ec.message());
+      throw std::runtime_error("init: failed to create bin directory " + bin_dir.string() +
+                               ": " + ec.message());
     }
   }
 
   auto const platforms{ util_parse_platform_flag(cfg_.platform_flag) };
   for (auto const plat : platforms) {
-    bootstrap_write_script(cfg_.bin_dir, plat);
+    bootstrap_write_script(bin_dir, plat);
     auto const name{ (plat == platform_id::WINDOWS) ? "envy.bat" : "envy" };
-    tui::info("Created %s", (cfg_.bin_dir / name).string().c_str());
+    tui::info("Created %s", (bin_dir / name).string().c_str());
   }
 
   write_manifest(cfg_.project_dir,
-                 cfg_.bin_dir,
+                 bin_dir,
                  cfg_.mirror,
                  cfg_.deploy,
                  cfg_.root,
@@ -330,7 +360,7 @@ void cmd_init::execute() {
             (cfg_.project_dir / "envy.lua").string().c_str());
   auto const native_name{ (platform::native() == platform_id::WINDOWS) ? "envy.bat"
                                                                        : "envy" };
-  tui::info("  2. Run %s sync", (cfg_.bin_dir / native_name).string().c_str());
+  tui::info("  2. Run %s sync", (bin_dir / native_name).string().c_str());
 }
 
 }  // namespace envy

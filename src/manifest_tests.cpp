@@ -1117,6 +1117,23 @@ PACKAGES = {}
   CHECK(*directives.bin == "../sibling/tools");
 }
 
+TEST_CASE("parse_envy_meta rejects a bin that is not anchored on the manifest") {
+  // An absolute bin dir breaks every other checkout, and '~'/'$' never expanded -- they
+  // would name a literal directory. Both are the trap cache-local's validator exists for.
+  CHECK_THROWS_WITH_AS(envy::parse_envy_meta("-- @envy bin \"/opt/tools\"\n"),
+                       doctest::Contains("'@envy bin'"),
+                       std::runtime_error);
+  CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"C:/tools\"\n"),
+                   std::runtime_error);
+  CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"~/tools\"\n"),
+                   std::runtime_error);
+  CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"$HOME/tools\"\n"),
+                   std::runtime_error);
+  CHECK_THROWS_WITH_AS(envy::parse_envy_meta("-- @envy bin-dir \"/opt/tools\"\n"),
+                       doctest::Contains("'@envy bin-dir'"),
+                       std::runtime_error);
+}
+
 TEST_CASE("manifest::load errors on missing bin directive") {
   char const *script{ R"(
 -- @envy version "1.0.0"

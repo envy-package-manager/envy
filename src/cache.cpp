@@ -29,7 +29,7 @@ bool strictly_inside(path const &inner, path const &outer) {
 
 }  // namespace
 
-std::optional<std::string> validate_project_relative_path(std::string_view value) {
+std::optional<std::string> validate_unrooted_path(std::string_view value) {
   if (value.empty()) { return "must not be empty"; }
 
   if (value.find('~') != std::string_view::npos) {
@@ -43,6 +43,12 @@ std::optional<std::string> validate_project_relative_path(std::string_view value
     return "must be relative, with no leading separator";
   }
   if (value.size() >= 2 && value[1] == ':') { return "must not name a drive"; }
+
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_project_relative_path(std::string_view value) {
+  if (auto const bad{ validate_unrooted_path(value) }) { return bad; }
 
   // Split on both separators: the value is authored once and read on every platform, so a
   // backslash is a separator here even when std::filesystem would not treat it as one.
