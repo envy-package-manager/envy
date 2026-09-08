@@ -370,6 +370,17 @@ class TestSetupPairs(EnvyTestCase):
         path.write_text(spec_content, encoding="utf-8")
         return path.as_posix()
 
+    def write_spec_raw(self, name: str, content: str) -> str:
+        """write_spec without the placeholder pass, for specs needing no substitution.
+
+        One escaping layer instead of two. A spec carrying Lua tables and a shell
+        one-liner is mostly braces, and having them survive str.format as well means
+        writing '{{{{' for one brace -- which is how a stray '}' reached PowerShell.
+        """
+        path = self.specs_dir / f"{name}.lua"
+        path.write_text(content, encoding="utf-8")
+        return path.as_posix()
+
     def create_manifest(self, content: str, manifest_dir: Optional[Path] = None) -> Path:
         """Create manifest file with given content."""
         manifest_dir = manifest_dir or self.test_dir
@@ -1209,6 +1220,23 @@ SETUP = {{{{
             "double-check lock must ensure exactly one INSTALL",
         )
 
+    @staticmethod
+    def wait_for_file_cmd(path: Path, platform: str = sys.platform) -> str:
+        """Shell one-liner that blocks until `path` appears, bounded at ~120s.
+
+        Bounded so a broken handshake fails the test instead of wedging the run.
+        """
+        target = path.as_posix()
+        if platform == "win32":
+            return (
+                f"for ($i=0; $i -lt 1200; $i++) {{ if (Test-Path '{target}') {{ break }}; "
+                "Start-Sleep -Milliseconds 100 }"
+            )
+        return (
+            f"i=0; while [ $i -lt 1200 ]; do [ -f '{target}' ] && break; "
+            "sleep 0.1; i=$((i+1)); done"
+        )
+
     def await_condition(self, predicate, proc, what, timeout=120.0):
         """Poll until `predicate` holds, failing if `proc` exits first or time runs out.
 
@@ -1234,31 +1262,21 @@ SETUP = {{{{
         """
         in_install = self.test_dir / "holder_in_install.txt"
         release = self.test_dir / "release_holder.txt"
+        marker = self.test_dir / "lock_wait_marker.txt"
         waiter_err = self.test_dir / "waiter_stderr.txt"
+        wait_cmd = self.wait_for_file_cmd(release)
 
-        # Bounded so a broken handshake fails the test instead of wedging the run. The
-        # braces survive two passes -- this f-string, then write_spec's .format().
-        if sys.platform == "win32":
-            wait_cmd = (
-                "for ($i=0; $i -lt 1200; $i++) "
-                f"{{{{ if (Test-Path '{release.as_posix()}') {{{{ break }}}}; "
-                "Start-Sleep -Milliseconds 100 }}}}"
-            )
-        else:
-            wait_cmd = (
-                f"i=0; while [ $i -lt 1200 ]; do [ -f '{release.as_posix()}' ] && break; "
-                "sleep 0.1; i=$((i+1)); done"
-            )
-
+        # Absolute marker paths: an INSTALL callback's cwd is not this test's to assume.
+        # write_spec_raw, so these braces face one escaping pass rather than two.
         # CHECK gates on a marker so the waiter, once it finally gets the lock, re-checks
         # and stops there instead of running the whole install a second time.
         spec = f"""IDENTITY = "local.lock_wait@v1"
 USER_MANAGED = true
 
-SETUP = {{{{
-  main = {{{{
+SETUP = {{
+  main = {{
     CHECK = function(pkg_dir, options)
-      local f = io.open("{(self.test_dir / "lock_wait_marker.txt").as_posix()}", "r")
+      local f = io.open("{marker.as_posix()}", "r")
       if f then f:close(); return true end
       return false
     end,
@@ -1266,15 +1284,15 @@ SETUP = {{{{
       local s = io.open("{in_install.as_posix()}", "w")
       s:write("in install")
       s:close()
-      envy.run("{wait_cmd}", {{{{ quiet = true }}}})
-      local m = io.open("{(self.test_dir / "lock_wait_marker.txt").as_posix()}", "w")
+      envy.run("{wait_cmd}", {{ quiet = true }})
+      local m = io.open("{marker.as_posix()}", "w")
       m:write("done")
       m:close()
     end,
-  }}}},
-}}}}
+  }},
+}}
 """
-        spec_path = self.write_spec("lock_wait", spec)
+        spec_path = self.write_spec_raw("lock_wait", spec)
         manifest = self.create_manifest(
             f'PACKAGES = {{ {{ spec = "local.lock_wait@v1", source = "{spec_path}", '
             f'setup = {{ "main" }} }} }}'
