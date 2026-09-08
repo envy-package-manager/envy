@@ -37,7 +37,7 @@ On every directory change:
 
 ## Auto-Update
 
-Hook files carry `_ENVY_HOOK_VERSION=N`. Any envy command checks the stamp and refreshes stale hooks automatically. Restart your shell after an update.
+Hook files carry `_ENVY_HOOK_STAMP=<envy version>:<digest>`—which envy wrote the file, and a digest of the hook's own content. Any envy command rewrites a hook that differs from its own copy, so a hook edit always ships; it leaves a hook a *newer* envy wrote alone, so a version-pinned project and a newer envy sharing the cache don't trade writes. Restart your shell after an update.
 
 ## Environment Variables
 

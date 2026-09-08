@@ -3,6 +3,8 @@
 
 Usage: embed_resource.py <output> [--compress] <varname1>=<file1> ...
 
+@@ENVY_RESOURCE_HASH@@ in a resource is replaced with a short digest of that resource.
+
 Outputs a header with:
   inline constexpr unsigned char kVarName[] = { 0x00, ... };
   inline constexpr size_t kVarNameSize = 123;
@@ -14,10 +16,15 @@ Compressed headers pull in envy's util.h for gz_resource and util_inflate_resour
 """
 
 import argparse
+import hashlib
 import struct
 import sys
 import zlib
 from pathlib import Path
+
+# Replaced per resource with a short digest of that resource's own source text, so a stamp
+# written into a file changes exactly when the resource does -- no hand-maintained version.
+HASH_TOKEN = b"@@ENVY_RESOURCE_HASH@@"
 
 # Fixed 10-byte gzip header: deflate, no flags, mtime 0, max compression, unknown OS. Built
 # by hand rather than via gzip.compress so output is byte-identical on every build host.
@@ -145,8 +152,11 @@ def main() -> int:
         data = filepath.read_bytes()
         if args.normalize_eol:
             data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        # Digest the source text: a define whose value changed is not a resource edit.
+        digest = hashlib.sha256(data).hexdigest()[:12]
         for pattern, replacement in substitutions.items():
             data = data.replace(pattern, replacement)
+        data = data.replace(HASH_TOKEN, digest.encode())
         header_parts.append(generate_resource(varname, data, args.compress))
 
     header_parts.append("}  // namespace envy::embedded")

@@ -1,5 +1,5 @@
 # envy shell hook — managed by envy; do not edit
-$global:_ENVY_HOOK_VERSION = @@ENVY_HOOK_VERSION@@
+$global:_ENVY_HOOK_STAMP = "@@ENVY_HOOK_WRITER@@:@@ENVY_RESOURCE_HASH@@"
 
 # Re-evaluated every prompt (cheap), so flipping the console encoding needs no re-source.
 function _envy_detect_utf8 {

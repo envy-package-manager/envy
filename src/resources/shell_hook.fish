@@ -1,5 +1,5 @@
 # envy shell hook — managed by envy; do not edit
-set -g _ENVY_HOOK_VERSION @@ENVY_HOOK_VERSION@@
+set -g _ENVY_HOOK_STAMP @@ENVY_HOOK_WRITER@@:@@ENVY_RESOURCE_HASH@@
 
 if string match -qi '*utf-8*' -- $LC_ALL $LC_CTYPE $LANG
     set -g _ENVY_UTF8 1

@@ -155,13 +155,6 @@ endif()
 include(cmake/Dependencies.cmake)
 include(cmake/EmbedResource.cmake)
 
-# Extract shell hook version from shell_hooks.h (single source of truth)
-file(STRINGS src/shell_hooks.h _hook_ver_line REGEX "kShellHookVersion = [0-9]+")
-if(NOT _hook_ver_line)
-    message(FATAL_ERROR "Failed to extract kShellHookVersion from src/shell_hooks.h")
-endif()
-string(REGEX MATCH "[0-9]+" ENVY_SHELL_HOOK_VERSION "${_hook_ver_line}")
-
 # Extract product script version from deploy.h (single source of truth)
 file(STRINGS src/deploy.h _prod_script_ver_line REGEX "kProductScriptVersion = [0-9]+")
 if(NOT _prod_script_ver_line)
@@ -169,14 +162,10 @@ if(NOT _prod_script_ver_line)
 endif()
 string(REGEX MATCH "[0-9]+" ENVY_PRODUCT_SCRIPT_VERSION "${_prod_script_ver_line}")
 
-# Both versions above are read at configure time and stamped into the embedded scripts, while
-# the C++ that compares against them reads the headers directly. Without this, bumping either
-# constant leaves an incremental build's resources stamped with the old number, so `ensure`
-# rewrites a hook and then decides the result is still stale.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    src/shell_hooks.h
-    src/deploy.h
-)
+# The version above is read at configure time and stamped into the embedded script, while the
+# C++ that compares against it reads the header directly. Without this, bumping the constant
+# leaves an incremental build's resource stamped with the old number.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/deploy.h)
 
 # Generate embedded resource header (all platform variants unconditionally)
 embed_resources(envy_embedded_resources
@@ -184,7 +173,7 @@ embed_resources(envy_embedded_resources
     NORMALIZE_EOL
     COMPRESS
     DEFINES
-        ENVY_HOOK_VERSION=${ENVY_SHELL_HOOK_VERSION}
+        ENVY_HOOK_WRITER=${PROJECT_VERSION}
         ENVY_PRODUCT_SCRIPT_VERSION=${ENVY_PRODUCT_SCRIPT_VERSION}
     RESOURCES
         bootstrap_posix=src/resources/envy

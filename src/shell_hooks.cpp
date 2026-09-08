@@ -3,10 +3,11 @@
 #include "embedded_init_resources.h"
 #include "tui.h"
 #include "util.h"
+#include "version.h"
 
-#include <cstdio>
-#include <cstring>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -26,47 +27,33 @@ constexpr hook_resource kHooks[] = {
   { "ps1", embedded::kShellHookPs1 },
 };
 
+struct hook_stamp {
+  std::string_view writer;  // the envy version that wrote the file
+  std::string_view digest;  // the hook resource that file came from
+};
+
+// Line 2 of every hook, in each shell's assignment syntax: <version>:<digest>. A file from
+// the retired integer scheme, an unstamped one and a missing one all read as {}.
+hook_stamp stamp_of(std::string_view content) {
+  constexpr std::string_view kKey{ "_ENVY_HOOK_STAMP" };
+  auto const key{ content.find(kKey) };
+  if (key == std::string_view::npos) { return {}; }
+  auto const begin{ content.find_first_not_of("= \"", key + kKey.size()) };
+  if (begin == std::string_view::npos) { return {}; }
+  auto const end{ content.find_first_of("\"\r\n \t", begin) };
+  auto const token{ content.substr(begin, end - begin) };  // npos-safe: substr clamps
+  auto const colon{ token.find(':') };
+  return colon == std::string_view::npos
+             ? hook_stamp{}
+             : hook_stamp{ token.substr(0, colon), token.substr(colon + 1) };
+}
+
+std::string read_text(std::filesystem::path const &path) {
+  std::ifstream in{ path, std::ios::binary };
+  return { std::istreambuf_iterator<char>{ in }, std::istreambuf_iterator<char>{} };
+}
+
 }  // namespace
-
-int parse_version_from_content(std::string_view content) {
-  int lines_checked{ 0 };
-  while (!content.empty() && lines_checked < 5) {
-    auto const nl{ content.find('\n') };
-    auto const line{ content.substr(0, nl) };
-
-    constexpr std::string_view kKey{ "_ENVY_HOOK_VERSION" };
-    auto const pos{ line.find(kKey) };
-    if (pos != std::string_view::npos) {
-      auto rest{ line.substr(pos + kKey.size()) };
-      // Skip past '=' or ' = ' or ' '
-      while (!rest.empty() && (rest[0] == ' ' || rest[0] == '=')) {
-        rest.remove_prefix(1);
-      }
-      int v{ 0 };
-      if (std::sscanf(std::string(rest).c_str(), "%d", &v) == 1) { return v; }
-    }
-
-    if (nl == std::string_view::npos) { break; }
-    content.remove_prefix(nl + 1);
-    ++lines_checked;
-  }
-  return 0;
-}
-
-int parse_version(std::filesystem::path const &hook_path) {
-  std::ifstream in{ hook_path };
-  if (!in) { return 0; }
-  char line[256];
-  for (int i{ 0 }; i < 5 && in.getline(line, sizeof(line)); ++i) {
-    char const *p{ std::strstr(line, "_ENVY_HOOK_VERSION") };
-    if (!p) { continue; }
-    p += std::strlen("_ENVY_HOOK_VERSION");
-    while (*p == ' ' || *p == '=') { ++p; }
-    int v{ 0 };
-    if (std::sscanf(p, "%d", &v) == 1) { return v; }
-  }
-  return 0;
-}
 
 int ensure(std::filesystem::path const &cache_root) {
   namespace fs = std::filesystem;
@@ -84,13 +71,21 @@ int ensure(std::filesystem::path const &cache_root) {
 
   for (auto const &h : kHooks) {
     fs::path const hook_path{ shell_dir / ("hook." + std::string{ h.ext }) };
-    if (fs::exists(hook_path) && parse_version(hook_path) >= kShellHookVersion) {
-      continue;
-    }
-
-    bool const was_update{ fs::exists(hook_path) };
     try {
-      util_write_file(hook_path, util_inflate_resource(h.res));
+      std::string const want{ util_inflate_resource(h.res) };
+      std::string const have{ read_text(hook_path) };
+      if (have == want) { continue; }
+
+      // Binaries live in <root>/envy/<version>/, yet every one writes this one file: a
+      // pinned project and a newer envy meet here, and must not trade writes forever.
+      hook_stamp const mine{ stamp_of(want) }, theirs{ stamp_of(have) };
+      if (theirs.writer != mine.writer) {  // our own version's copy we always repair
+        if (theirs.digest == mine.digest) { continue; }  // same hook, another one's label
+        if (version_is_newer(theirs.writer, mine.writer)) { continue; }  // a newer envy's
+      }
+
+      bool const was_update{ fs::exists(hook_path) };
+      util_write_file(hook_path, want);
       ++written;
       if (was_update) { tui::info("Shell hook updated (%s) — restart your shell", h.ext); }
     } catch (std::exception const &e) {

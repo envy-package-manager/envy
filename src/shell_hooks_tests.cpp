@@ -1,10 +1,12 @@
 #include "shell_hooks.h"
 
 #include "doctest.h"
+#include "version.h"
 
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <set>
 #include <string>
 
 namespace {
@@ -28,241 +30,153 @@ struct temp_dir_fixture {
     out.write(content.data(), static_cast<std::streamsize>(content.size()));
   }
 
+  std::string read_file(std::filesystem::path const &p) {
+    std::ifstream in{ p, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ in }, std::istreambuf_iterator<char>{} };
+  }
+
+  std::string hook_text(char const *ext) {
+    return read_file(root / "shell" / ("hook." + std::string{ ext }));
+  }
+
+  // hook.<ext>'s stamp token, <envy version>:<resource digest>; empty when absent.
+  std::string stamp(char const *ext) {
+    std::string const content{ hook_text(ext) };
+    auto const key{ content.find("_ENVY_HOOK_STAMP") };
+    if (key == std::string::npos) { return {}; }
+    auto const begin{ content.find_first_not_of("= \"", key + 16) };
+    auto const end{ content.find_first_of("\"\r\n \t", begin) };
+    return content.substr(begin, end - begin);
+  }
+
+  std::string writer(char const *ext) {
+    std::string const s{ stamp(ext) };
+    return s.substr(0, s.find(':'));
+  }
+
+  std::string digest(char const *ext) {
+    std::string const s{ stamp(ext) };
+    return s.substr(s.find(':') + 1);
+  }
+
+  // Rewrite hook.<ext>'s stamp: stands in for a file some other envy build left behind.
+  void restamp(char const *ext, std::string const &writer, std::string const &digest) {
+    auto const p{ root / "shell" / ("hook." + std::string{ ext }) };
+    std::string text{ read_file(p) };
+    auto const key{ text.find("_ENVY_HOOK_STAMP") };
+    auto const begin{ text.find_first_not_of("= \"", key + 16) };
+    auto const end{ text.find_first_of("\"\r\n \t", begin) };
+    text.replace(begin, end - begin, writer + ":" + digest);
+    write_file(p, text);
+  }
+
   std::filesystem::path root;
 };
 
+constexpr char const *kExts[] = { "bash", "zsh", "fish", "ps1" };
+
 }  // namespace
-
-// --- parse_version_from_content ---
-
-TEST_CASE("shell_hooks: parse_version_from_content") {
-  using envy::shell_hooks::parse_version_from_content;
-
-  SUBCASE("bash format: _ENVY_HOOK_VERSION=1") {
-    CHECK(parse_version_from_content("# comment\n_ENVY_HOOK_VERSION=1\n") == 1);
-  }
-
-  SUBCASE("bash format: _ENVY_HOOK_VERSION=42") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=42\n") == 42);
-  }
-
-  SUBCASE("powershell format: $global:_ENVY_HOOK_VERSION = 1") {
-    CHECK(parse_version_from_content("$global:_ENVY_HOOK_VERSION = 1\n") == 1);
-  }
-
-  SUBCASE("fish format: set -g _ENVY_HOOK_VERSION 3") {
-    CHECK(parse_version_from_content("set -g _ENVY_HOOK_VERSION 3\n") == 3);
-  }
-
-  SUBCASE("spaces around equals: _ENVY_HOOK_VERSION = 5") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION = 5\n") == 5);
-  }
-
-  SUBCASE("no trailing newline") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=7") == 7);
-  }
-
-  SUBCASE("empty content returns 0") { CHECK(parse_version_from_content("") == 0); }
-
-  SUBCASE("no version stamp returns 0") {
-    CHECK(parse_version_from_content("# just a comment\necho hello\n") == 0);
-  }
-
-  SUBCASE("version on line 5 (last checked) is found") {
-    CHECK(parse_version_from_content(
-              "line1\nline2\nline3\nline4\n_ENVY_HOOK_VERSION=9\n") == 9);
-  }
-
-  SUBCASE("version on line 6 (beyond limit) is not found") {
-    CHECK(parse_version_from_content("1\n2\n3\n4\n5\n_ENVY_HOOK_VERSION=9\n") == 0);
-  }
-
-  SUBCASE("non-numeric value returns 0") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=abc\n") == 0);
-  }
-
-  SUBCASE("version 0 explicitly") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=0\n") == 0);
-  }
-
-  SUBCASE("negative version parses as negative") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=-1\n") == -1);
-  }
-
-  SUBCASE("large version number") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=999\n") == 999);
-  }
-
-  SUBCASE("version with trailing text: _ENVY_HOOK_VERSION=3 # comment") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=3 # comment\n") == 3);
-  }
-
-  SUBCASE("multiple equals signs: _ENVY_HOOK_VERSION==2") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION==2\n") == 2);
-  }
-
-  SUBCASE("only spaces after key: _ENVY_HOOK_VERSION   8") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION   8\n") == 8);
-  }
-
-  SUBCASE("partial match _ENVY_HOOK_VERSIONX is still found (substring)") {
-    // _ENVY_HOOK_VERSION is found as substring; "X" follows, skipping '=' and spaces
-    // finds no digit -> returns 0
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSIONX=1\n") == 0);
-  }
-
-  SUBCASE("first occurrence wins if multiple present") {
-    CHECK(parse_version_from_content("_ENVY_HOOK_VERSION=2\n_ENVY_HOOK_VERSION=5\n") == 2);
-  }
-
-  SUBCASE("real bash hook header") {
-    CHECK(parse_version_from_content("# envy shell hook — managed by envy; do not edit\n"
-                                     "_ENVY_HOOK_VERSION=1\n"
-                                     "\n"
-                                     "_envy_find_manifest() {\n") == 1);
-  }
-
-  SUBCASE("real fish hook header") {
-    CHECK(parse_version_from_content("# envy shell hook — managed by envy; do not edit\n"
-                                     "set -g _ENVY_HOOK_VERSION 1\n") == 1);
-  }
-
-  SUBCASE("real powershell hook header") {
-    CHECK(parse_version_from_content("# envy shell hook — managed by envy; do not edit\n"
-                                     "$global:_ENVY_HOOK_VERSION = 1\n") == 1);
-  }
-}
-
-// --- parse_version (file-based) ---
-
-TEST_CASE_FIXTURE(temp_dir_fixture, "shell_hooks: parse_version") {
-  using envy::shell_hooks::parse_version;
-
-  SUBCASE("nonexistent file returns 0") {
-    CHECK(parse_version(root / "nonexistent") == 0);
-  }
-
-  SUBCASE("valid hook file returns version") {
-    auto const p{ root / "hook.bash" };
-    write_file(p, "# comment\n_ENVY_HOOK_VERSION=3\n");
-    CHECK(parse_version(p) == 3);
-  }
-
-  SUBCASE("empty file returns 0") {
-    auto const p{ root / "empty" };
-    write_file(p, "");
-    CHECK(parse_version(p) == 0);
-  }
-
-  SUBCASE("file with no stamp returns 0") {
-    auto const p{ root / "no_stamp" };
-    write_file(p, "echo hello\necho world\n");
-    CHECK(parse_version(p) == 0);
-  }
-
-  SUBCASE("file with stamp beyond line 5 returns 0") {
-    auto const p{ root / "late_stamp" };
-    write_file(p, "1\n2\n3\n4\n5\n_ENVY_HOOK_VERSION=7\n");
-    CHECK(parse_version(p) == 0);
-  }
-}
-
-// --- kShellHookVersion constant ---
-
-TEST_CASE("shell_hooks: kShellHookVersion is positive") {
-  CHECK(envy::shell_hooks::kShellHookVersion > 0);
-}
-
-// --- ensure ---
 
 TEST_CASE_FIXTURE(temp_dir_fixture, "shell_hooks: ensure") {
   namespace fs = std::filesystem;
   using envy::shell_hooks::ensure;
-  using envy::shell_hooks::kShellHookVersion;
-  using envy::shell_hooks::parse_version;
 
   SUBCASE("creates all 4 hook files in empty cache") {
-    int const written{ ensure(root) };
-    CHECK(written == 4);
-    CHECK(fs::exists(root / "shell" / "hook.bash"));
-    CHECK(fs::exists(root / "shell" / "hook.zsh"));
-    CHECK(fs::exists(root / "shell" / "hook.fish"));
-    CHECK(fs::exists(root / "shell" / "hook.ps1"));
+    CHECK(ensure(root) == 4);
+    for (auto const *ext : kExts) {
+      CHECK(fs::exists(root / "shell" / ("hook." + std::string{ ext })));
+    }
   }
 
-  SUBCASE("written hooks have correct version") {
+  SUBCASE("second ensure writes nothing") {
     ensure(root);
-    CHECK(parse_version(root / "shell" / "hook.bash") == kShellHookVersion);
-    CHECK(parse_version(root / "shell" / "hook.zsh") == kShellHookVersion);
-    CHECK(parse_version(root / "shell" / "hook.fish") == kShellHookVersion);
-    CHECK(parse_version(root / "shell" / "hook.ps1") == kShellHookVersion);
+    CHECK(ensure(root) == 0);
   }
 
-  SUBCASE("second ensure writes nothing (already up-to-date)") {
-    ensure(root);
-    int const written{ ensure(root) };
-    CHECK(written == 0);
-  }
-
-  SUBCASE("stale hooks are updated") {
-    ensure(root);
-    auto const bash_hook{ root / "shell" / "hook.bash" };
-    write_file(bash_hook, "# old\n_ENVY_HOOK_VERSION=0\nold content\n");
-    int const written{ ensure(root) };
-    CHECK(written == 1);  // only the stale one
-    CHECK(parse_version(bash_hook) == kShellHookVersion);
-  }
-
-  SUBCASE("hooks with missing version stamp are rewritten") {
-    ensure(root);
-    auto const zsh_hook{ root / "shell" / "hook.zsh" };
-    write_file(zsh_hook, "# broken hook with no version\necho hi\n");
-    int const written{ ensure(root) };
-    CHECK(written == 1);
-    CHECK(parse_version(zsh_hook) == kShellHookVersion);
-  }
-
-  SUBCASE("hooks at current version are not rewritten") {
+  SUBCASE("an untouched hook keeps its mtime") {
     ensure(root);
     auto const fish_hook{ root / "shell" / "hook.fish" };
-    auto const mtime_before{ fs::last_write_time(fish_hook) };
+    auto const before{ fs::last_write_time(fish_hook) };
     ensure(root);
-    auto const mtime_after{ fs::last_write_time(fish_hook) };
-    CHECK(mtime_before == mtime_after);
+    CHECK(before == fs::last_write_time(fish_hook));
   }
 
-  SUBCASE("hooks with future version are not downgraded") {
-    fs::create_directories(root / "shell");
-    auto const hook{ root / "shell" / "hook.bash" };
-    write_file(hook, "# future\n_ENVY_HOOK_VERSION=999\n");
-    int const written{ ensure(root) };
-    // bash should be skipped (version 999 >= kShellHookVersion), other 3 created
-    CHECK(written == 3);
-    CHECK(parse_version(hook) == 999);
+  // The regression #335 shipped into a void: a hook edit with the stamp left alone.
+  SUBCASE("a hook whose body drifts from the binary's is rewritten") {
+    ensure(root);
+    auto const zsh_hook{ root / "shell" / "hook.zsh" };
+    write_file(zsh_hook, read_file(zsh_hook) + "# drifted\n");  // stamp intact, body stale
+    CHECK(ensure(root) == 1);
+    CHECK(hook_text("zsh").find("# drifted") == std::string::npos);
+  }
+
+  // Hooks are shared at <root>/shell/ while binaries sit in <root>/envy/<version>/, so a
+  // version-pinned project and a newer envy meet here. Neither may fight over the file.
+  SUBCASE("a hook a newer envy wrote is left alone") {
+    ensure(root);
+    restamp("zsh", "999.0.0", "0123456789ab");
+    CHECK(ensure(root) == 0);
+    CHECK(writer("zsh") == "999.0.0");
+  }
+
+  SUBCASE("an identical hook from another envy is not relabeled") {
+    ensure(root);
+    restamp("zsh", "1.2.3", digest("zsh"));
+    CHECK(ensure(root) == 0);
+    CHECK(writer("zsh") == "1.2.3");
+  }
+
+  SUBCASE("a hook stamped by the retired integer scheme is rewritten") {
+    ensure(root);
+    write_file(root / "shell" / "hook.bash",
+               "# old\n_ENVY_HOOK_VERSION=99999\n# stale content\n");
+    CHECK(ensure(root) == 1);
+    CHECK(hook_text("bash").find("stale content") == std::string::npos);
+  }
+
+  SUBCASE("an empty hook is rewritten") {
+    ensure(root);
+    write_file(root / "shell" / "hook.ps1", "");
+    CHECK(ensure(root) == 1);
+    CHECK(!hook_text("ps1").empty());
+  }
+
+  SUBCASE("a missing hook is recreated without touching the others") {
+    ensure(root);
+    fs::remove(root / "shell" / "hook.fish");
+    CHECK(ensure(root) == 1);
+    CHECK(fs::exists(root / "shell" / "hook.fish"));
+  }
+
+  SUBCASE("written hooks carry writer and digest, not placeholders") {
+    ensure(root);
+    for (auto const *ext : kExts) {
+      for (auto const *token : { "@@ENVY_RESOURCE_HASH@@", "@@ENVY_HOOK_WRITER@@" }) {
+        CHECK_MESSAGE(hook_text(ext).find(token) == std::string::npos,
+                      "placeholder not replaced in hook.",
+                      ext);
+      }
+      // A writer the tie-break cannot parse would freeze every hook on this machine.
+      CHECK_MESSAGE(envy::version_is_newer("999.0.0", writer(ext)),
+                    "unparseable writer version in hook.",
+                    ext);
+      CHECK_MESSAGE(digest(ext).size() == 12, "no content digest in hook.", ext);
+    }
+  }
+
+  // Per-resource digests: one hash over all four would refresh every hook on any edit.
+  SUBCASE("each hook's digest is its own") {
+    ensure(root);
+    std::set<std::string> digests;
+    for (auto const *ext : kExts) { digests.insert(digest(ext)); }
+    CHECK(digests.size() == 4);
   }
 
   SUBCASE("written hooks contain managed-by comment") {
     ensure(root);
-    for (auto const *ext : { "bash", "zsh", "fish", "ps1" }) {
-      auto const hook{ root / "shell" / ("hook." + std::string{ ext }) };
-      std::ifstream in{ hook };
-      std::string content{ std::istreambuf_iterator<char>{ in },
-                           std::istreambuf_iterator<char>{} };
-      CHECK_MESSAGE(content.find("managed by envy") != std::string::npos,
+    for (auto const *ext : kExts) {
+      CHECK_MESSAGE(hook_text(ext).find("managed by envy") != std::string::npos,
                     "missing managed-by comment in hook.",
-                    ext);
-    }
-  }
-
-  SUBCASE("written hooks do not contain version placeholder") {
-    ensure(root);
-    for (auto const *ext : { "bash", "zsh", "fish", "ps1" }) {
-      auto const hook{ root / "shell" / ("hook." + std::string{ ext }) };
-      std::ifstream in{ hook };
-      std::string content{ std::istreambuf_iterator<char>{ in },
-                           std::istreambuf_iterator<char>{} };
-      CHECK_MESSAGE(content.find("@@ENVY_HOOK_VERSION@@") == std::string::npos,
-                    "placeholder not replaced in hook.",
                     ext);
     }
   }
