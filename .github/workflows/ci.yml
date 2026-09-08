@@ -236,7 +236,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}
@@ -381,7 +387,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}
@@ -547,7 +559,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: py -3.13 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}
