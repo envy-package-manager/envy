@@ -141,7 +141,18 @@ jobs:
           key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
           restore-keys: sccache-${{ matrix.cache_group }}-
 
+      # A compiler cache is an optimization, so losing it must slow a build, not redden
+      # it: the action downloads its binary from GitHub releases, and a transient 5xx
+      # there once failed a job before it compiled a line. Retry once, then let Build
+      # proceed without the launcher.
       - name: Setup sccache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Setup sccache (retry)
+        if: steps.sccache.outcome == 'failure'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Build
@@ -151,7 +162,13 @@ jobs:
           if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
             BUILD_ARGS="$BUILD_ARGS -DENVY_VERSION=${GITHUB_REF_NAME#v}"
           fi
-          ./build.sh $BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          if command -v sccache >/dev/null 2>&1; then
+            BUILD_ARGS="$BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache"
+            BUILD_ARGS="$BUILD_ARGS -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          else
+            echo "::warning::sccache unavailable; building without a compiler cache"
+          fi
+          ./build.sh $BUILD_ARGS
 
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
@@ -219,7 +236,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}
@@ -285,7 +308,18 @@ jobs:
           key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
           restore-keys: sccache-${{ matrix.cache_group }}-
 
+      # A compiler cache is an optimization, so losing it must slow a build, not redden
+      # it: the action downloads its binary from GitHub releases, and a transient 5xx
+      # there once failed a job before it compiled a line. Retry once, then let Build
+      # proceed without the launcher.
       - name: Setup sccache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Setup sccache (retry)
+        if: steps.sccache.outcome == 'failure'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Install test dependencies
@@ -299,7 +333,13 @@ jobs:
           if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
             BUILD_ARGS="$BUILD_ARGS -DENVY_VERSION=${GITHUB_REF_NAME#v}"
           fi
-          ./build.sh $BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          if command -v sccache >/dev/null 2>&1; then
+            BUILD_ARGS="$BUILD_ARGS -DCMAKE_C_COMPILER_LAUNCHER=sccache"
+            BUILD_ARGS="$BUILD_ARGS -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          else
+            echo "::warning::sccache unavailable; building without a compiler cache"
+          fi
+          ./build.sh $BUILD_ARGS
 
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
@@ -347,7 +387,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}
@@ -420,7 +466,18 @@ jobs:
           key: sccache-${{ matrix.cache_group }}-${{ github.sha }}
           restore-keys: sccache-${{ matrix.cache_group }}-
 
+      # A compiler cache is an optimization, so losing it must slow a build, not redden
+      # it: the action downloads its binary from GitHub releases, and a transient 5xx
+      # there once failed a job before it compiled a line. Retry once, then let Build
+      # proceed without the launcher.
       - name: Setup sccache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Setup sccache (retry)
+        if: steps.sccache.outcome == 'failure'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Build
@@ -439,8 +496,12 @@ jobs:
             $Version = $env:GITHUB_REF_NAME -replace '^v', ''
             $Arguments += "-DENVY_VERSION=$Version"
           }
-          $Arguments += "-DCMAKE_C_COMPILER_LAUNCHER=sccache"
-          $Arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            $Arguments += "-DCMAKE_C_COMPILER_LAUNCHER=sccache"
+            $Arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          } else {
+            Write-Output "::warning::sccache unavailable; building without a compiler cache"
+          }
           & ./build.bat @Arguments
 
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
@@ -498,7 +559,13 @@ jobs:
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: py -3.13 .github/scripts/purge_superseded_caches.py
 
+      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
+      # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
+      # per run, and an artifact service 403 on any one of them reddened a job whose
+      # build and tests had both passed.
       - name: Upload envy artifact
+        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v6
         with:
           name: envy-${{ matrix.name }}

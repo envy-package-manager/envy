@@ -78,9 +78,16 @@ jobs:
         with:
           path: artifacts
 
+      # upload-artifact/download-artifact round-trips the file mode away, so every binary
+      # arrives 0644 and tar records that. Restore it before archiving: whoever extracts by
+      # hand gets a runnable file, not a permission-denied.
       - name: Package release artifacts
         run: |
           mkdir -p release
+          chmod 0755 artifacts/envy-linux-x64-main/envy \
+                     artifacts/envy-linux-arm64-main/envy \
+                     artifacts/envy-macos-arm64-main/envy \
+                     artifacts/envy-macos-x64-main/envy
           tar -czf release/envy-linux-x86_64.tar.gz -C artifacts/envy-linux-x64-main envy
           tar -czf release/envy-linux-arm64.tar.gz -C artifacts/envy-linux-arm64-main envy
           tar -czf release/envy-darwin-arm64.tar.gz -C artifacts/envy-macos-arm64-main envy

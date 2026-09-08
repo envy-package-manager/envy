@@ -471,6 +471,10 @@ envy_meta parse_envy_meta(std::string_view content) {
           }
           result.sha256sums = value;
         } else if (key == "bin" || key == "bin-dir") {
+          if (auto const bad{ validate_unrooted_path(value) }) {
+            throw std::runtime_error("'@envy " + std::string{ key } + "' " + *bad + ": '" +
+                                     value + "'");
+          }
           result.bin = value;
         } else if (key == "schema") {
           try {

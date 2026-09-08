@@ -37,11 +37,16 @@ cache_mode resolve_cache_mode(bool local_marker,
                               std::optional<cache_mode> declared,
                               bool has_cache_local);
 
-// Accepts one or more non-empty path components, none of them '.' or '..', with no drive
-// letter, leading separator, '~', '$' or '%'. Returns the reason it was rejected, or
-// nullopt when valid.  Guards '@envy cache-local' and '@envy state-dir': both name a
-// subdirectory of the project, so anything else is either an escape or a stale absolute
-// path from the removed cache-posix/cache-win directives.
+// Rejects a value that is not anchored on the manifest: empty, a drive letter, a leading
+// separator, or a '~'/'$'/'%' from the removed expansion syntax. Returns the reason, or
+// nullopt when valid. Guards '@envy bin', where '.' and '..' components stay legal --
+// deploy judges those, root-aware, since a non-root manifest's bin dir may sit above it.
+std::optional<std::string> validate_unrooted_path(std::string_view value);
+
+// validate_unrooted_path, plus: every component non-empty and neither '.' nor '..'.
+// Guards '@envy cache-local' and '@envy state-dir': both name a subdirectory of the
+// project, so anything else is either an escape or a stale absolute path from the removed
+// cache-posix/cache-win directives.
 std::optional<std::string> validate_project_relative_path(std::string_view value);
 
 // Everything the cache root depends on, gathered at one call site so a process resolves

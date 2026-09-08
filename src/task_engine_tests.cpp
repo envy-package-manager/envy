@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <random>
@@ -353,15 +354,53 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   std::atomic_int unblocked{ 0 };
   std::atomic_int extended{ 0 };
 
+  // blocked/unblocked fire only for an edge that really blocks, and the worker decides
+  // that by reading the dependency's progress *after* ratcheting its target -- so 'a'
+  // is already awake and racing that read. Left to chance, 'a' can finish step 1 first
+  // and the pair never fires (observed on a loaded CI runner, never locally).
+  //
+  // The gate closes the window by construction: 'a' cannot complete step 1 until the
+  // blocked callback opens it, and that callback only runs if the worker saw a block.
+  // A handshake, not a delay -- nothing here waits out a duration, so there is no
+  // margin to tune and a slow runner only makes the wait longer, never wrong.
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool gate_open{ false };
+  std::atomic_bool gate_timed_out{ false };
+
   task_engine::observer obs;
-  obs.blocked = [&](std::string const &, int, std::string const &, int) { ++blocked; };
+  obs.blocked = [&](std::string const &, int, std::string const &, int) {
+    ++blocked;
+    {
+      std::lock_guard const lock(gate_mutex);
+      gate_open = true;
+    }
+    gate_cv.notify_all();
+  };
   obs.unblocked = [&](std::string const &, int, std::string const &) { ++unblocked; };
   obs.target_extended = [&](std::string const &, int, int) { ++extended; };
 
   step_log log;
   task_engine te{ std::move(obs) };
 
-  REQUIRE(te.ensure_task(simple_task("a", 2, log)));
+  auto a{ simple_task("a", 2, log) };
+  a.step = [&](int step) {
+    if (step == 1) {
+      // Bounded only so a hang-shaped bug fails instead of wedging the run; the timeout
+      // is never reached when this works. Recorded rather than asserted: a doctest
+      // assertion throws, and the engine would catch that and report a task failure
+      // instead of the assertion.
+      std::unique_lock lock(gate_mutex);
+      auto const opened{ gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] {
+        return gate_open;
+      }) };
+      if (!opened) { gate_timed_out = true; }
+    }
+    log.record("a:" + std::to_string(step));
+    return false;
+  };
+  REQUIRE(te.ensure_task(std::move(a)));
+
   auto b{ simple_task("b", 1, log) };
   b.edges = [](int) { return std::vector<task_engine::edge>{ { "a", 2 } }; };
   REQUIRE(te.ensure_task(std::move(b)));
@@ -372,6 +411,7 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   te.wait_at("b", 1);  // b's own wait ratchets a to 2 -> target_extended fires
   te.join_all();
 
+  CHECK_FALSE(gate_timed_out);
   CHECK(blocked == 1);
   CHECK(unblocked == 1);
   CHECK(extended >= 1);

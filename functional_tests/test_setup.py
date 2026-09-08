@@ -370,6 +370,17 @@ class TestSetupPairs(EnvyTestCase):
         path.write_text(spec_content, encoding="utf-8")
         return path.as_posix()
 
+    def write_spec_raw(self, name: str, content: str) -> str:
+        """write_spec without the placeholder pass, for specs needing no substitution.
+
+        One escaping layer instead of two. A spec carrying Lua tables and a shell
+        one-liner is mostly braces, and having them survive str.format as well means
+        writing '{{{{' for one brace -- which is how a stray '}' reached PowerShell.
+        """
+        path = self.specs_dir / f"{name}.lua"
+        path.write_text(content, encoding="utf-8")
+        return path.as_posix()
+
     def create_manifest(self, content: str, manifest_dir: Optional[Path] = None) -> Path:
         """Create manifest file with given content."""
         manifest_dir = manifest_dir or self.test_dir
@@ -1209,37 +1220,79 @@ SETUP = {{{{
             "double-check lock must ensure exactly one INSTALL",
         )
 
+    @staticmethod
+    def wait_for_file_cmd(path: Path, platform: str = sys.platform) -> str:
+        """Shell one-liner that blocks until `path` appears, bounded at ~120s.
+
+        Bounded so a broken handshake fails the test instead of wedging the run.
+        """
+        target = path.as_posix()
+        if platform == "win32":
+            return (
+                f"for ($i=0; $i -lt 1200; $i++) {{ if (Test-Path '{target}') {{ break }}; "
+                "Start-Sleep -Milliseconds 100 }"
+            )
+        return (
+            f"i=0; while [ $i -lt 1200 ]; do [ -f '{target}' ] && break; "
+            "sleep 0.1; i=$((i+1)); done"
+        )
+
+    def await_condition(self, predicate, proc, what, timeout=120.0):
+        """Poll until `predicate` holds, failing if `proc` exits first or time runs out.
+
+        Polling on a real signal, not a delay: the interval only decides how promptly
+        the handshake is noticed, never whether it happened.
+        """
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            self.assertIsNone(proc.poll(), f"{what}: process exited first")
+            self.assertLess(time.monotonic(), deadline, f"{what}: timed out")
+            time.sleep(0.02)
+
     def test_waiting_on_another_process_says_so(self):
         """Blocking on a lock another envy holds is an unbounded wait, so it draws.
 
-        The holder is started first and sleeps well past the waiter's startup, so the
-        second run is guaranteed to block rather than win the race.
+        Both sides of the race are handshakes, not delays. The holder announces that it
+        is inside INSTALL -- which it cannot reach without the pair lock -- and then
+        blocks until this test releases it, so the waiter meets a held lock however
+        slowly either process starts. A fixed sleep used to stand in for the first half
+        and a fixed 4-second INSTALL for the second: on a loaded runner the waiter could
+        take the lock uncontended and draw nothing, failing a test about contention for
+        want of contention.
         """
-        sleep_cmd = (
-            "Start-Sleep -Seconds 4" if sys.platform == "win32" else "sleep 4"
-        )
+        in_install = self.test_dir / "holder_in_install.txt"
+        release = self.test_dir / "release_holder.txt"
+        marker = self.test_dir / "lock_wait_marker.txt"
+        waiter_err = self.test_dir / "waiter_stderr.txt"
+        wait_cmd = self.wait_for_file_cmd(release)
+
+        # Absolute marker paths: an INSTALL callback's cwd is not this test's to assume.
+        # write_spec_raw, so these braces face one escaping pass rather than two.
         # CHECK gates on a marker so the waiter, once it finally gets the lock, re-checks
-        # and stops there instead of sleeping through the whole install a second time.
+        # and stops there instead of running the whole install a second time.
         spec = f"""IDENTITY = "local.lock_wait@v1"
 USER_MANAGED = true
 
-SETUP = {{{{
-  main = {{{{
+SETUP = {{
+  main = {{
     CHECK = function(pkg_dir, options)
-      local f = io.open("lock_wait_marker.txt", "r")
+      local f = io.open("{marker.as_posix()}", "r")
       if f then f:close(); return true end
       return false
     end,
     INSTALL = function(pkg_dir, options)
-      envy.run("{sleep_cmd}", {{{{ quiet = true }}}})
-      local m = io.open("lock_wait_marker.txt", "w")
+      local s = io.open("{in_install.as_posix()}", "w")
+      s:write("in install")
+      s:close()
+      envy.run("{wait_cmd}", {{ quiet = true }})
+      local m = io.open("{marker.as_posix()}", "w")
       m:write("done")
       m:close()
     end,
-  }}}},
-}}}}
+  }},
+}}
 """
-        spec_path = self.write_spec("lock_wait", spec)
+        spec_path = self.write_spec_raw("lock_wait", spec)
         manifest = self.create_manifest(
             f'PACKAGES = {{ {{ spec = "local.lock_wait@v1", source = "{spec_path}", '
             f'setup = {{ "main" }} }} }}'
@@ -1264,20 +1317,40 @@ SETUP = {{{{
             stderr=subprocess.PIPE,
             env=env,
         )
+        waiter = None
         try:
-            time.sleep(1.5)  # let the holder take the pair lock and start sleeping
-            waiter = test_config.run(
-                cmd, cwd=self.test_dir, capture_output=True, text=True, env=env
+            self.await_condition(
+                in_install.exists, holder, "holder never entered INSTALL"
             )
-        finally:
-            holder.communicate(timeout=60)
 
-        self.assertEqual(0, holder.returncode, "holder run failed")
-        self.assertEqual(0, waiter.returncode, f"stderr: {waiter.stderr}")
-        self.assertIn(
-            "waiting for another envy to release setup:main",
-            waiter.stderr,
-            f"blocked run drew no waiting row: {waiter.stderr}",
+            # Straight to a file rather than a pipe: this is read while the process runs,
+            # and a pipe nobody drains deadlocks once its buffer fills. The renderer
+            # flushes stderr per frame, so the row lands as soon as it is drawn.
+            with open(waiter_err, "w", encoding="utf-8") as err:
+                waiter = test_config.popen(
+                    cmd,
+                    cwd=self.test_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=err,
+                    env=env,
+                )
+                self.await_condition(
+                    lambda: "waiting for another envy to release setup:main"
+                    in waiter_err.read_text(encoding="utf-8", errors="replace"),
+                    waiter,
+                    "blocked run drew no waiting row",
+                )
+        finally:
+            release.write_text("go", encoding="utf-8")
+            holder_out = holder.communicate(timeout=120)
+            if waiter is not None:
+                waiter.communicate(timeout=120)
+
+        self.assertEqual(0, holder.returncode, f"holder run failed: {holder_out[1]}")
+        self.assertEqual(
+            0,
+            waiter.returncode,
+            f"waiter run failed: {waiter_err.read_text(encoding='utf-8')}",
         )
 
 
