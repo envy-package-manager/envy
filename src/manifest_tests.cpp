@@ -1128,6 +1128,9 @@ TEST_CASE("parse_envy_meta rejects a bin that is not anchored on the manifest") 
   CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"~/tools\"\n"), std::runtime_error);
   CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"$HOME/tools\"\n"),
                   std::runtime_error);
+  // '@envy bin ""' is what init used to stamp when no relative path existed between the
+  // project and the bin dir; init now refuses that up front, and this is the backstop.
+  CHECK_THROWS_AS(envy::parse_envy_meta("-- @envy bin \"\"\n"), std::runtime_error);
   CHECK_THROWS_WITH_AS(envy::parse_envy_meta("-- @envy bin-dir \"/opt/tools\"\n"),
                        doctest::Contains("'@envy bin-dir'"),
                        std::runtime_error);

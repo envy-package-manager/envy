@@ -226,14 +226,25 @@ fs::path resolve_bin_dir(fs::path const &project_dir, fs::path const &bin_dir) {
   return (bin_dir.is_absolute() ? bin_dir : project_dir / bin_dir).lexically_normal();
 }
 
-bool bin_dir_inside_project(fs::path const &project_dir, fs::path const &bin_dir) {
-  auto const rel{ fs::absolute(bin_dir).lexically_normal().lexically_relative(
-      fs::absolute(project_dir).lexically_normal()) };
-  return !rel.empty() && *rel.begin() != "..";
+// The value '@envy bin' gets: the hop from the manifest to the bin dir. Empty when no
+// relative path exists between the two -- different Windows drives -- which is not a
+// directive init can write.
+std::string project_relative_bin(fs::path const &project_dir, fs::path const &bin_dir) {
+  // generic_string: the directive is read on every platform, so it carries '/' even when
+  // the host builds the path with '\'.
+  return fs::absolute(bin_dir)
+      .lexically_normal()
+      .lexically_relative(fs::absolute(project_dir).lexically_normal())
+      .generic_string();
+}
+
+bool bin_dir_escapes_project(std::string_view relative_bin) {
+  fs::path const rel{ relative_bin };
+  return !rel.empty() && *rel.begin() == "..";
 }
 
 void write_manifest(fs::path const &project_dir,
-                    fs::path const &bin_dir,
+                    std::string_view relative_bin,
                     std::optional<std::string> const &mirror,
                     std::optional<bool> deploy,
                     std::optional<bool> root,
@@ -244,12 +255,6 @@ void write_manifest(fs::path const &project_dir,
     tui::info("Manifest already exists: %s", manifest_path.string().c_str());
     return;
   }
-
-  auto const abs_project{ fs::absolute(project_dir).lexically_normal() };
-  auto const abs_bin{ fs::absolute(bin_dir).lexically_normal() };
-  // generic_string: the directive is read on every platform, so it carries '/' even when
-  // the host builds the path with '\'.
-  auto const relative_bin{ abs_bin.lexically_relative(abs_project).generic_string() };
 
   std::string const content{ stamp_manifest_placeholders(get_manifest_template(),
                                                          mirror,
@@ -297,11 +302,22 @@ void cmd_init::execute() {
   }
 
   fs::path const bin_dir{ resolve_bin_dir(cfg_.project_dir, cfg_.bin_dir) };
+  auto const relative_bin{ project_relative_bin(cfg_.project_dir, bin_dir) };
+
+  // Before anything is created: with no hop to stamp there is no manifest worth writing,
+  // and '@envy bin ""' is a project no later command can load.
+  if (relative_bin.empty()) {
+    throw std::runtime_error(
+        "init: no path leads from the project " + cfg_.project_dir.string() +
+        " to the bin directory " + bin_dir.string() +
+        "; they sit on different roots, so there is no '@envy bin' to write. Put the "
+        "bin directory on the project's own drive.");
+  }
 
   // Deploy owns the verdict -- it walks up from the bin dir and only refuses when that
   // lands on a *different* envy.lua -- so this is a warning, not a refusal. Worth saying
   // here anyway: the stamped directive escapes, and init is where the layout is chosen.
-  if (cfg_.root.value_or(true) && !bin_dir_inside_project(cfg_.project_dir, bin_dir)) {
+  if (cfg_.root.value_or(true) && bin_dir_escapes_project(relative_bin)) {
     tui::warn(
         "init: bin directory %s is outside the project %s; scripts written there "
         "resolve whichever project encloses them, not this one. A nested tree that "
@@ -343,7 +359,12 @@ void cmd_init::execute() {
     tui::info("Created %s", (bin_dir / name).string().c_str());
   }
 
-  write_manifest(cfg_.project_dir, bin_dir, cfg_.mirror, cfg_.deploy, cfg_.root, sums_pin);
+  write_manifest(cfg_.project_dir,
+                 relative_bin,
+                 cfg_.mirror,
+                 cfg_.deploy,
+                 cfg_.root,
+                 sums_pin);
   extract_lua_ls_types(c->root());
   write_luarc(cfg_.project_dir, envy_meta{});
   ensure_gitignore_entries(cfg_.project_dir);

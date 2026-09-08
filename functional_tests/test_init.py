@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from . import test_config
-from .env import EnvyTestCase
+from .env import EnvyRun, EnvyTestCase
 
 
 class TestEnvyInit(EnvyTestCase):
@@ -28,11 +28,7 @@ class TestEnvyInit(EnvyTestCase):
             shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def _run_init(
-        self,
-        project_dir: Path | str | None = None,
-        bin_dir: Path | str | None = None,
-        cwd: Path | None = None,
-        **kwargs,
+        self, project_dir: Path | None = None, bin_dir: Path | None = None, **kwargs
     ) -> subprocess.CompletedProcess[str]:
         """Run envy init command."""
         project = str(project_dir or self._project_dir)
@@ -53,9 +49,7 @@ class TestEnvyInit(EnvyTestCase):
         env = test_config.get_test_env()
         env["ENVY_CACHE_ROOT"] = str(self._cache_dir)
 
-        return test_config.run(
-            cmd, capture_output=True, text=True, env=env, timeout=30, cwd=cwd
-        )
+        return test_config.run(cmd, capture_output=True, text=True, env=env, timeout=30)
 
     def _stage_sums_mirror(self, body: bytes | None = None) -> tuple[str, str]:
         """Publish a SHA256SUMS for this build's version on a file:// mirror.
@@ -105,58 +99,6 @@ class TestEnvyInit(EnvyTestCase):
 
         self.assertTrue(nested_project.exists())
         self.assertTrue(nested_bin.exists())
-
-    def test_init_resolves_relative_bin_dir_against_project_dir(self) -> None:
-        """<bin-dir> is part of the project, so the cwd never decides where it lands."""
-        self._project_dir.mkdir(parents=True)
-        result = self._run_init(
-            project_dir="project", bin_dir="bin", cwd=self._temp_dir
-        )
-        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-
-        name = "envy.bat" if sys.platform == "win32" else "envy"
-        self.assertTrue((self._project_dir / "bin" / name).exists())
-        self.assertFalse((self._temp_dir / "bin").exists())
-        self.assertIn('@envy bin "bin"', (self._project_dir / "envy.lua").read_text())
-
-    def test_init_anchors_bin_dir_on_an_absolute_project_dir_too(self) -> None:
-        """Naming the project absolutely does not hand the bin dir back to the cwd."""
-        self._project_dir.mkdir(parents=True)
-        result = self._run_init(
-            project_dir=self._project_dir, bin_dir="bin", cwd=self._temp_dir
-        )
-        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-
-        self.assertTrue((self._project_dir / "bin").is_dir())
-        self.assertFalse((self._temp_dir / "bin").exists())
-        self.assertIn('@envy bin "bin"', (self._project_dir / "envy.lua").read_text())
-
-    def test_init_warns_about_a_bin_dir_outside_a_root_project(self) -> None:
-        """An escaping bin dir is the caller's call, but never a silent one."""
-        self._project_dir.mkdir(parents=True)
-        result = self._run_init(
-            project_dir="project", bin_dir="../bin", cwd=self._temp_dir
-        )
-        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-        self.assertIn("outside the project", result.stderr)
-        self.assertTrue((self._temp_dir / "bin").is_dir())
-        self.assertIn(
-            '@envy bin "../bin"', (self._project_dir / "envy.lua").read_text()
-        )
-
-    def test_init_is_silent_about_an_escaping_bin_dir_for_a_non_root_project(
-        self,
-    ) -> None:
-        """'--root false' declares that the walk continues past this manifest."""
-        self._project_dir.mkdir(parents=True)
-        result = self._run_init(
-            project_dir="project", bin_dir="../bin", cwd=self._temp_dir, root="false"
-        )
-        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-        self.assertNotIn("outside the project", result.stderr)
-        self.assertIn(
-            '@envy bin "../bin"', (self._project_dir / "envy.lua").read_text()
-        )
 
     def test_init_manifest_contains_envy_version_directive(self) -> None:
         """Manifest contains @envy version directive."""
@@ -734,6 +676,186 @@ class TestEnvyInitGitignore(EnvyTestCase):
         shutil.rmtree(self._project_dir / ".git")
         self._init()
         self.assertFalse(self._gitignore.exists())
+
+class TestInitPathAnchoring(EnvyTestCase):
+    """Where `envy init` writes when the CWD is not the project.
+
+    Every case runs from `tree/elsewhere/deep` -- inside the fixture root, holding no
+    manifest, and deliberately not a sibling of the project: anchoring on the cwd and
+    anchoring on the project then land in different places for every relative argument,
+    so a test cannot pass by coincidence. Running from inside the project is what hid
+    this bug -- there the two anchors agree.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tree = self.make_temp_dir("tree").resolve()
+        self.elsewhere = self.tree / "elsewhere" / "deep"
+        self.elsewhere.mkdir(parents=True)
+        self.proj = self.tree / "proj"
+        self.proj.mkdir()
+        self.up = os.path.join("..", "..")  # elsewhere/deep -> tree
+
+    # -- helpers ------------------------------------------------------------
+
+    def snapshot(self) -> set[str]:
+        """Every path under the fixture root, relative and slash-normalized."""
+        return {p.relative_to(self.tree).as_posix() for p in self.tree.rglob("*")}
+
+    def assertOnlyWroteUnder(self, before: set[str], prefix: str) -> None:
+        stray = sorted(
+            e
+            for e in self.snapshot() - before
+            if e != prefix and not e.startswith(prefix + "/")
+        )
+        self.assertEqual([], stray, f"wrote outside {prefix}/: {stray}")
+
+    def init(self, project_dir, bin_dir, *extra, cwd=None) -> EnvyRun:
+        return self.run_envy(
+            "init", project_dir, bin_dir, *extra, cwd=cwd or self.elsewhere
+        )
+
+    def bin_directive(self, project_dir: Path | None = None) -> str:
+        manifest = (project_dir or self.proj) / "envy.lua"
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            if line.startswith("-- @envy bin "):
+                return line.split('"')[1]
+        self.fail(f"no '@envy bin' directive in {manifest}")
+
+    def bootstrap(self, bin_dir: Path) -> Path:
+        return bin_dir / ("envy.bat" if sys.platform == "win32" else "envy")
+
+    # -- resolution ---------------------------------------------------------
+
+    def test_relative_bin_dir_lands_in_the_project(self) -> None:
+        """The #363 repro: from outside, `<bin-dir>` followed the cwd, not the project."""
+        before = self.snapshot()
+        run = self.init(os.path.join(self.up, "proj"), "bin")
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue(self.bootstrap(self.proj / "bin").exists())
+        self.assertFalse((self.elsewhere / "bin").exists())
+        self.assertFalse((self.tree / "bin").exists())
+        self.assertEqual("bin", self.bin_directive())
+        self.assertOnlyWroteUnder(before, "proj")
+
+    def test_nested_relative_bin_dir_keeps_forward_slashes(self) -> None:
+        """One manifest is read on every OS, so the hop is '/'-separated everywhere."""
+        run = self.init(os.path.join(self.up, "proj"), os.path.join("build", "tools"))
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue(self.bootstrap(self.proj / "build" / "tools").exists())
+        self.assertEqual("build/tools", self.bin_directive())
+
+    def test_absolute_project_dir_still_anchors_the_bin_dir(self) -> None:
+        """Naming the project absolutely does not hand the bin dir back to the cwd."""
+        before = self.snapshot()
+        run = self.init(self.proj, "bin")
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue((self.proj / "bin").is_dir())
+        self.assertFalse((self.elsewhere / "bin").exists())
+        self.assertEqual("bin", self.bin_directive())
+        self.assertOnlyWroteUnder(before, "proj")
+
+    def test_absolute_bin_dir_inside_the_project(self) -> None:
+        """An absolute bin dir passes through, and still stamps the relative hop."""
+        run = self.init(os.path.join(self.up, "proj"), self.proj / "bin")
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue(self.bootstrap(self.proj / "bin").exists())
+        self.assertEqual("bin", self.bin_directive())
+
+    def test_bin_dir_equal_to_the_project_dir(self) -> None:
+        """A flat layout: '.' means the project, not the caller's directory."""
+        run = self.init(os.path.join(self.up, "proj"), ".")
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue(self.bootstrap(self.proj).exists())
+        self.assertFalse(self.bootstrap(self.elsewhere).exists())
+        self.assertEqual(".", self.bin_directive())
+
+    def test_a_missing_project_dir_is_created_at_the_named_place(self) -> None:
+        before = self.snapshot()
+        run = self.init(os.path.join(self.up, "fresh"), "bin")
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        fresh = self.tree / "fresh"
+        self.assertTrue(self.bootstrap(fresh / "bin").exists())
+        self.assertEqual("bin", self.bin_directive(fresh))
+        self.assertOnlyWroteUnder(before, "fresh")
+
+    def test_init_from_inside_the_project_is_unchanged(self) -> None:
+        """The flow Getting Started documents, and the reason the bug stayed hidden."""
+        run = self.init(".", "bin", cwd=self.proj)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        self.assertTrue(self.bootstrap(self.proj / "bin").exists())
+        self.assertEqual("bin", self.bin_directive())
+
+    # -- escaping bin dirs --------------------------------------------------
+
+    def test_escaping_bin_dir_warns_and_still_writes(self) -> None:
+        """Deploy owns the verdict, so init says so rather than refusing."""
+        run = self.init(os.path.join(self.up, "proj"), os.path.join("..", "shared"))
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertIn("outside the project", run.stderr)
+
+        # '..' from the project, not from the caller: tree/shared, not elsewhere/shared.
+        self.assertTrue(self.bootstrap(self.tree / "shared").exists())
+        self.assertFalse((self.tree / "elsewhere" / "shared").exists())
+        self.assertEqual("../shared", self.bin_directive())
+
+    def test_escaping_bin_dir_is_silent_under_root_false(self) -> None:
+        """'--root false' declares that the walk continues past this manifest."""
+        run = self.init(
+            os.path.join(self.up, "proj"), os.path.join("..", "shared"),
+            "--root", "false",
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertNotIn("outside the project", run.stderr)
+        self.assertEqual("../shared", self.bin_directive())
+
+    # -- what the project does next -----------------------------------------
+
+    def test_sync_from_outside_deploys_into_the_projects_bin_dir(self) -> None:
+        """End to end: init and sync both run from elsewhere, both write to proj/bin."""
+        self.assertEqual(0, self.init(os.path.join(self.up, "proj"), "bin").returncode)
+
+        spec = self.write_spec(
+            "tool.lua",
+            'IDENTITY = "local.tool@v1"\n'
+            'PRODUCTS = { tool = "TOOL" }\n'
+            "USER_MANAGED = true\n"
+            "SETUP = {\n"
+            "  main = {\n"
+            "    CHECK = function(pkg_dir, options) return true end,\n"
+            "    INSTALL = function(pkg_dir, options) end,\n"
+            "  },\n"
+            "}\n",
+            directory=self.proj,
+        )
+        manifest = self.proj / "envy.lua"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "PACKAGES = {\n}",
+                "PACKAGES = {\n"
+                f'  {{ spec = "local.tool@v1", source = "{self.lua_path(spec)}" }},\n'
+                "}",
+            ),
+            encoding="utf-8",
+        )
+
+        before = self.snapshot()
+        run = self.run_envy("--project", self.proj, "sync", cwd=self.elsewhere)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        bin_dir = self.proj / "bin"
+        self.assertTrue(self.bootstrap(bin_dir).exists())
+        product = bin_dir / ("tool.bat" if sys.platform == "win32" else "tool")
+        self.assertTrue(product.exists(), f"no product script at {product}")
+        self.assertOnlyWroteUnder(before, "proj")
+
 
 if __name__ == "__main__":
     unittest.main()
