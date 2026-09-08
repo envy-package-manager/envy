@@ -278,9 +278,10 @@ Future option: code signing for authenticity independent of the manifest.
 Alice creates a new project with envy:
 
 ```bash
-# 1. Download envy somehow (one-time, any method)
-curl -fsSL -o /tmp/envy https://github.com/envy-package-manager/envy/releases/latest/download/envy-darwin-arm64
-chmod +x /tmp/envy
+# 1. Download envy somehow (one-time, any method). Releases ship archives, not bare
+#    binaries: envy-<os>-<arch>.tar.gz on POSIX, envy-windows-<arch>.zip on Windows.
+curl -fsSL https://github.com/envy-package-manager/envy/releases/latest/download/envy-darwin-arm64.tar.gz \
+  | tar -xzf - -C /tmp
 
 # 2. Initialize project
 mkdir my-project && cd my-project
@@ -680,7 +681,7 @@ still runs. A `@envy sha256sums` pin skips step 4 and downloads instead.
 3. **Resolve cache dir** → `~/Library/Caches/envy`
 4. **Check candidates** → `$CACHE/envy/1.2.3/envy` not found
 5. **Determine platform** → darwin-arm64
-6. **Download to temp** → `curl https://github.com/.../envy-darwin-arm64` → `/tmp/envy-1.2.3-$$`
+6. **Download to temp** → `curl https://github.com/.../envy-darwin-arm64.tar.gz` → unpack to `/tmp/envy-1.2.3-$$`
 7. **exec** → temp binary (bootstrap's job is done)
 8. **envy self-deploys** → copies self to `$CACHE/envy/1.2.3/envy`, extracts types alongside
 9. **envy sync runs** → normal package synchronization
