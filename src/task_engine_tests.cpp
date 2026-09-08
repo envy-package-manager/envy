@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <random>
@@ -353,15 +354,43 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   std::atomic_int unblocked{ 0 };
   std::atomic_int extended{ 0 };
 
+  // blocked/unblocked fire only for an edge that really blocks, and the worker decides
+  // that by reading the dependency's progress *after* ratcheting its target -- so 'a'
+  // is already awake and racing that read. Left to chance, 'a' can finish step 1 first
+  // and the pair never fires (observed on a loaded CI runner, never locally).
+  //
+  // The gate closes the window by construction: 'a' cannot complete step 1 until the
+  // blocked callback opens it, and that callback only runs if the worker saw a block.
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool gate_open{ false };
+
   task_engine::observer obs;
-  obs.blocked = [&](std::string const &, int, std::string const &, int) { ++blocked; };
+  obs.blocked = [&](std::string const &, int, std::string const &, int) {
+    ++blocked;
+    {
+      std::lock_guard const lock(gate_mutex);
+      gate_open = true;
+    }
+    gate_cv.notify_all();
+  };
   obs.unblocked = [&](std::string const &, int, std::string const &) { ++unblocked; };
   obs.target_extended = [&](std::string const &, int, int) { ++extended; };
 
   step_log log;
   task_engine te{ std::move(obs) };
 
-  REQUIRE(te.ensure_task(simple_task("a", 2, log)));
+  auto a{ simple_task("a", 2, log) };
+  a.step = [&](int step) {
+    if (step == 1) {
+      std::unique_lock lock(gate_mutex);
+      REQUIRE(gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] { return gate_open; }));
+    }
+    log.record("a:" + std::to_string(step));
+    return false;
+  };
+  REQUIRE(te.ensure_task(std::move(a)));
+
   auto b{ simple_task("b", 1, log) };
   b.edges = [](int) { return std::vector<task_engine::edge>{ { "a", 2 } }; };
   REQUIRE(te.ensure_task(std::move(b)));
