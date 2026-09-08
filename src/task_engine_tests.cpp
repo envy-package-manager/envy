@@ -361,9 +361,12 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   //
   // The gate closes the window by construction: 'a' cannot complete step 1 until the
   // blocked callback opens it, and that callback only runs if the worker saw a block.
+  // A handshake, not a delay -- nothing here waits out a duration, so there is no
+  // margin to tune and a slow runner only makes the wait longer, never wrong.
   std::mutex gate_mutex;
   std::condition_variable gate_cv;
   bool gate_open{ false };
+  std::atomic_bool gate_timed_out{ false };
 
   task_engine::observer obs;
   obs.blocked = [&](std::string const &, int, std::string const &, int) {
@@ -383,9 +386,15 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   auto a{ simple_task("a", 2, log) };
   a.step = [&](int step) {
     if (step == 1) {
+      // Bounded only so a hang-shaped bug fails instead of wedging the run; the timeout
+      // is never reached when this works. Recorded rather than asserted: a doctest
+      // assertion throws, and the engine would catch that and report a task failure
+      // instead of the assertion.
       std::unique_lock lock(gate_mutex);
-      REQUIRE(
-          gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] { return gate_open; }));
+      auto const opened{ gate_cv.wait_for(lock,
+                                          std::chrono::seconds{ 10 },
+                                          [&] { return gate_open; }) };
+      if (!opened) { gate_timed_out = true; }
     }
     log.record("a:" + std::to_string(step));
     return false;
@@ -402,6 +411,7 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   te.wait_at("b", 1);  // b's own wait ratchets a to 2 -> target_extended fires
   te.join_all();
 
+  CHECK_FALSE(gate_timed_out);
   CHECK(blocked == 1);
   CHECK(unblocked == 1);
   CHECK(extended >= 1);
