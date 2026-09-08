@@ -384,7 +384,8 @@ TEST_CASE("task_engine: observer sees lifecycle events") {
   a.step = [&](int step) {
     if (step == 1) {
       std::unique_lock lock(gate_mutex);
-      REQUIRE(gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] { return gate_open; }));
+      REQUIRE(
+          gate_cv.wait_for(lock, std::chrono::seconds{ 10 }, [&] { return gate_open; }));
     }
     log.record("a:" + std::to_string(step));
     return false;
