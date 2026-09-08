@@ -1164,18 +1164,24 @@ TEST_CASE("default_shell: no manifest yields the platform built-in") {
 
 TEST_CASE("default_shell: a value form resolves without any task") {
   namespace fs = std::filesystem;
+#if defined(_WIN32)  // each built-in choice is accepted only on its own platform
+  constexpr char const *kValueShell{ "ENVY_SHELL.POWERSHELL" };
+  constexpr shell_choice kValueChoice{ shell_choice::powershell };
+#else
+  constexpr char const *kValueShell{ "ENVY_SHELL.SH" };
+  constexpr shell_choice kValueChoice{ shell_choice::sh };
+#endif
   fs::path const cache_root{ fs::temp_directory_path() / "envy-ds-eng-value" };
   cache c{ cache_root };
-  auto m{ manifest::load(R"(-- @envy bin-dir "tools"
-PACKAGES = {}
-DEFAULT_SHELL = ENVY_SHELL.SH
-)",
-                         fs::path("/fake/envy.lua")) };
+  std::string const script{ std::string{ "-- @envy bin-dir \"tools\"\nPACKAGES = {}\n"
+                                         "DEFAULT_SHELL = " } +
+                            kValueShell + "\n" };
+  auto m{ manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
   engine eng{ c, m.get() };
 
   auto const shell{ eng.default_shell(nullptr) };
   REQUIRE(std::holds_alternative<shell_choice>(shell));
-  CHECK(std::get<shell_choice>(shell) == shell_choice::sh);
+  CHECK(std::get<shell_choice>(shell) == kValueChoice);
 
   fs::remove_all(cache_root);
 }
