@@ -71,13 +71,21 @@ void tag_declarations(sol::table const &env, std::string const &base) {
   }
 }
 
-sol::table imported_bundles_list(sol::state_view lua) {
-  if (sol::object const obj{ lua.registry()[ENVY_IMPORTS_RIDX] }; obj.is<sol::table>()) {
+// Globals read only from the root state. PACKAGES and BUNDLES are absent because
+// envy.import already reads those back out of the sandbox itself.
+constexpr char const *kRootOnlyGlobals[]{ "DEFAULT_SHELL", "PACKAGE_DEPOTS" };
+
+sol::table registry_list(sol::state_view lua, int ridx) {
+  if (sol::object const obj{ lua.registry()[ridx] }; obj.is<sol::table>()) {
     return obj.as<sol::table>();
   }
   sol::table const list{ lua.create_table() };
-  lua.registry()[ENVY_IMPORTS_RIDX] = list;
+  lua.registry()[ridx] = list;
   return list;
+}
+
+sol::table imported_bundles_list(sol::state_view lua) {
+  return registry_list(lua, ENVY_IMPORTS_RIDX);
 }
 
 // Advisory only, and only against the root pin: an imported manifest asking for a
@@ -178,6 +186,12 @@ void lua_envy_import_install(sol::state &lua,
                                    std::string{ err.what() });
         }
 
+        // Every import is remembered, so the root-only globals it declared can be
+        // matched against the root's once the root chunk has finished assigning.
+        sol::table envs{ registry_list(lua_view, ENVY_IMPORT_ENVS_RIDX) };
+        envs[envs.size() + 1] =
+            lua_view.create_table_with("path", resolved.string(), "env", env);
+
         tag_declarations(env, util_normalized_path(resolved));
         if (sol::object const bundles{ env.raw_get<sol::object>("BUNDLES") };
             bundles.is<sol::table>()) {
@@ -191,6 +205,33 @@ void lua_envy_import_install(sol::state &lua,
                    .importer = importer.string());
         return env;
       });
+}
+
+void lua_envy_import_validate_root_globals(sol::state_view lua) {
+  sol::object const obj{ lua.registry()[ENVY_IMPORT_ENVS_RIDX] };
+  if (!obj.is<sol::table>()) { return; }
+
+  sol::table const list{ obj.as<sol::table>() };
+  for (size_t i{ 1 }, n{ list.size() }; i <= n; ++i) {
+    sol::object const e{ list[i] };
+    if (!e.is<sol::table>()) { continue; }
+    sol::table const entry{ e.as<sol::table>() };
+    sol::table const env{ entry.get<sol::table>(
+        "env") };  // MSVC: proxy brace-init is ambiguous
+
+    for (char const *name : kRootOnlyGlobals) {
+      sol::object const declared{ env.raw_get<sol::object>(name) };
+      if (!declared.valid() || declared.get_type() == sol::type::lua_nil) { continue; }
+      // Adopted: the root spliced the very value the import declared. Anything else
+      // -- unset, or a different value -- means nothing will ever read this one.
+      if (declared == sol::object{ lua.globals()[name] }) { continue; }
+      throw std::runtime_error(
+          "envy.import: " + entry.get<std::string>("path") + " sets " +
+          std::string{ name } +
+          ", which is read only from the root manifest; assign it there (e.g. " +
+          std::string{ name } + " = envy.import(...)." + std::string{ name } + ")");
+    }
+  }
 }
 
 std::vector<sol::table> lua_envy_import_bundle_tables(sol::state_view lua) {

@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -66,7 +67,17 @@ bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_tab
   return result;
 }
 
+// Keys a bundle declaration reads, whether it came from a BUNDLES alias or from an
+// inline `bundle = {...}` table.
+constexpr std::string_view kBundleDeclKeys[]{ kEnvyBaseKey,
+                                              "identity",
+                                              "ref",
+                                              "sha256",
+                                              "source" };
+
 bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_origin) {
+  sol_util_reject_unknown_keys(table, kBundleDeclKeys, "Bundle declaration");
+
   bundle_decl decl;
 
   // An imported manifest's BUNDLES entry carries its own anchor; every other one
@@ -347,26 +358,38 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
                                 std::unordered_map<std::string, pkg_cfg *> &memo) {
   if (auto const it{ memo.find(src.bundle_identity) }; it != memo.end()) {
     // One declaring scope, so this is the only cfg that will ever exist for the
-    // identity — engine::validate_bundle_redeclaration compares cfgs and would never
+    // identity — engine::validate_source_redeclaration compares cfgs and would never
     // see the loser. Reject a disagreeing redeclaration here instead; the engine
     // still catches the cross-scope case (manifest versus spec, spec versus spec).
     auto const &existing{ std::get<pkg_cfg::bundle_source>(it->second->source) };
-    switch (bundle_source_compare(existing, src)) {
-      case bundle_source_match::SAME: break;
 
-      case bundle_source_match::INCOMPARABLE:
+    // Both declaring files, so an author composing imported manifests can see which
+    // two disagree; one name when a single file declared it twice.
+    std::string const sites{ [&] {
+      auto const where{ [](std::filesystem::path const &p) {
+        return p.empty() ? std::string{ "<unknown>" } : p.string();
+      } };
+      std::string const first{ where(it->second->declaring_file_path) };
+      std::string const second{ where(decl_path) };
+      return first == second ? first : first + " and " + second;
+    }() };
+
+    switch (bundle_source_compare(existing, src)) {
+      case pkg_source_match::SAME: break;
+
+      case pkg_source_match::INCOMPARABLE:
         // Two fetch closures: undecidable, so keep the first and say so.
         tui::warn(
             "bundle '%s' is declared with more than one custom fetch function in %s; "
             "the first will run",
             src.bundle_identity.c_str(),
-            decl_path.string().c_str());
+            sites.c_str());
         break;
 
-      case bundle_source_match::DIFFERENT:
+      case pkg_source_match::DIFFERENT:
         throw std::runtime_error("bundle '" + src.bundle_identity +
-                                 "' is declared more than once in " + decl_path.string() +
-                                 " with conflicting sources; a bundle identity must "
+                                 "' is declared more than once, in " + sites +
+                                 ", with conflicting sources; a bundle identity must "
                                  "name one payload");
     }
     return it->second;

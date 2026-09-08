@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -127,5 +128,11 @@ T sol_util_get_or_default(sol::table const &table,
 std::vector<std::string> sol_util_get_string_list(sol::table const &table,
                                                   std::string_view key,
                                                   std::string_view context);
+
+// Reject every string key `allowed` does not list: a key no parser reads does nothing at
+// all, silently. Write `allowed` sorted; the error lists it verbatim.
+void sol_util_reject_unknown_keys(sol::table const &table,
+                                  std::span<std::string_view const> allowed,
+                                  std::string_view context);
 
 }  // namespace envy

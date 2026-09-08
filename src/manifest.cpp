@@ -12,8 +12,10 @@
 #include "tui.h"
 #include "util.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <string_view>
 
 namespace envy {
 
@@ -150,10 +152,11 @@ struct manifest_parse_ctx {
   // Aliases of an imported BUNDLES table, parsed once per table rather than per entry.
   std::unordered_map<void const *, bundle_alias_map> imported_bundles{};
 
+  // An imported entry's provenance is the file that wrote it, not the root that spliced
+  // it in: that file is what a conflict message must name and what keys a custom fetch.
   pkg_decl_origin origin_for(sol::table const &entry) const {
     auto base{ sol_util_get_optional<std::string>(entry, kEnvyBaseKey, "Package") };
-    return base ? pkg_decl_origin{ root_path, std::move(*base) }
-                : pkg_decl_origin{ root_path };
+    return base ? pkg_decl_origin{ std::move(*base) } : pkg_decl_origin{ root_path };
   }
 
   // An imported entry's own aliases win: its manifest wrote the reference. Falls back
@@ -196,10 +199,19 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
   cfg->setup = std::move(names);
 }
 
+// Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
+// set lives with pkg_cfg::parse, which owns that table.
+constexpr std::string_view kBundlePackageKeys[]{
+  kEnvyBaseKey, kEnvyBundlesKey, "bundle", "needed_by", "options",
+  "platforms",  "product",       "setup",  "spec"
+};
+
 // Parse a single package entry that may reference a bundle
 pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) {
   // For non-table entries (strings) - use standard parsing (no platforms possible)
-  if (!entry.is<sol::table>()) { return pkg_cfg::parse(entry, ctx.root_path); }
+  if (!entry.is<sol::table>()) {
+    return pkg_cfg::parse(entry, ctx.root_path, pkg_entry_shape::MANIFEST_PACKAGE);
+  }
 
   sol::table table{ entry.as<sol::table>() };
   pkg_decl_origin const origin{ ctx.origin_for(table) };
@@ -208,7 +220,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
   sol::object bundle_obj{ table["bundle"] };
   if (!bundle_obj.valid() || bundle_obj.get_type() == sol::type::lua_nil) {
     // No bundle field - use standard pkg_cfg::parse, then add platforms
-    pkg_cfg *cfg{ pkg_cfg::parse(entry, origin) };
+    pkg_cfg *cfg{ pkg_cfg::parse(entry, origin, pkg_entry_shape::MANIFEST_PACKAGE) };
     sol::object platforms_obj{ table["platforms"] };
     if (platforms_obj.valid() && platforms_obj.get_type() != sol::type::lua_nil) {
       if (platforms_obj.get_type() != sol::type::table) {
@@ -241,6 +253,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
       source_obj.valid() && source_obj.get_type() != sol::type::lua_nil) {
     throw std::runtime_error("Package cannot specify both 'source' and 'bundle' fields");
   }
+  sol_util_reject_unknown_keys(table, kBundlePackageKeys, "Package with 'bundle'");
 
   pkg_cfg::bundle_source const bundle_src{ [&]() -> pkg_cfg::bundle_source {
     if (bundle_obj.is<std::string>()) {
@@ -299,7 +312,6 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
 
   // Set bundle-related fields
   cfg->bundle_identity = bundle_identity;
-  // bundle_path will be resolved later when the bundle is fetched and parsed
 
   // Parse optional platforms field
   sol::object platforms_obj{ table["platforms"] };
@@ -378,28 +390,6 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
   }
 
   return depots;
-}
-
-// One BUNDLES table's custom fetch for `identity`, if it declares one.
-std::optional<sol::protected_function> find_bundle_fetch(sol::table const &bundles,
-                                                         std::string const &identity) {
-  for (auto const &[key, value] : bundles) {
-    if (!value.is<sol::table>()) { continue; }
-    sol::table const decl{ value.as<sol::table>() };
-
-    sol::object const identity_obj{ decl["identity"] };
-    if (!identity_obj.is<std::string>() || identity_obj.as<std::string>() != identity) {
-      continue;
-    }
-
-    sol::object const source_obj{ decl["source"] };
-    if (!source_obj.is<sol::table>()) { continue; }
-    if (sol::object const fetch{ source_obj.as<sol::table>()["fetch"] };
-        fetch.is<sol::function>()) {
-      return fetch.as<sol::protected_function>();
-    }
-  }
-  return std::nullopt;
 }
 
 // parse_shell_config_from_lua returns the flat variant; DEFAULT_SHELL stores the
@@ -678,6 +668,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
                              err.what());
   }
 
+  lua_envy_import_validate_root_globals(*state);
+
   auto m{ std::make_unique<manifest>() };
   m->manifest_path = manifest_path;
   m->meta = std::move(meta);
@@ -690,12 +682,16 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   // table, so they run whether or not a package references them. Every other bundle
   // is created on first reference below and pulled in as a source dependency.
   std::unordered_map<std::string, pkg_cfg *> bundle_pkgs;
+  std::vector<std::string> custom_fetch_aliases;
   for (auto const &[alias, bundle_src] : bundles) {
-    if (!std::holds_alternative<pkg_cfg::custom_fetch_source>(bundle_src.fetch_source)) {
-      continue;
+    if (std::holds_alternative<pkg_cfg::custom_fetch_source>(bundle_src.fetch_source)) {
+      custom_fetch_aliases.push_back(alias);
     }
+  }
+  std::ranges::sort(custom_fetch_aliases);  // BUNDLES hashes; root order must not
+  for (auto const &alias : custom_fetch_aliases) {
     m->packages.push_back(
-        bundle::ensure_pkg_cfg(bundle_src, manifest_path, nullptr, bundle_pkgs));
+        bundle::ensure_pkg_cfg(bundles.at(alias), manifest_path, nullptr, bundle_pkgs));
   }
 
   sol::object packages_obj = (*m->lua_)["PACKAGES"];
@@ -709,7 +705,14 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
                                 .root_bundles = bundles,
                                 .bundle_pkgs = bundle_pkgs };
   for (size_t i{ 1 }; i <= packages_table.size(); ++i) {
-    m->packages.push_back(parse_package_entry(packages_table[i], parse_ctx));
+    // One wrapper for the whole loop: every throw below names its own problem, and this
+    // is the only place that knows which entry of which file raised it.
+    try {
+      m->packages.push_back(parse_package_entry(packages_table[i], parse_ctx));
+    } catch (std::exception const &e) {
+      throw std::runtime_error(manifest_path.string() + ": PACKAGES[" + std::to_string(i) +
+                               "]: " + e.what());
+    }
   }
 
   m->package_depots = parse_package_depots((*m->lua_)["PACKAGE_DEPOTS"]);
@@ -738,32 +741,37 @@ default_shell_decl manifest::get_default_shell() const {
   // custom-shell value form, whose 'file'/'inline' keys cannot collide with it.
   if (default_shell_obj.is<sol::table>()) {
     sol::table wrapper{ default_shell_obj.as<sol::table>() };
-    if (sol::object shell_obj{ wrapper["SHELL"] };
-        shell_obj.valid() && shell_obj.get_type() != sol::type::lua_nil) {
-      default_shell_decl decl{ .is_function = shell_obj.is<sol::protected_function>() };
+    sol::object shell_obj{ wrapper["SHELL"] };
+    bool const has_shell{ shell_obj.valid() &&
+                          shell_obj.get_type() != sol::type::lua_nil };
 
-      if (sol::object dep_obj{ wrapper["DEPENDS"] };
-          dep_obj.valid() && dep_obj.get_type() != sol::type::lua_nil) {
-        if (!dep_obj.is<sol::table>()) {
+    default_shell_decl decl{ .is_function = shell_obj.is<sol::protected_function>() };
+
+    if (sol::object dep_obj{ wrapper["DEPENDS"] };
+        dep_obj.valid() && dep_obj.get_type() != sol::type::lua_nil) {
+      if (!dep_obj.is<sol::table>()) {
+        throw std::runtime_error(
+            "DEFAULT_SHELL DEPENDS must be a table of package identities");
+      }
+      sol::table dt{ dep_obj.as<sol::table>() };
+      for (size_t i{ 1 }; i <= dt.size(); ++i) {
+        sol::object d{ dt[i] };
+        if (!d.is<std::string>() || d.as<std::string>().empty()) {
           throw std::runtime_error(
-              "DEFAULT_SHELL DEPENDS must be a table of package identities");
+              "DEFAULT_SHELL DEPENDS entries must be non-empty strings");
         }
-        sol::table dt{ dep_obj.as<sol::table>() };
-        for (size_t i{ 1 }; i <= dt.size(); ++i) {
-          sol::object d{ dt[i] };
-          if (!d.is<std::string>() || d.as<std::string>().empty()) {
-            throw std::runtime_error(
-                "DEFAULT_SHELL DEPENDS entries must be non-empty strings");
-          }
-          decl.depends.push_back(d.as<std::string>());
-        }
+        decl.depends.push_back(d.as<std::string>());
       }
+    }
 
-      // Only a function is evaluated after its DEPENDS install; a value form is
-      // read here, before any package exists, so it could never name one.
-      if (!decl.depends.empty() && !decl.is_function) {
-        throw std::runtime_error("DEFAULT_SHELL DEPENDS requires SHELL to be a function");
-      }
+    // Only a function is evaluated after its DEPENDS install; a value form is read
+    // here, before any package exists, so it could never name one. Checked outside the
+    // SHELL branch: a DEPENDS table missing SHELL used to fall through to the value
+    // form below, which read the wrapper's own keys as a shell and dropped DEPENDS.
+    if (!decl.depends.empty() && !decl.is_function) {
+      throw std::runtime_error("DEFAULT_SHELL DEPENDS requires SHELL to be a function");
+    }
+    if (has_shell) {
       if (!decl.is_function) {
         decl.value = default_shell_from_lua(shell_obj, "DEFAULT_SHELL.SHELL");
       }
@@ -819,23 +827,10 @@ std::optional<std::string> manifest::run_bundle_fetch(
 
   if (!lua_) { return "manifest Lua state unavailable"; }
 
-  // Root globals first, then every imported manifest's own BUNDLES: an imported
-  // declaration never lands in the root table, so this is where its fetch lives.
-  sol::protected_function const fetch_func{ [&] {
-    if (sol::object const root{ (*lua_)["BUNDLES"] }; root.is<sol::table>()) {
-      if (auto fn{ find_bundle_fetch(root.as<sol::table>(), bundle_identity) }) {
-        return *fn;
-      }
-    }
-    for (sol::table const &imported : lua_envy_import_bundle_tables(*lua_)) {
-      if (auto fn{ find_bundle_fetch(imported, bundle_identity) }) { return *fn; }
-    }
-    return sol::protected_function{};
-  }() };
-
-  if (!fetch_func.valid()) {
-    return "bundle fetch function not found: " + bundle_identity;
-  }
+  auto const fetch_func{ find_fetch_function(
+      *lua_,
+      { .what = fetch_fn_query::kind::BUNDLE, .identity = bundle_identity }) };
+  if (!fetch_func) { return "bundle fetch function not found: " + bundle_identity; }
 
   // RAII guard to clear registry on scope exit (including exceptions)
   sol::state_view lua_view{ *lua_ };
@@ -846,7 +841,7 @@ std::optional<std::string> manifest::run_bundle_fetch(
 
   lua_view.registry()[ENVY_PHASE_CTX_RIDX] = phase_ctx;
 
-  sol::protected_function_result result{ fetch_func(util_normalized_path(tmp_dir)) };
+  sol::protected_function_result result{ (*fetch_func)(util_normalized_path(tmp_dir)) };
   if (!result.valid()) {
     sol::error err = result;
     return std::string(err.what());

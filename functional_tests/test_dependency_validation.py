@@ -639,6 +639,83 @@ end
         self.assertIn("local.dep_val_unrelated@v1", result.stderr)
         self.assertIn("local.dep_val_lib@v1", result.stderr)
 
+    def test_transitive_only_access_is_refused(self):
+        """Reaching a provider only through a dependency is not a dependency on it.
+
+        `top` depends on `mid`, `mid` on `base`; `top` never names `base`. The edge
+        is what ordered base's payload for mid, not for top, so the access is
+        refused -- and refused by name, rather than quietly handing back mid's
+        directory the way the transitive walk used to.
+        """
+        self.write_spec(
+            "dep_val_trans_only_base.lua",
+            """IDENTITY = "local.dep_val_trans_only_base@v1"
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
+end
+""",
+        )
+
+        self.write_spec(
+            "dep_val_trans_only_mid.lua",
+            """IDENTITY = "local.dep_val_trans_only_mid@v1"
+
+DEPENDENCIES = {{
+  {{ spec = "local.dep_val_trans_only_base@v1",
+     source = "{SPECS_DIR}/dep_val_trans_only_base.lua", needed_by = "stage" }}
+}}
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
+end
+""",
+        )
+
+        self.write_spec(
+            "dep_val_trans_only_top.lua",
+            """IDENTITY = "local.dep_val_trans_only_top@v1"
+
+DEPENDENCIES = {{
+  {{ spec = "local.dep_val_trans_only_mid@v1",
+     source = "{SPECS_DIR}/dep_val_trans_only_mid.lua", needed_by = "stage" }}
+}}
+
+FETCH = {{
+  source = "{ARCHIVE_PATH}",
+  sha256 = "{ARCHIVE_HASH}"
+}}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  envy.extract_all(fetch_dir, stage_dir, {{strip = 1}})
+  envy.package("local.dep_val_trans_only_base@v1")
+end
+""",
+        )
+
+        result, _ = self.install_spec(
+            "local.dep_val_trans_only_top@v1", "dep_val_trans_only_top.lua"
+        )
+
+        self.assertNotEqual(
+            result.returncode, 0, "transitive-only access must be refused"
+        )
+        self.assertIn(
+            "has no strong dependency on 'local.dep_val_trans_only_base@v1'",
+            result.stderr,
+        )
+        self.assertIn("local.dep_val_trans_only_top@v1", result.stderr)
+
     def test_needed_by_direct(self):
         """Spec with needed_by="recipe_fetch" calls envy.package() on direct dep in fetch phase - should succeed."""
         # Base spec for needed_by testing
@@ -1061,6 +1138,35 @@ end
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         self.assertIn("local.dep_val_chain5_e@v1", output)
+
+    # -- parse-error context ------------------------------------------------
+
+    def test_dependency_parse_error_names_the_spec_and_the_entry(self):
+        """A bad DEPENDENCIES entry says which spec and which index it came from."""
+        self.write_spec(
+            "dep_ctx.lua",
+            """IDENTITY = "local.dep_ctx@v1"
+DEPENDENCIES = {{
+  {{ spec = "local.dep_ctx_ok@v1", source = "{SPECS_DIR}/dep_ctx_ok.lua" }},
+  {{ spec = "local.dep_ctx_bad@v1", source = "x.lua", platforms = {{ "darwin" }} }},
+}}
+USER_MANAGED = true
+SETUP = {{ main = {{ CHECK = "exit 0", INSTALL = "exit 0" }} }}
+""",
+        )
+        self.write_spec(
+            "dep_ctx_ok.lua",
+            """IDENTITY = "local.dep_ctx_ok@v1"
+USER_MANAGED = true
+SETUP = {{ main = {{ CHECK = "exit 0", INSTALL = "exit 0" }} }}
+""",
+        )
+
+        result, _ = self.install_spec("local.dep_ctx@v1", "dep_ctx.lua")
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("spec 'local.dep_ctx@v1': DEPENDENCIES[2]:", result.stderr)
+        self.assertIn("cannot specify 'platforms'", result.stderr)
 
 
 if __name__ == "__main__":

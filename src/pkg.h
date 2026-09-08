@@ -23,9 +23,11 @@ namespace envy {
 class engine;
 enum class pkg_type;
 
-// Closures whose members run outside the window where resolve_weak_references() can
-// satisfy a reference, so no member of one may hold a weak reference. Set via
-// engine::mark_closure, which propagates transitively over dependencies.
+// Bootstrap closures. Two consequences for every member, whichever closure it is in:
+// it runs outside the window where resolve_weak_references() can satisfy a reference,
+// so it may hold none; and its own string verbs get the platform built-in shell, since
+// this work all precedes the manifest shell. Set via engine::mark_closure, which
+// propagates transitively over dependencies.
 enum class pkg_closure : uint8_t {
   // package-depot DEPENDS closure: never consults the depot, which breaks the
   // bootstrap circularity, and may run after the resolution loop has finished.
@@ -34,11 +36,16 @@ enum class pkg_closure : uint8_t {
   // graph resolution, because a consumer parked in spec_fetch waiting for it holds
   // the resolution barrier shut for that entire window.
   fetch = 1u << 1,
-  // DEFAULT_SHELL DEPENDS closure: gets the platform built-in shell for its own
-  // string verbs, since it is what supplies the manifest's shell, and runs to
-  // completion before any other package's first string verb.
+  // DEFAULT_SHELL DEPENDS closure: supplies the manifest's shell, so it cannot
+  // consume it. Started lazily by the #default_shell task, whose edges hold the shell
+  // until every member is installed — before any other package's first string verb.
   default_shell = 1u << 2,
 };
+
+// Every kind, for the sites that must treat them alike; a new kind is one edit here.
+inline constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap,
+                                             pkg_closure::fetch,
+                                             pkg_closure::default_shell };
 
 constexpr std::string_view pkg_closure_name(pkg_closure kind) {
   switch (kind) {
@@ -107,10 +114,6 @@ struct pkg {
   bool was_cache_hit{ false };   // set by check when the payload was already cached
   bool bundle_in_situ{ false };  // BUNDLE_ONLY: local bundle used from its source dir
 
-  // Ancestor identities for dependency-cycle detection. Set before this
-  // package's worker starts; immutable after.
-  std::vector<std::string> ancestor_chain;
-
   sol_state_guard lua;
   cache::scoped_entry_lock::ptr_t lock;
 
@@ -130,12 +133,14 @@ struct pkg {
   };
   std::map<std::string, setup_pair_decl> setup_pairs;
 
+  // Written by this package's own spec_fetch and read only after the resolution
+  // barrier, so no lock: worker-local until then, immutable afterwards.
+  std::vector<pkg_cfg *> owned_dependency_cfgs;
+
   // Dependency state — deps_mutex guards every field below. The engine's resolution
   // loop mutates these maps while worker threads traverse them. Lock one node at a
   // time; snapshot before recursing or blocking so no two pkg locks nest.
   mutable std::mutex deps_mutex;
-  std::vector<std::string> declared_dependencies;
-  std::vector<pkg_cfg *> owned_dependency_cfgs;
   std::unordered_map<std::string, dependency_info> dependencies;
   std::unordered_map<std::string, product_dependency> product_dependencies;
   std::vector<weak_reference> weak_references;

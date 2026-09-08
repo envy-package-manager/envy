@@ -23,6 +23,12 @@ struct phase_context {
 
   // May not be the same as p->lock: "custom fetch" runs with child package's lock!
   cache::scoped_entry_lock const *lock;
+
+  // Lua running in the manifest state (manifest bundle fetch, depot FETCH, the
+  // DEFAULT_SHELL function itself): envy.run gets the platform built-in. That work
+  // runs before the manifest shell can exist, and the manifest state is one
+  // non-recursive mutex — evaluating the shell from inside it would self-deadlock.
+  bool builtin_shell{ false };
 };
 
 // Get phase context from Lua registry (returns nullptr if not in phase execution)

@@ -20,8 +20,27 @@ namespace envy {
 
 namespace {
 
-// Convert Lua module path (dots) to filesystem path (slashes)
-std::string module_path_to_file_path(std::string const &module_path) {
+// A module path is Lua dot syntax naming a file inside the dependency, so every
+// spelling that could name something else is refused before the dots become
+// separators: `.etc.passwd` built an absolute path, which `operator/` adopts whole.
+std::string module_path_to_file_path(std::string const &module_path,
+                                     std::string const &identity) {
+  auto const reject{ [&](char const *why) {
+    return std::runtime_error("envy.loadenv_spec: invalid module path '" + module_path +
+                              "' for dependency '" + identity + "': " + why);
+  } };
+
+  if (module_path.empty()) { throw reject("path is empty"); }
+  if (module_path.front() == '.' || module_path.back() == '.') {
+    throw reject("a leading or trailing '.' does not separate modules");
+  }
+  if (module_path.find_first_of("/\\") != std::string::npos) {
+    throw reject("write Lua dot syntax ('lib.common'), not path separators");
+  }
+  if (module_path.find("..") != std::string::npos) {
+    throw reject("'..' cannot reach outside the dependency");
+  }
+
   std::string file_path{ module_path };
   std::replace(file_path.begin(), file_path.end(), '.', '/');
   return file_path;
@@ -36,8 +55,7 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
   envy_table["loadenv_spec"] = [](std::string const &identity,
                                   std::string const &module_path,
                                   sol::this_state L) -> sol::table {
-    // Convert dots to slashes
-    std::string const subpath{ module_path_to_file_path(module_path) };
+    std::string const subpath{ module_path_to_file_path(module_path, identity) };
     // Verify we're in a phase context (not global scope)
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *consumer{ ctx ? ctx->p : nullptr };
@@ -63,16 +81,15 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
                  .reason = reason);
     };
 
-    // Look up dependency by identity (with fuzzy matching)
-    pkg_phase first_needed_by{ pkg_phase::completion };
-    std::optional<std::string> matched_identity;
-    if (!strong_reachable(consumer, identity, first_needed_by, matched_identity)) {
+    auto const edge{ find_direct_dependency(consumer, identity) };
+    if (!edge) {
       std::string const msg{ "envy.loadenv_spec: pkg '" + consumer->cfg->identity +
                              "' has no dependency on '" + identity + "'" };
       emit_access(false, pkg_phase::none, msg);
       throw std::runtime_error(msg);
     }
 
+    pkg_phase const first_needed_by{ edge->needed_by };
     if (current_phase < first_needed_by) {
       std::string const msg{ "envy.loadenv_spec: dependency '" + identity +
                              "' needed_by '" +
@@ -83,22 +100,8 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       throw std::runtime_error(msg);
     }
 
-    // Use canonical identity from fuzzy match for lookup
-    std::string const &canonical_id{ matched_identity.value_or(identity) };
-
-    // Find the dependency package (copy under deps_mutex)
-    pkg const *dep{ [&]() -> pkg const * {
-      std::lock_guard const deps_lock(consumer->deps_mutex);
-      auto it{ consumer->dependencies.find(canonical_id) };
-      return it == consumer->dependencies.end() ? nullptr : it->second.p;
-    }() };
-    if (!dep) {
-      throw std::runtime_error("envy.loadenv_spec: dependency not found in map: " +
-                               canonical_id);
-    }
-    if (!dep) {
-      throw std::runtime_error("envy.loadenv_spec: null dependency pointer: " + identity);
-    }
+    std::string const &canonical_id{ edge->identity };
+    pkg const *dep{ edge->p };
 
     // Determine load root path based on dependency type
     std::filesystem::path load_root;
@@ -129,8 +132,18 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       load_root = dep->spec_file_path->parent_path();
     }
 
-    // Construct full path (add .lua extension)
-    std::filesystem::path const full_path{ load_root / (subpath + ".lua") };
+    // The validation above forbids every escape the module path could spell; assert
+    // the joined result anyway, since load_root is the only other input to it.
+    std::filesystem::path const root{ load_root.lexically_normal() };
+    std::filesystem::path const full_path{
+      (root / (subpath + ".lua")).lexically_normal()
+    };
+    if (auto const rel{ full_path.lexically_relative(root) };
+        rel.empty() || *rel.begin() == "..") {
+      throw std::runtime_error("envy.loadenv_spec: module '" + module_path +
+                               "' resolves outside dependency '" + identity +
+                               "': " + full_path.string());
+    }
 
     if (!std::filesystem::exists(full_path)) {
       throw std::runtime_error("envy.loadenv_spec: file not found: " + full_path.string());

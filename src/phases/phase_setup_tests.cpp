@@ -58,7 +58,6 @@ struct setup_test_fixture {
                                       .spec_file_path = std::nullopt,
                                       .result_hash = {},
                                       .type = pkg_type::USER_MANAGED,
-                                      .declared_dependencies = {},
                                       .owned_dependency_cfgs = {},
                                       .dependencies = {},
                                       .product_dependencies = {},

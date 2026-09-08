@@ -78,16 +78,7 @@ void cmd_sync::execute() {
   // Install packages (full build pipeline — filters to host platform internally)
   engine eng{ *c, m.get() };
   if (cfg_.ignore_depot) { eng.set_ignore_depot(true); }
-  auto result{ eng.run_full(targets) };
-
-  size_t failed{ 0 };
-  for (auto const &[key, outcome] : result) {
-    if (outcome.type == pkg_type::UNKNOWN) { ++failed; }
-  }
-
-  if (failed > 0) {
-    throw std::runtime_error("sync: " + std::to_string(failed) + " package(s) failed");
-  }
+  eng.run_full(targets);  // Throws on any failure
 
   // Resolve non-host targets so deploy knows about their products for script generation.
   // run_full only resolves host-platform packages; without this, deploy cleanup would

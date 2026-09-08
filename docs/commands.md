@@ -44,6 +44,8 @@ The root manifest's header is the sole bootstrap authority. A manifest pulled in
 
 The one exception is advisory and in-binary: an imported `@envy version` above the root pin is an error (bootstrap already chose the binary from the root header), and any other mismatch warns. Imports are visible as `manifest_imported{path, importer}`; discovery never sees the file, so no `manifest_resolved` names it.
 
+Globals follow the same rule. `PACKAGES` and `BUNDLES` are read back out of an import; `DEFAULT_SHELL` and `PACKAGE_DEPOTS` are read only from the root state, so an imported manifest that sets one must have the root adopt it (`DEFAULT_SHELL = envy.import("sub").DEFAULT_SHELL`) or the declaration is an error naming the file—never a silent drop.
+
 ## Subcommands
 
 ### Meta
@@ -60,6 +62,8 @@ envy sync                               # restamps scripts + .luarc.json as the 
 ```
 
 ### Package Management
+
+A manifest `DEFAULT_SHELL` function is evaluated on the first string verb that needs it, and its `DEPENDS` interpreter is installed no earlier. `deploy` and a bare `envy product` listing resolve the graph and run no payload phase, so they normally never fetch it; `package`, `product <name>` and `export` install what they name, and pay for the shell only if that work runs a string verb. See `docs/architecture.md` for the bootstrap-shell rule.
 
 **`envy package <identity> [--manifest=...]`** — Query and install package, print package path. Loads manifest (auto-discovered or via `--manifest`), finds matching spec, installs only that package plus transitive dependencies if not cached, prints absolute path to package directory to stdout. Other manifest packages are not processed. Errors if identity ambiguous (multiple option variants) or programmatic package (no cached artifacts). Exits 0 with path on success, exits 1 with "not found" on failure.
 

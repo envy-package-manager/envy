@@ -53,6 +53,41 @@ echo ok > marker.txt
 """
 
 
+# A package the machinery bootstraps with -- a package-depot DEPENDS entry, or a
+# fetch closure member. Both run before the manifest shell can exist, so its string
+# verb must see the platform built-in; it records which one it got.
+SPEC_TOOL = """IDENTITY = "local.ds_tool@v1"
+
+FETCH = {{ source = "{ARCHIVE}", sha256 = "{HASH}" }}
+
+STAGE = [[
+echo "${{ENVY_SHIM:-none}}" > tool-ran.txt
+]]
+"""
+
+# A bundle whose custom fetch writes one throwaway user-managed spec. Declared in the
+# manifest, so it executes under the manifest Lua lock.
+BUNDLE_BODY = r"""
+        local b = io.open(tmp_dir .. "/envy-bundle.lua", "w")
+        b:write('BUNDLE = "corp.specs@r1"\nSPECS = { ["corp.thing@r1"] = "thing.lua" }\n')
+        b:close()
+        local t = io.open(tmp_dir .. "/thing.lua", "w")
+        t:write('IDENTITY = "corp.thing@r1"\nUSER_MANAGED = true\n' ..
+                'SETUP = { m = { CHECK = function() return true end, ' ..
+                'INSTALL = function() end } }\n')
+        t:close()
+"""
+
+SHELL_FN = """
+DEFAULT_SHELL = {
+  DEPENDS = { "local.ds_interp@v1" },
+  SHELL = function()
+    return { file = { envy.product("myshell") }, ext = ".sh" }
+  end,
+}
+"""
+
+
 class TestDefaultShell(EnvyTestCase):
     envy_watchdog_timeout = 60
 
@@ -79,7 +114,7 @@ class TestDefaultShell(EnvyTestCase):
             template.format(ARCHIVE=self.lua_path(self.archive), HASH=self.archive_hash),
         )
 
-    def _manifest(self, default_shell: str) -> Path:
+    def _manifest(self, default_shell: str, deploy: bool = False) -> Path:
         interp = self._spec("interp", SPEC_INTERPRETER)
         consumer = self._spec("consumer", SPEC_CONSUMER)
         return self.write_manifest(
@@ -90,7 +125,8 @@ PACKAGES = {{
 }}
 
 {default_shell}
-"""
+""",
+            deploy=deploy,
         )
 
     def _find_one(self, name: str) -> Path:
@@ -184,19 +220,21 @@ DEFAULT_SHELL = {
 
         # The shell is resolved once, and only after DEPENDS lands: the consumer's
         # stage script cannot start before that, and cannot finish after it.
-        access = run.events("lua_ctx_product_access")
-        self.assertEqual(1, len(access), access)
+        resolved = run.events("default_shell_resolved")
+        self.assertEqual(1, len(resolved), resolved)
+        self.assertEqual("file", resolved[0].raw["shell"])
+        self.assertEqual([1], [e.raw["depends"] for e in run.events("default_shell_resolving")])
 
         interp_installed = seq("local.ds_interp@v1", "phase_complete", "install")
         consumer_staged = seq("local.ds_consumer@v1", "phase_complete", "stage")
 
         self.assertLess(
             interp_installed,
-            access[0].seq,
+            resolved[0].seq,
             "the shell must resolve only after its interpreter is installed",
         )
         self.assertLess(
-            access[0].seq,
+            resolved[0].seq,
             consumer_staged,
             "the consumer's stage script must run through the resolved shell",
         )
@@ -207,10 +245,9 @@ DEFAULT_SHELL = {
         a root in its own right — so it is reached by propagation, not by the
         DEPENDS entry that seeded the closure.
 
-        This does not reproduce the stale-bit race engine::is_default_shell_member
-        guards (the interpreter's spec_fetch reliably wires this edge before the
-        dependency reaches a string verb); it pins the propagation the guard
-        backstops.
+        Propagation can land after the dependency is already parked waiting for the
+        shell; mark_closure's global notify is what releases it, so the bit is the
+        only membership test the engine needs.
         """
         base = self.write_spec(
             "base.lua",
@@ -266,6 +303,130 @@ DEFAULT_SHELL = {{
         self.assertEqual("ok\n", self._find_one("marker.txt").read_text())
         # The transitive member is carved out too, whichever way it was reached.
         self.assertEqual("none\n", self._find_one("base-ran.txt").read_text())
+
+    # -- the bootstrap-shell rule -------------------------------------------
+
+    @posix_only
+    def test_depot_bootstrap_string_verb_gets_the_builtin(self):
+        """A package-depot DEPENDS entry cannot wait on the manifest shell.
+
+        The shell waits for its interpreter; the interpreter's import phase waits for
+        the depot; the depot waits for this tool. Only the bootstrap rule breaks that
+        cycle -- before it, the tool blocked here and the run deadlocked.
+        """
+        interp = self._spec("interp", SPEC_INTERPRETER)
+        consumer = self._spec("consumer", SPEC_CONSUMER)
+        tool = self._spec("tool", SPEC_TOOL)
+        manifest = self.write_manifest(
+            f"""
+PACKAGES = {{
+  {{ spec = "local.ds_interp@v1", source = "{self.lua_path(interp)}" }},
+  {{ spec = "local.ds_consumer@v1", source = "{self.lua_path(consumer)}" }},
+  {{ spec = "local.ds_tool@v1", source = "{self.lua_path(tool)}" }},
+}}
+
+PACKAGE_DEPOTS = {{
+  {{ DEPENDS = {{ "local.ds_tool@v1" }}, FETCH = function(ctx) return "" end }},
+}}
+{SHELL_FN}
+"""
+        )
+        run = self.install(manifest, timeout=90)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual("none\n", self._find_one("tool-ran.txt").read_text())
+        self.assertEqual("ok\n", self._find_one("marker.txt").read_text())
+
+        # The tool is exempt either way: it never reaches the wait, or it leaves the
+        # moment the depot's on_start flags it. It never consults the index.
+        waits = {e.spec: e.raw["result"] for e in run.events("depot_wait")}
+        self.assertEqual("ready", waits.get("local.ds_consumer@v1"), waits)
+        self.assertEqual([], [s for s, r in waits.items() if r == "failed"], waits)
+        if "local.ds_tool@v1" in waits:
+            self.assertEqual("bootstrap", waits["local.ds_tool@v1"], waits)
+
+    @posix_only
+    def test_fetch_closure_member_gets_the_builtin(self):
+        """A source.dependencies member runs during resolution, before the shell.
+
+        Nothing wires it to the interpreter, so a reachability test can never find it;
+        its closure bit is the whole answer. Before the rule it blocked until the
+        interpreter installed and then ran under the manifest shell.
+        """
+        interp = self._spec("interp", SPEC_INTERPRETER)
+        consumer = self._spec("consumer", SPEC_CONSUMER)
+        tool = self._spec("tool", SPEC_TOOL)
+        manifest = self.write_manifest(
+            f"""
+BUNDLES = {{
+  corp = {{ identity = "corp.specs@r1",
+    source = {{
+      dependencies = {{
+        {{ spec = "local.ds_tool@v1", source = "{self.lua_path(tool)}" }},
+      }},
+      fetch = function(tmp_dir)
+{BUNDLE_BODY}
+        envy.commit_fetch({{ "envy-bundle.lua", "thing.lua" }})
+      end }} }},
+}}
+
+PACKAGES = {{
+  {{ spec = "corp.thing@r1", bundle = "corp" }},
+  {{ spec = "local.ds_interp@v1", source = "{self.lua_path(interp)}" }},
+  {{ spec = "local.ds_consumer@v1", source = "{self.lua_path(consumer)}" }},
+}}
+{SHELL_FN}
+"""
+        )
+        run = self.install(manifest, timeout=90)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual("none\n", self._find_one("tool-ran.txt").read_text())
+        self.assertEqual("ok\n", self._find_one("marker.txt").read_text())
+
+    @posix_only
+    def test_manifest_bundle_fetch_may_call_envy_run(self):
+        """A manifest bundle's fetch runs inside the manifest Lua lock.
+
+        Evaluating the shell needs that same non-recursive lock, so asking for one
+        here would deadlock against this very call; the built-in is the only answer.
+        """
+        interp = self._spec("interp", SPEC_INTERPRETER)
+        manifest = self.write_manifest(
+            f"""
+BUNDLES = {{
+  corp = {{ identity = "corp.specs@r1",
+    source = {{
+      fetch = function(tmp_dir)
+        envy.run('echo "${{ENVY_SHIM:-none}}" > shell-seen.txt')
+{BUNDLE_BODY}
+        envy.commit_fetch({{ "envy-bundle.lua", "thing.lua", "shell-seen.txt" }})
+      end }} }},
+}}
+
+PACKAGES = {{
+  {{ spec = "corp.thing@r1", bundle = "corp" }},
+  {{ spec = "local.ds_interp@v1", source = "{self.lua_path(interp)}" }},
+}}
+{SHELL_FN}
+"""
+        )
+        run = self.install(manifest, timeout=90)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual("none\n", self._find_one("shell-seen.txt").read_text())
+
+    def test_deploy_does_not_install_the_interpreter(self):
+        """Resolve-only commands never run a string verb, so no shell is ever needed."""
+        manifest = self._manifest(SHELL_FN, deploy=True)
+        run = self.run_envy(
+            "deploy", "local.ds_consumer@v1", "--manifest", manifest, timeout=90
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        # Interned (DEPENDS is validated during resolution) but never started: no
+        # phase of its ladder runs, so nothing is fetched, built, or installed.
+        self.assertEqual([], run.events("phase_start", spec="local.ds_interp@v1"))
+        self.assertFalse(
+            self.pkg_complete("local.ds_interp@v1"), "deploy installed the interpreter"
+        )
+        self.assertEqual([], run.events("default_shell_resolved"))
 
     # -- declaration errors -------------------------------------------------
 
@@ -373,6 +534,25 @@ DEFAULT_SHELL = {
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual("ok\n", self._find_one("marker.txt").read_text())
+
+    def test_depends_without_shell_is_refused(self):
+        """A DEPENDS table with no SHELL used to parse as a custom-shell value.
+
+        The DEPENDS list was dropped on the floor and the table's own keys became the
+        shell, so a typo'd SHELL key silently changed what every verb ran under.
+        """
+        manifest = self._manifest(
+            """
+DEFAULT_SHELL = {
+  DEPENDS = { "local.ds_interp@v1" },
+  file = { "no-such-interpreter" },
+  ext = ".sh",
+}
+"""
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("DEPENDS requires SHELL to be a function", run.stderr)
 
     def test_depends_with_value_shell_is_refused(self):
         """DEPENDS only matters to a function; a value form is read before any

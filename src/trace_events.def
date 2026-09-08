@@ -113,10 +113,26 @@ ENVY_TRACE_EVENT(depot_check,
                  ENVY_TRACE_FIELD_STR(sha)
                  ENVY_TRACE_FIELD_STR(result))  // hit | miss | sha_mismatch
 
+// One package's block on the merged depot index, closed out. bootstrap = the wait
+// ended because this package joined the depot's own DEPENDS closure.
+ENVY_TRACE_EVENT(depot_wait,
+                 ENVY_TRACE_FIELD_I64(duration_ms)
+                 ENVY_TRACE_FIELD_STR(result))  // ready | bootstrap | failed
+
+// The #default_shell task starting: `depends` is how many packages it must install
+// before the SHELL function can name one. Subject is the synthetic consumer.
+ENVY_TRACE_EVENT(default_shell_resolving,
+                 ENVY_TRACE_FIELD_I64(depends))
+
+// The manifest shell, once for the run. shell: bash | sh | cmd | powershell (a
+// built-in) or file | inline (a custom shell naming an interpreter).
+ENVY_TRACE_EVENT(default_shell_resolved,
+                 ENVY_TRACE_FIELD_STR(shell))
+
 ENVY_TRACE_EVENT(product_resolved,
                  ENVY_TRACE_FIELD_STR(product)
                  ENVY_TRACE_FIELD_STR(provider)
-                 ENVY_TRACE_FIELD_STR(via))  // registry | identity | fallback
+                 ENVY_TRACE_FIELD_STR(via))  // registry | fallback
 
 ENVY_TRACE_EVENT(deploy_script,
                  ENVY_TRACE_FIELD_STR(product)

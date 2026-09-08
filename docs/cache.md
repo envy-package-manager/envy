@@ -1,7 +1,7 @@
 # Cache Design
 
 ## Overview
-- Single cache root holds specs and assets; entries become immutable once marked complete so
+- Single cache root holds specs and packages; entries become immutable once marked complete so
   readers never lock. The root is either the user-wide default (`~/Library/Caches/envy`,
   `$XDG_CACHE_HOME/envy`, `%LOCALAPPDATA%\envy`) or a project-local tree named by
   `@envy cache-local`; see "Override Precedence" in docs/envy-init.md. Package entries carry no
@@ -32,19 +32,18 @@
 │           └── work/             # Ephemeral workspace (wiped each attempt)
 ├── packages/                     # Package entries (one per identity/options/platform)
 │   └── {namespace}.{name}@{version}/
-│       └── {platform}-{arch}-sha256-{hash}/
+│       └── {platform}-{arch}-blake3-{hash}/
 │           ├── envy-complete
-│           ├── envy-fingerprint.blake3
-│           ├── asset/            # Publish-ready payload (renamed from install/)
+│           ├── pkg/              # The payload; INSTALL writes here, readers read here
 │           ├── fetch/            # Durable fetch cache (persists for per-file caching)
 │           │   └── envy-complete # Marker: all fetches verified
-│           ├── install/          # Staging area for asset preparation
-│           └── work/             # Ephemeral workspace (stage/, etc.)
-│               └── stage/        # Build staging tree (wiped before each attempt)
+│           └── work/             # Ephemeral workspace, wiped each attempt
+│               ├── stage/        # Build staging tree
+│               └── tmp/          # Scratch
 ├── shell/                        # PATH hooks, sourced from the user's profile
 │   └── hook.{bash,zsh,fish,ps1}  # User-wide only -- absent from a project-local tree
 └── locks/
-    └── {recipe|asset|envy}.*.lock
+    └── {packages|spec|envy}.*.lock
 ```
 
 ## Envy Binaries
@@ -67,11 +66,11 @@ The envy binary self-deploys on startup:
 5. **Release lock:** Continue with requested command
 6. **Shell hooks:** written only when the root is *not* a project-local tree
 
-This uses the same locking strategy as recipe/asset installation (see Locking & Workspace Lifecycle below). Multiple concurrent envy instances (parallel CI, multiple terminals) safely coordinate without corruption or duplicate work. Each version is self-contained; deleting `envy/1.2.3/` removes that version completely.
+This uses the same locking strategy as spec and package installation (see Locking & Workspace Lifecycle below). Multiple concurrent envy instances (parallel CI, multiple terminals) safely coordinate without corruption or duplicate work. Each version is self-contained; deleting `envy/1.2.3/` removes that version completely.
 
 ## Keys
 - **Spec/bundle**: `{identity}/blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical source — URL + sha256, git URL + ref, or local path. Identity alone would not do: a complete entry is never revalidated, so repointing a spec at a new source must land on a new entry rather than serve the old bytes. A custom fetch function has no fingerprint; its entries key on the declaring file, so editing the function body in place reuses the entry.
-- **Asset**: `{identity}.{platform}-{arch}-sha256-{hash}` where `hash` is the leading 16 hex chars of the archive SHA256; deterministic before download so locks can be acquired early.
+- **Package**: `{identity}/{platform}-{arch}-blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical key plus every resolved weak dependency key; computed at `pkg_check`, before any download, so locks can be acquired early.
 
 ## Locking & Workspace Lifecycle
 
@@ -83,17 +82,15 @@ This uses the same locking strategy as recipe/asset installation (see Locking & 
 - Lock files (`locks/...`) exist only while holding the lock—`cache::scoped_entry_lock` destroys them on destruction.
 
 ### Cache-Managed Packages (Standard)
-- Acquisition ensures `packages/{entry}/install/` and `packages/{entry}/work/` exist.
+- Acquisition ensures `packages/{entry}/pkg/` and `packages/{entry}/work/` exist.
 - Workspace separates `fetch/` (durable, persists across failures) and `work/` (ephemeral, wiped each attempt).
 - Per-file caching: `fetch/` persists across failed attempts. On subsequent runs, each file is verified by SHA256 before re-downloading. Only missing or corrupted files trigger new downloads. Files without SHA256 are always re-downloaded (no cache trust without verification).
 - Specs call `mark_fetch_complete()` once all fetches succeed; this drops `envy-complete` sentinel inside `fetch/`.
 - On success (INSTALL returns successfully):
   - Envy auto-marks complete internally
-  - Lock destructor atomically renames `install/` → `asset/`
-  - Fingerprints payload into `envy-fingerprint.blake3`
-  - Deletes both `work/` and `fetch/`
-  - Touches `entry/envy-complete`
-- Crash recovery: next locker deletes stale `install/`, recreates `work/`, preserves `fetch/` for per-file cache reuse.
+  - Lock destructor deletes `work/`, and `fetch/` unless the spec asked to preserve it
+  - Touches `entry/envy-complete`, then flushes the entry directory
+- Crash recovery: next locker deletes stale `pkg/`, recreates `work/`, preserves `fetch/` for per-file cache reuse.
 
 ### SETUP Pair Entries (Ephemeral Cache)
 - Host-side work lives in `SETUP` pairs (`{ name = { CHECK, INSTALL, DEPENDS? } }`); user-managed specs (`USER_MANAGED = true`, resolved once during `phase_spec_fetch`) define only pairs, cache-managed packages may add opt-in pairs beside their payload
@@ -109,14 +106,13 @@ This uses the same locking strategy as recipe/asset installation (see Locking & 
 ### Lock Destructor Three-Way Branch
 The `scoped_entry_lock` destructor handles three distinct completion modes:
 1. **Success (completed_):** Cache-managed package finished installation
-   - Rename `install/` → `asset/`
-   - Create `envy-complete` marker and fingerprint
-   - Delete `work/` and `fetch/`
+   - Delete `work/`, and `fetch/` unless preserved
+   - Create the `envy-complete` marker and flush the entry directory
 2. **User-managed (user_managed_):** Ephemeral workspace no longer needed
    - Delete entire `entry_dir` (all subdirectories)
    - No `envy-complete` marker created
 3. **Failure (neither flag set):** Cache-managed package failed
-   - Conditional purge: if `install/` and `fetch/` both empty, delete entry
+   - Conditional purge: if `pkg/` and `fetch/` both empty, delete entry
    - Otherwise preserve `fetch/` for per-file cache reuse
 
 ## Integrity & Verification
@@ -127,11 +123,10 @@ The `scoped_entry_lock` destructor handles three distinct completion modes:
 - **Custom fetch functions:** API-enforced per-file verification. `ctx:fetch(url, sha256)` and `ctx:import_file(src, dest, sha256)` verify before writing to cache. Custom fetch cannot bypass (no direct cache directory access).
 - **Verification timing:** SHA256 computed at fetch time only; never re-verified from cache (`envy-complete` marker signals immutable entry).
 
-**Assets:**
+**Packages:**
 - Specs declare expected hashes for downloads; verification happens before extraction and during per-file cache reuse.
 - Per-file caching: declarative fetch arrays with SHA256 verification enable cache reuse across partial failures. On each attempt, existing files in `fetch/` are verified by SHA256 before re-downloading. Cache hits skip download; cache misses (corruption, missing files) trigger re-download.
 - Trust chain: once spec passes integrity, its declared downloads inherit trust. Files without SHA256 cannot be cached (always re-downloaded).
-- BLAKE3 fingerprint file captures every asset payload (mmap-friendly header, entry table, string blob) so verification tools compare without locks.
 
 ## Operational Scenarios
 
@@ -151,17 +146,17 @@ The entry is finalized last, never at fetch time: `envy-complete` is trusted for
 
 6. **Source changed:** a new URL, ref, or path hashes to a different entry — a miss, not a stale hit. The old entry stays valid for anyone still declaring the old source.
 
-### Asset Install
+### Package Install
 
-1. **First asset install**: miss → lock → create `install/` + `fetch/` + `work/` → download into `fetch/` → verify SHA256 per file → `mark_fetch_complete()` on success → stage sources in `work/stage/` → write payload into `install/` → rename to `asset/` → fingerprint `asset/` → delete `fetch/` + `work/` → touch entry `envy-complete` → release.
+1. **First package install**: miss → lock → create `pkg/` + `fetch/` + `work/` → download into `fetch/` → verify SHA256 per file → `mark_fetch_complete()` on success → stage sources in `work/stage/` → write payload into `pkg/` → delete `fetch/` + `work/` → touch entry `envy-complete` → release.
 
-2. **Concurrent asset install**: waiter blocks on lock; when creator finishes, waiter rechecks `envy-complete` and returns final path without recaching.
+2. **Concurrent package install**: waiter blocks on lock; when creator finishes, waiter rechecks `envy-complete` and returns final path without recaching.
 
-3. **Crash recovery**: crash leaves `install/` (and maybe `fetch/` + `work/`); next locker deletes stale `install/` and `work/`, preserves `fetch/` for per-file cache reuse, and restarts. Declarative fetch verifies each cached file by SHA256 before re-downloading.
+3. **Crash recovery**: crash leaves a partial `pkg/` (and maybe `fetch/` + `work/`); next locker deletes stale `pkg/` and `work/`, preserves `fetch/` for per-file cache reuse, and restarts. Declarative fetch verifies each cached file by SHA256 before re-downloading.
 
 4. **Partial failure recovery**: partial download leaves some files in `fetch/`; next attempt verifies cached files by SHA256, reuses cache hits, only downloads missing/corrupted files.
 
-5. **Multi-project sharing**: identical `(identity, options, platform, hash)` reuses the same asset directory; no duplication.
+5. **Multi-project sharing**: identical `(identity, options, platform, hash)` reuses the same package directory; no duplication.
 
 ### SETUP Pair Install
 

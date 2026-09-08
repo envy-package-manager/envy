@@ -1,5 +1,7 @@
 #include "sol_util.h"
 
+#include <algorithm>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -103,6 +105,24 @@ std::vector<std::string> sol_util_get_string_list(sol::table const &table,
     values.push_back(elem.as<std::string>());
   }
   return values;
+}
+
+void sol_util_reject_unknown_keys(sol::table const &table,
+                                  std::span<std::string_view const> allowed,
+                                  std::string_view context) {
+  for (auto const &[key, value] : table) {
+    if (!key.is<std::string>() || value.get_type() == sol::type::lua_nil) { continue; }
+    std::string const name{ key.as<std::string>() };
+    if (std::ranges::find(allowed, name) != allowed.end()) { continue; }
+
+    std::string list;
+    for (auto const &a : allowed) {
+      if (!list.empty()) { list += ", "; }
+      list += a;
+    }
+    throw std::runtime_error(std::string{ context } + ": unknown key '" + name +
+                             "'; allowed keys are " + list);
+  }
 }
 
 }  // namespace envy

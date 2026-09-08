@@ -18,6 +18,13 @@ JSONL, one record per line. First record is `trace_start` carrying the schema ve
 
 Phase fields serialize as names (`"phase":"fetch"`), not numbers. Schema version: **2**.
 
+Scheduler phase fields are watermark-derived: a watermark of *n* means the first *n*
+steps finished, so `phase_blocked.target_phase` names the last phase `waiting_for` must
+*complete* before the block clears — `setup` for every ordinary dependency edge, since
+an edge waits on the provider's host state, not on its export. `blocked_at_phase` is the
+waiting step. When the waiter is itself a SETUP pair both are fixed (`setup` blocked at,
+`completion` waited for): a pair is one step, not a ladder.
+
 ## Authoring
 
 Single source of truth: `src/trace_events.def` (X-macro table). It generates the event structs, the `trace_event_t` variant's names, both serializers (JSON + human, via one field visitor—cannot drift), and the `trace-schema` dump. Emit with `ENVY_TRACE(event_name, spec_expr, .field = value, ...)`; guarded on `g_trace_enabled`.
@@ -38,6 +45,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `target_extended` | old_target:phase, new_target:phase |
 | `pkg_outcome` | outcome:str, duration_ms:i64 |
 | `manifest_resolved` | path:str, anchor:str, mode:str (explicit\|project\|cwd), nearest:bool |
+| `manifest_imported` | path:str, importer:str |
 | `cache_hit` | cache_key:str, pkg_path:str, fast_path:bool |
 | `cache_miss` | cache_key:str |
 | `lock_acquired` | lock_path:str, wait_duration_ms:i64 |
@@ -46,7 +54,10 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `lua_ctx_product_access` | target:str, provider:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
 | `lua_ctx_loadenv_spec_access` | target:str, subpath:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
 | `depot_check` | sha:str, result:str (hit\|miss\|sha_mismatch) |
-| `product_resolved` | product:str, provider:str, via:str (registry\|identity\|fallback) |
+| `depot_wait` | duration_ms:i64, result:str (ready\|bootstrap\|failed) |
+| `default_shell_resolving` | depends:i64 |
+| `default_shell_resolved` | shell:str (bash\|sh\|cmd\|powershell\|file\|inline) |
+| `product_resolved` | product:str, provider:str, via:str (registry\|fallback) |
 | `deploy_script` | product:str, platform:str, action:str (created\|updated\|unchanged\|removed) |
 | `cache_entry_finalized` | entry_dir:str, disposition:str (completed\|purged_user_managed\|cleaned_failure\|kept_partial) |
 | `download_start` | url:str, destination:str |

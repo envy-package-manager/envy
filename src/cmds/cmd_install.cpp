@@ -71,16 +71,7 @@ void cmd_install::execute() {
 
   engine eng{ *c, m.get() };
   if (cfg_.ignore_depot) { eng.set_ignore_depot(true); }
-  auto result{ eng.run_full(targets) };
-
-  size_t failed{ 0 };
-  for (auto const &[key, outcome] : result) {
-    if (outcome.type == pkg_type::UNKNOWN) { ++failed; }
-  }
-
-  if (failed > 0) {
-    throw std::runtime_error("install: " + std::to_string(failed) + " package(s) failed");
-  }
+  eng.run_full(targets);  // Throws on any failure
 }
 
 }  // namespace envy

@@ -22,6 +22,13 @@ ENVY_SHELL.POWERSHELL -- Windows only; error on Unix
 
 Platform-incompatible shells throw at runtime; all constants exist on all platforms.
 
+A manifest `DEFAULT_SHELL` overrides which shell every string verb and bare `envy.run`
+uses (see `docs/architecture.md`). Bootstrap code always gets the platform built-in
+instead: a package in any bootstrap closure (`DEFAULT_SHELL`/`PACKAGE_DEPOTS` `DEPENDS`,
+`source.dependencies`), and manifest-state Lua — a manifest bundle's `source.fetch`, a
+depot `FETCH`, the `SHELL` function itself. All of it runs before the manifest shell can
+exist. Pass `shell = ENVY_SHELL.*` to `envy.run` to override per call.
+
 ---
 
 ## Logging
@@ -259,17 +266,23 @@ platform, matching the archive formats themselves.
 
 ## Dependency Access
 
-### envy.asset(identity) → string
+### envy.package(identity) → string
 
-Get installed asset path for declared dependency.
+Get the installed package path of a declared dependency. `identity` matches fuzzily:
+exactly, or by name, `namespace.name`, or `name@revision`.
 
 **Requirements:**
-- Caller must have strong dependency on `identity`
-- Access must occur at or after dependency's `needed_by` phase
+- Caller must declare `identity` in its own `DEPENDENCIES` — a *direct* edge. A provider
+  reached only through a dependency of a dependency is refused.
+- Access must occur at or after that edge's `needed_by` phase
+- The dependency must be cache-managed: a user-managed package has no path, only host
+  state, so asking for one is an error
 
 ```lua
+DEPENDENCIES = { { spec = "arm.gcc@v2", source = "gcc.lua" } }   -- needed_by = build
+
 BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
-  local gcc = envy.asset("arm.gcc@v2")
+  local gcc = envy.package("arm.gcc@v2")
   envy.run("./configure --prefix=" .. install_dir .. " CC=" .. gcc .. "/bin/arm-none-eabi-gcc")
 end
 ```
@@ -297,14 +310,33 @@ Works inside a `source.fetch` function too: `source.dependencies` entries are wi
 with `needed_by = spec_fetch` before the fetch function runs, so their products are
 readable there.
 
+A `source.fetch` closure lives in the declaring file's interpreter but runs as the spec
+it declares: that spec's `source.dependencies` are the edges `envy.package` and
+`envy.product` authorize against, and `options` is the entry's own, not the declarer's.
+Declaring file, identity and options together key the spec cache entry, so two option
+variants of one entry fetch separately. Sibling fetches serialize on the declaring
+state's lock.
+
+Everything committed becomes the spec directory, not just `spec.lua` — name a directory
+to bring a whole subtree — so `envy.loadenv` and `require` reach the siblings at load.
+
 ```lua
-source = {
-  dependencies = { { spec = "tools.jfrog-cli@r1", source = "jfrog.lua" } },
-  fetch = function(tmp_dir)
-    envy.run(envy.product("jf") .. " rt dl specs/ " .. tmp_dir)
-  end,
-}
+{ spec = "corp.tool@r1", options = { channel = "beta" }, source = {
+    dependencies = { { spec = "tools.jfrog-cli@r1", source = "jfrog.lua" } },
+    fetch = function(tmp_dir, options)                       -- options.channel = "beta"
+      envy.run(envy.product("jf") .. " rt dl specs/" .. options.channel .. " " .. tmp_dir)
+      envy.commit_fetch({ "spec.lua", "lib" })               -- both land in the spec dir
+    end } }
 ```
+
+A spec's `source` table is legal only where the closure can be found again when the spec
+is fetched: a spec's `DEPENDENCIES`. A manifest `PACKAGES` entry rejects it (a manifest
+package has no parent spec whose Lua state would hold the function), and so does a
+`weak = {...}` fallback (the lookup reads an entry's own `source`, never the tables nested
+under it). Both say so at parse rather than failing at fetch time. A *bundle's* custom
+fetch is the looser case — legal in every declaration shape, including inline on a
+`PACKAGES` entry, because a manifest-declared bundle runs its fetch in the manifest's own
+state; see `docs/bundles.md`.
 
 Every `source.dependencies` entry must be a strong reference (`spec` + `source`). The
 weak pass runs only at a resolution barrier, after every spec_fetch — including that of
@@ -325,15 +357,15 @@ Load Lua file from declared dependency into sandboxed environment.
 
 **Requirements:**
 - Must be called within phase function (not global scope)
-- Caller must have dependency on `identity` with appropriate `needed_by`
-- Access must occur at or after dependency's `needed_by` phase
+- Caller must declare `identity` directly, same rule as `envy.package`
+- Access must occur at or after that edge's `needed_by` phase
+- `module` is dot syntax naming a file inside the dependency: no leading or trailing
+  `.`, no `..`, no `/` or `\`
 
 ```lua
-DEPENDENCIES = {
-  {
-    bundle = "acme.toolchain@v1",
-    needed_by = "fetch",
-  },
+DEPENDENCIES = {                       -- the bundle itself: `bundle` plus its own source
+  { bundle = "acme.toolchain@v1", source = "git://github.com/acme/specs",
+    ref = "a1b2c3d", needed_by = "fetch" },   -- build (the default) would be too late
 }
 
 FETCH = function(tmp_dir, options)
@@ -346,8 +378,9 @@ end
 
 **Error conditions:**
 - Called at global scope → error (must be in phase function)
-- Undeclared dependency → error
+- Undeclared (or only transitively reachable) dependency → error
 - `needed_by` phase not reached → error
+- Module path that is not plain dot syntax → error naming the module and the dependency
 - File not found → error
 - Lua parse/execution error → error
 
@@ -460,49 +493,28 @@ local cmd = envy.template(
 
 ---
 
-## Thread-Local Context
+## Phase Context
 
-The `envy.*` functions operate on thread-local phase context set by C++ via `phase_context_guard` RAII:
+There is no `ctx` object: directories arrive as phase-function parameters, and everything
+else is on `envy.*`. The functions that need to know *who* is running read a thread-local
+context C++ installs for the phase's duration:
 
 ```cpp
-phase_context_guard ctx_guard{ &engine, recipe, run_dir };
-// Lua code called here can use envy.run(), envy.asset(), etc.
+phase_context_guard ctx_guard{ &eng, p, L, run_dir, lock };
+// Lua called from here can use envy.run(), envy.package(), envy.product(), ...
 ```
 
-Context provides:
-- Current spec pointer (for `envy.asset` dependency validation)
-- Engine pointer (for TUI progress tracking)
-- Run directory (default cwd for `envy.run` and file operations)
+It carries the package (dependency-edge validation for `envy.package`/`envy.product`/
+`envy.loadenv_spec`), the engine, the run directory (default cwd), the cache entry lock
+(`envy.commit_fetch`), and whether this is bootstrap Lua that must use the built-in shell.
+A custom fetch runs with the *child's* package and the *declaring* file's `lua_State`, so
+its edges are the child's `source.dependencies`.
 
 Functions requiring context throw if called outside phase execution.
 
----
-
-## Migration from ctx.* (deprecated)
-
-| Old API | New API |
-|---------|---------|
-| `ctx:run(cmd)` | `envy.run(cmd)` |
-| `ctx:extract(...)` | `envy.extract(...)` |
-| `ctx:copy(...)` | `envy.copy(...)` |
-| `ctx:move(...)` | `envy.move(...)` |
-| `ctx:asset(id)` | `envy.asset(id)` |
-| `ctx:product(name)` | `envy.product(name)` |
-| `ctx.stage_dir` | Use `stage_dir` function parameter |
-| `ctx.fetch_dir` | Use `fetch_dir` function parameter |
-| `ctx.install_dir` | Use `install_dir` function parameter |
-
-The new API passes directories as function parameters instead of context fields:
-
 ```lua
--- Old
-BUILD = function(ctx)
-  ctx:run("make DESTDIR=" .. ctx.stage_dir)
-end
-
--- New
 BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
-  envy.run("./configure --prefix=" .. install_dir)
+  envy.run("./configure --prefix=" .. install_dir)   -- cwd defaults to stage_dir
   envy.run("make -j")
 end
 ```

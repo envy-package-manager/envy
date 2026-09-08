@@ -546,8 +546,8 @@ TEST_CASE("manifest::load setup selection does not affect serialized options") {
   auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
 
   REQUIRE(m->packages.size() == 1);
-  CHECK(m->packages[0]->serialized_options == "{version=\"9.30\"}");
-  CHECK(m->packages[0]->format_key() == "fi.jlink@r0{version=\"9.30\"}");
+  CHECK(m->packages[0]->serialized_options == "{[\"version\"]=\"9.30\"}");
+  CHECK(m->packages[0]->format_key() == "fi.jlink@r0{[\"version\"]=\"9.30\"}");
 }
 
 TEST_CASE("manifest::load parses mixed string and table packages") {
@@ -648,7 +648,7 @@ TEST_CASE("manifest::load errors on invalid package entry type") {
   char const *script{ "-- @envy bin-dir \"tools\"\nPACKAGES = { 123 }" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec entry must be string or table",
+                       doctest::Contains("Spec entry must be string or table"),
                        std::runtime_error);
 }
 
@@ -661,7 +661,7 @@ TEST_CASE("manifest::load errors on missing spec field") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec table missing required 'spec' field",
+                       doctest::Contains("Spec table missing required 'spec' field"),
                        std::runtime_error);
 }
 
@@ -674,7 +674,7 @@ TEST_CASE("manifest::load errors on non-string spec field") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec: spec must be a string",
+                       doctest::Contains("Spec: spec must be a string"),
                        std::runtime_error);
 }
 
@@ -684,9 +684,10 @@ TEST_CASE("manifest::load errors on invalid spec identity format") {
     PACKAGES = { { spec = "invalid-no-at-sign", source = "/fake/r.lua" } }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Invalid spec identity format: invalid-no-at-sign",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Invalid spec identity format: invalid-no-at-sign"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load errors on identity missing namespace") {
@@ -696,7 +697,7 @@ TEST_CASE("manifest::load errors on identity missing namespace") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Invalid spec identity format: gcc@v2",
+                       doctest::Contains("Invalid spec identity format: gcc@v2"),
                        std::runtime_error);
 }
 
@@ -707,7 +708,7 @@ TEST_CASE("manifest::load errors on identity missing version") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Invalid spec identity format: arm.gcc@",
+                       doctest::Contains("Invalid spec identity format: arm.gcc@"),
                        std::runtime_error);
 }
 
@@ -747,7 +748,7 @@ TEST_CASE("manifest::load errors on non-string source") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec 'source' field must be string or table",
+                       doctest::Contains("Spec 'source' field must be string or table"),
                        std::runtime_error);
 }
 
@@ -764,7 +765,7 @@ TEST_CASE("manifest::load errors on non-string sha256") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec source: sha256 must be a string",
+                       doctest::Contains("Spec source: sha256 must be a string"),
                        std::runtime_error);
 }
 
@@ -780,7 +781,7 @@ TEST_CASE("manifest::load errors on non-string source (local)") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec 'source' field must be string or table",
+                       doctest::Contains("Spec 'source' field must be string or table"),
                        std::runtime_error);
 }
 
@@ -797,7 +798,7 @@ TEST_CASE("manifest::load errors on non-table options") {
   )" };
 
   CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Spec 'options' field must be table",
+                       doctest::Contains("Spec 'options' field must be table"),
                        std::runtime_error);
 }
 
@@ -1839,11 +1840,12 @@ TEST_CASE("manifest::load errors on unknown bundle alias") {
     }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Bundle alias 'nonexistent' not found in the BUNDLES table of this "
-                       "manifest or of the manifest that declared it, for spec "
-                       "'arm.gcc@v2'",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Bundle alias 'nonexistent' not found in the BUNDLES table of "
+                        "this manifest or of the manifest that declared it, for spec "
+                        "'arm.gcc@v2'"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load errors on package with both source and bundle") {
@@ -1861,9 +1863,10 @@ TEST_CASE("manifest::load errors on package with both source and bundle") {
     }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Package cannot specify both 'source' and 'bundle' fields",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Package cannot specify both 'source' and 'bundle' fields"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load errors on bundle package without spec") {
@@ -1879,9 +1882,10 @@ TEST_CASE("manifest::load errors on bundle package without spec") {
     }
   )" };
 
-  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                       "Package with 'bundle' field requires 'spec' field",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      envy::manifest::load(script, fs::path("/fake/envy.lua")),
+      doctest::Contains("Package with 'bundle' field requires 'spec' field"),
+      std::runtime_error);
 }
 
 TEST_CASE("manifest::load parses package with bundle and options") {
@@ -1991,7 +1995,7 @@ TEST_CASE("manifest::load errors on non-string platforms entry") {
   )" };
 
   CHECK_THROWS_WITH(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                    "platforms entries must be strings");
+                    doctest::Contains("platforms entries must be strings"));
 }
 
 TEST_CASE("manifest::load platforms on os-arch constraint") {
@@ -2020,7 +2024,7 @@ TEST_CASE("manifest::load errors on non-table platforms value") {
   )" };
 
   CHECK_THROWS_WITH(envy::manifest::load(script, fs::path("/fake/envy.lua")),
-                    "platforms must be a table");
+                    doctest::Contains("platforms must be a table"));
 }
 
 // --- @envy sha256sums ---
@@ -2308,14 +2312,84 @@ TEST_CASE("envy.import takes a manifest file path as well as a directory") {
   CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
 }
 
-TEST_CASE("envy.import leaves the importing project as the declarer") {
-  // The anchor moves, the declarer does not: SETUP verbs and the project root still
-  // belong to the manifest the command is operating on.
+// -- entry-shape key sets and parse-error context --------------------------
+
+TEST_CASE("manifest::load rejects an unknown key on a bundle package entry") {
+  char const *script{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc" } }
+    PACKAGES = { { spec = "arm.gcc@v2", bundle = "tc", sha256 = "abc" } }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("Package with 'bundle': unknown key 'sha256'"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects source on a bundle package entry") {
+  // Both fields name a payload, so the specific message wins; and since `source` is
+  // never legal here, the allowed-key list the sweep prints must not offer it.
+  char const *both{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc" } }
+    PACKAGES = { { spec = "arm.gcc@v2", bundle = "tc", source = "/fake/r.lua" } }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(both, fs::path("/fake/envy.lua")),
+                       doctest::Contains("cannot specify both 'source' and 'bundle'"),
+                       std::runtime_error);
+
+  char const *unknown{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc" } }
+    PACKAGES = { { spec = "arm.gcc@v2", bundle = "tc", sha256 = "abc" } }
+  )" };
+  try {
+    envy::manifest::load(unknown, fs::path("/fake/envy.lua"));
+    CHECK_MESSAGE(false, "expected an unknown-key error");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("allowed keys are") != std::string::npos);
+    CHECK(msg.find("source") == std::string::npos);
+  }
+}
+
+TEST_CASE("manifest::load rejects an unknown key on a BUNDLES declaration") {
+  char const *script{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc", spec = "x@v1" } }
+    PACKAGES = {}
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("Bundle declaration: unknown key 'spec'"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load prefixes a PACKAGES parse error with file and index") {
+  char const *script{ R"(
+    -- @envy bin "tools"
+    PACKAGES = {
+      { spec = "ok.one@v1", source = "/fake/one.lua" },
+      { spec = "bad.two@v1" },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("/fake/envy.lua: PACKAGES[2]: Spec must specify "
+                                         "'source' field"),
+                       std::runtime_error);
+}
+
+TEST_CASE("envy.import names the imported manifest as the declarer") {
+  // Provenance follows the file that wrote the entry: that is what a conflicting-source
+  // message must name, and what keys a custom fetch. The project root is a property of
+  // the run, taken from the resolved manifest rather than from here.
   auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
 
   auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
   REQUIRE(sub_tool != nullptr);
-  CHECK(sub_tool->declaring_file_path == import_root() / "envy.lua");
+  CHECK(sub_tool->declaring_file_path == import_root() / "sub" / "envy.lua");
 }
 
 TEST_CASE("envy.import resolves an imported bundle alias with no root BUNDLES") {
@@ -2340,7 +2414,7 @@ TEST_CASE("envy.import tags stay out of an imported entry's package key") {
 
   auto const *opt{ find_pkg(*m, "sub.opt@r1") };
   REQUIRE(opt != nullptr);
-  CHECK(opt->format_key() == "sub.opt@r1{version=\"1.0\"}");
+  CHECK(opt->format_key() == "sub.opt@r1{[\"version\"]=\"1.0\"}");
 }
 
 TEST_CASE("envy.import errors on an unknown bundle alias naming both manifests") {
