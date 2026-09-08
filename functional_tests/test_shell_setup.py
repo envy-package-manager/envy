@@ -132,38 +132,34 @@ class TestShellHookDeployment(EnvyTestCase):
             hook = shell_dir / f"hook.{ext}"
             self.assertTrue(hook.exists(), f"Hook not created at {hook}")
 
-    def test_hook_files_contain_version_stamp(self) -> None:
+    def test_hook_files_contain_content_stamp(self) -> None:
         self._trigger_self_deploy()
         shell_dir = self._cache_dir / "shell"
         for ext in ("bash", "zsh", "fish", "ps1"):
             hook = shell_dir / f"hook.{ext}"
             content = hook.read_text(encoding="utf-8")
-            self.assertIn("_ENVY_HOOK_VERSION", content)
+            self.assertIn("_ENVY_HOOK_STAMP", content)
 
-    def test_hook_version_is_numeric_not_placeholder(self) -> None:
-        """Verify the @@ENVY_HOOK_VERSION@@ placeholder was replaced."""
+    def test_hook_stamp_names_its_writer_and_its_own_digest(self) -> None:
+        """<envy version>:<digest>, the digest per hook, so no two hooks share one."""
         import re
 
         self._trigger_self_deploy()
         shell_dir = self._cache_dir / "shell"
-        versions: dict[str, int] = {}
+        digests: dict[str, str] = {}
         for ext in ("bash", "zsh", "fish", "ps1"):
             hook = shell_dir / f"hook.{ext}"
             content = hook.read_text(encoding="utf-8")
-            self.assertNotIn(
-                "@@ENVY_HOOK_VERSION@@",
-                content,
-                f"Placeholder not replaced in hook.{ext}",
+            for token in ("@@ENVY_RESOURCE_HASH@@", "@@ENVY_HOOK_WRITER@@"):
+                self.assertNotIn(
+                    token, content, f"Placeholder not replaced in hook.{ext}"
+                )
+            m = re.search(
+                r'_ENVY_HOOK_STAMP\s*=?\s*"?(\d+\.\d+\.\d+):([0-9a-f]{12})"?', content
             )
-            m = re.search(r"_ENVY_HOOK_VERSION\s*=?\s*(\d+)", content)
-            self.assertIsNotNone(m, f"No numeric version stamp in hook.{ext}")
-            versions[ext] = int(m.group(1))  # type: ignore[union-attr]
-            self.assertGreater(
-                versions[ext], 0, f"Version must be positive in hook.{ext}"
-            )
-        # All hooks must agree on the version
-        unique = set(versions.values())
-        self.assertEqual(len(unique), 1, f"Version mismatch across hooks: {versions}")
+            self.assertIsNotNone(m, f"No writer:digest stamp in hook.{ext}")
+            digests[ext] = m.group(2)  # type: ignore[union-attr]
+        self.assertEqual(len(set(digests.values())), 4, f"Shared digests: {digests}")
 
     def test_hook_files_contain_managed_comment(self) -> None:
         self._trigger_self_deploy()
@@ -228,12 +224,12 @@ class TestShellHookDeployment(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
 
     def test_stale_hooks_are_updated(self) -> None:
-        """Writing an old version stamp then running envy should update the hook."""
+        """A hook whose bytes differ from the binary's copy is replaced on the next run."""
         self._trigger_self_deploy()
         hook = self._cache_dir / "shell" / "hook.bash"
         self.assertTrue(hook.exists())
 
-        # Write a stale hook with version 0
+        # A hook from the retired integer-stamp scheme
         hook.write_text("# envy shell hook v0\n_ENVY_HOOK_VERSION=0\n# stale content\n")
 
         # Run envy again — should update

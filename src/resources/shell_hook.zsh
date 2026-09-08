@@ -1,5 +1,5 @@
 # envy shell hook — managed by envy; do not edit
-_ENVY_HOOK_VERSION=@@ENVY_HOOK_VERSION@@
+_ENVY_HOOK_STAMP=@@ENVY_HOOK_WRITER@@:@@ENVY_RESOURCE_HASH@@
 
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) _ENVY_UTF8=1; _ENVY_DASH="—" ;;
