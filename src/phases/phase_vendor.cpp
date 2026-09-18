@@ -94,6 +94,7 @@ void run_vendor_phase(pkg *p, engine &eng) {
 
   auto const start{ std::chrono::steady_clock::now() };
   fs::path const &dest{ destination->dir };
+  vendor_validate_destination(dest, plan->project_root, p->cfg->identity);
   auto const &filter{ p->vendor_filter };
 
   draw(p, "hashing payload...");

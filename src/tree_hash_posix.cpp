@@ -9,8 +9,11 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>  // Apple-only; glibc dropped this header in 2.32
+#endif
 
 #include <algorithm>
 #include <cerrno>

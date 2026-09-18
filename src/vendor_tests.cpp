@@ -230,3 +230,36 @@ TEST_CASE("vendor_filter_key separates include from exclude") {
   CHECK(envy::vendor_filter_key({}) == envy::vendor_filter_key({}));
   CHECK(envy::vendor_filter_key({}) != a);
 }
+
+TEST_CASE("vendor_validate_stamp_dir rejects a stamp directory inside a destination") {
+  // `@envy state-dir "vendor"` with `vendor = "vendor"`: the wipe deletes the stamp, and
+  // the next whole-tree hash counts it, so the package redeploys forever.
+  auto plan{ resolve({ overridden("a.one@r1", "vendor/lib") }) };
+  plan.stamp_dir = kRoot / "vendor" / "lib" / ".envy-vendor";
+
+  try {
+    envy::vendor_validate_stamp_dir(plan);
+    FAIL("expected a stamp/destination overlap error");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("a.one@r1") != std::string::npos);
+    CHECK(msg.find("state-dir") != std::string::npos);
+  }
+}
+
+TEST_CASE("vendor_validate_stamp_dir rejects a destination inside the stamp directory") {
+  auto plan{ resolve({ overridden("a.one@r1", "state/stamps/lib") }) };
+  plan.stamp_dir = kRoot / "state" / "stamps";
+  CHECK_THROWS_AS(envy::vendor_validate_stamp_dir(plan), std::runtime_error);
+}
+
+TEST_CASE("vendor_validate_stamp_dir accepts a stamp directory beside the destinations") {
+  auto plan{ resolve({ overridden("a.one@r1", "vendor/lib"), derived("local.two@r1") }) };
+  plan.stamp_dir = kRoot / ".envy-vendor";
+  CHECK_NOTHROW(envy::vendor_validate_stamp_dir(plan));
+}
+
+TEST_CASE("vendor_resolve records the project root it validated against") {
+  auto const plan{ resolve({ derived("local.one@r1") }) };
+  CHECK(plan.project_root == kRoot);
+}

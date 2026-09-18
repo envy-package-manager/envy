@@ -141,6 +141,7 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
   }
 
   vendor_plan plan;
+  plan.project_root = project_root;
   for (size_t i{ 0 }; i < sorted.size(); ++i) {
     plan.dirs.emplace(
         sorted[i].key,
@@ -148,6 +149,42 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
                             .overridden = sorted[i].path_override.has_value() });
   }
   return plan;
+}
+
+void vendor_validate_stamp_dir(vendor_plan const &plan) {
+  for (auto const &[key, dest] : plan.dirs) {
+    if (contains_path(dest.dir, plan.stamp_dir) ||
+        contains_path(plan.stamp_dir, dest.dir)) {
+      throw std::runtime_error(
+          "vendor stamps for '" + std::string{ key.identity() } + "' would live at " +
+          plan.stamp_dir.string() + ", inside or over its destination " +
+          dest.dir.string() + "; vendoring wipes that directory, so point '@envy "
+          "state-dir' somewhere outside it");
+    }
+  }
+}
+
+void vendor_validate_destination(fs::path const &dest,
+                                 fs::path const &project_root,
+                                 std::string_view identity) {
+  // lexically_normal cannot see a symlinked component, and the next step is remove_all.
+  std::error_code ec;
+  auto const real_dest{ fs::weakly_canonical(dest, ec) };
+  if (ec) {
+    throw std::runtime_error("vendor: cannot resolve " + dest.string() + ": " +
+                             ec.message());
+  }
+  auto const real_root{ fs::weakly_canonical(project_root, ec) };
+  if (ec) {
+    throw std::runtime_error("vendor: cannot resolve project root " +
+                             project_root.string() + ": " + ec.message());
+  }
+  if (!contains_path(real_root, real_dest)) {
+    throw std::runtime_error("vendor: '" + std::string{ identity } + "' resolves to " +
+                             real_dest.string() + ", outside the project at " +
+                             real_root.string() + "; a symlinked path component would "
+                             "put a wipe-and-recopy somewhere it does not belong");
+  }
 }
 
 tree_filter vendor_parse_selectors(std::vector<std::string> const &raw,

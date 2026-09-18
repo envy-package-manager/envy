@@ -31,6 +31,9 @@ struct vendor_plan {
   // One digest file per destination. Set by the caller; vendor_resolve stays pure.
   std::filesystem::path stamp_dir;
 
+  // What destinations are checked against before anything is wiped.
+  std::filesystem::path project_root;
+
   bool empty() const { return dirs.empty(); }
   vendor_destination const *find(pkg_key const &key) const {
     auto const it{ dirs.find(key) };
@@ -46,6 +49,16 @@ struct vendor_plan {
 vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
                            std::optional<std::string> const &vendor_root,
                            std::filesystem::path const &project_root);
+
+// Vendoring wipes a destination before copying, so a stamp inside one is deleted and
+// then counted by the next whole-tree hash: a redeploy on every run. Throws.
+void vendor_validate_stamp_dir(vendor_plan const &plan);
+
+// vendor_resolve checks the path as written; this checks where it resolves to, since a
+// symlinked component would put the wipe-and-recopy outside the project.
+void vendor_validate_destination(std::filesystem::path const &dest,
+                                 std::filesystem::path const &project_root,
+                                 std::string_view identity);
 
 // A leading '!' excludes; an empty list selects the whole install directory. Throws
 // naming `context` on an unusable pattern.

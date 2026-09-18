@@ -202,6 +202,47 @@ class TestVendorCollisions(VendorTestCase):
         self.assertRefused(manifest, "nested", "local.one@r1", "local.two@r1")
         self.assertFalse((self.project / "deps").exists())
 
+    def test_stamp_directory_inside_a_destination_is_refused(self):
+        """`@envy state-dir` pointing into a vendor destination redeploys forever."""
+        # The destination *is* the state dir, so the stamp would land inside it.
+        manifest = self.project / "envy.lua"
+        manifest.write_text(
+            '-- @envy bin "envy-bin"\n-- @envy state-dir "vendor"\nPACKAGES = {\n'
+            + self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='"vendor"'
+            )
+            + "\n}\n",
+            encoding="utf-8",
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("local.nanocobs@r3", run.stderr)
+        self.assertIn("state-dir", run.stderr)
+        self.assertFalse((self.project / "vendor").exists())
+
+    @POSIX_ONLY
+    def test_destination_behind_a_symlink_out_of_the_project_is_refused(self):
+        """A symlinked path component would put the wipe-and-recopy outside the project.
+
+        vendor_resolve only sees the path as written, so this is caught on the way in to
+        the copy, before remove_all follows the link.
+        """
+        outside = self.make_temp_dir("outside")
+        (outside / "keepme.txt").write_text("not envy's to delete\n", encoding="utf-8")
+        (self.project / "escape").symlink_to(outside)
+
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='"escape/x"'
+            ),
+            vendor_root=None,
+        )
+        run = self.install(manifest)
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("outside the project", run.stderr)
+        self.assertTrue((outside / "keepme.txt").exists())
+
     def test_derived_name_needs_a_vendor_root(self):
         manifest = self.manifest(
             self.entry("local.nanocobs@r3", self.spec("local.nanocobs@r3")),

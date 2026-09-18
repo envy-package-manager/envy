@@ -790,6 +790,7 @@ vendor_plan manifest::resolve_vendor_plan() const {
   // single dotted subdirectory rather than scattered beside envy.lua.
   auto const state_dir{ resolve_state_dir(meta.state_dir, manifest_dir) };
   plan.stamp_dir = (state_dir ? *state_dir : manifest_dir) / ".envy-vendor";
+  vendor_validate_stamp_dir(plan);
   return plan;
 }
 

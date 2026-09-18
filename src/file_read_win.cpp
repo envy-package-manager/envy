@@ -110,6 +110,30 @@ void file_read_chunks(file_native_string const &path,
     s.ov.hEvent = s.event.get();
   }
 
+  // Slots are thread_local, so a read still in flight on the way out would land in the
+  // next file's buffer. Every exit waits the kernel out, throwing ones included.
+  class drain {
+   public:
+    drain(HANDLE handle, std::array<slot, kReadSlots> &slots)
+        : handle_{ handle }, slots_{ slots } {}
+    drain(drain const &) = delete;
+    drain &operator=(drain const &) = delete;
+    ~drain() {
+      for (auto &s : slots_) {
+        if (!s.busy) { continue; }
+        ::CancelIoEx(handle_, &s.ov);
+        DWORD ignored{ 0 };
+        ::GetOverlappedResult(handle_, &s.ov, &ignored, TRUE);  // aborts; result unused
+        s.busy = false;
+      }
+    }
+
+   private:
+    HANDLE handle_;
+    std::array<slot, kReadSlots> &slots_;
+  };
+  drain const drain_guard{ h.get(), slots };
+
   std::uint64_t issued{ 0 }, consumed{ 0 };
   std::size_t next{ 0 };
 
