@@ -25,6 +25,7 @@ FETCH = {{ source = "file://{seed}" }}
 {vendor_list}
 INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
   envy.copy("{payload}", install_dir)
+  {install_extra}
 end
 """
 
@@ -50,7 +51,7 @@ class VendorTestCase(EnvyTestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
-    def spec(self, identity: str, vendor_list: str = "") -> Path:
+    def spec(self, identity: str, vendor_list: str = "", install_extra: str = "") -> Path:
         name = identity.split(".", 1)[1].split("@", 1)[0]
         return self.write_spec(
             f"{name}.lua",
@@ -59,6 +60,7 @@ class VendorTestCase(EnvyTestCase):
                 seed=self.lua_path(self.seed),
                 payload=self.lua_path(self.payload),
                 vendor_list=vendor_list,
+                install_extra=install_extra,
             ),
             directory=self.project,
         )
@@ -419,6 +421,207 @@ class TestVendorRefresh(VendorTestCase):
         run = self.install(self.manifest_path)
         self.assertVendored(run, "local.nanocobs@r3", "redeployed", "drifted")
         self.assertFalse(os.access(target, os.X_OK))
+
+
+class TestVendorRedeployMatrix(VendorTestCase):
+    """The rest of the redeploy decision, case by case.
+
+    The phase compares three things: whether the destination exists, its whole-tree
+    digest against the project stamp, and that stamp against the cache's pristine
+    digest. Every branch and every way to reach it belongs here.
+    """
+
+    def install_once(self, vendor_list: str = "", install_extra: str = "") -> Path:
+        self.manifest_path = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3", vendor_list, install_extra),
+            )
+        )
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        return self.project / "vendor" / "nanocobs"
+
+    # -- a redeploy has to settle -------------------------------------------
+
+    def test_a_redeploy_settles_on_the_next_run(self):
+        """Drift, then recovery, then quiet. A redeploy that never converges is the
+        failure mode a single drift assertion cannot see."""
+        dest = self.install_once()
+        (dest / "src" / "lib.c").write_text("tampered\n", encoding="utf-8")
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "up_to_date", "current"
+        )
+
+    # -- stale: the source moved --------------------------------------------
+
+    def test_changed_vendor_list_redeploys_as_stale(self):
+        """Editing a spec's VENDOR list changes nothing about the package's cache key,
+        which is exactly why the pristine stamp is named for the selector set."""
+        dest = self.install_once('VENDOR = { "include/**" }\n')
+        self.assertEqual(
+            {"include/lib.h", "include/internal/secret.h"}, set(self.tree_of(dest))
+        )
+
+        # Same identity, same options, same payload -- only the selection changed.
+        self.spec("local.nanocobs@r3", 'VENDOR = { "include/lib.h", "LICENSE" }\n')
+        run = self.install(self.manifest_path)
+
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "stale")
+        self.assertEqual({"include/lib.h", "LICENSE"}, set(self.tree_of(dest)))
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "up_to_date", "current"
+        )
+
+    def test_wiped_cache_alone_does_not_force_a_redeploy(self):
+        """The pristine digest is recomputed from the rebuilt payload. Same bytes, same
+        digest, so an evicted cache costs a hash and not a recopy."""
+        import shutil
+
+        dest = self.install_once()
+        before = {p: p.stat().st_mtime_ns for p in sorted(dest.rglob("*")) if p.is_file()}
+
+        shutil.rmtree(self.cache_root)
+        run = self.install(self.manifest_path)
+
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+        after = {p: p.stat().st_mtime_ns for p in sorted(dest.rglob("*")) if p.is_file()}
+        self.assertEqual(before, after)
+
+    # -- drifted: the destination moved --------------------------------------
+
+    def test_added_empty_directory_is_drift(self):
+        dest = self.install_once()
+        (dest / "brand-new").mkdir()
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertFalse((dest / "brand-new").exists())
+
+    def test_removed_empty_directory_is_drift(self):
+        """Directories fold into the digest precisely so an empty one can go missing."""
+        (self.payload / "placeholder").mkdir()
+        dest = self.install_once()
+        self.assertTrue((dest / "placeholder").is_dir())
+
+        (dest / "placeholder").rmdir()
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertTrue((dest / "placeholder").is_dir())
+
+    def test_stray_file_the_vendor_list_would_not_select_is_still_drift(self):
+        """The destination is hashed whole, not through VENDOR. A file the selector
+        would have skipped is still a file sitting in the vendored tree."""
+        dest = self.install_once('VENDOR = { "include/**" }\n')
+        (dest / "notes.md").write_text("mine, not envy's\n", encoding="utf-8")
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertFalse((dest / "notes.md").exists())
+
+    def test_stray_directory_the_vendor_list_would_not_select_is_still_drift(self):
+        dest = self.install_once('VENDOR = { "include/**" }\n')
+        (dest / "scratch").mkdir()
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertFalse((dest / "scratch").exists())
+
+    def test_emptied_destination_is_drift_not_absent(self):
+        """The directory is still there, so this is not the absent branch."""
+        import shutil
+
+        dest = self.install_once()
+        for child in dest.iterdir():
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
+        self.assertTrue(dest.is_dir())
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+
+    def test_file_replaced_by_a_directory_is_drift(self):
+        dest = self.install_once()
+        (dest / "LICENSE").unlink()
+        (dest / "LICENSE").mkdir()
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertTrue((dest / "LICENSE").is_file())
+
+    def test_touched_mtimes_alone_are_not_drift(self):
+        """The digest is over content, so a checkout or a copy that resets timestamps
+        must not trigger a recopy."""
+        import os
+
+        dest = self.install_once()
+        for path in dest.rglob("*"):
+            os.utime(path, (1, 1))
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "up_to_date", "current"
+        )
+
+    @POSIX_ONLY
+    def test_repointed_symlink_is_drift(self):
+        # envy.copy follows symlinks, so the payload cannot carry one into the cache --
+        # INSTALL makes it there, which is also how a real spec would.
+        self.write_payload("real.txt", "target\n")
+        dest = self.install_once(
+            install_extra='envy.run("ln -s real.txt " .. install_dir .. "/link.txt")'
+        )
+        self.assertTrue(
+            (dest / "link.txt").is_symlink(), "a vendored symlink must stay a symlink"
+        )
+
+        (dest / "link.txt").unlink()
+        (dest / "link.txt").symlink_to("LICENSE")
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "redeployed", "drifted"
+        )
+        self.assertEqual("real.txt", os.readlink(dest / "link.txt"))
+
+    # -- the destination itself moved ----------------------------------------
+
+    def test_moved_destination_copies_afresh_and_leaves_the_old_one(self):
+        """envy does not prune: a destination it no longer owns stays where it is."""
+        old = self.install_once()
+
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='"deps/cobs"'
+            )
+        )
+        run = self.install(manifest)
+
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.project / "deps" / "cobs"))
+        self.assertTrue(old.exists(), "pruning is not a thing envy does")
+
+    def test_one_package_drifting_leaves_the_other_alone(self):
+        manifest = self.manifest(
+            self.entry("local.one@r1", self.spec("local.one@r1"))
+            + "\n"
+            + self.entry("local.two@r1", self.spec("local.two@r1"))
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+
+        (self.project / "vendor" / "one" / "LICENSE").write_text("x\n", encoding="utf-8")
+        results = self.results(self.install(manifest))
+
+        self.assertEqual("redeployed", results["local.one@r1"]["action"])
+        self.assertEqual("drifted", results["local.one@r1"]["reason"])
+        self.assertEqual("up_to_date", results["local.two@r1"]["action"])
 
 
 class TestVendorRejections(VendorTestCase):
