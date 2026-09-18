@@ -183,6 +183,21 @@ jobs:
             [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
           fi
 
+          # Hash envy's own source tree: the one place the subtree hasher runs on every
+          # platform against a real tree of nested directories and mixed file sizes.
+          # stdout must stay the digest alone, with --stats on stderr.
+          digest="$(./out/build/envy hash --tree --stats src 2>/tmp/tree-stats.txt)"
+          cat /tmp/tree-stats.txt
+          echo "$digest"
+          [[ "$(echo "$digest" | wc -l)" -eq 1 ]] || { echo "::error::--stats leaked into stdout"; exit 1; }
+          [[ "$digest" =~ ^[0-9a-f]{64}[[:space:]] ]] || { echo "::error::bad digest line: $digest"; exit 1; }
+          grep -q files/worker /tmp/tree-stats.txt || { echo "::error::--stats missing from stderr"; exit 1; }
+          # Deterministic across thread counts, which is the property the vendor stamp rests on.
+          for t in 1 4; do
+            other="$(./out/build/envy hash --tree --threads $t src 2>/dev/null)"
+            [[ "$other" == "$digest" ]] || { echo "::error::digest changed at --threads=$t"; exit 1; }
+          done
+
       - name: Unit tests under valgrind
         if: matrix.shard == 'main'
         run: valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=valgrind.supp out/build/envy_unit_tests
@@ -235,6 +250,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
@@ -354,6 +386,21 @@ jobs:
             [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
           fi
 
+          # Hash envy's own source tree: the one place the subtree hasher runs on every
+          # platform against a real tree of nested directories and mixed file sizes.
+          # stdout must stay the digest alone, with --stats on stderr.
+          digest="$(./out/build/envy hash --tree --stats src 2>/tmp/tree-stats.txt)"
+          cat /tmp/tree-stats.txt
+          echo "$digest"
+          [[ "$(echo "$digest" | wc -l)" -eq 1 ]] || { echo "::error::--stats leaked into stdout"; exit 1; }
+          [[ "$digest" =~ ^[0-9a-f]{64}[[:space:]] ]] || { echo "::error::bad digest line: $digest"; exit 1; }
+          grep -q files/worker /tmp/tree-stats.txt || { echo "::error::--stats missing from stderr"; exit 1; }
+          # Deterministic across thread counts, which is the property the vendor stamp rests on.
+          for t in 1 4; do
+            other="$(./out/build/envy hash --tree --threads $t src 2>/dev/null)"
+            [[ "$other" == "$digest" ]] || { echo "::error::digest changed at --threads=$t"; exit 1; }
+          done
+
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
         run: python3.13 -m functional_tests
@@ -386,6 +433,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
@@ -520,6 +584,24 @@ jobs:
             if (-not $got.StartsWith($want)) { throw "expected '$want...', got '$got'" }
           }
 
+          # Hash envy's own source tree: the one place the subtree hasher runs on every
+          # platform against a real tree of nested directories and mixed file sizes.
+          # stdout must stay the digest alone, with --stats on stderr.
+          $digest = (cmd /c "out\build\envy.exe hash --tree --stats src 2>tree-stats.txt" | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "envy hash --tree exited $LASTEXITCODE" }
+          Get-Content tree-stats.txt | Write-Host
+          Write-Host $digest
+          if (($digest -split "`n").Count -ne 1) { throw "--stats leaked into stdout: $digest" }
+          if ($digest -notmatch '^[0-9a-f]{64}\s') { throw "bad digest line: $digest" }
+          if (-not (Select-String -Path tree-stats.txt -Pattern 'files/worker' -Quiet)) {
+            throw "--stats missing from stderr"
+          }
+          # Deterministic across thread counts, which is the property the vendor stamp rests on.
+          foreach ($t in 1, 4) {
+            $other = (cmd /c "out\build\envy.exe hash --tree --threads $t src 2>nul" | Out-String).Trim()
+            if ($other -ne $digest) { throw "digest changed at --threads=$t" }
+          }
+
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
         run: py -3.13 -m functional_tests
@@ -558,6 +640,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: py -3.13 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: py -3.13 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing

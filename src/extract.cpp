@@ -1,5 +1,6 @@
 #include "extract.h"
 
+#include "glob.h"
 #include "trace.h"
 #include "tui.h"
 #include "util.h"
@@ -22,21 +23,10 @@
 
 namespace envy {
 
-// Selector matching lives here and in extract_tests.cpp only, so extract.h publishes it
-// under ENVY_UNIT_TEST alone; these declarations serve the helpers below.
-std::string extract_canonical_match_path(std::string_view path);
-std::vector<std::string> extract_normalize_selectors(
-    std::vector<std::string> const &selectors,
-    std::string_view context);
-bool extract_glob_match(std::string_view pattern, std::string_view entry_path);
-bool extract_selectors_match(std::vector<std::string> const &selectors,
-                             std::string_view entry_path,
-                             std::vector<bool> &matched);
-std::vector<std::string> extract_unmatched_selectors(
-    std::vector<std::string> const &selectors,
-    std::vector<bool> const &matched);
-
 namespace {
+
+// What a rejected selector is called in an error; extract spells its list "only".
+constexpr char kOnlyEntry[]{ "'only' entry" };
 
 struct archive_reader : unmovable {
   explicit archive_reader(bool enable_raw_format = false) : handle(archive_read_new()) {
@@ -126,111 +116,6 @@ std::vector<std::string> collect_extract_items(std::filesystem::path const &fetc
   return items;
 }
 
-// One '/'-delimited component off the front; rest is what follows the separator, empty
-// once nothing is left. Canonical paths have no empty components, so "" means exhausted.
-struct path_split {
-  std::string_view head, rest;
-};
-
-path_split split_component(std::string_view path) {
-  auto const slash{ path.find('/') };
-  return slash == std::string_view::npos
-             ? path_split{ path, {} }
-             : path_split{ path.substr(0, slash), path.substr(slash + 1) };
-}
-
-// Match c against the '[...]' class opening at pat[open]; returns the index past ']'.
-// Assumes the class is terminated - extract_normalize_selectors rejects the rest.
-std::pair<std::size_t, bool> glob_class_match(std::string_view pat,
-                                              std::size_t open,
-                                              char c) {
-  std::size_t i{ open + 1 };
-  bool const negate{ i < pat.size() && (pat[i] == '!' || pat[i] == '^') };
-  if (negate) { ++i; }
-
-  bool matched{ false };
-  for (bool first{ true }; i < pat.size(); ++i, first = false) {
-    if (pat[i] == ']' && !first) {
-      ++i;
-      break;
-    }
-    if (i + 2 < pat.size() && pat[i + 1] == '-' && pat[i + 2] != ']') {
-      if (c >= pat[i] && c <= pat[i + 2]) { matched = true; }
-      i += 2;
-      continue;
-    }
-    if (pat[i] == c) { matched = true; }
-  }
-  return { i, matched != negate };
-}
-
-// Match one path component: '*' any run, '?' one character, '[...]' a class, everything
-// else literal. One saved star is enough to be complete, so no recursion and no allocs.
-bool glob_component_match(std::string_view pat, std::string_view text) {
-  constexpr auto kNone{ std::string_view::npos };
-  std::size_t pi{ 0 }, ti{ 0 }, star_pi{ kNone }, star_ti{ 0 };
-
-  while (ti < text.size()) {
-    bool advanced{ false };
-    if (pi < pat.size()) {
-      if (pat[pi] == '*') {
-        star_pi = pi++;
-        star_ti = ti;
-        continue;
-      }
-      if (pat[pi] == '?') {
-        ++pi;
-        ++ti;
-        continue;
-      }
-      if (pat[pi] == '[') {
-        if (auto const [next, hit]{ glob_class_match(pat, pi, text[ti]) }; hit) {
-          pi = next;
-          ++ti;
-          advanced = true;
-        }
-      } else if (pat[pi] == text[ti]) {
-        ++pi;
-        ++ti;
-        advanced = true;
-      }
-    }
-    if (advanced) { continue; }
-    if (star_pi == kNone) { return false; }
-    pi = star_pi + 1;  // let the last '*' eat one more character
-    ti = ++star_ti;
-  }
-
-  while (pi < pat.size() && pat[pi] == '*') { ++pi; }
-  return pi == pat.size();
-}
-
-// Why a canonical selector can't be matched unambiguously, or nullopt when it can.
-// Rejecting beats guessing: a malformed pattern is a typo, and typos must be loud.
-std::optional<std::string_view> selector_problem(std::string_view entry) {
-  for (std::string_view rest{ entry }; !rest.empty();) {
-    auto const [component, tail]{ split_component(rest) };
-    rest = tail;
-
-    if (component.find("**") != std::string_view::npos && component != "**") {
-      return "must give '**' a path component of its own";
-    }
-
-    for (std::size_t i{ 0 }; i < component.size(); ++i) {
-      if (component[i] != '[') { continue; }
-      std::size_t scan{ i + 1 };
-      if (scan < component.size() && (component[scan] == '!' || component[scan] == '^')) {
-        ++scan;
-      }
-      if (scan < component.size() && component[scan] == ']') { ++scan; }  // literal ']'
-      auto const close{ component.find(']', scan) };
-      if (close == std::string_view::npos) { return "has an unterminated '[' class"; }
-      i = close;
-    }
-  }
-  return std::nullopt;
-}
-
 // The path extract() would write, canonicalized for selector matching: derived name for a
 // raw stream, else the stripped entry path. nullopt when strip drops the entry.
 std::optional<std::string> selector_match_path(
@@ -242,13 +127,13 @@ std::optional<std::string> selector_match_path(
   auto const stripped{ strip_path_components(archive_entry_pathname(entry),
                                              strip_components) };
   if (!stripped) { return std::nullopt; }
-  return extract_canonical_match_path(*stripped);
+  return glob_canonical_path(*stripped);
 }
 
 // Add the file count and uncompressed bytes of the entries `selectors` selects (all when
 // empty) to totals, flagging selectors that matched. context prefixes errors.
 void accumulate_archive_totals(std::filesystem::path const &archive_path,
-                               std::vector<std::string> const &selectors,
+                               glob_filter const &selectors,
                                int strip_components,
                                std::string_view context,
                                extract_totals &totals,
@@ -285,7 +170,7 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
         selector_match_path(entry, is_raw_stream, bare_name, strip_components)
       };
       if (!match_path ||
-          !extract_selectors_match(selectors, *match_path, selector_matched)) {
+          !selectors.selects(*match_path, selector_matched)) {
         continue;
       }
     }
@@ -450,119 +335,7 @@ struct extract_tui_state {
 
 }  // namespace
 
-std::string extract_canonical_match_path(std::string_view path) {
-  std::string collapsed;
-  collapsed.reserve(path.size());
-  for (char const c : path) {  // '\' is a separator, and "a//b" is "a/b"
-    char const sep{ (c == '\\') ? '/' : c };
-    if (sep == '/' && !collapsed.empty() && collapsed.back() == '/') { continue; }
-    collapsed.push_back(sep);
-  }
 
-  std::string_view view{ collapsed };
-  while (view.starts_with("./")) { view.remove_prefix(2); }
-  while (!view.empty() && view.back() == '/') { view.remove_suffix(1); }
-  if (view == ".") { view = {}; }  // "." names the root, which no selector can name
-  return std::string{ view };
-}
-
-bool extract_glob_match(std::string_view pattern, std::string_view entry_path) {
-  std::string_view star_pattern{}, star_path{};
-  bool have_star{ false };
-
-  while (true) {
-    // Pattern exhausted: whatever is left of the path sits under what already matched,
-    // which is how a directory entry pulls in its subtree.
-    if (pattern.empty()) { return true; }
-
-    auto const pat{ split_component(pattern) };
-    if (pat.head == "**") {  // start by letting it match zero components
-      have_star = true;
-      star_pattern = pat.rest;
-      star_path = entry_path;
-      pattern = pat.rest;
-      continue;
-    }
-
-    if (!entry_path.empty()) {
-      if (auto const path{ split_component(entry_path) };
-          glob_component_match(pat.head, path.head)) {
-        pattern = pat.rest;
-        entry_path = path.rest;
-        continue;
-      }
-    }
-
-    if (!have_star || star_path.empty()) { return false; }
-    star_path = split_component(star_path).rest;  // '**' eats one more component
-    pattern = star_pattern;
-    entry_path = star_path;
-  }
-}
-
-std::vector<std::string> extract_normalize_selectors(
-    std::vector<std::string> const &selectors,
-    std::string_view context) {
-  std::vector<std::string> normalized;
-  normalized.reserve(selectors.size());
-  for (auto const &raw : selectors) {
-    std::string canonical{ extract_canonical_match_path(raw) };
-    if (canonical.empty() || !extract_is_safe_archive_path(canonical.c_str())) {
-      throw std::runtime_error(std::string(context) +
-                               ": 'only' entry must be a non-empty archive-relative "
-                               "path without '..': \"" +
-                               raw + "\"");
-    }
-    if (auto const problem{ selector_problem(canonical) }; problem) {
-      throw std::runtime_error(std::string(context) + ": 'only' entry \"" + raw + "\" " +
-                               std::string(*problem));
-    }
-    normalized.push_back(std::move(canonical));
-  }
-  return normalized;
-}
-
-bool extract_selectors_match(std::vector<std::string> const &selectors,
-                             std::string_view entry_path,
-                             std::vector<bool> &matched) {
-  matched.resize(selectors.size(), false);
-  bool selected{ false };
-  for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
-    if (extract_glob_match(selectors[i], entry_path)) {
-      matched[i] = true;
-      selected = true;
-    }
-  }
-  return selected;
-}
-
-std::vector<std::string> extract_unmatched_selectors(
-    std::vector<std::string> const &selectors,
-    std::vector<bool> const &matched) {
-  std::vector<std::string> unmatched;
-  for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
-    if (i >= matched.size() || !matched[i]) { unmatched.push_back(selectors[i]); }
-  }
-  return unmatched;
-}
-
-bool extract_is_safe_archive_path(char const *path) {
-  if (!path || path[0] == '\0') { return false; }
-  if (path[0] == '/' || path[0] == '\\') { return false; }
-#ifdef _WIN32
-  if (util_ascii_is_alpha(path[0]) && path[1] == ':') { return false; }
-#endif
-  std::string_view sv{ path };
-  // Reject paths containing ".." components
-  for (std::size_t pos{ 0 }; pos < sv.size();) {
-    auto const sep{ sv.find_first_of("/\\", pos) };
-    if (sv.substr(pos, sep == std::string_view::npos ? sep : sep - pos) == "..") {
-      return false;
-    }
-    pos = (sep == std::string_view::npos) ? sv.size() : sep + 1;
-  }
-  return true;
-}
 
 std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
                                      std::filesystem::path const &source_dir,
@@ -688,7 +461,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         archive_path.string());
   }
 
-  auto const selectors{ extract_normalize_selectors(options.selectors, "extract") };
+  auto const selectors{
+    glob_parse_filter(options.selectors, "extract", kOnlyEntry)
+  };
 
   archive_reader reader{ bare_name.has_value() };
   archive_writer writer;
@@ -702,7 +477,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   archive_entry *entry{ nullptr };
   std::uint64_t processed{ 0 };
   std::uint64_t files_extracted{ 0 };
-  std::vector<bool> selector_matched(selectors.size(), false);
+  std::vector<bool> selector_matched(selectors.include.size(), false);
 
   while (true) {
     int const r{ archive_read_next_header(reader.handle, &entry) };
@@ -742,7 +517,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       entry_path = stripped_path.c_str();
     }
 
-    if (!extract_is_safe_archive_path(entry_path)) {
+    if (!glob_is_safe_relative_path(entry_path)) {
       throw std::runtime_error(std::string("extract: unsafe archive entry path: ") +
                                entry_path);
     }
@@ -750,9 +525,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     // Kept past the pathname rewrite below so hardlink diagnostics can name the entry.
     std::string const canonical_entry{ selectors.empty()
                                            ? std::string{}
-                                           : extract_canonical_match_path(entry_path) };
+                                           : glob_canonical_path(entry_path) };
     if (!selectors.empty() &&
-        !extract_selectors_match(selectors, canonical_entry, selector_matched)) {
+        !selectors.selects(canonical_entry, selector_matched)) {
       continue;  // Not selected: leave it compressed, never touch the disk.
     }
 
@@ -770,7 +545,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         auto stripped{ strip_path_components(hardlink, options.strip_components) };
         if (stripped) { hardlink_str = *stripped; }
       }
-      if (!extract_is_safe_archive_path(hardlink_str.c_str())) {
+      if (!glob_is_safe_relative_path(hardlink_str.c_str())) {
         throw std::runtime_error(std::string("extract: unsafe hardlink target: ") +
                                  hardlink_str);
       }
@@ -780,9 +555,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       // problem, and conflating the two would report the wrong cause. Checking
       // selectors here must not flag them as matched - the target entry does that.
       if (!selectors.empty()) {
-        std::string const target{ extract_canonical_match_path(hardlink_str) };
-        if (std::ranges::none_of(selectors, [&](std::string const &selector) {
-              return extract_glob_match(selector, target);
+        std::string const target{ glob_canonical_path(hardlink_str) };
+        if (std::ranges::none_of(selectors.include, [&](std::string const &selector) {
+              return glob_match(selector, target);
             })) {
           throw std::runtime_error("extract: \"" + canonical_entry +
                                    "\" is a hard link to \"" + target +
@@ -858,8 +633,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   }
 
   if (options.require_all_selectors) {
-    throw_on_unmatched_selectors(extract_unmatched_selectors(selectors, selector_matched),
-                                 "extract " + archive_path.filename().string());
+    throw_on_unmatched_selectors(
+        glob_unmatched_selectors(selectors.include, selector_matched),
+        "extract " + archive_path.filename().string());
   }
 
   // A selector list legitimately yields zero files (directories only, or nothing this
@@ -914,9 +690,10 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
 
 extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
                                       extract_options const &options) {
-  auto const selectors{ extract_normalize_selectors(options.selectors,
-                                                    "compute_archive_totals") };
-  std::vector<bool> selector_matched(selectors.size(), false);
+  auto const selectors{ glob_parse_filter(options.selectors,
+                                            "compute_archive_totals",
+                                            kOnlyEntry) };
+  std::vector<bool> selector_matched(selectors.include.size(), false);
   extract_totals totals{};
   accumulate_archive_totals(archive_path,
                             selectors,
@@ -924,15 +701,17 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
                             "compute_archive_totals",
                             totals,
                             selector_matched);
-  totals.unmatched_selectors = extract_unmatched_selectors(selectors, selector_matched);
+  totals.unmatched_selectors =
+      glob_unmatched_selectors(selectors.include, selector_matched);
   return totals;
 }
 
 extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                                       extract_options const &options) {
-  auto const selectors{ extract_normalize_selectors(options.selectors,
-                                                    "compute_extract_totals") };
-  std::vector<bool> selector_matched(selectors.size(), false);
+  auto const selectors{ glob_parse_filter(options.selectors,
+                                            "compute_extract_totals",
+                                            kOnlyEntry) };
+  std::vector<bool> selector_matched(selectors.include.size(), false);
   extract_totals totals{};
   if (!std::filesystem::exists(fetch_dir)) { return totals; }
 
@@ -943,9 +722,8 @@ extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
     if (!extract_is_archive_extension(entry.path())) {
       // Loose files are copied verbatim, so selectors match their filename.
       if (!selectors.empty() &&
-          !extract_selectors_match(selectors,
-                                   entry.path().filename().generic_string(),
-                                   selector_matched)) {
+          !selectors.selects(entry.path().filename().generic_string(),
+                             selector_matched)) {
         continue;
       }
       std::error_code ec;
@@ -966,7 +744,8 @@ extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                               selector_matched);
   }
 
-  totals.unmatched_selectors = extract_unmatched_selectors(selectors, selector_matched);
+  totals.unmatched_selectors =
+      glob_unmatched_selectors(selectors.include, selector_matched);
   return totals;
 }
 
@@ -982,7 +761,10 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   if (items.empty()) { return; }
 
   int const strip_components{ options.strip_components };
-  auto const selectors{ extract_normalize_selectors(options.selectors, "extract") };
+  // For this function's loose-file matching; the nested options below carry the raw
+  // list, which each archive parses for itself.
+  auto const selectors{ glob_parse_filter(options.selectors, "extract", kOnlyEntry) };
+  auto const &raw_selectors{ options.selectors };
 
   // Compute totals (with spinner if TUI enabled)
   std::optional<extract_tui_state> tui_state;
@@ -1000,7 +782,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   // a selector that nothing in the fetch dir provides gets caught.
   extract_totals const totals{ compute_extract_totals(
       fetch_dir,
-      { .strip_components = strip_components, .selectors = selectors }) };
+      { .strip_components = strip_components, .selectors = raw_selectors }) };
   throw_on_unmatched_selectors(totals.unmatched_selectors, "extract");
 
   // Set up TUI state for extraction progress
@@ -1038,7 +820,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
       std::uint64_t last_archive_bytes{ 0 };
 
       extract_options opts{ .strip_components = strip_components,
-                            .selectors = selectors,
+                            .selectors = raw_selectors,
                             // The pre-scan already validated the selectors against
                             // every archive; one archive alone need not satisfy it.
                             .require_all_selectors = false,
@@ -1071,7 +853,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
     } else {
       // Loose files are copied whole, so selectors match their filename.
       if (!selectors.empty() &&
-          !extract_selectors_match(selectors, filename, loose_selector_matched)) {
+          !selectors.selects(filename, loose_selector_matched)) {
         continue;
       }
 

@@ -68,7 +68,9 @@ using trace_event_t = std::variant<trace_events::trace_start,
                                    trace_events::download_skipped,
                                    trace_events::git_resolve,
                                    trace_events::extract_start,
-                                   trace_events::extract_complete>;
+                                   trace_events::extract_complete,
+                                   trace_events::vendor_resolved,
+                                   trace_events::vendor_result>;
 
 inline constexpr std::size_t kTraceEventCount{ 0
 #define ENVY_TRACE_EVENT(name, fields) +1

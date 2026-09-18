@@ -353,10 +353,69 @@ to run costs one no-op step, so there is nothing to declare or infer:
 - **`install`** — write final artifacts; on success the entry is marked complete
 - **`setup`** — run the selected `SETUP` pairs as their own tasks (host state, never cached)
 - **`export`** — write the package's export artifact when one was asked for
+- **`vendor`** — copy the payload into the project's vendor tree, when the manifest asked
 - **`completion`** — report the outcome row
 
 A dependency edge is satisfied once the dependency finishes `setup`; the edge still
 ratchets it through `export`, so export overlaps dependents' builds.
+
+### Vendoring
+
+A manifest can ask for a package's payload to be copied out of the cache and into the
+project tree, for an IDE or a non-envy build that cannot consult the cache. `envy install`
+and `envy sync` do it as part of the ladder—there is no separate command.
+
+```lua
+VENDOR_ROOT = "third_party"                        -- project-relative; root manifest only
+
+PACKAGES = {
+  { spec = "local.nanocobs@r3", source = "cobs.lua", vendor = true },       -- third_party/nanocobs
+  { spec = "local.nanocobs@r3", source = "cobs.lua",
+    options = { build = "debug" }, vendor = true },                          -- auto-disambiguated
+  { spec = "fi.armgcc@r1", source = "gcc.lua", vendor = "tools/armgcc" },   -- exact leaf dir
+}
+```
+
+`vendor = true` derives a leaf name under `VENDOR_ROOT`, spelling out only as much of the
+identity as it must to stay unique: `name`, then `namespace.name`, then
+`namespace.name@revision`, then that plus a hash of the options. Escalation runs per
+colliding group and to a fixpoint, so two option variants of one spec both vendor. A
+string is the final directory itself, project-relative, and is a fixed point in that
+ladder—a derived name that wanted it steps aside. Only manifest `PACKAGES` entries may
+carry `vendor`; only cache-managed packages can be vendored (a bundle has no payload, and
+`USER_MANAGED` writes to the host, which `spec_fetch` refuses before any build work).
+
+A spec chooses what of its install directory is worth copying:
+
+```lua
+VENDOR = { "include/**", "LICENSE", "!include/internal/**" }   -- absent = everything
+```
+
+Every destination is resolved and checked—for duplicates and for nesting, where the outer
+package's wipe-and-recopy would erase the inner one—**before any file is written**, so a
+bad manifest fails with nothing half-copied.
+
+**Staying in sync.** A vendored tree lives in the repo, so people edit it. Each run hashes
+the destination whole (`tree_hash`, see below) and compares it against a stamp under the
+project's state dir; a mismatch is drift. When they agree, the stamp is compared against a
+*pristine* digest recorded in the package's cache entry, keyed by the selector set; a
+mismatch there means the payload moved on. Either way the destination is wiped and
+recopied—reconciling two trees entry by entry is the same walk plus a way to get it wrong.
+The stamps live in the state dir rather than inside the vendored tree: envy can assume
+nothing about a payload's contents, nor about where an override points.
+
+**Hashing.** `src/tree_hash.h` is one entry point over a portable driver and per-platform
+traversal hooks (`tree_hash_posix.cpp`, `tree_hash_win.cpp`), the same split `platform.h`
+uses for `dir_sizes`. It hashes through `blake3_stream` (`blake3_util.h`) and reads through
+`file_read_chunks` (`file_read.h`) — the same hasher behind every other BLAKE3 in the
+codebase, and the same reader behind the per-file `sha256`, so neither algorithm nor IO
+policy has a second home. Workers drain a LIFO queue of directories and BLAKE3 whole files on
+the thread that read them, so throughput scales with cores; the fold runs over (relative
+path, kind, exec bit, content digest) in sorted order, so thread count never changes the
+answer. It is strict where `dir_sizes` is best-effort: an unreadable entry throws, because
+a digest that silently omits data would report "unchanged" for a tree it never read.
+`envy hash --tree <dir>` prints the same digest. `tools/bench_tree_hash.py` sweeps it
+across corpus shapes and thread counts; see `docs/tree-hash.md`.
 
 **Phase execution:** Scheduling lives in `task_engine` (src/task_engine.h), a domain-agnostic threaded executor: keyed tasks, linear steps, ratcheting target watermarks, per-step edges, dynamic task creation. `engine` adapts envy onto it — each package is one task whose steps are the phase ladder; SETUP pairs are single-step tasks. Inter-package dependencies become task edges via `needed_by` annotation (see below).
 

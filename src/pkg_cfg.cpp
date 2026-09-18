@@ -53,7 +53,7 @@ bool contains_function(sol::object const &val) {
 // A key absent here is silently inert today, which is the whole reason to reject it.
 constexpr std::string_view kManifestPackageKeys[]{
   kEnvyBaseKey, kEnvyBundlesKey, "needed_by", "options", "platforms", "product",
-  "ref",        "setup",         "sha256",    "source",  "spec"
+  "ref",        "setup",         "sha256",    "source",  "spec",      "vendor"
 };
 constexpr std::string_view kDependencyKeys[]{ "needed_by", "options", "product",
                                               "ref",       "setup",   "sha256",

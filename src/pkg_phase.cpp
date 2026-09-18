@@ -10,8 +10,8 @@ namespace envy {
 namespace {
 
 // Enum-to-string mapping (order must match pkg_phase enum in pkg_phase.h)
-// Index = enum value, so none (-1) and completion (9) handled specially
-constinit std::array<std::string_view, 9> const pkg_phase_name_table{ {
+// Index = enum value, so none (-1) and completion handled specially
+constinit std::array<std::string_view, 10> const pkg_phase_name_table{ {
     "spec_fetch",  // pkg_phase::spec_fetch (0)
     "check",       // pkg_phase::pkg_check (1)
     "import",      // pkg_phase::pkg_import (2)
@@ -21,7 +21,12 @@ constinit std::array<std::string_view, 9> const pkg_phase_name_table{ {
     "install",     // pkg_phase::pkg_install (6)
     "setup",       // pkg_phase::pkg_setup (7)
     "export",      // pkg_phase::pkg_export (8)
+    "vendor",      // pkg_phase::pkg_vendor (9)
 } };
+
+static_assert(pkg_phase_name_table.size() ==
+                  static_cast<std::size_t>(pkg_phase::completion),
+              "every phase but completion needs a name here");
 
 }  // namespace
 

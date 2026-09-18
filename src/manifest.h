@@ -6,6 +6,7 @@
 #include "shell.h"
 #include "sol_util.h"
 #include "util.h"
+#include "vendor.h"
 
 #include <filesystem>
 #include <memory>
@@ -80,6 +81,14 @@ struct manifest : unmovable {
   std::vector<depot_source> package_depots;
   std::filesystem::path manifest_path;
   envy_meta meta;
+
+  // Where `vendor = true` entries land, relative to this manifest. No default: an entry
+  // that needs it and does not find it is an error naming that entry.
+  std::optional<std::string> vendor_root;
+
+  // Resolved and collision-free, or throws. Covers every host-matching PACKAGES entry,
+  // not a command's targets, so two installs cannot each pass while colliding.
+  vendor_plan resolve_vendor_plan() const;
 
   manifest() = default;
 

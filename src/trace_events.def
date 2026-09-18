@@ -186,4 +186,23 @@ ENVY_TRACE_EVENT(extract_complete,
                  ENVY_TRACE_FIELD_I64(files_extracted)
                  ENVY_TRACE_FIELD_I64(duration_ms))
 
+// --- vendor ---
+
+// One resolved vendor destination, emitted before any vendor work begins -- so a run that
+// dies on a collision still shows what it had settled on. origin: derived | override.
+ENVY_TRACE_EVENT(vendor_resolved,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_STR(origin))
+
+// What the vendor phase did with one destination. action: copied | redeployed |
+// up_to_date. reason: absent | drifted | stale | current. files/bytes count what was
+// written, so an up_to_date result reports zeroes.
+ENVY_TRACE_EVENT(vendor_result,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_STR(action)
+                 ENVY_TRACE_FIELD_STR(reason)
+                 ENVY_TRACE_FIELD_I64(files)
+                 ENVY_TRACE_FIELD_I64(bytes)
+                 ENVY_TRACE_FIELD_I64(duration_ms))
+
 // clang-format on

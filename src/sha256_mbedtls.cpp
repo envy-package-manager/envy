@@ -1,17 +1,16 @@
 #include "sha256.h"
 
+#include "file_read.h"
 #include "util.h"
 
 #include "mbedtls/sha256.h"
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
-#include <vector>
 
 namespace envy {
 
@@ -21,12 +20,14 @@ sha256_t sha256(std::filesystem::path const &file_path,
     throw std::runtime_error("sha256: file does not exist: " + file_path.string());
   }
 
-  // A length is what makes this a bar. Without one, no per-chunk report goes out at all —
-  // only the terminal one below, which also gives an empty file a row.
+  // A length is what makes this a bar rather than a spinner, so it is read before a byte
+  // of content is, and handed straight to the shared reader -- one stat, not two.
   std::error_code size_ec;
   auto const total{ std::filesystem::file_size(file_path, size_ec) };
-  bool const total_known{ !size_ec };
-  std::uint64_t hashed{ 0 };
+  if (size_ec) {
+    throw std::runtime_error("sha256: cannot size " + file_path.string() + ": " +
+                             size_ec.message());
+  }
 
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
@@ -39,32 +40,23 @@ sha256_t sha256(std::filesystem::path const &file_path,
     throw std::runtime_error("sha256: mbedtls_sha256_starts failed");
   }
 
-  file_ptr_t file{ util_open_file(file_path, "rb") };
-  if (!file) {
-    throw std::runtime_error("sha256: failed to open file: " + file_path.string());
-  }
+  // One file-reading path in the process: the same platform-native reader the subtree
+  // hash uses, so read sizing, readahead and short-read handling are decided once.
+  std::uint64_t hashed{ 0 };
+  file_read_chunks(file_native_path(file_path),
+                   total,
+                   [&](void const *data, std::size_t n) {
+                     if (mbedtls_sha256_update(&ctx,
+                                               static_cast<unsigned char const *>(data),
+                                               n)) {
+                       throw std::runtime_error("sha256: mbedtls_sha256_update failed");
+                     }
+                     hashed += n;
+                     if (progress) { progress(hashed, total); }
+                   });
 
-  std::vector<unsigned char> buffer(1024 * 1024);
-  while (true) {
-    auto const read_bytes{
-      std::fread(buffer.data(), sizeof(unsigned char), buffer.size(), file.get())
-    };
-
-    if (read_bytes > 0) {
-      if (mbedtls_sha256_update(&ctx, buffer.data(), read_bytes)) {
-        throw std::runtime_error("sha256: mbedtls_sha256_update failed");
-      }
-      hashed += read_bytes;
-      if (progress && total_known) { progress(hashed, total); }
-    }
-
-    if (read_bytes < buffer.size()) {
-      if (std::ferror(file.get())) { throw std::runtime_error("sha256: fread failed"); }
-      break;
-    }
-  }
-
-  if (progress) { progress(hashed, total_known ? total : hashed); }
+  // An empty file reports nothing above, so its row still gets one terminal frame.
+  if (progress) { progress(hashed, total); }
 
   sha256_t digest{};
   if (mbedtls_sha256_finish(&ctx, digest.data())) {

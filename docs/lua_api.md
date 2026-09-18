@@ -129,6 +129,27 @@ envy.move("output/lib", install_dir .. "/lib")
 
 ---
 
+## Vendoring
+
+### VENDOR (spec global)
+
+Which of the install directory a manifest copies out when it vendors this package. Absent
+selects everything.
+
+```lua
+VENDOR = { "include/**", "LICENSE", "!include/internal/**" }
+```
+
+Same selector language as `envy.extract`'s `only`, down to the same code: an entry is
+taken when the include list is empty or one pattern matches, and no `!` pattern does.
+Validated when the spec loads, so a typo fails before anything is fetched.
+
+Vendoring is requested by the *manifest* (`VENDOR_ROOT` and a `vendor` key on a `PACKAGES`
+entry), never by the spec; see `docs/architecture.md`. Only cache-managed packages can be
+vendored.
+
+---
+
 ## Archive Extraction
 
 ### envy.extract(archive_path, dest_dir, [opts]) → int
@@ -137,19 +158,24 @@ Extract single archive; returns file count.
 
 **Options:**
 - `strip` — components to strip from paths (default: 0)
-- `only` — archive-relative paths or globs naming the sole entries to extract (omit for
-  everything). A path takes that entry; a directory takes its whole subtree. Matched
-  *after* `strip`. Unselected entries are never decompressed to disk. An entry matching
-  nothing is an error, as are a malformed pattern and an empty list; a selected hard link
-  needs its target selected too.
+- `only` — archive-relative paths or globs naming the entries to extract (omit for
+  everything). A path takes that entry; a directory takes its whole subtree. A leading
+  `!` excludes instead, and an exclusion always beats an inclusion. Matched *after*
+  `strip`. Unselected entries are never decompressed to disk. An *inclusion* matching
+  nothing is an error (it is a typo); an exclusion matching nothing is not. A malformed
+  pattern, an empty list and a bare `"!"` are all errors; a selected hard link needs its
+  target selected too.
 
 Glob syntax: `*` (any run) and `?` (one char) stay inside one component, `**` spans
 components, `[a-z]`/`[!a-z]` are classes (`[*]`, `[?]`, `[[]` for literals). Case-sensitive
-everywhere, so one spec behaves the same on every platform.
+everywhere, so one spec behaves the same on every platform. This is the one selector
+language in envy — `only` here and a spec's `VENDOR` list are the same thing, parsed and
+matched by the same code.
 
 ```lua
 envy.extract(fetch_dir .. "/source.tar.gz", ".", { strip = 1 })
 envy.extract(fetch_dir .. "/llvm.tar.xz", ".", { strip = 1, only = { "bin/clang-*" } })
+envy.extract(fetch_dir .. "/sdk.tar.gz", ".", { only = { "**", "!docs/**", "!**/*.pdb" } })
 ```
 
 ### envy.extract_all(src_dir, dest_dir, [opts])

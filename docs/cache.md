@@ -34,6 +34,7 @@
 │   └── {namespace}.{name}@{version}/
 │       └── {platform}-{arch}-blake3-{hash}/
 │           ├── envy-complete
+│           ├── envy-vendor-{sel} # Pristine vendor digest, one per VENDOR selector set
 │           ├── pkg/              # The payload; INSTALL writes here, readers read here
 │           ├── fetch/            # Durable fetch cache (persists for per-file caching)
 │           │   └── envy-complete # Marker: all fetches verified
@@ -67,6 +68,26 @@ The envy binary self-deploys on startup:
 6. **Shell hooks:** written only when the root is *not* a project-local tree
 
 This uses the same locking strategy as spec and package installation (see Locking & Workspace Lifecycle below). Multiple concurrent envy instances (parallel CI, multiple terminals) safely coordinate without corruption or duplicate work. Each version is self-contained; deleting `envy/1.2.3/` removes that version completely.
+
+## Vendor Digests
+
+A vendored package carries a **pristine digest** beside its payload:
+`envy-vendor-{sel}`, where `sel` is the leading 16 hex of BLAKE3 over the canonical VENDOR
+selector list. It holds the subtree digest of exactly what those selectors take out of
+`pkg/`. Keyed on the selector set, not the package, because a package entry's cache key
+covers its identity and options but not its spec's *contents* — editing a spec's `VENDOR`
+list in place would otherwise be served the old digest forever.
+
+Written by the install phase while the entry lock is still held, but only for packages the
+run actually vendors; the vendor phase backfills it for anyone who arrived by cache hit or
+depot import. It is the one file added to a completed entry after the fact, which is safe
+because `util_write_file` is temp+rename and the content is a pure function of bytes that
+never change.
+
+The *project-side* stamp — what envy last put at a vendor destination — lives in the
+project's state dir (`{state-dir}/.envy-vendor/{hash of destination}`), never in the
+vendored tree: envy can assume nothing about a payload's contents, nor about where an
+override points. See "Vendoring" in `docs/architecture.md`.
 
 ## Keys
 - **Spec/bundle**: `{identity}/blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical source — URL + sha256, git URL + ref, or local path. Identity alone would not do: a complete entry is never revalidated, so repointing a spec at a new source must land on a new entry rather than serve the old bytes. A custom fetch function has no fingerprint; its entries key on the declaring file, so editing the function body in place reuses the entry.

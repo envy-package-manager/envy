@@ -6,6 +6,7 @@
 #include "lua_ctx/lua_envy_import.h"
 #include "lua_envy.h"
 #include "lua_shell.h"
+#include "platform.h"
 #include "shell.h"
 #include "sol_util.h"
 #include "trace.h"
@@ -199,6 +200,29 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
   cfg->setup = std::move(names);
 }
 
+// `vendor = true` derives a name under VENDOR_ROOT; a string is that exact directory.
+// `false` and absent both mean not vendored, so the field toggles without being deleted.
+void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
+  sol::object vendor_obj{ table["vendor"] };
+  if (!vendor_obj.valid() || vendor_obj.get_type() == sol::type::lua_nil) { return; }
+
+  if (vendor_obj.get_type() == sol::type::boolean) {
+    if (vendor_obj.as<bool>()) { cfg->vendor = std::string{}; }
+    return;
+  }
+  if (vendor_obj.is<std::string>()) {
+    std::string path{ vendor_obj.as<std::string>() };
+    if (path.empty()) {
+      throw std::runtime_error(
+          "Package 'vendor' path cannot be empty; use vendor = true to derive one");
+    }
+    cfg->vendor = std::move(path);
+    return;
+  }
+  throw std::runtime_error(
+      "Package 'vendor' must be a boolean or a project-relative path");
+}
+
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
 // set lives with pkg_cfg::parse, which owns that table.
 constexpr std::string_view kBundlePackageKeys[]{
@@ -236,6 +260,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
       }
     }
     parse_setup_field(table, cfg);
+    parse_vendor_field(table, cfg);
     return cfg;
   }
 
@@ -721,6 +746,15 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 
   m->package_depots = parse_package_depots((*m->lua_)["PACKAGE_DEPOTS"]);
 
+  if (sol::object vendor_root_obj{ (*m->lua_)["VENDOR_ROOT"] };
+      vendor_root_obj.valid() && vendor_root_obj.get_type() != sol::type::lua_nil) {
+    if (!vendor_root_obj.is<std::string>()) {
+      throw std::runtime_error(manifest_path.string() +
+                               ": VENDOR_ROOT must be a project-relative path string");
+    }
+    m->vendor_root = vendor_root_obj.as<std::string>();
+  }
+
   return m;
 }
 
@@ -729,6 +763,34 @@ std::unique_ptr<manifest> manifest::load(char const *script,
   tui::debug("Loading manifest from C string");
   return load(std::vector<unsigned char>(script, script + std::strlen(script)),
               manifest_path);
+}
+
+vendor_plan manifest::resolve_vendor_plan() const {
+  std::vector<vendor_request> requests;
+  for (auto const *cfg : packages) {
+    if (!cfg->vendor) { continue; }
+    // A package excluded here never becomes a pkg, so a linux-only and a darwin-only
+    // package may name the same destination.
+    if (!util_platform_matches(cfg->platforms,
+                               platform::os_name(),
+                               platform::arch_name())) {
+      continue;
+    }
+    requests.push_back({ .key = pkg_key{ *cfg },
+                         .path_override = cfg->vendor->empty()
+                                              ? std::nullopt
+                                              : std::optional{ *cfg->vendor } });
+  }
+  if (requests.empty()) { return {}; }
+
+  auto const manifest_dir{ manifest_path.parent_path() };
+  auto plan{ vendor_resolve(requests, vendor_root, manifest_dir) };
+
+  // The state dir defaults to the manifest's own directory, so the stamps land in a
+  // single dotted subdirectory rather than scattered beside envy.lua.
+  auto const state_dir{ resolve_state_dir(meta.state_dir, manifest_dir) };
+  plan.stamp_dir = (state_dir ? *state_dir : manifest_dir) / ".envy-vendor";
+  return plan;
 }
 
 default_shell_decl manifest::get_default_shell() const {

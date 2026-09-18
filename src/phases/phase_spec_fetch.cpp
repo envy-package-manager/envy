@@ -14,6 +14,7 @@
 #include "sol_util.h"
 #include "trace.h"
 #include "tui.h"
+#include "vendor.h"
 #include "tui_actions.h"
 #include "util.h"
 
@@ -29,6 +30,21 @@
 namespace envy {
 
 namespace {
+
+// The spec's VENDOR global: an array of glob patterns, '!' prefixed to exclude. Absent
+// means the whole install directory, which is what an empty filter selects.
+tree_filter parse_vendor_table(sol::state_view lua, std::string const &identity) {
+  sol::object obj{ lua["VENDOR"] };
+  if (!obj.valid() || obj.get_type() == sol::type::lua_nil) { return {}; }
+  if (obj.get_type() != sol::type::table) {
+    throw std::runtime_error(std::string{ "VENDOR must be a table of patterns (got " } +
+                             sol::type_name(lua.lua_state(), obj.get_type()) + ") for " +
+                             identity);
+  }
+  return vendor_parse_selectors(
+      sol_util_get_string_list(lua.globals(), "VENDOR", "spec '" + identity + "'"),
+      "spec '" + identity + "'");
+}
 
 bool resolve_user_managed(sol::state_view lua, std::string const &identity) {
   sol::object obj{ lua["USER_MANAGED"] };
@@ -1457,6 +1473,21 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     validate_phases(lua_view, cfg.identity, user_managed, !p->setup_pairs.empty());
     p->type = user_managed ? pkg_type::USER_MANAGED : pkg_type::CACHE_MANAGED;
     tui::debug(user_managed ? "spec: user-managed (setup-only)" : "spec: cache-managed");
+
+    // The spec's VENDOR list is validated here rather than at the vendor phase, so a
+    // typo'd glob fails before anything is fetched or built.
+    p->vendor_filter = parse_vendor_table(lua_view, cfg.identity);
+
+    // User-managed writes to the host, not a cache entry, so there is no payload to
+    // copy. First moment this is knowable, and still before pkg_check.
+    if (user_managed) {
+      if (auto const *plan{ eng.vendor_plan() }; plan && plan->find(p->key)) {
+        throw std::runtime_error(
+            "package '" + cfg.identity +
+            "' is declared USER_MANAGED, which has no cached payload to vendor; remove "
+            "its 'vendor' entry from the manifest");
+      }
+    }
   }
 
   {  // deps_mutex-guarded: engine::register_products reads this from the barrier side

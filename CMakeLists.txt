@@ -292,8 +292,17 @@ set(ENVY_BASE_SOURCES
     src/phases/phase_setup.cpp
     src/phases/phase_spec_fetch.cpp
     src/phases/phase_stage.cpp
+    src/phases/phase_vendor.cpp
     src/luarc.cpp
     src/extract.cpp
+    src/glob.cpp
+    src/file_read.cpp
+    $<$<PLATFORM_ID:Windows>:src/file_read_win.cpp>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:src/file_read_posix.cpp>
+    src/vendor.cpp
+    src/tree_hash.cpp
+    $<$<PLATFORM_ID:Windows>:src/tree_hash_win.cpp>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:src/tree_hash_posix.cpp>
     src/aws_util.cpp
     src/envy_release.cpp
     src/blake3_util.cpp
@@ -499,6 +508,10 @@ set(ENVY_UNIT_TEST_SOURCES
     src/cmds/cmd_version_tests.cpp
     src/bundle_tests.cpp
     src/spec_util_tests.cpp
+    src/file_read_tests.cpp
+    src/glob_tests.cpp
+    src/tree_hash_tests.cpp
+    src/vendor_tests.cpp
     src/extract_tests.cpp
     src/engine_tests.cpp
     src/engine_weak_resolution_tests.cpp

@@ -82,6 +82,15 @@ EVENT_REGISTRY = {
     "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
     "extract_start": ["archive:str", "destination:str", "strip_components:i64"],
     "extract_complete": ["archive:str", "files_extracted:i64", "duration_ms:i64"],
+    "vendor_resolved": ["path:str", "origin:str"],
+    "vendor_result": [
+        "path:str",
+        "action:str",
+        "reason:str",
+        "files:i64",
+        "bytes:i64",
+        "duration_ms:i64",
+    ],
 }
 
 
@@ -98,7 +107,8 @@ class PkgPhase(IntEnum):
     PKG_INSTALL = 6
     PKG_SETUP = 7
     PKG_EXPORT = 8
-    COMPLETION = 9
+    PKG_VENDOR = 9
+    COMPLETION = 10
 
 
 # Serialized phase names (matches src/pkg_phase.cpp name table).
@@ -113,6 +123,7 @@ PHASE_BY_NAME = {
     "install": PkgPhase.PKG_INSTALL,
     "setup": PkgPhase.PKG_SETUP,
     "export": PkgPhase.PKG_EXPORT,
+    "vendor": PkgPhase.PKG_VENDOR,
     "completion": PkgPhase.COMPLETION,
 }
 

@@ -78,6 +78,8 @@ void cmd_sync::execute() {
   // Install packages (full build pipeline — filters to host platform internally)
   engine eng{ *c, m.get() };
   if (cfg_.ignore_depot) { eng.set_ignore_depot(true); }
+  // Before the run, so a collision fails with nothing copied.
+  eng.set_vendor_plan(m->resolve_vendor_plan());
   eng.run_full(targets);  // Throws on any failure
 
   // Resolve non-host targets so deploy knows about their products for script generation.

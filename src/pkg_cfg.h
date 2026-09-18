@@ -142,6 +142,10 @@ struct pkg_cfg : unmovable {
   // effective set is the union across all referrers, closed over pair DEPENDS.
   std::optional<std::vector<std::string>> setup;
 
+  // Manifest PACKAGES only; a dependency entry cannot carry it. nullopt is not
+  // vendored, empty means derive a name under VENDOR_ROOT, else that exact directory.
+  std::optional<std::string> vendor;
+
   // Bundle-related fields (for specs that come from bundles)
   std::optional<std::string> bundle_identity;  // Which bundle contains this spec
 

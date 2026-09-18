@@ -511,6 +511,74 @@ class EnvyExtractTests(unittest.TestCase):
             self.assertTrue((dest / "root/subdir2/file5.txt").exists())
             self.assertFalse((dest / "root/file2.txt").exists())
 
+    def test_extract_only_excludes_with_bang(self) -> None:
+        """A leading '!' subtracts -- the same selector language a spec's VENDOR uses."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/**",
+                "--only",
+                "!root/subdir1/**",
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertIn("Extracted 3 files", result.stderr)
+
+            dest = Path(tmpdir)
+            self.assertTrue((dest / "root/file1.txt").exists())
+            self.assertTrue((dest / "root/subdir2/file5.txt").exists())
+            self.assertFalse((dest / "root/subdir1/file3.txt").exists())
+            self.assertFalse((dest / "root/subdir1/nested/file4.txt").exists())
+
+    def test_extract_only_exclude_beats_include(self) -> None:
+        """An exclusion wins over an inclusion naming the same entry."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/subdir1/nested/file4.txt",
+                "--only",
+                "!root/subdir1",
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertFalse((Path(tmpdir) / "root/subdir1").exists())
+
+    def test_extract_only_unmatched_exclusion_is_not_an_error(self) -> None:
+        """An exclusion naming nothing is a set that lacked it, not a typo to reject."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy(
+                "extract",
+                str(archive),
+                tmpdir,
+                "--only",
+                "root/file1.txt",
+                "--only",
+                "!root/nothing-like-this",
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertTrue((Path(tmpdir) / "root/file1.txt").exists())
+
+    def test_extract_only_bare_bang_rejected(self) -> None:
+        """'!' on its own excludes nothing and is refused rather than ignored."""
+        archive = self._archives_dir / "test.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self._run_envy("extract", str(archive), tmpdir, "--only", "!")
+            self.assertNotEqual(0, result.returncode)
+
     def test_extract_only_unmatched_errors(self) -> None:
         """An --only entry that matches nothing must fail loudly, not silently."""
         archive = self._archives_dir / "test.tar.gz"

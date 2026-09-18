@@ -16,7 +16,8 @@ enum class pkg_phase : int {
   pkg_install = 6,
   pkg_setup = 7,  // Host-side SETUP pairs (check-gated, ephemeral)
   pkg_export = 8,
-  completion = 9,  // All phases complete
+  pkg_vendor = 9,   // Copy the payload into the project's vendor tree, if asked
+  completion = 10,  // All phases complete
 };
 
 constexpr int pkg_phase_count = static_cast<int>(pkg_phase::completion) + 1;

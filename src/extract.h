@@ -51,10 +51,6 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
 // Check if path has archive extension
 bool extract_is_archive_extension(std::filesystem::path const &path);
 
-// True if an archive entry path is safe to materialize under a destination root:
-// non-empty, relative, no ".." components (and no drive letter on Windows).
-bool extract_is_safe_archive_path(char const *path);
-
 // If path has a single-stream compression suffix (.gz, .bz2, .xz, .zst, .lzma) AND
 // the stem is not a tar wrapper (e.g., foo.tar.gz), returns the filename with the
 // suffix stripped (e.g., bar.txt.gz -> bar.txt). Otherwise returns nullopt.
@@ -85,33 +81,6 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
 // Exposed for unit tests only - computes totals by scanning archives in a directory
 extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                                       extract_options const &options = {});
-
-// Selector matching, exposed for unit tests only - extract.cpp declares these for itself.
-// Canonical form for matching: '\' to '/', repeated '/' collapsed, leading "./" and
-// trailing '/' removed. Applied to selectors and archive paths alike.
-std::string extract_canonical_match_path(std::string_view path);
-
-// Canonicalize selectors and reject the unusable ones: empty, absolute, "..", malformed
-// glob (unterminated '[', '**' sharing a component). context prefixes errors.
-std::vector<std::string> extract_normalize_selectors(
-    std::vector<std::string> const &selectors,
-    std::string_view context);
-
-// True when canonical glob pattern matches canonical entry_path. '*' (any run) and '?'
-// (one char) stay inside one component, '**' spans components, '[a-z]'/'[!a-z]' are
-// classes; matching a directory takes everything under it. Literal patterns just compare.
-bool extract_glob_match(std::string_view pattern, std::string_view entry_path);
-
-// True when any selector names canonical entry_path, globs included. Flags every selector
-// that matched, so callers can report the ones that never hit anything.
-bool extract_selectors_match(std::vector<std::string> const &selectors,
-                             std::string_view entry_path,
-                             std::vector<bool> &matched);
-
-// Selectors never flagged in matched, in declaration order.
-std::vector<std::string> extract_unmatched_selectors(
-    std::vector<std::string> const &selectors,
-    std::vector<bool> const &matched);
 #endif
 
 }  // namespace envy
