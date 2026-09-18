@@ -22,6 +22,17 @@ namespace fs = std::filesystem;
 
 fs::path const kBasic{ "test_data/tree_hash/basic" };
 
+// The digest's rule, restated for the oracle: always false on Windows, which has no such
+// bit. MSVC reports owner_exec set on every readable file, so asking std::filesystem
+// there would disagree with the walk about every single entry.
+bool is_executable([[maybe_unused]] fs::path const &path) {
+#ifdef _WIN32
+  return false;
+#else
+  return (fs::status(path).permissions() & fs::perms::owner_exec) != fs::perms::none;
+#endif
+}
+
 // 3 and 17 are unround on purpose: a drain bug that needs workers to outnumber
 // directories, or not divide evenly into them, hides behind 1/2/4/8.
 constexpr unsigned kThreadCounts[]{ 1, 2, 3, 4, 8, 17 };
@@ -78,10 +89,7 @@ std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter 
                                               std::istreambuf_iterator<char>{} };
       auto const d{ envy::blake3_hash(bytes.data(), bytes.size()) };
       payload.push_back('f');
-      payload.push_back((fs::status(it->path()).permissions() & fs::perms::owner_exec) !=
-                                fs::perms::none
-                            ? '\1'
-                            : '\0');
+      payload.push_back(is_executable(it->path()) ? '\1' : '\0');
       push(d.data(), d.size());
     }
     folded.emplace(rel, std::move(payload));

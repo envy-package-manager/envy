@@ -8,7 +8,9 @@ without matching prose.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -28,6 +30,19 @@ INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
   {install_extra}
 end
 """
+
+
+def rmtree_retry(path: Path, attempts: int = 10) -> None:
+    """shutil.rmtree, retried. An antivirus or indexer on Windows can hold a handle for
+    a moment after the process that wrote the file has exited."""
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.1)
 
 
 class VendorTestCase(EnvyTestCase):
@@ -361,9 +376,7 @@ class TestVendorRefresh(VendorTestCase):
 
     def test_deleted_destination_is_recreated(self):
         dest = self.install_once()
-        import shutil
-
-        shutil.rmtree(dest)
+        rmtree_retry(dest)
 
         run = self.install(self.manifest_path)
         self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
@@ -458,11 +471,8 @@ class TestVendorRedeployMatrix(VendorTestCase):
         dest = self.install_once()
         contents = self.tree_of(dest)
 
-        # Everything envy could have remembered, gone: a different cache root, and a
-        # destination this envy never wrote.
-        import shutil
-
-        shutil.rmtree(self.cache_root)
+        # Everything envy could have remembered, gone: a cache root it has never seen.
+        # The old one is left to its own cleanup rather than raced with.
         self.cache_root = self.make_temp_dir("cache2")
 
         run = self.install(self.manifest_path)
@@ -486,12 +496,10 @@ class TestVendorRedeployMatrix(VendorTestCase):
     def test_wiped_cache_alone_does_not_force_a_redeploy(self):
         """The pristine digest is recomputed from the rebuilt payload. Same bytes, same
         digest, so an evicted cache costs a hash and not a recopy."""
-        import shutil
-
         dest = self.install_once()
         before = {p: p.stat().st_mtime_ns for p in sorted(dest.rglob("*")) if p.is_file()}
 
-        shutil.rmtree(self.cache_root)
+        rmtree_retry(self.cache_root)
         run = self.install(self.manifest_path)
 
         self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
@@ -543,11 +551,9 @@ class TestVendorRedeployMatrix(VendorTestCase):
 
     def test_emptied_destination_is_a_mismatch_not_absent(self):
         """The directory is still there, so this is not the absent branch."""
-        import shutil
-
         dest = self.install_once()
         for child in dest.iterdir():
-            shutil.rmtree(child) if child.is_dir() else child.unlink()
+            rmtree_retry(child) if child.is_dir() else child.unlink()
         self.assertTrue(dest.is_dir())
 
         self.assertVendored(
