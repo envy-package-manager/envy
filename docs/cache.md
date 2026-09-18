@@ -84,10 +84,10 @@ depot import. It is the one file added to a completed entry after the fact, whic
 because `util_write_file` is temp+rename and the content is a pure function of bytes that
 never change.
 
-The *project-side* stamp — what envy last put at a vendor destination — lives in the
-project's state dir (`{state-dir}/.envy-vendor/{hash of destination}`), never in the
-vendored tree: envy can assume nothing about a payload's contents, nor about where an
-override points. See "Vendoring" in `docs/architecture.md`.
+This is the *only* record vendoring keeps: the vendor phase hashes a destination whole and
+compares it against this digest. There is no project-side stamp — the destination's own
+contents answer the question, so a vendored tree committed to git is adopted as-is on a
+machine that has never run envy. See "Vendoring" in `docs/architecture.md`.
 
 ## Keys
 - **Spec/bundle**: `{identity}/blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical source — URL + sha256, git URL + ref, or local path. Identity alone would not do: a complete entry is never revalidated, so repointing a spec at a new source must land on a new entry rather than serve the old bytes. A custom fetch function has no fingerprint; its entries key on the declaring file, so editing the function body in place reuses the entry.

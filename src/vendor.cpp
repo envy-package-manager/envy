@@ -151,19 +151,6 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
   return plan;
 }
 
-void vendor_validate_stamp_dir(vendor_plan const &plan) {
-  for (auto const &[key, dest] : plan.dirs) {
-    if (contains_path(dest.dir, plan.stamp_dir) ||
-        contains_path(plan.stamp_dir, dest.dir)) {
-      throw std::runtime_error("vendor stamps for '" + std::string{ key.identity() } +
-                               "' would live at " + plan.stamp_dir.string() +
-                               ", inside or over its destination " + dest.dir.string() +
-                               "; vendoring wipes that directory, so point '@envy "
-                               "state-dir' somewhere outside it");
-    }
-  }
-}
-
 void vendor_validate_destination(fs::path const &dest,
                                  fs::path const &project_root,
                                  std::string_view identity) {
@@ -207,7 +194,21 @@ std::string vendor_pristine_hash(fs::path const &pkg_path, tree_filter const &fi
   fs::path const stamp{ pkg_path.parent_path() /
                         ("envy-vendor-" + util_bytes_to_hex(key_digest.data(), 8)) };
 
-  if (auto const stamped{ vendor_read_stamp(stamp) }) { return *stamped; }
+  // A completed entry is immutable, so a digest found here was computed over these exact
+  // bytes and needs no revalidation.
+  std::error_code ec;
+  if (fs::is_regular_file(stamp, ec) && !ec) {
+    try {
+      auto const bytes{ util_load_file(stamp) };
+      std::string digest{ bytes.begin(), bytes.end() };
+      if (auto const nl{ digest.find('\n') }; nl != std::string::npos) {
+        digest.resize(nl);
+      }
+      if (digest.size() == 64) { return digest; }
+    } catch (std::exception const &) {
+      // Unreadable or truncated: recompute rather than trust it.
+    }
+  }
 
   auto const result{ tree_hash(pkg_path, filter) };
   auto const digest{ util_bytes_to_hex(result.digest.data(), result.digest.size()) };
@@ -217,38 +218,6 @@ std::string vendor_pristine_hash(fs::path const &pkg_path, tree_filter const &fi
     // Backfilling is an optimization; losing it costs the next run one more walk.
   }
   return digest;
-}
-
-fs::path vendor_stamp_path(fs::path const &stamp_dir, fs::path const &dest) {
-  auto const key{ dest.generic_string() };
-  auto const digest{ blake3_hash(key.data(), key.size()) };
-  return stamp_dir / util_bytes_to_hex(digest.data(), 8);
-}
-
-std::optional<std::string> vendor_read_stamp(fs::path const &stamp) {
-  std::error_code ec;
-  if (!fs::is_regular_file(stamp, ec) || ec) { return std::nullopt; }
-
-  std::string first;
-  try {
-    auto const bytes{ util_load_file(stamp) };
-    first.assign(bytes.begin(), bytes.end());
-  } catch (std::exception const &) { return std::nullopt; }
-  if (auto const nl{ first.find('\n') }; nl != std::string::npos) { first.resize(nl); }
-  // A truncated or hand-edited stamp reads as absent and re-deploys, which beats
-  // trusting a digest nobody wrote.
-  if (first.size() != 64) { return std::nullopt; }
-  return first;
-}
-
-void vendor_write_stamp(fs::path const &stamp_dir,
-                        fs::path const &dest,
-                        std::string_view digest) {
-  std::error_code ec;
-  fs::create_directories(stamp_dir, ec);
-  // The second line is for a human reading the directory; only the first is read back.
-  util_write_file(vendor_stamp_path(stamp_dir, dest),
-                  std::string{ digest } + "\n" + dest.generic_string() + "\n");
 }
 
 }  // namespace envy

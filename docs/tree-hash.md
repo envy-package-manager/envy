@@ -22,7 +22,8 @@ A selection always contains the directories holding its entries, even when the f
 not name them. `--only '**/*.h'` selects two headers *and* the `include/` they live in,
 because a copy of that selection has to create it. This is what makes the digest of a
 selection equal the digest of a copy of it, which is the whole basis of the vendor
-up-to-date check.
+up-to-date check: a destination is hashed whole and compared against the digest its
+package recorded, with no state kept on the project side.
 
 These bytes are the stamped format—append to it, never renumber. A change invalidates
 every vendor stamp in every cache, which is what the known-answer test in

@@ -195,8 +195,8 @@ ENVY_TRACE_EVENT(vendor_resolved,
                  ENVY_TRACE_FIELD_STR(origin))
 
 // What the vendor phase did with one destination. action: copied | redeployed |
-// up_to_date. reason: absent | drifted | stale | current. files/bytes count what was
-// written, so an up_to_date result reports zeroes.
+// up_to_date. reason: absent | mismatch | current. files/bytes count what was written,
+// so an up_to_date result reports zeroes.
 ENVY_TRACE_EVENT(vendor_result,
                  ENVY_TRACE_FIELD_STR(path)
                  ENVY_TRACE_FIELD_STR(action)

@@ -28,9 +28,6 @@ struct vendor_destination {
 struct vendor_plan {
   std::unordered_map<pkg_key, vendor_destination> dirs;
 
-  // One digest file per destination. Set by the caller; vendor_resolve stays pure.
-  std::filesystem::path stamp_dir;
-
   // What destinations are checked against before anything is wiped.
   std::filesystem::path project_root;
 
@@ -49,10 +46,6 @@ struct vendor_plan {
 vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
                            std::optional<std::string> const &vendor_root,
                            std::filesystem::path const &project_root);
-
-// Vendoring wipes a destination before copying, so a stamp inside one is deleted and
-// then counted by the next whole-tree hash: a redeploy on every run. Throws.
-void vendor_validate_stamp_dir(vendor_plan const &plan);
 
 // vendor_resolve checks the path as written; this checks where it resolves to, since a
 // symlinked component would put the wipe-and-recopy outside the project.
@@ -73,18 +66,5 @@ std::string vendor_filter_key(tree_filter const &filter);
 // so concurrent backfills are safe). Keyed on the selector set, which no cache key covers.
 std::string vendor_pristine_hash(std::filesystem::path const &pkg_path,
                                  tree_filter const &filter);
-
-// Named for the destination, which is what the digest describes; a package that moves
-// stops consulting its old stamp.
-std::filesystem::path vendor_stamp_path(std::filesystem::path const &stamp_dir,
-                                        std::filesystem::path const &dest);
-
-// The digest in `stamp`, or nullopt when it is missing or unreadable.
-std::optional<std::string> vendor_read_stamp(std::filesystem::path const &stamp);
-
-// Record `digest` as the state of `dest`. Creates `stamp_dir` if needed.
-void vendor_write_stamp(std::filesystem::path const &stamp_dir,
-                        std::filesystem::path const &dest,
-                        std::string_view digest);
 
 }  // namespace envy

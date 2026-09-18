@@ -783,15 +783,7 @@ vendor_plan manifest::resolve_vendor_plan() const {
   }
   if (requests.empty()) { return {}; }
 
-  auto const manifest_dir{ manifest_path.parent_path() };
-  auto plan{ vendor_resolve(requests, vendor_root, manifest_dir) };
-
-  // The state dir defaults to the manifest's own directory, so the stamps land in a
-  // single dotted subdirectory rather than scattered beside envy.lua.
-  auto const state_dir{ resolve_state_dir(meta.state_dir, manifest_dir) };
-  plan.stamp_dir = (state_dir ? *state_dir : manifest_dir) / ".envy-vendor";
-  vendor_validate_stamp_dir(plan);
-  return plan;
+  return vendor_resolve(requests, vendor_root, manifest_path.parent_path());
 }
 
 default_shell_decl manifest::get_default_shell() const {

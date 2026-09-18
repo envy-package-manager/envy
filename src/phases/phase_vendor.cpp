@@ -30,8 +30,7 @@ struct verdict {
 };
 
 constexpr verdict kAbsent{ "copied", "absent", true };
-constexpr verdict kDrifted{ "redeployed", "drifted", true };
-constexpr verdict kStale{ "redeployed", "stale", true };
+constexpr verdict kMismatch{ "redeployed", "mismatch", true };
 constexpr verdict kCurrent{ "up_to_date", "current", false };
 
 void draw(pkg *p, std::string const &text) {
@@ -105,14 +104,13 @@ void run_vendor_phase(pkg *p, engine &eng) {
     if (!fs::is_directory(dest, ec) || ec) { return kAbsent; }
 
     // Hashed whole, with no selectors: whatever sits in the destination counts, which
-    // is what makes a stray file drift.
+    // is what makes a stray file a mismatch. The payload's own digest is the only thing
+    // worth comparing against -- an edited copy and a moved-on package are both just
+    // "this is not what the package holds", and both want the same repair.
     draw(p, "hashing vendor copy...");
     auto const digest{ tree_hash(dest).digest };
     auto const current{ util_bytes_to_hex(digest.data(), digest.size()) };
-    auto const stamped{ vendor_read_stamp(vendor_stamp_path(plan->stamp_dir, dest)) };
-
-    if (!stamped || *stamped != current) { return kDrifted; }
-    return *stamped == pristine ? kCurrent : kStale;
+    return current == pristine ? kCurrent : kMismatch;
   }() };
 
   std::uint64_t files{ 0 }, bytes{ 0 };
@@ -142,7 +140,6 @@ void run_vendor_phase(pkg *p, engine &eng) {
       }
     }
 
-    vendor_write_stamp(plan->stamp_dir, dest, pristine);
     tui::debug("vendored %llu file(s) to %s (%s)",
                static_cast<unsigned long long>(files),
                dest.string().c_str(),

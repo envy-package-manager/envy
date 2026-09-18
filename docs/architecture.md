@@ -396,13 +396,16 @@ package's wipe-and-recopy would erase the inner one—**before any file is writt
 bad manifest fails with nothing half-copied.
 
 **Staying in sync.** A vendored tree lives in the repo, so people edit it. Each run hashes
-the destination whole (`tree_hash`, see below) and compares it against a stamp under the
-project's state dir; a mismatch is drift. When they agree, the stamp is compared against a
-*pristine* digest recorded in the package's cache entry, keyed by the selector set; a
-mismatch there means the payload moved on. Either way the destination is wiped and
-recopied—reconciling two trees entry by entry is the same walk plus a way to get it wrong.
-The stamps live in the state dir rather than inside the vendored tree: envy can assume
-nothing about a payload's contents, nor about where an override points.
+the destination whole (`tree_hash`, see below) and compares it against the *pristine*
+digest recorded in the package's cache entry, keyed by the selector set and written at
+install time. Equal means the copy is what the package holds; anything else—an edited
+file, a stray one, a package that moved on—is the same fact and wants the same repair, so
+the destination is wiped and recopied. Reconciling two trees entry by entry is the same
+walk plus a way to get it wrong.
+
+The package's own digest is the only record, so envy keeps no project-side state for
+vendoring. A vendored tree committed to git is adopted as-is on a machine that has never
+run envy, provided its contents match the package.
 
 **Hashing.** `src/tree_hash.h` is one entry point over a portable driver and per-platform
 traversal hooks (`tree_hash_posix.cpp`, `tree_hash_win.cpp`), the same split `platform.h`
