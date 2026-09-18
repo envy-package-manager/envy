@@ -134,12 +134,15 @@ void file_read_chunks(file_native_string const &path,
   while (consumed < size) {
     slot &s{ slots[next] };
     DWORD got{ 0 };
-    // A read at an explicit offset returns `want` or hits EOF, so anything else means
-    // the file shrank mid-read. The caller stamps this digest as truth, so fail.
-    if (!s.busy || !::GetOverlappedResult(h.get(), &s.ov, &got, TRUE) || got != s.want) {
-      if (s.busy && ::GetLastError() != ERROR_HANDLE_EOF && got == s.want) {
-        throw_last_error("file_read: cannot read", path);
-      }
+    bool const ok{ s.busy && ::GetOverlappedResult(h.get(), &s.ov, &got, TRUE) };
+
+    // A failed call is an I/O error and keeps its Windows code. A short read is not: at
+    // an explicit offset the only way to get less than `want` is a file that shrank
+    // mid-read, and the caller stamps this digest as truth.
+    if (s.busy && !ok && ::GetLastError() != ERROR_HANDLE_EOF) {
+      throw_last_error("file_read: cannot read", path);
+    }
+    if (!ok || got != s.want) {
       throw std::runtime_error("file_read: file shrank while reading: " + narrow(path));
     }
     sink(s.buf.data(), got);

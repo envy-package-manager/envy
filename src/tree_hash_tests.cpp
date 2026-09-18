@@ -11,6 +11,7 @@
 #include <fstream>
 #include <map>
 #include <numeric>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -83,6 +84,19 @@ std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter 
     folded.emplace(rel, std::move(payload));
   }
 
+  // A copy of the selection has to create the directories holding it, so they are part
+  // of the selection. Spelled out here separately from the walker's own version.
+  for (auto it{ folded.begin() }; it != folded.end();) {
+    auto rel{ it->first };
+    ++it;
+    for (auto slash{ rel.rfind('/') }; slash != std::string::npos;
+         slash = rel.rfind('/')) {
+      rel = rel.substr(0, slash);
+      std::vector<unsigned char> const dir{ 'd', '\0' };
+      if (!folded.emplace(rel, dir).second) { break; }
+    }
+  }
+
   std::vector<unsigned char> stream;
   for (auto const &[rel, payload] : folded) {
     stream.insert(stream.end(), rel.begin(), rel.end());
@@ -109,6 +123,11 @@ TEST_CASE("a file's digest inside the tree is its own blake3_hash") {
   auto const bytes{ envy::util_load_file(kBasic / "bin" / "data.bin") };
 
   envy::blake3_stream expected;
+  std::string const dir{ "bin" };  // the directory the file needs, added by the walk
+  expected.update(dir.data(), dir.size());
+  unsigned char const dir_head[]{ '\0', 'd', '\0' };
+  expected.update(dir_head, sizeof(dir_head));
+
   std::string const rel{ "bin/data.bin" };
   expected.update(rel.data(), rel.size());
   unsigned char const head[]{ '\0', 'f', '\0' };
@@ -219,9 +238,13 @@ TEST_CASE("tree_filter selects a whole subtree from a literal directory name") {
 TEST_CASE("tree_filter '**' spans components") {
   envy::tree_filter const headers{ .include = { "**/*.h" } };
   auto const entries{ envy::tree_list(kBasic, headers) };
-  REQUIRE(entries.size() == 2);
-  CHECK(entries[0].relpath == "include/detail/impl.h");
-  CHECK(entries[1].relpath == "include/lib.h");
+
+  // The two headers, plus the directories a copy of them would have to create.
+  REQUIRE(entries.size() == 4);
+  CHECK(entries[0].relpath == "include");
+  CHECK(entries[1].relpath == "include/detail");
+  CHECK(entries[2].relpath == "include/detail/impl.h");
+  CHECK(entries[3].relpath == "include/lib.h");
 }
 
 TEST_CASE("tree_filter that matches nothing yields the empty-selection digest") {
@@ -242,10 +265,34 @@ TEST_CASE("tree_filter reaches selected files under an unselected directory") {
   // VENDOR list naming only leaf files would come back empty.
   envy::tree_filter const deep{ .include = { "include/detail/**" } };
   auto const entries{ envy::tree_list(kBasic, deep) };
-  REQUIRE(entries.size() == 2);  // the 'detail' directory and the header under it
-  CHECK(entries[0].relpath == "include/detail");
-  CHECK(entries[1].relpath == "include/detail/impl.h");
+  REQUIRE(entries.size() == 3);
+  CHECK(entries[0].relpath == "include");  // unselected, but the copy needs it
+  CHECK(entries[1].relpath == "include/detail");
+  CHECK(entries[2].relpath == "include/detail/impl.h");
   CHECK(digest_of(kBasic, deep) == oracle_digest(kBasic, deep));
+}
+
+TEST_CASE("a filtered selection hashes as a copy of itself would") {
+  // The property vendoring rests on: the digest of what a filter selects has to equal the
+  // digest of a tree containing exactly that. Without the ancestor directories a copy has
+  // to create, a spec like VENDOR = {"**/*.h"} never reaches "up to date".
+  for (auto const &filter : { envy::tree_filter{ .include = { "**/*.h" } },
+                              envy::tree_filter{ .include = { "bin/data.bin" } },
+                              envy::tree_filter{ .include = { "include/detail/**" } },
+                              envy::tree_filter{ .exclude = { "src" } },
+                              envy::tree_filter{} }) {
+    // Every entry's parent is in the set, which is what makes such a copy constructible.
+    std::set<std::string> paths;
+    for (auto const &e : envy::tree_list(kBasic, filter)) { paths.insert(e.relpath); }
+    for (auto const &path : paths) {
+      if (auto const slash{ path.rfind('/') }; slash != std::string::npos) {
+        CHECK_MESSAGE(paths.count(path.substr(0, slash)) == 1,
+                      "missing parent of ",
+                      path);
+      }
+    }
+    CHECK(digest_of(kBasic, filter) == oracle_digest(kBasic, filter));
+  }
 }
 
 TEST_CASE("tree_hash rejects a root that is not a directory") {

@@ -275,6 +275,31 @@ class TestVendorRefresh(VendorTestCase):
         self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
         return self.project / "vendor" / "nanocobs"
 
+    def test_second_run_is_a_no_op_with_a_partial_vendor_list(self):
+        """A VENDOR list that names files, not directories, must still settle.
+
+        The destination gains the directories holding those files, so the source-side
+        digest only matches it if the selection covers them too. Without that, the
+        package reports drift and is recopied on every single run.
+        """
+        dest = self.install_once('VENDOR = { "**/*.h", "LICENSE" }\n')
+        self.assertEqual(
+            {"include/lib.h": "#pragma once\n",
+             "include/internal/secret.h": "// internal\n",
+             "LICENSE": "MIT\n"},
+            self.tree_of(dest),
+        )
+
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+
+    def test_second_run_is_a_no_op_with_a_single_named_file(self):
+        dest = self.install_once('VENDOR = { "src/lib.c" }\n')
+        self.assertEqual({"src/lib.c": "int lib(void){return 0;}\n"}, self.tree_of(dest))
+
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+
     def test_second_run_is_a_no_op(self):
         dest = self.install_once()
         before = {p: p.stat().st_mtime_ns for p in sorted(dest.rglob("*")) if p.is_file()}

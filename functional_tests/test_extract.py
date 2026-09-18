@@ -764,6 +764,37 @@ class EnvyExtractTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
             self.assertEqual(b"payload\n", (dest / "root/link.txt").read_bytes())
 
+    def test_extract_only_hardlink_with_exclude_only_selection(self) -> None:
+        """An exclude-only list selects everything else, hard-link targets included."""
+        archive = self._write_hardlink_archive("hardlink_exclude_only.tar")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "dest"
+            dest.mkdir()
+            result = self._run_envy(
+                "extract", str(archive), str(dest), "--only", "!root/nothing"
+            )
+
+            self.assertEqual(0, result.returncode, f"Extract failed: {result.stderr}")
+            self.assertEqual(b"payload\n", (dest / "root/link.txt").read_bytes())
+
+    def test_extract_only_hardlink_target_excluded_blames_only(self) -> None:
+        """An include that reaches the target plus an exclude that removes it is an
+        'only' fault, not an archive-ordering one."""
+        archive = self._write_hardlink_archive("hardlink_excluded_target.tar")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "dest"
+            dest.mkdir()
+            result = self._run_envy(
+                "extract", str(archive), str(dest),
+                "--only", "root/**", "--only", "!root/target.txt",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("'only' does not select", result.stderr)
+            self.assertNotIn("appears later in the archive", result.stderr)
+
     def test_extract_only_hardlink_preexisting_target_file_still_errors(self) -> None:
         """An unselected target that happens to exist in the destination must still
         fail: existence is not selection."""

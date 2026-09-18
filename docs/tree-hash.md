@@ -15,7 +15,14 @@ Folded over every selected entry in sorted relative-path order:
 `kind` is `f`/`d`/`l`; `exec` is the owner-execute bit (always `0` on Windows, which has
 no such concept). Payload is the file's BLAKE3 for `f`, the target string plus a NUL for
 `l`, and nothing for `d`. Directories fold in, so an added or removed empty directory is a
-difference. Symlinks are never followed, so no tree is counted twice however it is linked.
+difference. Symlinks are hashed by their *stored* target and never followed, so a digest
+does not depend on where the tree sits.
+
+A selection always contains the directories holding its entries, even when the filter does
+not name them. `--only '**/*.h'` selects two headers *and* the `include/` they live in,
+because a copy of that selection has to create it. This is what makes the digest of a
+selection equal the digest of a copy of it, which is the whole basis of the vendor
+up-to-date check.
 
 These bytes are the stamped format—append to it, never renumber. A change invalidates
 every vendor stamp in every cache, which is what the known-answer test in
@@ -133,9 +140,14 @@ runner lets you drop it portably.
 
 CI runs `--quick --stats` on the six `main` shards, uploads the JSON — stage breakdown
 included, so a regression can be attributed without a reproduction — and writes the table
-to the step summary. Two guards, deliberately asymmetric because shared runners are noisy: a hard
-floor of 200 MiB/s on `few-large` (five to ten times below anything working—it catches a
-serialized queue, not a regression worth arguing about), and a 1.5x single-to-many thread
-scaling check that only annotates.
+to the step summary. Both guards — a 200 MiB/s floor on `few-large` and a 1.5x
+single-to-many scaling check — only annotate. A runner's storage is its own business, and
+a spinning disk or a throttled shared volume is not a regression in this code. The one
+thing that fails the job is a digest that changed with thread count: that is correctness,
+not speed.
 
 To judge a change, diff two JSON runs from the same shard name.
+
+The per-platform smoke test also runs `envy hash --tree --stats src` on envy's own source
+and prints the breakdown. That is a look at how the hasher behaves on each runner, not a
+check: it asserts nothing and names no thread count.

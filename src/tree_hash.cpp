@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -128,12 +129,45 @@ class walker : unmovable {
     for (auto &w : workers) { w.join(); }
 
     if (error_) { std::rethrow_exception(error_); }
+    add_missing_ancestors();
     std::ranges::sort(entries_, {}, [](walk_entry const &w) -> std::string const & {
       return w.e.relpath;
     });
   }
 
   std::vector<walk_entry> take() { return std::move(entries_); }
+
+ private:
+  // A filter can select a file without selecting the directory holding it, but a copy of
+  // that set still has to create the directory. Adding those ancestors here is what makes
+  // the digest of a selection equal the digest of a copy of it -- without them a spec
+  // like VENDOR = {"**/*.h"} redeploys on every run.
+  void add_missing_ancestors() {
+    std::unordered_set<std::string_view> present;
+    present.reserve(entries_.size());
+    for (auto const &w : entries_) {
+      if (w.e.kind == tree_entry_kind::DIRECTORY) { present.insert(w.e.relpath); }
+    }
+
+    std::vector<std::string> missing;
+    for (std::size_t i{ 0 }, n{ entries_.size() }; i < n; ++i) {
+      std::string_view path{ entries_[i].e.relpath };
+      for (auto slash{ path.rfind('/') }; slash != std::string_view::npos;
+           slash = path.rfind('/')) {
+        path = path.substr(0, slash);
+        if (!present.insert(path).second) { break; }  // this ancestor and all above it
+        missing.emplace_back(path);
+      }
+    }
+
+    // `present` holds views into `missing`, so it dies with this scope, not before.
+    for (auto &relpath : missing) {
+      entries_.push_back(
+          { .e = { .relpath = std::move(relpath), .kind = tree_entry_kind::DIRECTORY } });
+    }
+  }
+
+ public:
 
  private:
   void run(unsigned worker) {

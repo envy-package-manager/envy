@@ -262,15 +262,15 @@ def table(records) -> str:
     return "\n".join(lines)
 
 
-# Deliberately far below what any working implementation reaches: this catches a
-# serialized queue or a lock in the inner loop, not a regression worth arguing about.
+# Advisory only. A runner's storage is its own business -- a spinning disk, a throttled
+# shared volume or a cold cache all land far below a fast machine, and none of that is a
+# regression in this code. Nothing here fails the job; the archived JSON is the record.
 FLOOR_MB_PER_S = 200.0
 SCALING_RATIO = 1.5
 
 
 def check_guards(records) -> int:
-    """Hard floor fails; the scaling check only annotates. Shared runners are noisy."""
-    failures = 0
+    """Annotate numbers worth a look. Never fails: only correctness gates CI."""
     large = [r for r in records if r["profile"] == "few-large"]
     if not large:
         return 0
@@ -278,11 +278,10 @@ def check_guards(records) -> int:
     fastest = max(large, key=lambda r: r["threads"])
     if fastest["mb_per_s"] < FLOOR_MB_PER_S:
         print(
-            f"::error::tree-hash throughput {fastest['mb_per_s']:.0f} MiB/s is below the "
-            f"{FLOOR_MB_PER_S:.0f} MiB/s floor",
+            f"::warning::tree-hash throughput {fastest['mb_per_s']:.0f} MiB/s is below "
+            f"{FLOOR_MB_PER_S:.0f} MiB/s -- slow storage, or something to look at",
             file=sys.stderr,
         )
-        failures += 1
 
     single = next((r for r in large if r["threads"] == 1), None)
     hw = os.cpu_count() or 1
@@ -294,7 +293,7 @@ def check_guards(records) -> int:
                 f"{fastest['threads']} threads (expected >= {SCALING_RATIO}x)",
                 file=sys.stderr,
             )
-    return failures
+    return 0
 
 
 def main() -> int:
@@ -359,7 +358,10 @@ def main() -> int:
         with args.summary.open("a", encoding="utf-8") as handle:
             handle.write("### tree-hash benchmark\n\n" + rendered + "\n")
 
-    return 1 if check_guards(records) else 0
+    check_guards(records)
+    # A digest that changed with thread count already raised inside sweep(); machine
+    # speed never fails this job.
+    return 0
 
 
 if __name__ == "__main__":

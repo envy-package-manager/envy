@@ -11,7 +11,9 @@
 #include <array>
 #include <memory>
 #include <stdexcept>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -47,13 +49,6 @@ std::string narrow(std::wstring_view w) {
   throw std::runtime_error(std::string(what) + ": " + narrow(path) + " (error " +
                            std::to_string(::GetLastError()) + ")");
 }
-
-struct handle_closer {
-  void operator()(HANDLE h) const noexcept {
-    if (h && h != INVALID_HANDLE_VALUE) { ::CloseHandle(h); }
-  }
-};
-using scoped_handle = std::unique_ptr<std::remove_pointer_t<HANDLE>, handle_closer>;
 
 struct find_closer {
   void operator()(HANDLE h) const noexcept {
@@ -137,26 +132,20 @@ void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &ou
 }
 
 std::string tree_scan_link_target(tree_scan_string const &path) {
-  scoped_handle const h{ ::CreateFileW(
-      path.c_str(),
-      0,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-      nullptr) };
-  if (h.get() == INVALID_HANDLE_VALUE) {
-    throw_last_error("tree_hash: cannot open symlink", path);
+  // The link's *stored* target, not where it resolves to. GetFinalPathNameByHandleW
+  // returns an absolute \\?\ path, which would make the digest depend on where the tree
+  // sits -- a cache copy and a vendor copy of one payload would never agree.
+  //
+  // read_symlink reads the reparse buffer, which is what POSIX readlink gives and what
+  // the test oracle expects. The one std::filesystem call in the walk, on an entry rare
+  // enough to be worth the clarity.
+  std::error_code ec;
+  auto const target{ std::filesystem::read_symlink(std::filesystem::path{ path }, ec) };
+  if (ec) {
+    throw std::runtime_error("tree_hash: cannot read symlink: " + narrow(path) + ": " +
+                             ec.message());
   }
-
-  std::wstring buf(1024, L'\0');
-  auto const n{ ::GetFinalPathNameByHandleW(h.get(),
-                                            buf.data(),
-                                            static_cast<DWORD>(buf.size()),
-                                            FILE_NAME_NORMALIZED) };
-  if (!n || n >= buf.size()) { throw_last_error("tree_hash: cannot read symlink", path); }
-  buf.resize(n);
-  return narrow(buf);
+  return narrow(target.wstring());
 }
 
 }  // namespace envy

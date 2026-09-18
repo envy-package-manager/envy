@@ -548,9 +548,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       // selectors here must not flag them as matched - the target entry does that.
       if (!selectors.empty()) {
         std::string const target{ glob_canonical_path(hardlink_str) };
-        if (std::ranges::none_of(selectors.include, [&](std::string const &selector) {
-              return glob_match(selector, target);
-            })) {
+        // The whole filter, not just the includes: an exclude-only list selects the
+        // target, and an exclude that names it means the filter really does reject it.
+        if (!selectors.selects(target)) {
           throw std::runtime_error("extract: \"" + canonical_entry +
                                    "\" is a hard link to \"" + target +
                                    "\", which 'only' does not select; name it too");
