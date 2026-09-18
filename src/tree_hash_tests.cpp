@@ -45,7 +45,8 @@ std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter 
   } };
 
   for (auto it{ fs::recursive_directory_iterator(
-           root, fs::directory_options::skip_permission_denied) };
+           root,
+           fs::directory_options::skip_permission_denied) };
        it != fs::recursive_directory_iterator{};
        ++it) {
     auto const rel{ relative_of(it->path()) };
@@ -73,10 +74,10 @@ std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter 
                                               std::istreambuf_iterator<char>{} };
       auto const d{ envy::blake3_hash(bytes.data(), bytes.size()) };
       payload.push_back('f');
-      payload.push_back(
-          (fs::status(it->path()).permissions() & fs::perms::owner_exec) != fs::perms::none
-              ? '\1'
-              : '\0');
+      payload.push_back((fs::status(it->path()).permissions() & fs::perms::owner_exec) !=
+                                fs::perms::none
+                            ? '\1'
+                            : '\0');
       push(d.data(), d.size());
     }
     folded.emplace(rel, std::move(payload));
@@ -86,7 +87,7 @@ std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter 
   for (auto const &[rel, payload] : folded) {
     stream.insert(stream.end(), rel.begin(), rel.end());
     stream.push_back('\0');
-    stream.push_back(payload[0]);                       // kind tag
+    stream.push_back(payload[0]);                              // kind tag
     stream.push_back(payload.size() > 1 ? payload[1] : '\0');  // exec bit
     stream.insert(stream.end(), payload.begin() + 2, payload.end());
   }

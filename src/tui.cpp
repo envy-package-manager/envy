@@ -61,9 +61,8 @@ struct section_line_event {  // a committed progress row: pre-rendered, no prefi
   std::string text;
 };
 
-using log_entry =
-    std::variant<log_event, stdout_event, stderr_event, section_line_event,
-                 envy::trace_record>;
+using log_entry = std::
+    variant<log_event, stdout_event, stderr_event, section_line_event, envy::trace_record>;
 
 struct tui {
   std::queue<log_entry> messages;

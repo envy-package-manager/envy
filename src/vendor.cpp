@@ -31,9 +31,8 @@ std::string derive_leaf(pkg_key const &key, int level) {
     case name_level::HASHED: {
       // Whatever follows the identity in the canonical key. Hashing keeps the name a
       // legal path component whatever the author wrote.
-      std::string_view const options{
-        std::string_view{ key.canonical() }.substr(key.identity().size())
-      };
+      std::string_view const options{ std::string_view{ key.canonical() }.substr(
+          key.identity().size()) };
       auto const digest{ blake3_hash(options.data(), options.size()) };
       return std::string{ key.identity() } + "-" + util_bytes_to_hex(digest.data(), 8);
     }
@@ -127,10 +126,9 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
       auto const &a{ sorted[i].key };
       auto const &b{ sorted[j].key };
       if (dest[i] == dest[j]) {
-        throw std::runtime_error("vendor destination collision: '" +
-                                 std::string{ a.identity() } + "' and '" +
-                                 std::string{ b.identity() } + "' both vendor to " +
-                                 dest[i].string());
+        throw std::runtime_error(
+            "vendor destination collision: '" + std::string{ a.identity() } + "' and '" +
+            std::string{ b.identity() } + "' both vendor to " + dest[i].string());
       }
       // Vendoring wipes before copying, so an outer package would delete an inner one.
       if (contains_path(dest[i], dest[j]) || contains_path(dest[j], dest[i])) {
@@ -197,9 +195,7 @@ std::optional<std::string> vendor_read_stamp(fs::path const &stamp) {
   try {
     auto const bytes{ util_load_file(stamp) };
     first.assign(bytes.begin(), bytes.end());
-  } catch (std::exception const &) {
-    return std::nullopt;
-  }
+  } catch (std::exception const &) { return std::nullopt; }
   if (auto const nl{ first.find('\n') }; nl != std::string::npos) { first.resize(nl); }
   // A truncated or hand-edited stamp reads as absent and re-deploys, which beats
   // trusting a digest nobody wrote.

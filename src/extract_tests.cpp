@@ -825,9 +825,8 @@ TEST_CASE("extract 'only' exclusion beats inclusion") {
   auto const dest{ make_temp_dir() };
   auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
 
-  envy::extract_options const opts{
-    .selectors = { "root/subdir1/nested/file4.txt", "!root/subdir1/**" }
-  };
+  envy::extract_options const opts{ .selectors = { "root/subdir1/nested/file4.txt",
+                                                   "!root/subdir1/**" } };
   envy::extract(archive, dest, opts);
   CHECK(collect_files_recursive(dest).empty());
 

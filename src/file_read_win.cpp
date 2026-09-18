@@ -36,8 +36,14 @@ std::string narrow(std::wstring_view w) {
                                      nullptr) };
   if (n <= 0) { throw std::runtime_error("file_read: undecodable path name"); }
   std::string out(static_cast<std::size_t>(n), '\0');
-  ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n,
-                        nullptr, nullptr);
+  ::WideCharToMultiByte(CP_UTF8,
+                        0,
+                        w.data(),
+                        static_cast<int>(w.size()),
+                        out.data(),
+                        n,
+                        nullptr,
+                        nullptr);
   return out;
 }
 
@@ -70,14 +76,14 @@ file_native_string file_native_path(std::filesystem::path const &path) {
 void file_read_chunks(file_native_string const &path,
                       std::uint64_t size,
                       file_chunk_sink const &sink) {
-  scoped_handle const h{ ::CreateFileW(path.c_str(),
-                                       GENERIC_READ,
-                                       FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                           FILE_SHARE_DELETE,
-                                       nullptr,
-                                       OPEN_EXISTING,
-                                       FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OVERLAPPED,
-                                       nullptr) };
+  scoped_handle const h{ ::CreateFileW(
+      path.c_str(),
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OVERLAPPED,
+      nullptr) };
   if (h.get() == INVALID_HANDLE_VALUE) {
     throw_last_error("file_read: cannot open", path);
   }
@@ -130,8 +136,7 @@ void file_read_chunks(file_native_string const &path,
     DWORD got{ 0 };
     // A read at an explicit offset returns `want` or hits EOF, so anything else means
     // the file shrank mid-read. The caller stamps this digest as truth, so fail.
-    if (!s.busy || !::GetOverlappedResult(h.get(), &s.ov, &got, TRUE) ||
-        got != s.want) {
+    if (!s.busy || !::GetOverlappedResult(h.get(), &s.ov, &got, TRUE) || got != s.want) {
       if (s.busy && ::GetLastError() != ERROR_HANDLE_EOF && got == s.want) {
         throw_last_error("file_read: cannot read", path);
       }

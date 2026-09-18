@@ -2,8 +2,8 @@
 #error "tree_hash_win.cpp is Windows-only; POSIX builds tree_hash_posix.cpp"
 #endif
 
-#include "platform.h"  // pulls in <windows.h> with the project's lean/NOMINMAX settings
 #include "file_read.h"
+#include "platform.h"  // pulls in <windows.h> with the project's lean/NOMINMAX settings
 #include "tree_hash.h"
 #include "util.h"
 
@@ -89,16 +89,16 @@ std::string tree_scan_utf8(tree_scan_string const &name) { return narrow(name); 
 
 void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &out) {
   std::size_t count{ 0 };
-  auto const emit{ [&out, &count](wchar_t const *name,
-                                  tree_entry_kind kind,
-                                  std::uint64_t size = 0) {
-    if (count == out.size()) { out.emplace_back(); }
-    auto &e{ out[count++] };
-    e.name.assign(name);  // assign over the old name; the buffer is already there
-    e.kind = kind;
-    e.executable = false;  // no such concept here; the digest reads it as 0
-    e.size = size;
-  } };
+  auto const emit{
+    [&out, &count](wchar_t const *name, tree_entry_kind kind, std::uint64_t size = 0) {
+      if (count == out.size()) { out.emplace_back(); }
+      auto &e{ out[count++] };
+      e.name.assign(name);  // assign over the old name; the buffer is already there
+      e.kind = kind;
+      e.executable = false;  // no such concept here; the digest reads it as 0
+      e.size = size;
+    }
+  };
 
   WIN32_FIND_DATAW fd{};
   // FIND_FIRST_EX_LARGE_FETCH batches directory reads; on a payload with tens of
@@ -137,15 +137,14 @@ void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &ou
 }
 
 std::string tree_scan_link_target(tree_scan_string const &path) {
-  scoped_handle const h{ ::CreateFileW(path.c_str(),
-                                       0,
-                                       FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                           FILE_SHARE_DELETE,
-                                       nullptr,
-                                       OPEN_EXISTING,
-                                       FILE_FLAG_BACKUP_SEMANTICS |
-                                           FILE_FLAG_OPEN_REPARSE_POINT,
-                                       nullptr) };
+  scoped_handle const h{ ::CreateFileW(
+      path.c_str(),
+      0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      nullptr) };
   if (h.get() == INVALID_HANDLE_VALUE) {
     throw_last_error("tree_hash: cannot open symlink", path);
   }
@@ -159,6 +158,5 @@ std::string tree_scan_link_target(tree_scan_string const &path) {
   buf.resize(n);
   return narrow(buf);
 }
-
 
 }  // namespace envy

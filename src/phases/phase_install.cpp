@@ -12,8 +12,8 @@
 #include "trace.h"
 #include "tui.h"
 #include "tui_actions.h"
-#include "vendor.h"
 #include "util.h"
+#include "vendor.h"
 
 #include <filesystem>
 #include <sstream>

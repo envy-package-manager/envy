@@ -145,8 +145,7 @@ TEST_CASE("glob_match: '**' spans components") {
 
 TEST_CASE("glob_match: pathological patterns terminate without matching") {
   // One saved star per level keeps this linear; a recursive matcher would blow up here.
-  CHECK_FALSE(
-      envy::glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  CHECK_FALSE(envy::glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
   CHECK(envy::glob_match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"));
   CHECK_FALSE(envy::glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/j"));
   CHECK(envy::glob_match("**/**/**/x", "a/b/c/d/e/f/g/h/i/x"));
@@ -238,9 +237,8 @@ TEST_CASE("glob_selectors_match matches files exactly and directories by subtree
 
   CHECK(envy::glob_selectors_match(selectors, "bin/clang-format", matched));
   CHECK(envy::glob_selectors_match(selectors, "lib/clang", matched));
-  CHECK(envy::glob_selectors_match(selectors,
-                                      "lib/clang/19/include/stdatomic.h",
-                                      matched));
+  CHECK(
+      envy::glob_selectors_match(selectors, "lib/clang/19/include/stdatomic.h", matched));
 
   // Prefix-of-a-name is not a subtree; neither is a parent of a selected entry.
   CHECK_FALSE(envy::glob_selectors_match(selectors, "bin/clang-format-diff", matched));
@@ -266,7 +264,9 @@ TEST_CASE("glob_selectors_match flags every matching entry, not just the first")
 
 TEST_CASE("glob_parse_filter splits '!' entries into the exclude list") {
   auto const f{ envy::glob_parse_filter(
-      { "include/**", "!include/internal/**", "LICENSE" }, "ctx", "sel") };
+      { "include/**", "!include/internal/**", "LICENSE" },
+      "ctx",
+      "sel") };
   REQUIRE(f.include.size() == 2);
   CHECK(f.include[0] == "include/**");
   CHECK(f.include[1] == "LICENSE");

@@ -169,10 +169,7 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
       auto const match_path{
         selector_match_path(entry, is_raw_stream, bare_name, strip_components)
       };
-      if (!match_path ||
-          !selectors.selects(*match_path, selector_matched)) {
-        continue;
-      }
+      if (!match_path || !selectors.selects(*match_path, selector_matched)) { continue; }
     }
 
     if (!is_raw_stream && archive_entry_filetype(entry) != AE_IFREG) { continue; }
@@ -335,8 +332,6 @@ struct extract_tui_state {
 
 }  // namespace
 
-
-
 std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
                                      std::filesystem::path const &source_dir,
                                      std::string const &prefix,
@@ -461,9 +456,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         archive_path.string());
   }
 
-  auto const selectors{
-    glob_parse_filter(options.selectors, "extract", kOnlyEntry)
-  };
+  auto const selectors{ glob_parse_filter(options.selectors, "extract", kOnlyEntry) };
 
   archive_reader reader{ bare_name.has_value() };
   archive_writer writer;
@@ -526,8 +519,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     std::string const canonical_entry{ selectors.empty()
                                            ? std::string{}
                                            : glob_canonical_path(entry_path) };
-    if (!selectors.empty() &&
-        !selectors.selects(canonical_entry, selector_matched)) {
+    if (!selectors.empty() && !selectors.selects(canonical_entry, selector_matched)) {
       continue;  // Not selected: leave it compressed, never touch the disk.
     }
 
@@ -690,9 +682,9 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
 
 extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
                                       extract_options const &options) {
-  auto const selectors{ glob_parse_filter(options.selectors,
-                                            "compute_archive_totals",
-                                            kOnlyEntry) };
+  auto const selectors{
+    glob_parse_filter(options.selectors, "compute_archive_totals", kOnlyEntry)
+  };
   std::vector<bool> selector_matched(selectors.include.size(), false);
   extract_totals totals{};
   accumulate_archive_totals(archive_path,
@@ -708,9 +700,9 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
 
 extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                                       extract_options const &options) {
-  auto const selectors{ glob_parse_filter(options.selectors,
-                                            "compute_extract_totals",
-                                            kOnlyEntry) };
+  auto const selectors{
+    glob_parse_filter(options.selectors, "compute_extract_totals", kOnlyEntry)
+  };
   std::vector<bool> selector_matched(selectors.include.size(), false);
   extract_totals totals{};
   if (!std::filesystem::exists(fetch_dir)) { return totals; }
@@ -722,8 +714,7 @@ extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
     if (!extract_is_archive_extension(entry.path())) {
       // Loose files are copied verbatim, so selectors match their filename.
       if (!selectors.empty() &&
-          !selectors.selects(entry.path().filename().generic_string(),
-                             selector_matched)) {
+          !selectors.selects(entry.path().filename().generic_string(), selector_matched)) {
         continue;
       }
       std::error_code ec;
@@ -852,8 +843,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
       if (tui_state) { tui_state->on_progress(processed_bytes, {}, false); }
     } else {
       // Loose files are copied whole, so selectors match their filename.
-      if (!selectors.empty() &&
-          !selectors.selects(filename, loose_selector_matched)) {
+      if (!selectors.empty() && !selectors.selects(filename, loose_selector_matched)) {
         continue;
       }
 

@@ -24,11 +24,11 @@ struct tree_hash_result {
 // are summed across workers, so they exceed wall time; read the ratio, not the total.
 struct tree_hash_stats {
   std::uint64_t dirs{ 0 };
-  std::uint64_t scan_ns{ 0 };   // enumerating directories
-  std::uint64_t read_ns{ 0 };   // open/read/close, excluding the hashing below
-  std::uint64_t hash_ns{ 0 };   // BLAKE3 over file contents
-  std::uint64_t fold_ns{ 0 };   // sorting entries and folding them into one digest
-  std::uint64_t wait_ns{ 0 };   // blocked on the work queue
+  std::uint64_t scan_ns{ 0 };  // enumerating directories
+  std::uint64_t read_ns{ 0 };  // open/read/close, excluding the hashing below
+  std::uint64_t hash_ns{ 0 };  // BLAKE3 over file contents
+  std::uint64_t fold_ns{ 0 };  // sorting entries and folding them into one digest
+  std::uint64_t wait_ns{ 0 };  // blocked on the work queue
   std::uint64_t wall_ns{ 0 };
   unsigned threads{ 0 };
   std::vector<std::uint64_t> files_per_worker;  // the balance report: spread is the point

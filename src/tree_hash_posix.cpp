@@ -155,5 +155,4 @@ std::string tree_scan_link_target(tree_scan_string const &path) {
   throw std::runtime_error("tree_hash: symlink target too long: " + path);
 }
 
-
 }  // namespace envy

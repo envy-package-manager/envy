@@ -14,9 +14,9 @@
 #include "sol_util.h"
 #include "trace.h"
 #include "tui.h"
-#include "vendor.h"
 #include "tui_actions.h"
 #include "util.h"
+#include "vendor.h"
 
 #include <chrono>
 #include <map>

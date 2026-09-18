@@ -17,9 +17,7 @@ class blake3_stream : uncopyable {
  public:
   blake3_stream() { blake3_hasher_init(&h_); }
 
-  void update(void const *data, size_t length) {
-    blake3_hasher_update(&h_, data, length);
-  }
+  void update(void const *data, size_t length) { blake3_hasher_update(&h_, data, length); }
 
   // Const: finalizing does not consume the state, and further updates are legal.
   blake3_t finalize() const {

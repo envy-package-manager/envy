@@ -59,9 +59,8 @@ TEST_CASE("vendor_resolve escalates to the namespace only for the colliding grou
 }
 
 TEST_CASE("vendor_resolve escalates to the revision when the namespace still collides") {
-  auto const plan{
-    resolve({ derived("local.nanocobs@r3"), derived("local.nanocobs@r4") })
-  };
+  auto const plan{ resolve(
+      { derived("local.nanocobs@r3"), derived("local.nanocobs@r4") }) };
   CHECK(dest_of(plan, "local.nanocobs@r3") == "vendor/local.nanocobs@r3");
   CHECK(dest_of(plan, "local.nanocobs@r4") == "vendor/local.nanocobs@r4");
 }
@@ -90,17 +89,16 @@ TEST_CASE("vendor_resolve is stable under input order") {
 TEST_CASE("vendor_resolve escalates again when raising a group creates a new collision") {
   // "x.local.tool@r1" has name "local.tool", exactly where escalating the two `tool`
   // packages lands one of them. A single pass would leave that collision unresolved.
-  auto const plan{ resolve({ derived("local.tool@r1"),
-                             derived("acme.tool@r1"),
-                             derived("x.local.tool@r1") }) };
+  auto const plan{ resolve(
+      { derived("local.tool@r1"), derived("acme.tool@r1"), derived("x.local.tool@r1") }) };
   CHECK(dest_of(plan, "local.tool@r1") == "vendor/local.tool@r1");  // raised twice
   CHECK(dest_of(plan, "x.local.tool@r1") == "vendor/x.local.tool");
   CHECK(dest_of(plan, "acme.tool@r1") == "vendor/acme.tool");
 }
 
 TEST_CASE("vendor_resolve places an override exactly where it says") {
-  auto const plan{ resolve({ overridden("fi.armgcc@r1", "tools/armgcc"),
-                             derived("local.nanocobs@r3") }) };
+  auto const plan{ resolve(
+      { overridden("fi.armgcc@r1", "tools/armgcc"), derived("local.nanocobs@r3") }) };
   CHECK(dest_of(plan, "fi.armgcc@r1") == "tools/armgcc");
   CHECK(plan.find(envy::pkg_key{ "fi.armgcc@r1" })->overridden);
   CHECK(dest_of(plan, "local.nanocobs@r3") == "vendor/nanocobs");
@@ -126,8 +124,8 @@ TEST_CASE("vendor_resolve rejects a derived name with no VENDOR_ROOT") {
 
 TEST_CASE("vendor_resolve rejects two overrides naming one directory") {
   try {
-    resolve({ overridden("a.one@r1", "shared/dir"),
-              overridden("b.two@r1", "shared/dir") });
+    resolve(
+        { overridden("a.one@r1", "shared/dir"), overridden("b.two@r1", "shared/dir") });
     FAIL("expected a collision error");
   } catch (std::runtime_error const &e) {
     std::string const msg{ e.what() };
@@ -140,19 +138,18 @@ TEST_CASE("vendor_resolve rejects two overrides naming one directory") {
 TEST_CASE("vendor_resolve steps a derived name aside for an override that claims it") {
   // An override is a fixed point, so the escalation ladder resolves this rather than
   // failing: the author asked for that exact directory and gets it.
-  auto const plan{ resolve({ derived("local.nanocobs@r3"),
-                             overridden("b.two@r1", "vendor/nanocobs") }) };
+  auto const plan{ resolve(
+      { derived("local.nanocobs@r3"), overridden("b.two@r1", "vendor/nanocobs") }) };
   CHECK(dest_of(plan, "b.two@r1") == "vendor/nanocobs");
   CHECK(dest_of(plan, "local.nanocobs@r3") == "vendor/local.nanocobs");
 }
 
 TEST_CASE("vendor_resolve rejects nested destinations in either order") {
-  for (auto const &reqs : { std::vector<envy::vendor_request>{
-                                overridden("a.one@r1", "deps"),
-                                overridden("b.two@r1", "deps/inner") },
-                            std::vector<envy::vendor_request>{
-                                overridden("b.two@r1", "deps/inner"),
-                                overridden("a.one@r1", "deps") } }) {
+  for (auto const &reqs :
+       { std::vector<envy::vendor_request>{ overridden("a.one@r1", "deps"),
+                                            overridden("b.two@r1", "deps/inner") },
+         std::vector<envy::vendor_request>{ overridden("b.two@r1", "deps/inner"),
+                                            overridden("a.one@r1", "deps") } }) {
     try {
       resolve(reqs);
       FAIL("expected a nesting error");
@@ -168,8 +165,8 @@ TEST_CASE("vendor_resolve rejects nested destinations in either order") {
 TEST_CASE("vendor_resolve allows sibling directories sharing a name prefix") {
   // "deps/lib" must not read as the parent of "deps/lib-extra": nesting is a component
   // relationship, not a string prefix.
-  auto const plan{ resolve({ overridden("a.one@r1", "deps/lib"),
-                             overridden("b.two@r1", "deps/lib-extra") }) };
+  auto const plan{ resolve(
+      { overridden("a.one@r1", "deps/lib"), overridden("b.two@r1", "deps/lib-extra") }) };
   CHECK(dest_of(plan, "a.one@r1") == "deps/lib");
   CHECK(dest_of(plan, "b.two@r1") == "deps/lib-extra");
 }
@@ -189,7 +186,8 @@ TEST_CASE("vendor_resolve on no requests yields an empty plan") {
 
 TEST_CASE("vendor_parse_selectors splits '!' entries into the exclude list") {
   auto const f{ envy::vendor_parse_selectors(
-      { "include/**", "!include/internal/**", "LICENSE" }, "spec 'a.b@r1'") };
+      { "include/**", "!include/internal/**", "LICENSE" },
+      "spec 'a.b@r1'") };
   REQUIRE(f.include.size() == 2);
   CHECK(f.include[0] == "include/**");
   CHECK(f.include[1] == "LICENSE");

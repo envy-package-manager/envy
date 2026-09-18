@@ -625,9 +625,8 @@ TEST_CASE("cli_parse: cmd_hash") {
   }
 
   SUBCASE("--only repeats and keeps order, including '!' entries") {
-    std::vector<std::string> args{ "envy",   "hash",        "--tree",
-                                   "--only", "include/**",  "--only",
-                                   "!**/*_test.c",          "some/dir" };
+    std::vector<std::string> args{ "envy",       "hash",   "--tree",       "--only",
+                                   "include/**", "--only", "!**/*_test.c", "some/dir" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -641,8 +640,8 @@ TEST_CASE("cli_parse: cmd_hash") {
   }
 
   SUBCASE("--threads and --json round-trip") {
-    std::vector<std::string> args{ "envy", "hash",     "--tree", "--threads",
-                                   "8",    "--json",   "some/dir" };
+    std::vector<std::string> args{ "envy", "hash",   "--tree",  "--threads",
+                                   "8",    "--json", "some/dir" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
@@ -668,7 +667,7 @@ TEST_CASE("cli_parse: cmd_hash") {
   }
 
   SUBCASE("--tree and --prefix are mutually exclusive") {
-    std::vector<std::string> args{ "envy",     "hash", "--tree",
+    std::vector<std::string> args{ "envy",     "hash",         "--tree",
                                    "--prefix", "s3://bucket/", "some/dir" };
     auto argv{ make_argv(args) };
 

@@ -19,8 +19,8 @@ struct vendor_request {
 };
 
 struct vendor_destination {
-  std::filesystem::path dir;   // absolute, lexically normal
-  bool overridden{ false };    // whether `vendor = "..."` named it
+  std::filesystem::path dir;  // absolute, lexically normal
+  bool overridden{ false };   // whether `vendor = "..."` named it
 };
 
 // Every destination, proven collision-free. Resolved before the engine runs, so a bad

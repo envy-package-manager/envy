@@ -69,8 +69,12 @@ TEST_CASE("blake3_stream is insensitive to how input is split") {
   }
   auto const want{ envy::blake3_hash(data.data(), data.size()) };
 
-  for (size_t chunk : { size_t{ 1 }, size_t{ 7 }, size_t{ 1024 }, size_t{ 65536 },
-                        data.size(), data.size() * 2 }) {
+  for (size_t chunk : { size_t{ 1 },
+                        size_t{ 7 },
+                        size_t{ 1024 },
+                        size_t{ 65536 },
+                        data.size(),
+                        data.size() * 2 }) {
     envy::blake3_stream s;
     for (size_t off{ 0 }; off < data.size(); off += chunk) {
       s.update(data.data() + off, std::min(chunk, data.size() - off));

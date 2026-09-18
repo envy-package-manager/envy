@@ -53,21 +53,20 @@ sha256_t sha256(std::filesystem::path const &file_path,
   // One file-reading path in the process: the same platform-native reader the subtree
   // hash uses, so read sizing, readahead and short-read handling are decided once.
   std::uint64_t hashed{ 0 };
-  file_read_chunks(
-      file_native_path(file_path),
-      total,
-      [&](void const *data, std::size_t n) {
-        auto const hash_status{ BCryptHashData(
-            hash_handle,
-            const_cast<PUCHAR>(static_cast<unsigned char const *>(data)),
-            static_cast<ULONG>(n),
-            0) };
-        if (!BCRYPT_SUCCESS(hash_status)) {
-          throw std::runtime_error("sha256: BCryptHashData failed");
-        }
-        hashed += n;
-        if (progress) { progress(hashed, total); }
-      });
+  file_read_chunks(file_native_path(file_path),
+                   total,
+                   [&](void const *data, std::size_t n) {
+                     auto const hash_status{ BCryptHashData(
+                         hash_handle,
+                         const_cast<PUCHAR>(static_cast<unsigned char const *>(data)),
+                         static_cast<ULONG>(n),
+                         0) };
+                     if (!BCRYPT_SUCCESS(hash_status)) {
+                       throw std::runtime_error("sha256: BCryptHashData failed");
+                     }
+                     hashed += n;
+                     if (progress) { progress(hashed, total); }
+                   });
 
   // An empty file reports nothing above, so its row still gets one terminal frame.
   if (progress) { progress(hashed, total); }

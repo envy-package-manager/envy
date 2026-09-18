@@ -41,8 +41,9 @@ class thread_budget : unmovable {
 
   unsigned threads() const {
     if (requested_) { return requested_; }
-    return std::max(1u, tree_hash_default_threads() /
-                            static_cast<unsigned>(std::max(1, inflight_)));
+    return std::max(
+        1u,
+        tree_hash_default_threads() / static_cast<unsigned>(std::max(1, inflight_)));
   }
 
  private:
@@ -121,7 +122,9 @@ class walker : unmovable {
 
     std::vector<std::thread> workers;
     workers.reserve(n);
-    for (unsigned i{ 0 }; i < n; ++i) { workers.emplace_back([this, i] { run(i); }); }
+    for (unsigned i{ 0 }; i < n; ++i) {
+      workers.emplace_back([this, i] { run(i); });
+    }
     for (auto &w : workers) { w.join(); }
 
     if (error_) { std::rethrow_exception(error_); }
@@ -338,10 +341,10 @@ tree_hash_result tree_hash(std::filesystem::path const &root,
   }
   result.digest = fold.finalize();
   if (stats) {
-    stats->wall_ns = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - started)
-            .count());
+    stats->wall_ns =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now() - started)
+                                       .count());
   }
   return result;
 }
