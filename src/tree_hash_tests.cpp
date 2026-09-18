@@ -286,9 +286,7 @@ TEST_CASE("a filtered selection hashes as a copy of itself would") {
     for (auto const &e : envy::tree_list(kBasic, filter)) { paths.insert(e.relpath); }
     for (auto const &path : paths) {
       if (auto const slash{ path.rfind('/') }; slash != std::string::npos) {
-        CHECK_MESSAGE(paths.count(path.substr(0, slash)) == 1,
-                      "missing parent of ",
-                      path);
+        CHECK_MESSAGE(paths.count(path.substr(0, slash)) == 1, "missing parent of ", path);
       }
     }
     CHECK(digest_of(kBasic, filter) == oracle_digest(kBasic, filter));

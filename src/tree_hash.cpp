@@ -13,8 +13,8 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
-#include <unordered_set>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -168,7 +168,6 @@ class walker : unmovable {
   }
 
  public:
-
  private:
   void run(unsigned worker) {
     // Results and scratch buffers are per worker; the shared lock carries only queue
