@@ -78,7 +78,7 @@ void run_vendor_phase(pkg *p, engine &eng) {
                                        pkg_phase::pkg_vendor,
                                        std::chrono::steady_clock::now() };
 
-  auto const *plan{ eng.vendor_plan() };
+  auto const *plan{ eng.vendor() };
   if (!plan) { return; }  // Not a vendoring run; short-circuit.
 
   auto const *destination{ plan->find(p->key) };

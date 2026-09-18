@@ -1481,7 +1481,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     // User-managed writes to the host, not a cache entry, so there is no payload to
     // copy. First moment this is knowable, and still before pkg_check.
     if (user_managed) {
-      if (auto const *plan{ eng.vendor_plan() }; plan && plan->find(p->key)) {
+      if (auto const *plan{ eng.vendor() }; plan && plan->find(p->key)) {
         throw std::runtime_error(
             "package '" + cfg.identity +
             "' is declared USER_MANAGED, which has no cached payload to vendor; remove "

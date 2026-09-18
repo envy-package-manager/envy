@@ -41,8 +41,11 @@ std::string digest_of(fs::path const &root,
 std::string oracle_digest(fs::path const &root, envy::tree_filter const &filter = {}) {
   std::map<std::string, std::vector<unsigned char>> folded;
 
+  // generic_string() is the active code page on Windows, while tree_hash folds UTF-8.
+  // A non-ASCII filename would make the two disagree about bytes, not about content.
   auto const relative_of{ [&root](fs::path const &p) {
-    return p.lexically_relative(root).generic_string();
+    auto const u8{ p.lexically_relative(root).generic_u8string() };
+    return std::string{ u8.begin(), u8.end() };
   } };
 
   for (auto it{ fs::recursive_directory_iterator(

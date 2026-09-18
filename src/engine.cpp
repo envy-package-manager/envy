@@ -775,7 +775,7 @@ void engine::set_depot_index(package_depot_index idx) {
 
 void engine::set_ignore_depot(bool ignore) { depot_ignored_ = ignore; }
 
-void engine::set_vendor_plan(envy::vendor_plan plan) {
+void engine::set_vendor_plan(vendor_plan plan) {
   // Written before any worker exists and read-only after, so the vendor phase needs no
   // lock to read it from every package thread.
   for (auto const &[key, dest] : plan.dirs) {
@@ -787,7 +787,7 @@ void engine::set_vendor_plan(envy::vendor_plan plan) {
   vendor_plan_ = std::move(plan);
 }
 
-vendor_plan const *engine::vendor_plan() const {
+vendor_plan const *engine::vendor() const {
   return vendor_plan_ ? &*vendor_plan_ : nullptr;
 }
 

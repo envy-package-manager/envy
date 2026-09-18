@@ -197,7 +197,7 @@ void run_install_phase(pkg *p, engine &eng) {
 
   // Stamp while the entry is still ours and the payload untouched, but only for what
   // this run vendors. The vendor phase backfills a cache hit or a depot import.
-  if (auto const *plan{ eng.vendor_plan() }; plan && plan->find(p->key)) {
+  if (auto const *plan{ eng.vendor() }; plan && plan->find(p->key)) {
     vendor_pristine_hash(p->pkg_path, p->vendor_filter);
   }
 }

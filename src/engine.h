@@ -158,7 +158,9 @@ class engine : unmovable {
   // Set before the run, never during it: resolving up front is what makes a collision
   // fail with nothing written. Null means every vendor step is a no-op.
   void set_vendor_plan(vendor_plan plan);
-  vendor_plan const *vendor_plan() const;
+  // Not `vendor_plan()`: a member function of that name would change the meaning of the
+  // type name used just above it, which GCC rejects outright.
+  vendor_plan const *vendor() const;
 
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
@@ -268,7 +270,7 @@ class engine : unmovable {
   std::unordered_map<std::string, std::unique_ptr<bundle>> bundle_registry_;
 
   // Vendor plan (set before the run, read by the vendor phase on worker threads)
-  std::optional<envy::vendor_plan> vendor_plan_;
+  std::optional<vendor_plan> vendor_plan_;
 
   // Export phase state (set before resolve_graph, read by phase handler)
   std::optional<export_phase_config> export_config_;
