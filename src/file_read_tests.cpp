@@ -20,8 +20,9 @@ namespace fs = std::filesystem;
 
 fs::path const kFixtures{ "test_data/tree_hash/basic" };
 
-// A narrow literal becomes a path through the active code page on Windows, which mangles
-// anything outside ASCII. char8_t says UTF-8 and means it on every platform.
+// Two Windows traps in one line. A narrow literal becomes a path through the active code
+// page, so it must be char8_t; and MSVC reads a BOM-less source file in that code page
+// too, so the name is spelled with universal character names rather than its own bytes.
 fs::path u8path(char8_t const *name) { return fs::path{ std::u8string{ name } }; }
 
 // Everything file_read_chunks handed over, concatenated, plus how it was chunked.
@@ -64,7 +65,7 @@ TEST_CASE("file_read_chunks reports an empty file as zero bytes and no chunks") 
 
 TEST_CASE("file_read_chunks handles a non-ASCII path") {
   capture c;
-  auto const path{ kFixtures / "docs" / u8path(u8"ünïcode.txt") };
+  auto const path{ kFixtures / "docs" / u8path(u8"\u00fcn\u00efcode.txt") };
   CHECK(envy::file_read_chunks(path, c.sink()) == read_via_stdio(path).size());
   CHECK(c.bytes == read_via_stdio(path));
 }
