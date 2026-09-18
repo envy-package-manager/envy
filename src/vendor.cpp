@@ -155,11 +155,11 @@ void vendor_validate_stamp_dir(vendor_plan const &plan) {
   for (auto const &[key, dest] : plan.dirs) {
     if (contains_path(dest.dir, plan.stamp_dir) ||
         contains_path(plan.stamp_dir, dest.dir)) {
-      throw std::runtime_error(
-          "vendor stamps for '" + std::string{ key.identity() } + "' would live at " +
-          plan.stamp_dir.string() + ", inside or over its destination " +
-          dest.dir.string() + "; vendoring wipes that directory, so point '@envy "
-          "state-dir' somewhere outside it");
+      throw std::runtime_error("vendor stamps for '" + std::string{ key.identity() } +
+                               "' would live at " + plan.stamp_dir.string() +
+                               ", inside or over its destination " + dest.dir.string() +
+                               "; vendoring wipes that directory, so point '@envy "
+                               "state-dir' somewhere outside it");
     }
   }
 }
@@ -182,7 +182,8 @@ void vendor_validate_destination(fs::path const &dest,
   if (!contains_path(real_root, real_dest)) {
     throw std::runtime_error("vendor: '" + std::string{ identity } + "' resolves to " +
                              real_dest.string() + ", outside the project at " +
-                             real_root.string() + "; a symlinked path component would "
+                             real_root.string() +
+                             "; a symlinked path component would "
                              "put a wipe-and-recopy somewhere it does not belong");
   }
 }
