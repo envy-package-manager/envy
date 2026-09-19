@@ -7,9 +7,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstddef>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -428,7 +428,8 @@ bool tree_remove(std::filesystem::path const &root, unsigned threads) {
 
   try {
     thread_budget const budget{ threads };
-    return tree_remove_listed(root, tree_list(root, {}, budget.threads()),
+    return tree_remove_listed(root,
+                              tree_list(root, {}, budget.threads()),
                               budget.threads());
   } catch (std::exception const &) {
     return false;  // unreadable somewhere; the caller's fallback decides how hard to try

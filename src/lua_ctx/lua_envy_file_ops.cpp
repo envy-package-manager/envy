@@ -1,8 +1,8 @@
 #include "lua_envy_file_ops.h"
 
 #include "lua_phase_context.h"
-#include "tree_hash.h"
 #include "pkg.h"
+#include "tree_hash.h"
 
 #include <filesystem>
 #include <stdexcept>

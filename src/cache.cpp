@@ -2,8 +2,8 @@
 
 #include "blake3_util.h"
 #include "platform.h"
-#include "tree_hash.h"
 #include "trace.h"
+#include "tree_hash.h"
 #include "tui.h"
 #include "util.h"
 
