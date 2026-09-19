@@ -3793,6 +3793,9 @@ TEST_CASE("cli_parse: cmd_vendor") {
     CHECK(accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all", "--threads", "4" })
               .threads == 4);
     rejects({ "envy", "vendor", "--all", "--threads", "many" });
+    // Negative parses; execute() is where it is refused, as `hash --threads` does.
+    CHECK(accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all", "--threads", "-2" })
+              .threads == -2);
   }
 
   SUBCASE("--manifest points at a project") {

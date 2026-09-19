@@ -17,7 +17,7 @@ class cmd_vendor : public cmd {
     std::vector<std::string> queries;  // Which vendored packages; --all takes every one
     bool all = false;
     bool force = false;    // Repair even where vendor.auto_sync = false
-    bool dry_run = false;  // Report the decision, write nothing
+    bool dry_run = false;  // Report the decision, leave the destination alone
     int threads = 0;       // Copy workers; 0 = the performance-core count
     std::optional<std::filesystem::path> manifest_path;
   };

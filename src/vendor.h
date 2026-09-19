@@ -33,7 +33,9 @@ struct vendor_plan {
   // What destinations are checked against before anything is wiped.
   std::filesystem::path project_root;
 
-  // `envy vendor --dry-run`: decide as usual, report the decision, write nothing.
+  // `envy vendor --dry-run`: decide as usual, report the decision, write nothing to
+  // the destination. Not "no writes at all" -- the ladder still runs, so an uncached
+  // package is still fetched and installed; the vendor step is what holds off.
   bool dry_run{ false };
 
   // Copy workers; 0 divides the performance cores by the vendor phases in flight. A

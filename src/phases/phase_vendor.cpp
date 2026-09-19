@@ -115,13 +115,16 @@ std::uint64_t copy_entries(fs::path const &src_root,
                            std::vector<tree_entry> const &entries,
                            unsigned threads,
                            std::function<void(std::uint64_t)> const &on_file) {
-  std::vector<tree_entry const *> files;
-  files.reserve(entries.size());
+  // Symlinks are work items too, but they are not what the row counts: the caller's
+  // denominator is the file count, and a numerator that also ticked for links would
+  // walk the bar past 100%.
+  std::vector<tree_entry const *> work;
+  work.reserve(entries.size());
   for (auto const &e : entries) {
     if (e.kind == tree_entry_kind::DIRECTORY) {
       materialize(src_root, dest, e);
     } else {
-      files.push_back(&e);
+      work.push_back(&e);
     }
   }
 
@@ -132,27 +135,27 @@ std::uint64_t copy_entries(fs::path const &src_root,
 
   auto const worker{ [&] {
     constexpr std::size_t kSlice{ 32 };
-    for (std::size_t first{ next.fetch_add(kSlice) }; first < files.size();
+    for (std::size_t first{ next.fetch_add(kSlice) }; first < work.size();
          first = next.fetch_add(kSlice)) {
-      auto const last{ std::min(first + kSlice, files.size()) };
+      auto const last{ std::min(first + kSlice, work.size()) };
       try {
         for (std::size_t i{ first }; i < last; ++i) {
-          materialize(src_root, dest, *files[i]);
+          materialize(src_root, dest, *work[i]);
+          if (work[i]->kind == tree_entry_kind::FILE) { done.fetch_add(1); }
           // Every worker reports; the callback draws at most one frame per slice, so a
           // 50,000-file payload does not spend its time in the renderer.
-          auto const n{ done.fetch_add(1) + 1 };
-          if (i + 1 == last) { on_file(n); }
+          if (i + 1 == last) { on_file(done.load()); }
         }
       } catch (...) {
         std::lock_guard const lock{ error_mutex };
         if (!error) { error = std::current_exception(); }
-        next.store(files.size());  // a half-written tree is not worth finishing
+        next.store(work.size());  // a half-written tree is not worth finishing
         return;
       }
     }
   } };
 
-  unsigned const n{ std::max(1u, std::min<unsigned>(threads, 1 + files.size() / 32)) };
+  unsigned const n{ std::max(1u, std::min<unsigned>(threads, 1 + work.size() / 32)) };
   std::vector<std::thread> pool;
   pool.reserve(n - 1);
   for (unsigned i{ 1 }; i < n; ++i) { pool.emplace_back(worker); }
@@ -250,7 +253,14 @@ void run_vendor_phase(pkg *p, engine &eng) {
       // The listed delete is the fast path and reports when it did not finish; the
       // retrying whole-tree remove is the backstop, and is the whole story for an absent
       // destination, where the drift check listed nothing.
-      bool const cleared{ !present.empty() &&
+      //
+      // A destination that is itself a symlink goes straight to the backstop. The
+      // listing came from tree_hash, which followed the link, so every relpath in it
+      // names something under the *target*: deleting them would empty a directory the
+      // package does not own, where remove_all unlinks the link and leaves the target
+      // whole. That is also what makes the recreate below a real directory.
+      std::error_code link_ec;
+      bool const cleared{ !present.empty() && !fs::is_symlink(dest, link_ec) &&
                           vendor_remove_listed(dest, present, budget.threads()) };
       if (!cleared) {
         if (auto const ec{ platform::remove_all_with_retry(dest) }) {
@@ -267,8 +277,8 @@ void run_vendor_phase(pkg *p, engine &eng) {
       wipe_ms = elapsed_ms(wipe_start);
     }
 
-    // Count files, not entries: directories are free to make, and the file count is what
-    // the row's last word reports.
+    // Count files, not entries: directories are free to make, symlinks cost nothing to
+    // write, and the file count is both the row's denominator and its last word.
     auto const total{ std::ranges::count_if(entries, [](tree_entry const &e) {
       return e.kind == tree_entry_kind::FILE;
     }) };

@@ -225,6 +225,36 @@ class TestVendorCollisions(VendorTestCase):
         self.assertFalse((self.project / "deps").exists())
 
     @POSIX_ONLY
+    def test_a_symlinked_destination_does_not_erase_what_it_points_at(self):
+        """The wipe deletes the listing the drift check produced, and that listing was
+        taken through the link -- so it names the target's contents, not the link."""
+        target = self.project / "elsewhere"
+        target.mkdir()
+        (target / "precious.txt").write_text("not the package's\n", encoding="utf-8")
+        (self.project / "link").symlink_to(target)
+
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='"link"'
+            )
+        )
+        # The link resolves to a directory holding something else, so the first run is
+        # already a mismatch: it wipes and recopies.
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        # remove_all unlinks the link and leaves the target; the copy then lands in a
+        # real directory of its own.
+        self.assertTrue(
+            (target / "precious.txt").exists(),
+            "vendoring through a symlinked destination erased the target's contents",
+        )
+        self.assertFalse((self.project / "link").is_symlink())
+        self.assertEqual(
+            self.tree_of(self.payload), self.tree_of(self.project / "link")
+        )
+
+    @POSIX_ONLY
     def test_destination_behind_a_symlink_out_of_the_project_is_refused(self):
         """A symlinked path component would put the wipe-and-recopy outside the project.
 

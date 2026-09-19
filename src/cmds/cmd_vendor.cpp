@@ -13,7 +13,6 @@
 
 #include "cli_parse.h"
 
-#include <algorithm>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -28,7 +27,7 @@ cli_cmd &cmd_vendor::register_cli(cli_cmd &app, cfg &c) {
   sub.pos("queries", c.queries, "Package queries to vendor");
   sub.flag("--all", c.all, "Vendor every package the manifest vendors");
   sub.flag("--force", c.force, "Repair even where vendor.auto_sync = false");
-  sub.flag("--dry-run", c.dry_run, "Print what would happen; write nothing");
+  sub.flag("--dry-run", c.dry_run, "Print what would happen; touch no vendored file");
   sub.opt("--threads", c.threads, "Copy worker threads (0 = performance-core count)");
   sub.opt("--manifest", c.manifest_path, "Path to envy.lua manifest");
   sub.finalize(
@@ -50,6 +49,10 @@ cmd_vendor::cmd_vendor(cfg cfg, std::optional<std::filesystem::path> const &cli_
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_vendor::execute() {
+  if (cfg_.threads < 0) {
+    throw std::runtime_error("vendor: --threads cannot be negative");
+  }
+
   auto const [m, c]{ cmd_startup_load("vendor",
                                       cfg_.manifest_path,
                                       cli_cache_root_,
@@ -104,7 +107,7 @@ void cmd_vendor::execute() {
     for (auto &[_, destination] : plan.dirs) { destination.auto_sync = true; }
   }
   plan.dry_run = cfg_.dry_run;
-  plan.threads = static_cast<unsigned>(std::max(0, cfg_.threads));
+  plan.threads = static_cast<unsigned>(cfg_.threads);
 
   engine eng{ *c, m.get() };
   eng.set_vendor_plan(std::move(plan));

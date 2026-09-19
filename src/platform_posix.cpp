@@ -429,8 +429,11 @@ bool clone_file(std::filesystem::path const &src, std::filesystem::path const &d
   }
 
   // FICLONE shares extents rather than copying them, and fails on a filesystem or a
-  // cross-device pair that cannot: the empty file it would leave has to go.
-  bool const cloned{ ::ioctl(out, FICLONE, in) == 0 };
+  // cross-device pair that cannot: the empty file it would leave has to go. The mode
+  // needs fchmod on top of open's argument, which the umask filters -- and the exec bit
+  // is in the tree digest, so losing it would redeploy the package on every run.
+  bool const cloned{ ::ioctl(out, FICLONE, in) == 0 &&
+                     ::fchmod(out, st.st_mode & 07777) == 0 };
   ::close(out);
   ::close(in);
   if (!cloned) {

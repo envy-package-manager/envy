@@ -417,7 +417,11 @@ def sweep_wipe(profiles, root: Path, threads: list[int], reps: int, verbose: boo
                 shutil.rmtree(scratch, ignore_errors=True)
                 try:
                     copy_tree(corpus, scratch, layout, clone_file, max(threads))
-                except OSError:  # no clone here; the copy is setup, not the measurement
+                except OSError:
+                    # No reflink here; the tree is setup, not the measurement, so any
+                    # copy will do. The failed attempt left the directories behind and
+                    # copy_tree creates its own, so it starts from nothing.
+                    shutil.rmtree(scratch, ignore_errors=True)
                     copy_tree(corpus, scratch, layout, shutil.copyfile, max(threads))
                 started = time.perf_counter()
                 run(scratch)
