@@ -1249,4 +1249,39 @@ TEST_CASE("engine_resolve_targets: duplicate declarations of one key are one tar
   CHECK(pkg_key{ *targets[0] }.canonical() == "local.tool@v1");
 }
 
+TEST_CASE("collect_all_products: spec_fetch publishes the type, not the step count") {
+  // The state this pins is the one the resolution barrier hands a reader for a few
+  // microseconds, made permanent: a package interned but never started has a step
+  // count of 0 for certain, where a racing one has it only sometimes.
+  //
+  // engine.cpp's spec_fetch wrapper sets spec_fetch_completed, *then* calls
+  // on_spec_fetch_complete() -- which releases wait_for_resolution_phase() -- and only
+  // returns after that, which is when the task engine counts the step. So
+  // resolve_graph() can return with the count still at zero, and a reader gating the
+  // type on that count calls a user-managed package UNKNOWN. `envy product --json`
+  // then skips its verbatim-value branch and prints a synthesized cache path for a
+  // package that has no payload at all.
+  namespace fs = std::filesystem;
+  fs::path const cache_root{ fs::temp_directory_path() / "envy-products-publish" };
+  cache c{ cache_root };
+  auto m{ manifest::load("-- @envy bin-dir \"tools\"\nPACKAGES = {}",
+                         fs::path("/fake/envy.lua")) };
+  engine eng{ c, m.get() };
+
+  pkg *p{ eng.ensure_pkg(make_local_cfg("local.programmatic@v1", "dummy.lua")) };
+
+  // Exactly what the spec_fetch step does, in its order: the type, then the products,
+  // then the flag that says both are readable.
+  p->type = pkg_type::USER_MANAGED;
+  p->products.emplace("tool", product_entry{ .value = "programmatic-tool" });
+  p->spec_fetch_completed = true;
+
+  auto const infos{ eng.collect_all_products() };
+  REQUIRE(infos.size() == 1);
+  CHECK(infos[0].value == "programmatic-tool");
+  CHECK(infos[0].type == pkg_type::USER_MANAGED);
+
+  fs::remove_all(cache_root);
+}
+
 }  // namespace envy
