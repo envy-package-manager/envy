@@ -261,7 +261,7 @@ void run_vendor_phase(pkg *p, engine &eng) {
       // whole. That is also what makes the recreate below a real directory.
       std::error_code link_ec;
       bool const cleared{ !present.empty() && !fs::is_symlink(dest, link_ec) &&
-                          vendor_remove_listed(dest, present, budget.threads()) };
+                          tree_remove_listed(dest, present, budget.threads()) };
       if (!cleared) {
         if (auto const ec{ platform::remove_all_with_retry(dest) }) {
           throw std::runtime_error("vendor: cannot clear " + dest.string() + ": " +

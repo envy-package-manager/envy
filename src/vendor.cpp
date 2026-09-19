@@ -3,14 +3,10 @@
 #include "blake3_util.h"
 #include "cache.h"
 #include "glob.h"
-#include "platform.h"
 #include "util.h"
 
 #include <algorithm>
-#include <atomic>
-#include <cstddef>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -179,50 +175,6 @@ void vendor_validate_destination(fs::path const &dest,
                              "; a symlinked path component would "
                              "put a wipe-and-recopy somewhere it does not belong");
   }
-}
-
-bool vendor_remove_listed(fs::path const &root,
-                          std::vector<tree_entry> const &entries,
-                          unsigned threads) {
-  // Files across the pool, then directories deepest-first on this thread. The listing is
-  // sorted, so reverse order puts every child before its parent -- one rmdir each, and
-  // no tree to rediscover.
-  std::vector<tree_entry const *> files;
-  files.reserve(entries.size());
-  for (auto const &e : entries) {
-    if (e.kind != tree_entry_kind::DIRECTORY) { files.push_back(&e); }
-  }
-
-  std::atomic_bool ok{ true };
-  std::atomic<std::size_t> next{ 0 };
-  auto const worker{ [&] {
-    constexpr std::size_t kSlice{ 64 };
-    for (std::size_t first{ next.fetch_add(kSlice) }; first < files.size() && ok.load();
-         first = next.fetch_add(kSlice)) {
-      for (std::size_t i{ first }, last{ std::min(first + kSlice, files.size()) };
-           i < last;
-           ++i) {
-        if (!platform::remove_file(root / fs::path{ files[i]->relpath })) {
-          ok.store(false);
-          return;
-        }
-      }
-    }
-  } };
-
-  unsigned const n{ std::max(1u, std::min<unsigned>(threads, 1 + files.size() / 64)) };
-  std::vector<std::thread> pool;
-  pool.reserve(n - 1);
-  for (unsigned i{ 1 }; i < n; ++i) { pool.emplace_back(worker); }
-  worker();
-  for (auto &t : pool) { t.join(); }
-  if (!ok.load()) { return false; }
-
-  for (auto it{ entries.rbegin() }; it != entries.rend(); ++it) {
-    if (it->kind != tree_entry_kind::DIRECTORY) { continue; }
-    if (!platform::remove_empty_dir(root / fs::path{ it->relpath })) { return false; }
-  }
-  return platform::remove_empty_dir(root);
 }
 
 tree_filter vendor_parse_selectors(std::vector<std::string> const &raw,

@@ -1,6 +1,7 @@
 #include "lua_envy_file_ops.h"
 
 #include "lua_phase_context.h"
+#include "tree_hash.h"
 #include "pkg.h"
 
 #include <filesystem>
@@ -81,7 +82,9 @@ void lua_envy_file_ops_install(sol::table &envy_table) {
   // envy.remove(path) - Delete file or directory recursively
   envy_table["remove"] = [](std::string const &path_str, sol::this_state L) {
     std::filesystem::path const path{ resolve_relative(path_str, L) };
-    std::filesystem::remove_all(path);
+    // The throwing remove_all is the fallback, so a spec still learns when a tree it
+    // asked to delete is still there.
+    if (!tree_remove(path)) { std::filesystem::remove_all(path); }
   };
 
   // envy.exists(path) - Check if path exists

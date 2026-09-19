@@ -69,17 +69,6 @@ void vendor_validate_destination(std::filesystem::path const &dest,
 tree_filter vendor_parse_selectors(std::vector<std::string> const &raw,
                                    std::string_view context);
 
-// Delete `entries` under `root`, then `root` itself, across `threads` workers. The
-// caller passes the listing the drift check already produced, so the wipe walks nothing.
-//
-// Returns false when anything did not come away -- a stray file that appeared since the
-// listing, a read-only file on Windows, a handle an antivirus still holds -- which is
-// the caller's cue to fall back to platform::remove_all_with_retry, where the behavior
-// those need already lives. A partial delete is fine: the fallback finishes the job.
-bool vendor_remove_listed(std::filesystem::path const &root,
-                          std::vector<tree_entry> const &entries,
-                          unsigned threads);
-
 // A stable serialization, so a cache entry's pristine hash can be keyed on the selector
 // set that produced it.
 std::string vendor_filter_key(tree_filter const &filter);

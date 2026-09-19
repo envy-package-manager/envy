@@ -2,6 +2,7 @@
 
 #include "blake3_util.h"
 #include "platform.h"
+#include "tree_hash.h"
 #include "trace.h"
 #include "tui.h"
 #include "util.h"
@@ -312,7 +313,13 @@ namespace {
 // Best-effort single-shot removal — all callers tolerate failure (constructor
 // cleans up stale dirs on next run).  No retry; remove_all_with_retry's 3.5s
 // backoff is wasted on ephemeral dirs that Defender may hold briefly.
+//
+// tree_remove first: an install_dir holding a toolchain is the largest delete envy
+// does outside vendoring, and a parallel unlink over a native walk beats remove_all's
+// serial path-resolving one. Whatever it could not finish goes to the same single
+// remove_all this always ended with, so the no-retry policy is unchanged.
 void remove_all_noexcept(path const &target) {
+  if (envy::tree_remove(target)) { return; }
   std::error_code ec;
   std::filesystem::remove_all(target, ec);
 }
@@ -419,7 +426,9 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
       // fetch_dir cleanup is best-effort: the install is already complete, so a
       // lingering fetch dir only wastes disk space.  On Windows, Defender or Search
       // Indexer may still be scanning recently-downloaded archives.
-      if (auto ec{ platform::remove_all_with_retry(fetch_dir()) }) {
+      if (auto ec{ envy::tree_remove(fetch_dir())
+                       ? std::error_code{}
+                       : platform::remove_all_with_retry(fetch_dir()) }) {
         tui::warn("cache: could not remove %s: %s",
                   fetch_dir().string().c_str(),
                   ec.message().c_str());

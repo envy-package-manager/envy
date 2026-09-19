@@ -96,6 +96,25 @@ void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &ou
 // The stored target of a symlink. Throws if it cannot be read.
 std::string tree_scan_link_target(tree_scan_string const &path);
 
+// Delete `entries` under `root`, then `root` itself, across `threads` workers: files
+// unlink in parallel, directories rmdir deepest-first from the same sorted list. One
+// syscall per entry, where std::filesystem::remove_all re-resolves every path from the
+// root it was handed and builds an error_code per entry.
+//
+// False means something did not come away -- a stray file that appeared since the
+// listing, a read-only file on Windows, a handle an antivirus still holds. A partial
+// delete is fine: every caller has a whole-tree fallback, and which one differs (a
+// cache entry's ephemeral dirs want a cheap second pass, a vendored tree wants the
+// retrying one), which is why this reports rather than choosing.
+bool tree_remove_listed(std::filesystem::path const &root,
+                        std::vector<tree_entry> const &entries,
+                        unsigned threads);
+
+// The same delete for a caller that has no listing yet: walks with tree_list, which is
+// the native parallel walk, and hands the result to tree_remove_listed. A missing root
+// is success; a root that is a file or a symlink is unlinked as one, never followed.
+bool tree_remove(std::filesystem::path const &root, unsigned threads = 0);
+
 // The cores worth scheduling on, not hardware_concurrency: on a 6P+6E Apple M-series
 // 12 threads ran 3x slower than 6. See docs/tree-hash.md.
 unsigned tree_hash_default_threads();

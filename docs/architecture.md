@@ -415,9 +415,14 @@ and threads do almost nothing for a few big ones.
 
 **The wipe.** The drift check hands back the listing it just hashed, so the wipe walks
 nothing: files unlink across a pool, directories `rmdir` deepest-first from the same
-sorted list. Both go through `platform::remove_file`/`remove_empty_dir`—one syscall each,
-where `std::filesystem::remove_all` re-resolves every path from the root it was handed
-and constructs an `error_code` per entry. Anything that does not come away—a stray file
+sorted list (`tree_remove_listed`). Both go through
+`platform::remove_file`/`remove_empty_dir`—one syscall each, where
+`std::filesystem::remove_all` re-resolves every path from the root it was handed and
+constructs an `error_code` per entry. `tree_remove` is the same delete for a caller
+with no listing yet—it walks with `tree_list` first—and is what the cache's entry-lock
+cleanup, a staged install's promotion, a git clone's target and `envy.remove` use. Each
+keeps its own fallback: a cache entry's ephemeral dirs get one more cheap `remove_all`,
+a vendored tree gets the retrying one. Anything that does not come away—a stray file
 that appeared since the listing, a read-only file on Windows, a handle an antivirus still
 holds—falls the whole tree back to `remove_all_with_retry`, which is where that behavior
 lives; a partial delete is fine, since the fallback finishes it. 269 ms → 71 ms on the
