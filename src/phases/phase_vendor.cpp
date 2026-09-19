@@ -55,12 +55,12 @@ void bar(pkg *p,
          std::string status,
          bool terminal) {
   if (!p->tui_section) { return; }
-  tui::section_set_content(p->tui_section,
-                           tui::section_frame{ .label = label,
-                                               .content = tui::progress_data{
-                                                   .percent = percent,
-                                                   .status = std::move(status) },
-                                               .terminal = terminal });
+  tui::section_set_content(
+      p->tui_section,
+      tui::section_frame{
+          .label = label,
+          .content = tui::progress_data{ .percent = percent, .status = std::move(status) },
+          .terminal = terminal });
 }
 
 // Recreate one payload entry under `dest`. The walk is sorted, so a directory lands
@@ -142,9 +142,10 @@ void run_vendor_phase(pkg *p, engine &eng) {
     // Exempted by `auto_sync = false`: say so and leave it. A warning, not a log line --
     // the project asked to own this directory, and it is now out of step with the
     // package it came from.
-    tui::warn("vendored copy at %s no longer matches the package; left as it is "
-              "(vendor.auto_sync = false)",
-              dest.string().c_str());
+    tui::warn(
+        "vendored copy at %s no longer matches the package; left as it is "
+        "(vendor.auto_sync = false)",
+        dest.string().c_str());
     bar(p, label, 100.0, "kept: contents differ from the package", true);
   } else if (kind != outcome::CURRENT) {
     spin(p, label, "vendoring...");
@@ -182,11 +183,10 @@ void run_vendor_phase(pkg *p, engine &eng) {
 
     // The last word on the row names the cause: a wipe-and-recopy over someone's edited
     // tree is worth more than a file count.
-    std::string const summary{
-      kind == outcome::REVENDORED
-          ? "re-vendored " + std::to_string(files) + " files: contents were dirty"
-          : "vendored " + std::to_string(files) + " files"
-    };
+    std::string const summary{ kind == outcome::REVENDORED
+                                   ? "re-vendored " + std::to_string(files) +
+                                         " files: contents were dirty"
+                                   : "vendored " + std::to_string(files) + " files" };
     bar(p, label, 100.0, summary, true);
     tui::debug("%s to %s", summary.c_str(), dest.string().c_str());
   } else {

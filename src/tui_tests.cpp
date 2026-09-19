@@ -1080,16 +1080,14 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY withholds a complet
   envy::tui::test::g_isatty = true;
 }
 
-
 namespace {
 
 // A bar's last frame, of the shape the vendor and extract phases publish.
 envy::tui::section_frame last_frame(char const *label, char const *status) {
-  return envy::tui::section_frame{
-    .label = label,
-    .content = envy::tui::progress_data{ .percent = 100.0, .status = status },
-    .terminal = true
-  };
+  return envy::tui::section_frame{ .label = label,
+                                   .content = envy::tui::progress_data{ .percent = 100.0,
+                                                                        .status = status },
+                                   .terminal = true };
 }
 
 }  // namespace
@@ -1121,9 +1119,9 @@ TEST_CASE_FIXTURE(captured_output, "a mid-flight frame off a TTY waits for the r
   auto const h{ envy::tui::section_create() };
   envy::tui::section_set_content(
       h,
-      envy::tui::section_frame{ .label = "vendor",
-                                .content = envy::tui::progress_data{
-                                    .percent = 40.0, .status = "6 files" } });
+      envy::tui::section_frame{
+          .label = "vendor",
+          .content = envy::tui::progress_data{ .percent = 40.0, .status = "6 files" } });
 
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
   CHECK_NOTHROW(envy::tui::shutdown());

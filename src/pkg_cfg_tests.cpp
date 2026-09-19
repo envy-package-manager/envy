@@ -1184,9 +1184,10 @@ TEST_CASE("pkg_cfg::parse accepts every vendor form on a manifest PACKAGES entry
 
 TEST_CASE("pkg_cfg::parse refuses vendor_overwrite, the key the vendor table replaced") {
   sol::state lua;
-  auto lua_val{ lua_eval("result = { spec = 'a.one@v1', source = '/fake/r.lua', "
-                         "vendor = true, vendor_overwrite = false }",
-                         lua) };
+  auto lua_val{ lua_eval(
+      "result = { spec = 'a.one@v1', source = '/fake/r.lua', "
+      "vendor = true, vendor_overwrite = false }",
+      lua) };
 
   CHECK_THROWS_AS(envy::pkg_cfg::parse(lua_val,
                                        fs::path("/fake"),

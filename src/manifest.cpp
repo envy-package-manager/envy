@@ -240,8 +240,9 @@ void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
     parse_vendor_table(vendor_obj.as<sol::table>(), cfg);
     return;
   }
-  throw std::runtime_error("Package 'vendor' must be a boolean, a project-relative path, "
-                           "or a table of { path, auto_sync }");
+  throw std::runtime_error(
+      "Package 'vendor' must be a boolean, a project-relative path, "
+      "or a table of { path, auto_sync }");
 }
 
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's

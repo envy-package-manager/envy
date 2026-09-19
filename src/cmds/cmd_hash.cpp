@@ -69,14 +69,15 @@ void print_stats(tree_hash_stats const &s, tree_hash_result const &result) {
   if (s.threads && !s.files_per_worker.empty()) {
     auto const [flo, fhi]{ std::ranges::minmax(s.files_per_worker) };
     auto const [blo, bhi]{ std::ranges::minmax(s.bytes_per_worker) };
-    tui::info("  files/worker %llu..%llu (ideal %llu)   bytes/worker %llu..%llu "
-              "(ideal %llu)",
-              static_cast<unsigned long long>(flo),
-              static_cast<unsigned long long>(fhi),
-              static_cast<unsigned long long>(result.files / s.threads),
-              static_cast<unsigned long long>(blo),
-              static_cast<unsigned long long>(bhi),
-              static_cast<unsigned long long>(result.bytes / s.threads));
+    tui::info(
+        "  files/worker %llu..%llu (ideal %llu)   bytes/worker %llu..%llu "
+        "(ideal %llu)",
+        static_cast<unsigned long long>(flo),
+        static_cast<unsigned long long>(fhi),
+        static_cast<unsigned long long>(result.files / s.threads),
+        static_cast<unsigned long long>(blo),
+        static_cast<unsigned long long>(bhi),
+        static_cast<unsigned long long>(result.bytes / s.threads));
   }
 }
 
