@@ -96,11 +96,13 @@ void file_read_chunks(file_native_string const &path,
     bool busy{ false };
   };
 
-  // Per worker, not per file: a megabyte and a kernel event per small file cost more
-  // than reading it.
+  // Per worker, not per file, and no larger than the file needs. A megabyte apiece to
+  // read a 20-byte file is worse than pointless on a small machine.
+  auto const chunk{ static_cast<std::size_t>(
+      std::min<std::uint64_t>(kReadChunk, size ? size : 1)) };
   static thread_local std::array<slot, kReadSlots> slots;
   for (auto &s : slots) {
-    if (s.buf.empty()) { s.buf.resize(kReadChunk); }
+    if (s.buf.size() < chunk) { s.buf.resize(chunk); }
     if (!s.event) {
       s.event.reset(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
       if (!s.event) { throw_last_error("file_read: cannot create read event", path); }

@@ -25,6 +25,11 @@ from .env import EnvyTestCase
 
 POSIX_ONLY = unittest.skipIf(sys.platform == "win32", "POSIX file modes and symlinks")
 
+# A decorator's argument is evaluated when the class body runs, so an os.geteuid() call
+# inside one would raise on Windows before any skip could apply -- and take the whole
+# module's import down with it.
+RUNNING_AS_ROOT = sys.platform != "win32" and os.geteuid() == 0
+
 
 class TreeHashMixin(EnvyTestCase):
     """Building trees and asking envy what they hash to."""
@@ -373,7 +378,7 @@ class TestTreeHashErrors(TreeHashMixin):
         self.assertIn("directory", self.hash_fails(target))
 
     @POSIX_ONLY
-    @unittest.skipIf(os.geteuid() == 0, "root reads unreadable directories anyway")
+    @unittest.skipIf(RUNNING_AS_ROOT, "root reads unreadable directories anyway")
     def test_unreadable_directory_fails_rather_than_being_skipped(self):
         # A digest that silently omits what it could not read would report "unchanged"
         # for a tree it never looked at.

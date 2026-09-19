@@ -64,9 +64,14 @@ void file_read_chunks(file_native_string const &path,
 #endif
   }
 
-  // Per worker, not per file: zero-filling a fresh 1 MiB vector costs more than reading
-  // a small file, and a payload is mostly small files.
-  static thread_local std::vector<unsigned char> buf(kReadChunk);
+  // Per worker, not per file, and no larger than the file needs. A megabyte to read a
+  // 20-byte file is worse than pointless on a small machine: it is a megabyte to
+  // zero-fill, and one per worker thread.
+  auto const chunk{ static_cast<std::size_t>(
+      std::min<std::uint64_t>(kReadChunk, size ? size : 1)) };
+  static thread_local std::vector<unsigned char> buf;
+  if (buf.size() < chunk) { buf.resize(chunk); }
+
   std::uint64_t offset{ 0 };
   while (offset < size) {
     auto const want{ static_cast<std::size_t>(

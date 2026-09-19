@@ -356,6 +356,13 @@ endif()
 
 # Common compile options
 set(ENVY_COMMON_COMPILE_OPTIONS
+    # MSVC reads a BOM-less source file in the machine's active code page, so a literal
+    # outside ASCII is decoded from the wrong charset before it is ever compiled. /utf-8
+    # sets the source and execution charsets both to UTF-8, which is what every other
+    # compiler here already does. Scoped to envy's own targets: third-party sources are
+    # configured elsewhere and are not ours to reinterpret.
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-ffunction-sections>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fdata-sections>
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-ffunction-sections>
