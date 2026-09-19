@@ -191,10 +191,9 @@ void run_vendor_phase(pkg *p, engine &eng) {
   // one duration cannot say which of them a slow run was waiting on.
   std::int64_t hash_ms{ 0 }, wipe_ms{ 0 }, copy_ms{ 0 };
   auto const elapsed_ms{ [](std::chrono::steady_clock::time_point since) {
-    return static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - since)
-            .count());
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - since)
+                                         .count());
   } };
   std::string const label{ "[" + p->cfg->identity + "]" };
   fs::path const &dest{ destination->dir };
@@ -281,18 +280,14 @@ void run_vendor_phase(pkg *p, engine &eng) {
 
     if (!dry) {
       thread_budget const budget{ plan->threads };
-      copy_entries(p->pkg_path,
-                   dest,
-                   entries,
-                   budget.threads(),
-                   [&](std::uint64_t done) {
-                     bar(p,
-                         label,
-                         100.0 * static_cast<double>(done) /
-                             static_cast<double>(std::max<std::int64_t>(total, 1)),
-                         std::to_string(done) + "/" + std::to_string(total) + " files",
-                         false);
-                   });
+      copy_entries(p->pkg_path, dest, entries, budget.threads(), [&](std::uint64_t done) {
+        bar(p,
+            label,
+            100.0 * static_cast<double>(done) /
+                static_cast<double>(std::max<std::int64_t>(total, 1)),
+            std::to_string(done) + "/" + std::to_string(total) + " files",
+            false);
+      });
     }
 
     // The last word names the cause: a wipe-and-recopy over someone's edited tree is

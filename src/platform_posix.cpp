@@ -398,9 +398,7 @@ std::error_code remove_all_with_retry(std::filesystem::path const &target) {
   return ec;
 }
 
-bool remove_file(std::filesystem::path const &path) {
-  return ::unlink(path.c_str()) == 0;
-}
+bool remove_file(std::filesystem::path const &path) { return ::unlink(path.c_str()) == 0; }
 
 bool remove_empty_dir(std::filesystem::path const &path) {
   return ::rmdir(path.c_str()) == 0;
@@ -417,14 +415,14 @@ bool clone_file(std::filesystem::path const &src, std::filesystem::path const &d
   // of that is in the tree digest, so a cloned copy and a copied one compare equal.
   return ::clonefile(src.c_str(), dst.c_str(), 0) == 0;
 #elif defined(__linux__)
-  struct stat st {};
+  struct stat st{};
   if (::stat(src.c_str(), &st)) { return false; }
 
   int const in{ ::open(src.c_str(), O_RDONLY | O_CLOEXEC) };
   if (in < 0) { return false; }
-  int const out{ ::open(dst.c_str(),
-                        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
-                        st.st_mode & 07777) };
+  int const out{
+    ::open(dst.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, st.st_mode & 07777)
+  };
   if (out < 0) {
     ::close(in);
     return false;
