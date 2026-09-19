@@ -69,6 +69,6 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `extract_start` | archive:str, destination:str, strip_components:i64 |
 | `extract_complete` | archive:str, files_extracted:i64, duration_ms:i64 |
 | `vendor_resolved` | path:str, origin:str (derived\|override) |
-| `vendor_result` | path:str, action:str (copied\|redeployed\|kept\|up_to_date), reason:str (absent\|mismatch\|current), files:i64, bytes:i64, duration_ms:i64 |
+| `vendor_result` | path:str, action:str (copied\|redeployed\|kept\|up_to_date), reason:str (absent\|mismatch\|current), dry_run:bool, files:i64, bytes:i64, hash_ms:i64, wipe_ms:i64, copy_ms:i64, duration_ms:i64 |
 
 Not covered: `bootstrap.cpp`, `bundle.cpp`, `aws_util.cpp` (see `future-enhancements.md`).

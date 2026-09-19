@@ -131,6 +131,7 @@ cli_args cli_parse(int argc, char **argv) {
                            cmd_trace_schema,
 #endif
                            cmd_use,
+                           cmd_vendor,
                            cmd_version>(app);
 
   cli_args args{};

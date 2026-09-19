@@ -124,6 +124,7 @@ struct pkg {
   // The spec's VENDOR list, parsed and validated during spec_fetch so a malformed glob
   // fails before any fetch or build work. Empty selects the whole install directory.
   tree_filter vendor_filter;
+  std::string vendor_outcome;
 
   std::filesystem::path pkg_path;
   std::optional<std::filesystem::path> spec_file_path;

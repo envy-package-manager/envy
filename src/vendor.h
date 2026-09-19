@@ -33,6 +33,13 @@ struct vendor_plan {
   // What destinations are checked against before anything is wiped.
   std::filesystem::path project_root;
 
+  // `envy vendor --dry-run`: decide as usual, report the decision, write nothing.
+  bool dry_run{ false };
+
+  // Copy workers; 0 divides the performance cores by the vendor phases in flight. A
+  // knob for tools/bench_vendor.py, exactly as `envy hash --tree --threads` is one.
+  unsigned threads{ 0 };
+
   bool empty() const { return dirs.empty(); }
   vendor_destination const *find(pkg_key const &key) const {
     auto const it{ dirs.find(key) };
@@ -59,6 +66,17 @@ void vendor_validate_destination(std::filesystem::path const &dest,
 // naming `context` on an unusable pattern.
 tree_filter vendor_parse_selectors(std::vector<std::string> const &raw,
                                    std::string_view context);
+
+// Delete `entries` under `root`, then `root` itself, across `threads` workers. The
+// caller passes the listing the drift check already produced, so the wipe walks nothing.
+//
+// Returns false when anything did not come away -- a stray file that appeared since the
+// listing, a read-only file on Windows, a handle an antivirus still holds -- which is
+// the caller's cue to fall back to platform::remove_all_with_retry, where the behavior
+// those need already lives. A partial delete is fine: the fallback finishes the job.
+bool vendor_remove_listed(std::filesystem::path const &root,
+                          std::vector<tree_entry> const &entries,
+                          unsigned threads);
 
 // A stable serialization, so a cache entry's pristine hash can be keyed on the selector
 // set that produced it.

@@ -3,7 +3,10 @@
 #include "blake3_util.h"
 #include "file_read.h"
 #include "glob.h"
+#include "util.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -35,15 +38,6 @@ struct tree_hash_stats {
   std::vector<std::uint64_t> bytes_per_worker;
 };
 
-// Folded over (relpath, kind, exec bit, content) in sorted order, so thread count never
-// changes the answer. Directories fold in; symlinks hash as their target, unfollowed.
-//
-// An unreadable entry throws rather than call a tree it never read unchanged.
-tree_hash_result tree_hash(std::filesystem::path const &root,
-                           tree_filter const &filter = {},
-                           unsigned threads = 0,
-                           tree_hash_stats *stats = nullptr);
-
 enum class tree_entry_kind : std::uint8_t { FILE, DIRECTORY, SYMLINK };
 
 struct tree_entry {
@@ -53,6 +47,20 @@ struct tree_entry {
   std::uint64_t size{ 0 };     // FILE only
   std::string symlink_target;  // SYMLINK only, as stored
 };
+
+// Folded over (relpath, kind, exec bit, content) in sorted order, so thread count never
+// changes the answer. Directories fold in; symlinks hash as their target, unfollowed.
+//
+// An unreadable entry throws rather than call a tree it never read unchanged.
+//
+// `entries` takes the sorted listing the fold ran over, which the walk built either way:
+// a caller about to act on this tree (the vendor phase, which wipes what it just hashed)
+// then needs no second walk to find out what is in it.
+tree_hash_result tree_hash(std::filesystem::path const &root,
+                           tree_filter const &filter = {},
+                           unsigned threads = 0,
+                           tree_hash_stats *stats = nullptr,
+                           std::vector<tree_entry> *entries = nullptr);
 
 // Sorted by relpath. Same walk and same strictness as tree_hash, so a copy moves exactly
 // the set the digest covered.
@@ -91,5 +99,27 @@ std::string tree_scan_link_target(tree_scan_string const &path);
 // The cores worth scheduling on, not hardware_concurrency: on a 6P+6E Apple M-series
 // 12 threads ran 3x slower than 6. See docs/tree-hash.md.
 unsigned tree_hash_default_threads();
+
+// Divides the machine by the calls already in flight, counting hashes and copies alike:
+// every package worker is its own thread, so concurrent vendor phases must not each
+// claim all of it. A non-zero request is honored as asked.
+class thread_budget : unmovable {
+ public:
+  explicit thread_budget(unsigned requested)
+      : requested_{ requested }, inflight_{ ++s_inflight } {}
+  ~thread_budget() { --s_inflight; }
+
+  unsigned threads() const {
+    if (requested_) { return requested_; }
+    return std::max(
+        1u,
+        tree_hash_default_threads() / static_cast<unsigned>(std::max(1, inflight_)));
+  }
+
+ private:
+  static inline std::atomic<int> s_inflight{ 0 };
+  unsigned requested_;
+  int inflight_;
+};
 
 }  // namespace envy

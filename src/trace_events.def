@@ -197,13 +197,20 @@ ENVY_TRACE_EVENT(vendor_resolved,
 // What the vendor phase did with one destination. action: copied | redeployed | kept |
 // up_to_date. reason: absent | mismatch | current. `kept` is a mismatch left alone by
 // `vendor.auto_sync = false`. files/bytes count what was written, so anything but a copy
-// reports zeroes.
+// reports zeroes. dry_run is `envy vendor --dry-run`: the decision is the same one, and
+// nothing was written -- files/bytes are then what a copy would have cost. hash_ms
+// (both digests), wipe_ms and copy_ms (the source walk and the writes) split the
+// duration by what each stage waits on: cores, the unlink path, copy bandwidth.
 ENVY_TRACE_EVENT(vendor_result,
                  ENVY_TRACE_FIELD_STR(path)
                  ENVY_TRACE_FIELD_STR(action)
                  ENVY_TRACE_FIELD_STR(reason)
+                 ENVY_TRACE_FIELD_BOOL(dry_run)
                  ENVY_TRACE_FIELD_I64(files)
                  ENVY_TRACE_FIELD_I64(bytes)
+                 ENVY_TRACE_FIELD_I64(hash_ms)
+                 ENVY_TRACE_FIELD_I64(wipe_ms)
+                 ENVY_TRACE_FIELD_I64(copy_ms)
                  ENVY_TRACE_FIELD_I64(duration_ms))
 
 // clang-format on

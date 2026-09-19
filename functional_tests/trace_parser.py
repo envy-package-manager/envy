@@ -87,8 +87,12 @@ EVENT_REGISTRY = {
         "path:str",
         "action:str",
         "reason:str",
+        "dry_run:bool",
         "files:i64",
         "bytes:i64",
+        "hash_ms:i64",
+        "wipe_ms:i64",
+        "copy_ms:i64",
         "duration_ms:i64",
     ],
 }
