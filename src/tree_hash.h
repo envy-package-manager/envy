@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace envy {
@@ -114,6 +115,18 @@ bool tree_remove_listed(std::filesystem::path const &root,
 // the native parallel walk, and hands the result to tree_remove_listed. A missing root
 // is success; a root that is a file or a symlink is unlinked as one, never followed.
 bool tree_remove(std::filesystem::path const &root, unsigned threads = 0);
+
+// tree_remove, then std::filesystem for whatever it could not take -- which is still
+// the right tool for the leftovers, since that is where the platform's awkward cases
+// live. Returns what the fallback made of it; most callers are deleting something they
+// are about to recreate and ignore it.
+//
+// The two differ only in how hard that fallback tries. `best_effort` takes one cheap
+// pass: remove_all_with_retry's seconds of backoff are wasted on an ephemeral directory
+// whose next user recreates it anyway. `insisting` pays that backoff, for a tree that
+// has to be gone before the caller can continue.
+std::error_code tree_remove_best_effort(std::filesystem::path const &root);
+std::error_code tree_remove_insisting(std::filesystem::path const &root);
 
 // The cores worth scheduling on, not hardware_concurrency: on a 6P+6E Apple M-series
 // 12 threads ran 3x slower than 6. See docs/tree-hash.md.

@@ -130,9 +130,11 @@ bool promote_stage_to_install(cache::scoped_entry_lock *lock) {
 
   if (directory_has_entries(stage_dir)) {
     tui::debug("install: promoting staged files");
-    // The throwing remove_all stays the fallback: this one reports rather than throws,
-    // and a failure here must still stop the promotion.
-    if (!tree_remove(install_dir)) { std::filesystem::remove_all(install_dir); }
+    // A leftover here would be renamed over, so the promotion stops if it is still
+    // there; everything else about the delete is the shared path's business.
+    if (auto const ec{ tree_remove_insisting(install_dir) }) {
+      throw std::filesystem::filesystem_error("install: cannot clear", install_dir, ec);
+    }
     std::filesystem::create_directories(install_dir.parent_path());
     std::filesystem::rename(stage_dir, install_dir);
     lock->mark_install_complete();

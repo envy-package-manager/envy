@@ -4,6 +4,7 @@
 #include "envy_release.h"
 #include "fetch.h"
 #include "platform.h"
+#include "tree_hash.h"
 #include "sha256.h"
 #include "tui.h"
 #include "tui_actions.h"
@@ -40,7 +41,7 @@ class scoped_temp_dir : unmovable {
   explicit scoped_temp_dir(std::filesystem::path path) : path_{ std::move(path) } {}
 
   ~scoped_temp_dir() {
-    if (auto const ec{ platform::remove_all_with_retry(path_) }) {
+    if (auto const ec{ tree_remove_insisting(path_) }) {
       tui::warn("failed to remove staging directory %s: %s",
                 path_.string().c_str(),
                 ec.message().c_str());

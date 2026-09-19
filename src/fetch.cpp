@@ -180,7 +180,7 @@ fetch_result fetch_git_repo(std::string const &url,
   // git_clone rejects a non-empty target, and a failed clone leaves its partial work
   // behind, so every attempt -- first or retry -- starts from a clean slate.
   std::error_code ec;
-  if (!tree_remove(dest)) { std::filesystem::remove_all(dest, ec); }
+  tree_remove_best_effort(dest);
 
   // Try shallow clone first; fall back to full clone if shallow fails or ref not found.
   // Some servers (e.g., googlesource.com) have libgit2 shallow clone issues.
@@ -200,7 +200,7 @@ fetch_result fetch_git_repo(std::string const &url,
   }
 
   if (need_full_clone) {
-    if (!tree_remove(dest)) { std::filesystem::remove_all(dest, ec); }
+    tree_remove_best_effort(dest);
     std::filesystem::create_directories(dest, ec);
 
     repo_raw = try_git_clone(url, dest, progress, 0);

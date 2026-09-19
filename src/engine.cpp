@@ -986,10 +986,10 @@ void engine::run_depot_step() {
     depot_index_ = std::move(merged);
     depot_state_ = task_state::READY;
   } catch (...) {
-    fs::remove_all(depot_tmp, ec);
+    tree_remove_best_effort(depot_tmp);
     throw;
   }
-  fs::remove_all(depot_tmp, ec);
+  tree_remove_best_effort(depot_tmp);
 }
 
 void engine::mark_closure(pkg *p, pkg_closure kind) {

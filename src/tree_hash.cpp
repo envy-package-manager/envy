@@ -436,6 +436,18 @@ bool tree_remove(std::filesystem::path const &root, unsigned threads) {
   }
 }
 
+std::error_code tree_remove_best_effort(std::filesystem::path const &root) {
+  if (tree_remove(root)) { return {}; }
+  std::error_code ec;
+  std::filesystem::remove_all(root, ec);
+  return ec;
+}
+
+std::error_code tree_remove_insisting(std::filesystem::path const &root) {
+  if (tree_remove(root)) { return {}; }
+  return platform::remove_all_with_retry(root);
+}
+
 std::vector<tree_entry> tree_list(std::filesystem::path const &root,
                                   tree_filter const &filter,
                                   unsigned threads) {

@@ -310,20 +310,6 @@ struct cache::scoped_entry_lock::impl {
 
 namespace {
 
-// Best-effort single-shot removal — all callers tolerate failure (constructor
-// cleans up stale dirs on next run).  No retry; remove_all_with_retry's 3.5s
-// backoff is wasted on ephemeral dirs that Defender may hold briefly.
-//
-// tree_remove first: an install_dir holding a toolchain is the largest delete envy
-// does outside vendoring, and a parallel unlink over a native walk beats remove_all's
-// serial path-resolving one. Whatever it could not finish goes to the same single
-// remove_all this always ended with, so the no-retry policy is unchanged.
-void remove_all_noexcept(path const &target) {
-  if (envy::tree_remove(target)) { return; }
-  std::error_code ec;
-  std::filesystem::remove_all(target, ec);
-}
-
 envy::cache::ensure_result ensure_entry(
     envy::cache_impl &impl,
     path const &entry_dir,
@@ -398,8 +384,8 @@ cache::scoped_entry_lock::scoped_entry_lock(
                                 std::move(lock_path),
                                 std::move(pkg_identity),
                                 lock_acquired_at) } {
-  remove_all_noexcept(install_dir());
-  remove_all_noexcept(work_dir());  // always delete (purely ephemeral)
+  envy::tree_remove_best_effort(install_dir());
+  envy::tree_remove_best_effort(work_dir());  // always delete (purely ephemeral)
 
   // Preserve fetch/ to enable per-file caching across failed attempts; create
   // the rest.
@@ -421,14 +407,12 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
 
   if (m->completed_) {
     disposition = "completed";
-    remove_all_noexcept(work_dir());
+    envy::tree_remove_best_effort(work_dir());
     if (!m->preserve_fetch_) {
       // fetch_dir cleanup is best-effort: the install is already complete, so a
       // lingering fetch dir only wastes disk space.  On Windows, Defender or Search
       // Indexer may still be scanning recently-downloaded archives.
-      if (auto ec{ envy::tree_remove(fetch_dir())
-                       ? std::error_code{}
-                       : platform::remove_all_with_retry(fetch_dir()) }) {
+      if (auto ec{ envy::tree_remove_insisting(fetch_dir()) }) {
         tui::warn("cache: could not remove %s: %s",
                   fetch_dir().string().c_str(),
                   ec.message().c_str());
@@ -438,7 +422,7 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
     platform::flush_directory(m->entry_dir_);
   } else if (m->user_managed_) {
     disposition = "purged_user_managed";
-    remove_all_noexcept(m->entry_dir_);
+    envy::tree_remove_best_effort(m->entry_dir_);
   } else {
     // Check empty install_dir AND fetch_dir (installation didn't use cache at all)
     std::error_code ec;
@@ -461,12 +445,12 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
       return it == std::filesystem::directory_iterator{};
     }() };
 
-    remove_all_noexcept(install_dir());
-    remove_all_noexcept(work_dir());
+    envy::tree_remove_best_effort(install_dir());
+    envy::tree_remove_best_effort(work_dir());
 
     if (install_dir_empty && fetch_dir_empty) {
       disposition = "cleaned_failure";
-      remove_all_noexcept(fetch_dir());
+      envy::tree_remove_best_effort(fetch_dir());
     }
   }
 

@@ -82,9 +82,10 @@ void lua_envy_file_ops_install(sol::table &envy_table) {
   // envy.remove(path) - Delete file or directory recursively
   envy_table["remove"] = [](std::string const &path_str, sol::this_state L) {
     std::filesystem::path const path{ resolve_relative(path_str, L) };
-    // The throwing remove_all is the fallback, so a spec still learns when a tree it
-    // asked to delete is still there.
-    if (!tree_remove(path)) { std::filesystem::remove_all(path); }
+    // A spec still learns when a tree it asked to delete is still there.
+    if (auto const ec{ tree_remove_insisting(path) }) {
+      throw std::filesystem::filesystem_error("envy.remove", path, ec);
+    }
   };
 
   // envy.exists(path) - Check if path exists

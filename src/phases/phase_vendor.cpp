@@ -263,7 +263,10 @@ void run_vendor_phase(pkg *p, engine &eng) {
       bool const cleared{ !present.empty() && !fs::is_symlink(dest, link_ec) &&
                           tree_remove_listed(dest, present, budget.threads()) };
       if (!cleared) {
-        if (auto const ec{ platform::remove_all_with_retry(dest) }) {
+        // Whatever the listed delete could not take, plus the symlink case it declined
+        // outright: tree_remove unlinks a link rather than following it, exactly as the
+        // retrying remove_all behind it would.
+        if (auto const ec{ tree_remove_insisting(dest) }) {
           throw std::runtime_error("vendor: cannot clear " + dest.string() + ": " +
                                    ec.message());
         }
