@@ -261,6 +261,7 @@ set(ENVY_BASE_SOURCES
     src/cmds/cmd_sync.cpp
     src/cmds/cmd_shell.cpp
     src/cmds/cmd_use.cpp
+    src/cmds/cmd_vendor.cpp
     src/cmds/cmd_version.cpp
     src/deploy.cpp
     src/engine.cpp

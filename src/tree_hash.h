@@ -3,11 +3,15 @@
 #include "blake3_util.h"
 #include "file_read.h"
 #include "glob.h"
+#include "util.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace envy {
@@ -35,15 +39,6 @@ struct tree_hash_stats {
   std::vector<std::uint64_t> bytes_per_worker;
 };
 
-// Folded over (relpath, kind, exec bit, content) in sorted order, so thread count never
-// changes the answer. Directories fold in; symlinks hash as their target, unfollowed.
-//
-// An unreadable entry throws rather than call a tree it never read unchanged.
-tree_hash_result tree_hash(std::filesystem::path const &root,
-                           tree_filter const &filter = {},
-                           unsigned threads = 0,
-                           tree_hash_stats *stats = nullptr);
-
 enum class tree_entry_kind : std::uint8_t { FILE, DIRECTORY, SYMLINK };
 
 struct tree_entry {
@@ -53,6 +48,20 @@ struct tree_entry {
   std::uint64_t size{ 0 };     // FILE only
   std::string symlink_target;  // SYMLINK only, as stored
 };
+
+// Folded over (relpath, kind, exec bit, content) in sorted order, so thread count never
+// changes the answer. Directories fold in; symlinks hash as their target, unfollowed.
+//
+// An unreadable entry throws rather than call a tree it never read unchanged.
+//
+// `entries` takes the sorted listing the fold ran over, which the walk built either way:
+// a caller about to act on this tree (the vendor phase, which wipes what it just hashed)
+// then needs no second walk to find out what is in it.
+tree_hash_result tree_hash(std::filesystem::path const &root,
+                           tree_filter const &filter = {},
+                           unsigned threads = 0,
+                           tree_hash_stats *stats = nullptr,
+                           std::vector<tree_entry> *entries = nullptr);
 
 // Sorted by relpath. Same walk and same strictness as tree_hash, so a copy moves exactly
 // the set the digest covered.
@@ -88,8 +97,61 @@ void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &ou
 // The stored target of a symlink. Throws if it cannot be read.
 std::string tree_scan_link_target(tree_scan_string const &path);
 
+// Delete `entries` under `root`, then `root` itself, across `threads` workers: files
+// unlink in parallel, directories rmdir deepest-first from the same sorted list. One
+// syscall per entry, where std::filesystem::remove_all re-resolves every path from the
+// root it was handed and builds an error_code per entry.
+//
+// False means something did not come away -- a stray file that appeared since the
+// listing, a read-only file on Windows, a handle an antivirus still holds. A partial
+// delete is fine: every caller has a whole-tree fallback, and which one differs (a
+// cache entry's ephemeral dirs want a cheap second pass, a vendored tree wants the
+// retrying one), which is why this reports rather than choosing.
+bool tree_remove_listed(std::filesystem::path const &root,
+                        std::vector<tree_entry> const &entries,
+                        unsigned threads);
+
+// The same delete for a caller that has no listing yet: walks with tree_list, which is
+// the native parallel walk, and hands the result to tree_remove_listed. A missing root
+// is success; a root that is a file or a symlink is unlinked as one, never followed.
+bool tree_remove(std::filesystem::path const &root, unsigned threads = 0);
+
+// tree_remove, then std::filesystem for whatever it could not take -- which is still
+// the right tool for the leftovers, since that is where the platform's awkward cases
+// live. Returns what the fallback made of it; most callers are deleting something they
+// are about to recreate and ignore it.
+//
+// The two differ only in how hard that fallback tries. `best_effort` takes one cheap
+// pass: remove_all_with_retry's seconds of backoff are wasted on an ephemeral directory
+// whose next user recreates it anyway. `insisting` pays that backoff, for a tree that
+// has to be gone before the caller can continue.
+std::error_code tree_remove_best_effort(std::filesystem::path const &root);
+std::error_code tree_remove_insisting(std::filesystem::path const &root);
+
 // The cores worth scheduling on, not hardware_concurrency: on a 6P+6E Apple M-series
 // 12 threads ran 3x slower than 6. See docs/tree-hash.md.
 unsigned tree_hash_default_threads();
+
+// Divides the machine by the calls already in flight, counting hashes and copies alike:
+// every package worker is its own thread, so concurrent vendor phases must not each
+// claim all of it. A non-zero request is honored as asked.
+class thread_budget : unmovable {
+ public:
+  explicit thread_budget(unsigned requested)
+      : requested_{ requested }, inflight_{ ++s_inflight } {}
+  ~thread_budget() { --s_inflight; }
+
+  unsigned threads() const {
+    if (requested_) { return requested_; }
+    return std::max(
+        1u,
+        tree_hash_default_threads() / static_cast<unsigned>(std::max(1, inflight_)));
+  }
+
+ private:
+  static inline std::atomic<int> s_inflight{ 0 };
+  unsigned requested_;
+  int inflight_;
+};
 
 }  // namespace envy

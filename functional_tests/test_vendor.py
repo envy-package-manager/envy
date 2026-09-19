@@ -103,12 +103,17 @@ class VendorTestCase(EnvyTestCase):
         """identity -> the vendor_result event it produced."""
         return {e.spec: e.raw for e in run.events("vendor_result")}
 
-    def assertVendored(self, run, identity: str, action: str, reason: str):
+    def assertVendored(
+        self, run, identity: str, action: str, reason: str, dry_run: bool = False
+    ):
         self.assertEqual(0, run.returncode, run.stderr)
         results = self.results(run)
         self.assertIn(identity, results, f"no vendor_result for {identity}")
         self.assertEqual(action, results[identity]["action"], results[identity])
         self.assertEqual(reason, results[identity]["reason"], results[identity])
+        # Defaulted, so every install/sync assertion in this file also pins that a
+        # package outside `envy vendor --dry-run` is never merely contemplated.
+        self.assertEqual(dry_run, results[identity]["dry_run"], results[identity])
 
     def tree_of(self, root: Path) -> dict[str, str]:
         """Relative path -> contents, for every file under `root`."""
@@ -218,6 +223,36 @@ class TestVendorCollisions(VendorTestCase):
         )
         self.assertRefused(manifest, "nested", "local.one@r1", "local.two@r1")
         self.assertFalse((self.project / "deps").exists())
+
+    @POSIX_ONLY
+    def test_a_symlinked_destination_does_not_erase_what_it_points_at(self):
+        """The wipe deletes the listing the drift check produced, and that listing was
+        taken through the link -- so it names the target's contents, not the link."""
+        target = self.project / "elsewhere"
+        target.mkdir()
+        (target / "precious.txt").write_text("not the package's\n", encoding="utf-8")
+        (self.project / "link").symlink_to(target)
+
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='"link"'
+            )
+        )
+        # The link resolves to a directory holding something else, so the first run is
+        # already a mismatch: it wipes and recopies.
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        # remove_all unlinks the link and leaves the target; the copy then lands in a
+        # real directory of its own.
+        self.assertTrue(
+            (target / "precious.txt").exists(),
+            "vendoring through a symlinked destination erased the target's contents",
+        )
+        self.assertFalse((self.project / "link").is_symlink())
+        self.assertEqual(
+            self.tree_of(self.payload), self.tree_of(self.project / "link")
+        )
 
     @POSIX_ONLY
     def test_destination_behind_a_symlink_out_of_the_project_is_refused(self):
@@ -396,6 +431,42 @@ class TestVendorRefresh(VendorTestCase):
         run = self.install(manifest)
         self.assertVendored(run, "local.nanocobs@r4", "redeployed", "mismatch")
         self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+
+    @POSIX_ONLY
+    def test_an_executable_payload_file_stays_executable(self):
+        """A clone carries the mode; a copy_file fallback has to be told to. Either way
+        the digest covers the exec bit, so getting it wrong also never settles."""
+        tool = self.write_payload("bin/tool", "#!/bin/sh\necho hi\n")
+        tool.chmod(0o755)
+        manifest = self.manifest(
+            self.entry("local.nanocobs@r3", self.spec("local.nanocobs@r3"))
+        )
+        self.assertVendored(
+            self.install(manifest), "local.nanocobs@r3", "copied", "absent"
+        )
+
+        dest = self.project / "vendor" / "nanocobs"
+        self.assertTrue(os.access(dest / "bin" / "tool", os.X_OK))
+        self.assertVendored(
+            self.install(manifest), "local.nanocobs@r3", "up_to_date", "current"
+        )
+
+    def test_a_payload_of_many_files_copies_exactly_and_settles(self):
+        """The copy hands each worker a slice of 32 files, so a payload of four never
+        leaves the calling thread and proves nothing about the pool."""
+        for i in range(200):
+            self.write_payload(f"gen/{i % 7}/file{i}.txt", f"payload {i}\n")
+        manifest = self.manifest(
+            self.entry("local.nanocobs@r3", self.spec("local.nanocobs@r3"))
+        )
+
+        run = self.install(manifest)
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        dest = self.project / "vendor" / "nanocobs"
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+        self.assertVendored(
+            self.install(manifest), "local.nanocobs@r3", "up_to_date", "current"
+        )
 
     @POSIX_ONLY
     def test_exec_bit_drift_is_detected(self):
@@ -1023,6 +1094,325 @@ INSTALL = function(install_dir) end
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode, run.stdout)
         self.assertIn("vendor", run.stderr)
+
+
+class TestVendorCommand(VendorTestCase):
+    """`envy vendor`: restore a vendored tree on demand rather than as part of a run.
+
+    The command runs its targets to completion like any other, so the assertions are
+    the same `vendor_result` ones; what is new is which packages the plan covers and
+    whether `auto_sync` still has the last word.
+    """
+
+    def vendor(self, manifest: Path, *extra, **kwargs):
+        return self.run_envy("vendor", *extra, "--manifest", manifest, **kwargs)
+
+    def one(self, vendor: str = "true") -> Path:
+        """One vendored package, installed. Returns its manifest."""
+        self.manifest_path = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor=vendor
+            )
+        )
+        self.dest = self.project / "vendor" / "nanocobs"
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "copied", "absent"
+        )
+        return self.manifest_path
+
+    def two(self) -> Path:
+        manifest = self.manifest(
+            self.entry("local.one@r1", self.spec("local.one@r1"))
+            + "\n"
+            + self.entry("local.two@r1", self.spec("local.two@r1"))
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+        return manifest
+
+    # -- restoring -----------------------------------------------------------
+
+    def test_a_deleted_destination_is_copied_afresh(self):
+        manifest = self.one()
+        rmtree_retry(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+
+    def test_an_edited_destination_is_restored(self):
+        manifest = self.one()
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+
+    def test_the_command_reports_what_it_did(self):
+        """The phase's row is overwritten by the completion row, so the command says it."""
+        manifest = self.one()
+        (self.dest / "LICENSE").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertIn("re-vendored", run.stderr)
+        self.assertIn(str(self.dest), run.stderr)
+
+    def test_the_report_names_the_destination_before_the_cause(self):
+        """'N files: contents were dirty to <dir>' reads as if the directory were dirt."""
+        manifest = self.one()
+        (self.dest / "LICENSE").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertRegex(
+            run.stderr, r"re-vendored \d+ files to \S+: contents were dirty"
+        )
+
+    def test_two_queries_naming_one_package_report_it_once(self):
+        """The dest is on the command's line and nowhere else, so it counts the lines."""
+        manifest = self.one()
+        (self.dest / "LICENSE").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "nanocobs")
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual(1, run.stderr.count(str(self.dest)), run.stderr)
+
+    def test_an_up_to_date_destination_is_left_alone(self):
+        manifest = self.one()
+        before = self.tree_of(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+        self.assertIn("up to date", run.stderr)
+        self.assertEqual(before, self.tree_of(self.dest))
+
+    def test_restoring_converges(self):
+        manifest = self.one()
+        (self.dest / "stray.txt").write_text("mine\n", encoding="utf-8")
+
+        self.assertVendored(
+            self.vendor(manifest, "local.nanocobs@r3"),
+            "local.nanocobs@r3",
+            "redeployed",
+            "mismatch",
+        )
+        self.assertVendored(
+            self.vendor(manifest, "local.nanocobs@r3"),
+            "local.nanocobs@r3",
+            "up_to_date",
+            "current",
+        )
+
+    # -- selecting -----------------------------------------------------------
+
+    def test_all_covers_every_vendored_package(self):
+        manifest = self.two()
+        for name in ("one", "two"):
+            (self.project / "vendor" / name / "LICENSE").write_text("x\n")
+
+        run = self.vendor(manifest, "--all")
+        self.assertVendored(run, "local.one@r1", "redeployed", "mismatch")
+        self.assertVendored(run, "local.two@r1", "redeployed", "mismatch")
+        for name in ("one", "two"):
+            self.assertEqual(
+                "MIT\n", (self.project / "vendor" / name / "LICENSE").read_text()
+            )
+
+    def test_a_query_leaves_every_other_destination_as_it_found_it(self):
+        manifest = self.two()
+        for name in ("one", "two"):
+            (self.project / "vendor" / name / "LICENSE").write_text("x\n")
+
+        run = self.vendor(manifest, "local.one@r1")
+        self.assertVendored(run, "local.one@r1", "redeployed", "mismatch")
+        self.assertNotIn("local.two@r1", self.results(run))
+        self.assertEqual("MIT\n", (self.project / "vendor/one/LICENSE").read_text())
+        self.assertEqual("x\n", (self.project / "vendor/two/LICENSE").read_text())
+
+    def test_a_vendored_dependency_of_a_target_is_not_swept_along(self):
+        """The plan is resolved over the whole manifest, so a collision with a package
+        nobody named is still an error -- but only what was named is copied."""
+        dep = self.spec("local.dep@r1")
+        consumer = self.write_spec(
+            "consumer.lua",
+            f"""IDENTITY = "local.consumer@r1"
+FETCH = {{ source = "file://{self.lua_path(self.seed)}" }}
+DEPENDENCIES = {{
+  {{ spec = "local.dep@r1", source = "{self.lua_path(dep)}" }},
+}}
+INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
+  envy.copy("{self.lua_path(self.payload)}", install_dir)
+end
+""",
+            directory=self.project,
+        )
+        manifest = self.manifest(
+            self.entry("local.consumer@r1", consumer)
+            + "\n"
+            + self.entry("local.dep@r1", dep)
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+        for name in ("consumer", "dep"):
+            (self.project / "vendor" / name / "LICENSE").write_text("x\n")
+
+        run = self.vendor(manifest, "local.consumer@r1")
+        self.assertVendored(run, "local.consumer@r1", "redeployed", "mismatch")
+        self.assertNotIn("local.dep@r1", self.results(run))
+        self.assertEqual("MIT\n", (self.project / "vendor/consumer/LICENSE").read_text())
+        self.assertEqual("x\n", (self.project / "vendor/dep/LICENSE").read_text())
+
+    def test_a_package_that_is_not_vendored_is_an_error(self):
+        manifest = self.manifest(
+            self.entry("local.one@r1", self.spec("local.one@r1"))
+            + "\n"
+            + self.entry("local.two@r1", self.spec("local.two@r1"), vendor=None)
+        )
+        run = self.vendor(manifest, "local.two@r1")
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("local.two@r1", run.stderr)
+        self.assertIn("not vendored", run.stderr)
+
+    def test_a_manifest_that_vendors_nothing_is_an_error(self):
+        manifest = self.manifest(
+            self.entry("local.one@r1", self.spec("local.one@r1"), vendor=None)
+        )
+        run = self.vendor(manifest, "--all")
+
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("asks to be vendored", run.stderr)
+
+    # -- --force -------------------------------------------------------------
+
+    def test_an_exempt_package_is_kept_without_force(self):
+        manifest = self.one(vendor="{ auto_sync = false }")
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
+        self.assertEqual("mine\n", (self.dest / "src" / "lib.c").read_text())
+
+    def test_force_repairs_an_exempt_package(self):
+        manifest = self.one(vendor="{ auto_sync = false }")
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--force")
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+
+    def test_the_warning_names_the_flag_that_overrides_it(self):
+        manifest = self.one(vendor="{ auto_sync = false }")
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        self.assertIn("--force", self.vendor(manifest, "local.nanocobs@r3").stderr)
+
+    def test_force_changes_nothing_where_auto_sync_is_on(self):
+        manifest = self.one()
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--force")
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+
+    def test_force_on_an_up_to_date_package_is_still_a_no_op(self):
+        """--force lifts the exemption; it is not "copy regardless"."""
+        manifest = self.one()
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--force")
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+
+    # -- --threads -----------------------------------------------------------
+
+    def test_the_thread_count_does_not_change_what_lands(self):
+        """A copy is only parallel if the answer is the same however wide it ran."""
+        for i in range(120):
+            self.write_payload(f"gen/{i % 5}/file{i}.txt", f"payload {i}\n")
+        manifest = self.one()
+
+        for count in ("1", "2", "8"):
+            rmtree_retry(self.dest)
+            run = self.vendor(manifest, "local.nanocobs@r3", "--threads", count)
+            self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+            self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+            # Same bytes means the same digest, so the next run has nothing to do --
+            # a wider copy that quietly dropped a file would redeploy here instead.
+            self.assertVendored(
+                self.vendor(manifest, "local.nanocobs@r3"),
+                "local.nanocobs@r3",
+                "up_to_date",
+                "current",
+            )
+
+    # -- --dry-run -----------------------------------------------------------
+
+    def test_dry_run_reports_a_repair_without_making_it(self):
+        manifest = self.one()
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+        before = self.tree_of(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--dry-run")
+        self.assertVendored(
+            run, "local.nanocobs@r3", "redeployed", "mismatch", dry_run=True
+        )
+        self.assertIn("would re-vendor", run.stderr)
+        self.assertEqual(before, self.tree_of(self.dest))
+
+    def test_dry_run_does_not_create_an_absent_destination(self):
+        manifest = self.one()
+        rmtree_retry(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--dry-run")
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent", dry_run=True)
+        self.assertIn("would vendor", run.stderr)
+        self.assertFalse(self.dest.exists(), "a dry run created the destination")
+
+    def test_dry_run_counts_the_files_it_would_write(self):
+        manifest = self.one()
+        rmtree_retry(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--dry-run")
+        result = self.results(run)["local.nanocobs@r3"]
+        self.assertEqual(len(self.tree_of(self.payload)), result["files"])
+        self.assertGreater(result["bytes"], 0)
+
+    def test_dry_run_leaves_the_work_for_the_next_run(self):
+        manifest = self.one()
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        self.vendor(manifest, "local.nanocobs@r3", "--dry-run")
+        run = self.vendor(manifest, "local.nanocobs@r3")
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.dest))
+
+    def test_dry_run_with_force_reports_the_repair_the_exemption_blocks(self):
+        manifest = self.one(vendor="{ auto_sync = false }")
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+        before = self.tree_of(self.dest)
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--force", "--dry-run")
+        self.assertVendored(
+            run, "local.nanocobs@r3", "redeployed", "mismatch", dry_run=True
+        )
+        self.assertEqual(before, self.tree_of(self.dest))
+
+    def test_dry_run_without_force_still_reports_the_exemption(self):
+        manifest = self.one(vendor="{ auto_sync = false }")
+        (self.dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.vendor(manifest, "local.nanocobs@r3", "--dry-run")
+        self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch", dry_run=True)
+        self.assertIn("no longer matches", run.stderr)
+
+    def test_dry_run_over_all_of_them_writes_nothing(self):
+        manifest = self.two()
+        for name in ("one", "two"):
+            (self.project / "vendor" / name / "LICENSE").write_text("x\n")
+
+        run = self.vendor(manifest, "--all", "--dry-run")
+        for identity in ("local.one@r1", "local.two@r1"):
+            self.assertVendored(run, identity, "redeployed", "mismatch", dry_run=True)
+        for name in ("one", "two"):
+            self.assertEqual(
+                "x\n", (self.project / "vendor" / name / "LICENSE").read_text()
+            )
 
 
 if __name__ == "__main__":

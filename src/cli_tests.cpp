@@ -18,6 +18,7 @@
 #include "cmds/cmd_shell.h"
 #include "cmds/cmd_sync.h"
 #include "cmds/cmd_use.h"
+#include "cmds/cmd_vendor.h"
 #include "cmds/cmd_version.h"
 #include "envy_release.h"
 
@@ -960,6 +961,7 @@ TEST_CASE("cli_parse: global --project") {
     CHECK(anchor_of({ "envy", "--project", ".", "import", "--dir", "." }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "cache" }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "use", "1.2.3" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "vendor", "--all" }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "run", "ls" }).has_value());
   }
 
@@ -3763,6 +3765,53 @@ TEST_CASE("cli_parse: environment variables stand in for absent flags") {
   }
 }
 
+TEST_CASE("cli_parse: cmd_vendor") {
+  SUBCASE("queries name what to restore") {
+    auto const cfg{ accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "gcc", "cobs" }) };
+    CHECK(cfg.queries == std::vector<std::string>{ "gcc", "cobs" });
+    CHECK_FALSE(cfg.all);
+    CHECK_FALSE(cfg.force);
+    CHECK_FALSE(cfg.dry_run);
+    CHECK_FALSE(cfg.manifest_path.has_value());
+  }
+
+  SUBCASE("--all takes every vendored package instead") {
+    auto const cfg{ accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all" }) };
+    CHECK(cfg.all);
+    CHECK(cfg.queries.empty());
+  }
+
+  SUBCASE("--force and --dry-run are independent of each other") {
+    auto const cfg{ accepts<envy::cmd_vendor::cfg>(
+        { "envy", "vendor", "--all", "--force", "--dry-run" }) };
+    CHECK(cfg.force);
+    CHECK(cfg.dry_run);
+  }
+
+  SUBCASE("--threads is a number, defaulting to the performance-core count") {
+    CHECK(accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all" }).threads == 0);
+    CHECK(accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all", "--threads", "4" })
+              .threads == 4);
+    rejects({ "envy", "vendor", "--all", "--threads", "many" });
+    // Negative parses; execute() is where it is refused, as `hash --threads` does.
+    CHECK(accepts<envy::cmd_vendor::cfg>({ "envy", "vendor", "--all", "--threads", "-2" })
+              .threads == -2);
+  }
+
+  SUBCASE("--manifest points at a project") {
+    auto const cfg{ accepts<envy::cmd_vendor::cfg>(
+        { "envy", "vendor", "cobs", "--manifest=/m/envy.lua" }) };
+    CHECK(*cfg.manifest_path == std::filesystem::path{ "/m/envy.lua" });
+  }
+
+  SUBCASE("the selection is required, and is one of the two") {
+    rejects({ "envy", "vendor" });
+    rejects({ "envy", "vendor", "--force" });
+    rejects({ "envy", "vendor", "--all", "cobs" });
+    rejects({ "envy", "vendor", "cobs", "--all" });
+  }
+}
+
 TEST_CASE("cli_parse: every mutually exclusive pair rejects both orders") {
   SUBCASE("global verbosity") {
     rejects({ "envy", "--verbose", "--quiet", "version" });
@@ -3801,6 +3850,12 @@ TEST_CASE("cli_parse: every mutually exclusive pair rejects both orders") {
     rejects({ "envy", "import", kFile, "--dir", kDir });
     rejects({ "envy", "import", "--dir", kDir, kFile });
     rejects({ "envy", "import" });
+  }
+
+  SUBCASE("vendor takes queries or --all, never both and never neither") {
+    rejects({ "envy", "vendor", "--all", "cobs" });
+    rejects({ "envy", "vendor", "cobs", "--all" });
+    rejects({ "envy", "vendor" });
   }
 }
 

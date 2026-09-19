@@ -1,5 +1,6 @@
 #include "product_util.h"
 
+#include "cache.h"
 #include "engine.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
@@ -95,6 +96,48 @@ TEST_CASE("product_util_resolve throws on missing package path for cached provid
   provider->products["tool"] = product_entry{ "bin/tool", true };
   CHECK_THROWS_WITH_AS(product_util_resolve(provider.get(), "tool"),
                        "Product 'tool' provider 'local.provider@v1' missing pkg path",
+                       std::runtime_error);
+}
+
+// An unresolved type is the state the publication race used to produce: the products
+// are readable, the type is not yet. Neither renderer may guess from it -- the wrong
+// guess is an absolute path into a package that has no payload at all.
+
+TEST_CASE("product_util_resolve refuses a provider whose type is unresolved") {
+  auto provider{ make_pkg("local.provider@v1", pkg_type::UNKNOWN) };
+  provider->products["tool"] = product_entry{ "bin/tool", true };
+  provider->pkg_path = std::filesystem::path("/tmp/provider");
+
+  CHECK_THROWS_WITH_AS(product_util_resolve(provider.get(), "tool"),
+                       "Product 'tool' provider 'local.provider@v1' has no resolved "
+                       "package type; its spec did not finish loading",
+                       std::runtime_error);
+}
+
+TEST_CASE("product_util_predict prints a user-managed value verbatim") {
+  auto provider{ make_pkg("local.provider@v1", pkg_type::USER_MANAGED) };
+  cache c{ std::filesystem::path("/nonexistent-cache") };  // never consulted
+
+  product_info const pi{ .product_name = "tool",
+                         .value = "programmatic-tool",
+                         .provider_canonical = "local.provider@v1",
+                         .type = pkg_type::USER_MANAGED };
+
+  CHECK(product_util_predict(pi, provider.get(), c) == "programmatic-tool");
+}
+
+TEST_CASE("product_util_predict refuses a product whose type is unresolved") {
+  auto provider{ make_pkg("local.provider@v1", pkg_type::UNKNOWN) };
+  cache c{ std::filesystem::path("/nonexistent-cache") };
+
+  product_info const pi{ .product_name = "tool",
+                         .value = "programmatic-tool",
+                         .provider_canonical = "local.provider@v1",
+                         .type = pkg_type::UNKNOWN };
+
+  CHECK_THROWS_WITH_AS(product_util_predict(pi, provider.get(), c),
+                       "Product 'tool' provider 'local.provider@v1' has no resolved "
+                       "package type; its spec did not finish loading",
                        std::runtime_error);
 }
 

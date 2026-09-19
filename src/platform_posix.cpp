@@ -7,6 +7,13 @@
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/attr.h>
+#include <sys/clonefile.h>
+#endif
+
+#ifdef __linux__
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #endif
 
 #include <cerrno>
@@ -389,6 +396,55 @@ std::error_code remove_all_with_retry(std::filesystem::path const &target) {
   std::error_code ec;
   std::filesystem::remove_all(target, ec);
   return ec;
+}
+
+bool remove_file(std::filesystem::path const &path) { return ::unlink(path.c_str()) == 0; }
+
+bool remove_empty_dir(std::filesystem::path const &path) {
+  return ::rmdir(path.c_str()) == 0;
+}
+
+bool make_dir(std::filesystem::path const &path) {
+  // 0777 is the mode before the umask, which is what mkdir -p and create_directory use.
+  return ::mkdir(path.c_str(), 0777) == 0 || errno == EEXIST;
+}
+
+bool clone_file(std::filesystem::path const &src, std::filesystem::path const &dst) {
+#if defined(__APPLE__)
+  // Carries the mode, the times and the xattrs with it, which a copy_file does not; none
+  // of that is in the tree digest, so a cloned copy and a copied one compare equal.
+  return ::clonefile(src.c_str(), dst.c_str(), 0) == 0;
+#elif defined(__linux__)
+  struct stat st{};
+  if (::stat(src.c_str(), &st)) { return false; }
+
+  int const in{ ::open(src.c_str(), O_RDONLY | O_CLOEXEC) };
+  if (in < 0) { return false; }
+  int const out{
+    ::open(dst.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, st.st_mode & 07777)
+  };
+  if (out < 0) {
+    ::close(in);
+    return false;
+  }
+
+  // FICLONE shares extents rather than copying them, and fails on a filesystem or a
+  // cross-device pair that cannot: the empty file it would leave has to go. The mode
+  // needs fchmod on top of open's argument, which the umask filters -- and the exec bit
+  // is in the tree digest, so losing it would redeploy the package on every run.
+  bool const cloned{ ::ioctl(out, FICLONE, in) == 0 &&
+                     ::fchmod(out, st.st_mode & 07777) == 0 };
+  ::close(out);
+  ::close(in);
+  if (!cloned) {
+    std::error_code ec;
+    std::filesystem::remove(dst, ec);
+  }
+  return cloned;
+#else
+  (void)src, (void)dst;
+  return false;
+#endif
 }
 
 int get_process_id() { return static_cast<int>(getpid()); }
