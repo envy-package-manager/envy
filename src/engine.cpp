@@ -638,11 +638,18 @@ std::vector<product_info> engine::collect_all_products() const {
 
     for (auto const &[key, package] : packages_) {
       // type is written during spec_fetch and pkg_path across check/import/install:
-      // read each only once its own worker has published the step that writes it
-      // (the atomic completed count is the happens-before), or a still-running
-      // closure member is a data race.
+      // read each only once its own worker has published the step that writes it, or a
+      // still-running closure member is a data race.
+      //
+      // For the type that publisher is spec_fetch_completed, not the step count. The
+      // spec_fetch wrapper sets the flag, then releases the resolution barrier, and
+      // only then returns -- which is when the count moves. A reader that resolve_graph
+      // just let go can therefore see the count at zero and call a user-managed package
+      // UNKNOWN, which `envy product --json` renders as a synthesized cache path for a
+      // package that has no payload. pkg_path keeps the count: no barrier races it.
       int const done{ core_.completed(key.canonical()) };
-      pkg_type const type{ done >= 1 ? package->type : pkg_type::UNKNOWN };
+      pkg_type const type{ package->spec_fetch_completed ? package->type
+                                                         : pkg_type::UNKNOWN };
       auto const pkg_path{ done >= kDependencySatisfiedWatermark
                                ? package->pkg_path
                                : std::filesystem::path{} };

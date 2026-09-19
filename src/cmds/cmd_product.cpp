@@ -43,22 +43,8 @@ void print_products_json(engine &eng, cache &c) {
 
   picojson::object obj;
   for (auto const &pi : products) {
-    std::string const resolved{ [&] {
-      if (pi.type == pkg_type::USER_MANAGED) { return pi.value; }
-      pkg *provider{ eng.find_product_provider(pi.product_name) };
-      std::ostringstream key;
-      key << provider->cfg->format_key();
-      for (auto const &wk : provider->resolved_weak_dependency_keys) { key << '|' << wk; }
-      auto const key_for_hash{ key.str() };
-      auto const digest{ blake3_hash(key_for_hash.data(), key_for_hash.size()) };
-      std::string const hash_prefix{ util_bytes_to_hex(digest.data(), 8) };
-      auto const pkg_path{ c.compute_pkg_path(provider->cfg->identity,
-                                              platform::os_name(),
-                                              platform::arch_name(),
-                                              hash_prefix) };
-      return util_normalized_path(pkg_path / pi.value);
-    }() };
-    obj[pi.product_name] = picojson::value(resolved);
+    obj[pi.product_name] = picojson::value(
+        product_util_predict(pi, eng.find_product_provider(pi.product_name), c));
   }
 
   std::string const output{ picojson::value(obj).serialize(true) };

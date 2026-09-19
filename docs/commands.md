@@ -65,6 +65,14 @@ envy sync                               # restamps scripts + .luarc.json as the 
 
 A manifest `DEFAULT_SHELL` function is evaluated on the first string verb that needs it, and its `DEPENDS` interpreter is installed no earlier. `deploy` and a bare `envy product` listing resolve the graph and run no payload phase, so they normally never fetch it; `package`, `product <name>` and `export` install what they name, and pay for the shell only if that work runs a string verb. See `docs/architecture.md` for the bootstrap-shell rule.
 
+**`envy vendor <query>... | --all [--force] [--dry-run] [--manifest=...]`** — Restore vendored copies in the project tree. Runs the named packages (or every package the manifest vendors) to completion, exactly as `install` would, with the vendor step as the point: a destination that is absent, edited or stale is wiped and recopied from the cache. Either name what to restore or say `--all`—there is no "all by default", because this command deletes directories. The plan is resolved over the whole manifest, so a collision or a nesting anywhere is still an error before a byte is written, but only what was named is copied: a vendored *dependency* of a target keeps whatever it has. `--force` ignores `vendor.auto_sync = false`, which is the only way to discard deliberate edits to an exempt copy. `--dry-run` decides the same way and touches no vendored file, reporting what it would have done and what it would have cost (it is not "no writes at all": the ladder still runs, so an uncached package is still fetched and installed, and the cache still records the digest either way) (`vendor_result` then carries `dry_run: true`, and `files`/`bytes` are what a copy would write). `--threads` (0 = the performance-core count) exists for `tools/bench_vendor.py`, as `envy hash --tree --threads` does. A package with no `vendor` entry is an error naming it, not a silent no-op.
+
+```bash
+envy vendor nanocobs                # restore one
+envy vendor --all --dry-run         # what has drifted, and what repairing it costs
+envy vendor patched --force         # throw away deliberate edits to an exempt copy
+```
+
 **`envy package <identity> [--manifest=...]`** — Query and install package, print package path. Loads manifest (auto-discovered or via `--manifest`), finds matching spec, installs only that package plus transitive dependencies if not cached, prints absolute path to package directory to stdout. Other manifest packages are not processed. Errors if identity ambiguous (multiple option variants) or programmatic package (no cached artifacts). Exits 0 with path on success, exits 1 with "not found" on failure.
 
 ### Cache

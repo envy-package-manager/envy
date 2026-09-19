@@ -363,7 +363,9 @@ ratchets it through `export`, so export overlaps dependents' builds.
 
 A manifest can ask for a package's payload to be copied out of the cache and into the
 project tree, for an IDE or a non-envy build that cannot consult the cache. `envy install`
-and `envy sync` do it as part of the ladder—there is no separate command.
+and `envy sync` do it as part of the ladder; `envy vendor` is the same ladder run for the
+sake of that one step, and the only way to override `auto_sync` or to ask what would
+happen without it happening.
 
 ```lua
 VENDOR_ROOT = "third_party"                        -- project-relative; root manifest only
@@ -398,6 +400,43 @@ Every destination is resolved and checked—for duplicates and for nesting, wher
 package's wipe-and-recopy would erase the inner one—**before any file is written**, so a
 bad manifest fails with nothing half-copied.
 
+**The copy.** Directories first, on the calling thread, in the sorted order `tree_list`
+already guarantees; then every file and symlink across a pool sized like the hasher's
+(performance cores, divided by the vendor phases in flight). A selection carries the
+ancestors of its entries, so every parent exists before the pool starts and no worker
+creates one. Each file is tried as a copy-on-write clone first—`clonefile` on APFS,
+`FICLONE` on btrfs/XFS—and falls back to a byte copy when the filesystem or the pair of
+volumes has no such thing; the clone carries the mode, and neither the mode's carrier nor
+the file's timestamps are in the digest, so a cloned tree and a copied one compare equal.
+Measured with `tools/bench_vendor.py`: 512 MiB of large files went 112 ms → under 1 ms
+(the clone), a 6,251-file tree 672 ms → 279 ms (the pool), and a realistic mixed payload
+379 ms → 133 ms. Both levers are needed—clone does almost nothing for many small files,
+and threads do almost nothing for a few big ones.
+
+**The wipe.** The drift check hands back the listing it just hashed, so the wipe walks
+nothing: files unlink across a pool, directories `rmdir` deepest-first from the same
+sorted list. Both go through `platform::remove_file`/`remove_empty_dir`—one syscall each,
+where `std::filesystem::remove_all` re-resolves every path from the root it was handed
+and constructs an `error_code` per entry. Anything that does not come away—a stray file
+that appeared since the listing, a read-only file on Windows, a handle an antivirus still
+holds—falls the whole tree back to `remove_all_with_retry`, which is where that behavior
+lives; a partial delete is fine, since the fallback finishes it. 269 ms → 71 ms on the
+many-file shape, 54 → 14 on the deep one. A single directory of 12,500 files is the
+exception at 1.7x: the unlinks serialize on that one directory's metadata whatever the
+thread count, which the benchmark predicted before the code was written.
+
+**What the clone costs, since envy hashes far more often than it vendors.** A clone
+writes no bytes, so nothing pre-warms the page cache for the next reader: the *first*
+drift check after a re-vendor reads cold and runs 3–4x a warm one. Every hash after that
+is identical to one over a byte-copied tree—39 ms vs 38, 73 vs 73, 9 vs 9 across the
+shapes (`tools/bench_vendor.py --hash-after`, which exists to keep that true). The
+steady-state hot path is therefore untouched; the same physical I/O simply moves out of
+the copy and into the one read that follows it, and the pair together still costs less
+than a byte copy did alone (many-small: 255 + 118 against 676 + 43).
+
+End-to-end, a re-vendor is 1.9–2.2x faster on every shape. `envy vendor --threads` and
+`tools/bench_vendor.py --wipe` are how these numbers get re-derived.
+
 **Staying in sync.** A vendored tree lives in the repo, so people edit it. Each run hashes
 the destination whole (`tree_hash`, see below) and compares it against the *pristine*
 digest recorded in the package's cache entry, keyed by the selector set and written at
@@ -410,7 +449,9 @@ walk plus a way to get it wrong.
 destination that no longer matches is reported as a warning and left exactly as it is.
 An absent destination is still copied -- there is nothing to preserve -- and a matching
 one is still quiet. This is for a project that edits its vendored copy on purpose and
-wants to be told when it has diverged, not corrected.
+wants to be told when it has diverged, not corrected. `envy vendor --force` is how that
+project throws its edits away when it is done with them; the exemption is a manifest
+default, not a lock.
 
 The package's own digest is the only record, so envy keeps no project-side state for
 vendoring. A vendored tree committed to git is adopted as-is on a machine that has never

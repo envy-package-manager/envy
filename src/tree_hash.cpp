@@ -32,27 +32,6 @@ constexpr unsigned char kind_tag(tree_entry_kind k) {
   return '?';
 }
 
-// Divides the machine by the calls already in flight: every package worker is its own
-// thread, so concurrent vendor phases must not each claim all of it.
-class thread_budget : unmovable {
- public:
-  explicit thread_budget(unsigned requested)
-      : requested_{ requested }, inflight_{ ++s_inflight } {}
-  ~thread_budget() { --s_inflight; }
-
-  unsigned threads() const {
-    if (requested_) { return requested_; }
-    return std::max(
-        1u,
-        tree_hash_default_threads() / static_cast<unsigned>(std::max(1, inflight_)));
-  }
-
- private:
-  static inline std::atomic<int> s_inflight{ 0 };
-  unsigned requested_;
-  int inflight_;
-};
-
 // Scan this directory, or hash this file. Files queue rather than being hashed by
 // whoever enumerated them, or one directory of big files hashes on one thread.
 struct work_item {
@@ -340,11 +319,12 @@ void require_directory(std::filesystem::path const &root, char const *who) {
 tree_hash_result tree_hash(std::filesystem::path const &root,
                            tree_filter const &filter,
                            unsigned threads,
-                           tree_hash_stats *stats) {
+                           tree_hash_stats *stats,
+                           std::vector<tree_entry> *out_entries) {
   require_directory(root, "tree_hash");
   auto const started{ std::chrono::steady_clock::now() };
   thread_budget const budget{ threads };
-  auto const entries{
+  auto entries{
     walker{ tree_scan_root(root), filter, true, budget.threads(), stats }.take()
   };
 
@@ -373,6 +353,11 @@ tree_hash_result tree_hash(std::filesystem::path const &root,
     }
   }
   result.digest = fold.finalize();
+  if (out_entries) {
+    out_entries->clear();
+    out_entries->reserve(entries.size());
+    for (auto &w : entries) { out_entries->push_back(std::move(w.e)); }
+  }
   if (stats) {
     stats->wall_ns =
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

@@ -500,6 +500,35 @@ void mark_not_indexed(std::filesystem::path const &dir) {
   ::SetFileAttributesW(dir.c_str(), attrs | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
 }
 
+bool remove_file(std::filesystem::path const &path) {
+  if (::DeleteFileW(path.c_str())) { return true; }
+  // A read-only file refuses to be deleted until the attribute goes, which is what the
+  // STL's remove() does too. Anything else -- a handle an antivirus still holds -- is
+  // the caller's cue to fall back to the retrying path.
+  if (::GetLastError() != ERROR_ACCESS_DENIED) { return false; }
+  DWORD const attrs{ ::GetFileAttributesW(path.c_str()) };
+  if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_READONLY)) {
+    return false;
+  }
+  ::SetFileAttributesW(path.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+  return ::DeleteFileW(path.c_str()) != 0;
+}
+
+bool remove_empty_dir(std::filesystem::path const &path) {
+  return ::RemoveDirectoryW(path.c_str()) != 0;
+}
+
+bool make_dir(std::filesystem::path const &path) {
+  return ::CreateDirectoryW(path.c_str(), nullptr) ||
+         ::GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+bool clone_file(std::filesystem::path const &, std::filesystem::path const &) {
+  // NTFS has no reflink. ReFS does (FSCTL_DUPLICATE_EXTENTS_TO_FILE), but it is not what
+  // a developer machine formats with, and the caller's fallback is the ordinary copy.
+  return false;
+}
+
 int get_process_id() { return static_cast<int>(GetCurrentProcessId()); }
 
 std::vector<std::string> get_environment() {

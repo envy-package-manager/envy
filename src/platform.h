@@ -131,6 +131,21 @@ void env_var_unset(char const *name);
 // Returns default error_code on success, or the final OS error on failure.
 std::error_code remove_all_with_retry(std::filesystem::path const &target);
 
+// One unlink, one rmdir, one mkdir, native and without std::filesystem's per-call
+// status() and error_code construction: a bulk tree operation makes these calls once per
+// entry, where that overhead is the measurement. False means it did not happen -- the
+// caller decides whether that is fatal. make_dir tolerates an existing directory, and
+// creates no parents: the caller that needs them creates them in order.
+bool remove_file(std::filesystem::path const &path);
+bool remove_empty_dir(std::filesystem::path const &path);
+bool make_dir(std::filesystem::path const &path);
+
+// Copy `src` to `dst` by sharing its blocks copy-on-write, preserving the mode: APFS
+// `clonefile`, btrfs/XFS `FICLONE`. False -- not an error -- when the platform, the
+// filesystem or the pair of volumes has no such thing, which is every caller's cue to
+// copy the bytes instead. `dst` must not exist; on false nothing is left behind.
+bool clone_file(std::filesystem::path const &src, std::filesystem::path const &dst);
+
 // Wait until all regular files in dir are readable (no sharing violations).
 // On Windows, probes each file with CreateFileW and, for ".exe" files,
 // with CreateProcessW(CREATE_SUSPENDED); retries with backoff on

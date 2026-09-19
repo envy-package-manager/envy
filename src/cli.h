@@ -19,6 +19,7 @@
 #include "cmds/cmd_shell.h"
 #include "cmds/cmd_sync.h"
 #include "cmds/cmd_use.h"
+#include "cmds/cmd_vendor.h"
 #include "cmds/cmd_version.h"
 #ifdef ENVY_FUNCTIONAL_TESTER
 #include "cmds/cmd_cache_functional_test.h"
@@ -53,6 +54,7 @@ struct cli_args {
                                  cmd_shell::cfg,
                                  cmd_sync::cfg,
                                  cmd_use::cfg,
+                                 cmd_vendor::cfg,
                                  cmd_version::cfg
 #ifdef ENVY_FUNCTIONAL_TESTER
                                  ,
