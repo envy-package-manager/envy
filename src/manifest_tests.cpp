@@ -2539,3 +2539,186 @@ TEST_CASE("envy.import accepts an imported manifest pinning an older envy") {
   CHECK(local_path(tool) ==
         fixture_path(fs::path{ "version_older" } / "specs" / "tool.lua"));
 }
+
+TEST_CASE("manifest::load parses the vendor field's three forms") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = {
+      { spec = "a.one@v1",   source = "/fake/r.lua", vendor = true },
+      { spec = "b.two@v1",   source = "/fake/r.lua", vendor = "deps/two" },
+      { spec = "c.three@v1", source = "/fake/r.lua", vendor = false },
+      { spec = "d.four@v1",  source = "/fake/r.lua" },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 4);
+  REQUIRE(m->packages[0]->vendor.has_value());
+  CHECK(m->packages[0]->vendor->empty());  // engaged but empty: derive a name
+  REQUIRE(m->packages[1]->vendor.has_value());
+  CHECK(*m->packages[1]->vendor == "deps/two");
+  CHECK_FALSE(m->packages[2]->vendor.has_value());  // false reads as not vendored
+  CHECK_FALSE(m->packages[3]->vendor.has_value());
+  CHECK(*m->vendor_root == "third_party");
+}
+
+TEST_CASE("manifest::load defaults a vendored package to syncing") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = { { spec = "a.one@v1", source = "/fake/r.lua", vendor = true } }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+  REQUIRE(m->packages.size() == 1);
+  CHECK_FALSE(m->packages[0]->vendor_auto_sync.has_value());  // unset means sync
+}
+
+TEST_CASE("manifest::load reads the vendor table's path like the string form") {
+  // { path = "x" } and "x" are the same request spelled two ways.
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { path = "deps/one" } },
+      { spec = "b.two@v1", source = "/fake/r.lua", vendor = "deps/one" },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+  REQUIRE(m->packages.size() == 2);
+  CHECK(m->packages[0]->vendor == m->packages[1]->vendor);
+  CHECK(*m->packages[0]->vendor == "deps/one");
+  CHECK_FALSE(m->packages[0]->vendor_auto_sync.has_value());
+}
+
+TEST_CASE("manifest::load reads auto_sync from the vendor table, both ways") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { auto_sync = false } },
+      { spec = "b.two@v1", source = "/fake/r.lua", vendor = { auto_sync = true } },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 2);
+  REQUIRE(m->packages[0]->vendor_auto_sync.has_value());
+  CHECK_FALSE(*m->packages[0]->vendor_auto_sync);
+  REQUIRE(m->packages[1]->vendor_auto_sync.has_value());
+  CHECK(*m->packages[1]->vendor_auto_sync);
+}
+
+TEST_CASE("manifest::load reads a vendor table holding both keys") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua",
+        vendor = { path = "tools/gcc", auto_sync = false } },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+  REQUIRE(m->packages.size() == 1);
+  CHECK(*m->packages[0]->vendor == "tools/gcc");
+  REQUIRE(m->packages[0]->vendor_auto_sync.has_value());
+  CHECK_FALSE(*m->packages[0]->vendor_auto_sync);
+}
+
+TEST_CASE("manifest::load reads an empty vendor table as vendor = true") {
+  // No path is a derived name, and no auto_sync is the default; that is `vendor = true`.
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = { { spec = "a.one@v1", source = "/fake/r.lua", vendor = {} } }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+  REQUIRE(m->packages.size() == 1);
+  REQUIRE(m->packages[0]->vendor.has_value());
+  CHECK(m->packages[0]->vendor->empty());  // empty means derive
+  CHECK_FALSE(m->packages[0]->vendor_auto_sync.has_value());
+}
+
+TEST_CASE("manifest::load rejects an unknown key in the vendor table") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { pat = "deps/one" } },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("pat"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects vendor_overwrite, the key this replaced") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = true,
+        vendor_overwrite = false },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("vendor_overwrite"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects a non-boolean vendor auto_sync") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    VENDOR_ROOT = "third_party"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { auto_sync = "yes" } },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("boolean"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects a non-string vendor path") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { path = 42 } },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("string"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects an empty vendor table path") {
+  // Distinct from an absent path, which derives: writing path = "" asked for nothing.
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = {
+      { spec = "a.one@v1", source = "/fake/r.lua", vendor = { path = "" } },
+    }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("empty"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load rejects a vendor value that is neither bool, string nor table") {
+  char const *script{ R"(
+    -- @envy bin-dir "tools"
+    PACKAGES = { { spec = "a.one@v1", source = "/fake/r.lua", vendor = 42 } }
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("vendor"),
+                       std::runtime_error);
+}

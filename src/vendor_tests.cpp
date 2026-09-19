@@ -235,3 +235,37 @@ TEST_CASE("vendor_resolve records the project root it validated against") {
   auto const plan{ resolve({ derived("local.one@r1") }) };
   CHECK(plan.project_root == kRoot);
 }
+
+TEST_CASE("vendor_resolve defaults a destination to overwriting") {
+  auto const plan{ resolve({ derived("local.one@r1") }) };
+  CHECK(plan.find(envy::pkg_key{ "local.one@r1" })->auto_sync);
+}
+
+TEST_CASE("vendor_resolve carries the auto_sync exemption to the destination") {
+  std::vector<envy::vendor_request> reqs{ derived("local.one@r1"),
+                                          overridden("local.two@r1", "deps/two") };
+  reqs[0].auto_sync = false;
+  auto const plan{ resolve(reqs) };
+
+  CHECK_FALSE(plan.find(envy::pkg_key{ "local.one@r1" })->auto_sync);
+  CHECK(plan.find(envy::pkg_key{ "local.two@r1" })->auto_sync);
+}
+
+TEST_CASE("an exempt package still takes part in collision resolution") {
+  // Exemption decides what happens to a destination, not which one it gets.
+  std::vector<envy::vendor_request> reqs{ derived("local.tool@r1"),
+                                          derived("acme.tool@r1") };
+  reqs[0].auto_sync = false;
+  auto const plan{ resolve(reqs) };
+
+  CHECK(dest_of(plan, "local.tool@r1") == "vendor/local.tool");
+  CHECK(dest_of(plan, "acme.tool@r1") == "vendor/acme.tool");
+  CHECK_FALSE(plan.find(envy::pkg_key{ "local.tool@r1" })->auto_sync);
+}
+
+TEST_CASE("an exempt destination is still refused when it collides") {
+  std::vector<envy::vendor_request> reqs{ overridden("a.one@r1", "deps/shared"),
+                                          overridden("b.two@r1", "deps/shared") };
+  reqs[0].auto_sync = false;
+  CHECK_THROWS_AS(resolve(reqs), std::runtime_error);
+}

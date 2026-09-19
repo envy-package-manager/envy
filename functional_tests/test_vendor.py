@@ -390,7 +390,8 @@ class TestVendorRefresh(VendorTestCase):
         # A new revision is a new cache entry, so the vendor copy is intact but no longer
         # matches what the package now installs.
         manifest = self.manifest(
-            self.entry("local.nanocobs@r4", self.spec("local.nanocobs@r4"), vendor='"vendor/nanocobs"')
+            self.entry("local.nanocobs@r4", self.spec("local.nanocobs@r4"),
+                       vendor='"vendor/nanocobs"')
         )
         run = self.install(manifest)
         self.assertVendored(run, "local.nanocobs@r4", "redeployed", "mismatch")
@@ -617,7 +618,8 @@ class TestVendorRedeployMatrix(VendorTestCase):
         run = self.install(manifest)
 
         self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
-        self.assertEqual(self.tree_of(self.payload), self.tree_of(self.project / "deps" / "cobs"))
+        self.assertEqual(self.tree_of(self.payload),
+                         self.tree_of(self.project / "deps" / "cobs"))
         self.assertTrue(old.exists(), "pruning is not a thing envy does")
 
     def test_one_package_mismatching_leaves_the_other_alone(self):
@@ -634,6 +636,345 @@ class TestVendorRedeployMatrix(VendorTestCase):
         self.assertEqual("redeployed", results["local.one@r1"]["action"])
         self.assertEqual("mismatch", results["local.one@r1"]["reason"])
         self.assertEqual("up_to_date", results["local.two@r1"]["action"])
+
+
+class TestVendorAutoSyncExemption(VendorTestCase):
+    """`vendor = { auto_sync = false }`: report a mismatch, do not repair it."""
+
+    def exempt_install(self, vendor: str = "{ auto_sync = false }",
+                       vendor_list: str = "") -> Path:
+        self.manifest_path = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3", vendor_list),
+                vendor=vendor,
+            )
+        )
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        return self.project / "vendor" / "nanocobs"
+
+    # -- the exemption applies only to a mismatch ----------------------------
+
+    def test_absent_destination_is_still_copied(self):
+        """Nothing to preserve, so exemption has nothing to say."""
+        dest = self.exempt_install()
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+
+    def test_matching_destination_is_still_quiet(self):
+        dest = self.exempt_install()
+        run = self.install(self.manifest_path)
+
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+        self.assertNotIn("no longer matches", run.stderr)
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+
+    def test_deleted_destination_is_recreated(self):
+        dest = self.exempt_install()
+        rmtree_retry(dest)
+
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        self.assertEqual(self.tree_of(self.payload), self.tree_of(dest))
+
+    # -- a mismatch is kept, and said out loud -------------------------------
+
+    def test_edited_file_is_kept_and_reported(self):
+        dest = self.exempt_install()
+        (dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
+        before = self.tree_of(dest)
+
+        run = self.install(self.manifest_path)
+
+        self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
+        self.assertEqual(before, self.tree_of(dest), "the edit was overwritten")
+        self.assertIn("no longer matches", run.stderr)
+        self.assertPathContains(run.stderr, str(dest))
+        self.assertIn("auto_sync", run.stderr)
+
+    def test_stray_file_is_kept(self):
+        dest = self.exempt_install()
+        (dest / "notes.md").write_text("mine\n", encoding="utf-8")
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "kept", "mismatch"
+        )
+        self.assertTrue((dest / "notes.md").exists())
+
+    def test_deleted_file_is_not_restored(self):
+        dest = self.exempt_install()
+        (dest / "LICENSE").unlink()
+
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "kept", "mismatch"
+        )
+        self.assertFalse((dest / "LICENSE").exists())
+
+    def test_a_changed_package_is_also_kept(self):
+        """The mismatch can come from the package side; the answer is the same."""
+        dest = self.exempt_install()
+        self.write_payload("src/lib.c", "int lib(void){return 1;}\n")
+
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r4",
+                self.spec("local.nanocobs@r4"),
+                vendor='{ path = "vendor/nanocobs", auto_sync = false }',
+            )
+        )
+        run = self.install(manifest)
+
+        self.assertVendored(run, "local.nanocobs@r4", "kept", "mismatch")
+        self.assertEqual("int lib(void){return 0;}\n", (dest / "src/lib.c").read_text())
+
+    def test_keeping_is_stable_across_runs(self):
+        """It reports every time and never oscillates into repairing."""
+        dest = self.exempt_install()
+        (dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
+        before = self.tree_of(dest)
+
+        for _ in range(3):
+            run = self.install(self.manifest_path)
+            self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
+            self.assertIn("no longer matches", run.stderr)
+            self.assertEqual(before, self.tree_of(dest))
+
+    def test_reverting_the_edit_goes_quiet_again(self):
+        dest = self.exempt_install()
+        original = (dest / "src" / "lib.c").read_text()
+        (dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
+        self.assertVendored(
+            self.install(self.manifest_path), "local.nanocobs@r3", "kept", "mismatch"
+        )
+
+        (dest / "src" / "lib.c").write_text(original, encoding="utf-8")
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+        self.assertNotIn("no longer matches", run.stderr)
+
+    # -- it is per package ----------------------------------------------------
+
+    def test_exemption_does_not_leak_to_a_neighbour(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.one@r1",
+                self.spec("local.one@r1"),
+                vendor="{ auto_sync = false }",
+            )
+            + "\n"
+            + self.entry("local.two@r1", self.spec("local.two@r1"))
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+
+        for name in ("one", "two"):
+            license = self.project / "vendor" / name / "LICENSE"
+            license.write_text("x\n", encoding="utf-8")
+        results = self.results(self.install(manifest))
+
+        self.assertEqual("kept", results["local.one@r1"]["action"])
+        self.assertEqual("redeployed", results["local.two@r1"]["action"])
+        self.assertEqual("x\n", (self.project / "vendor/one/LICENSE").read_text())
+        self.assertEqual("MIT\n", (self.project / "vendor/two/LICENSE").read_text())
+
+    def test_explicit_true_syncs_as_usual(self):
+        self.manifest_path = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor="{ auto_sync = true }",
+            )
+        )
+        self.assertEqual(0, self.install(self.manifest_path).returncode)
+        dest = self.project / "vendor" / "nanocobs"
+        (dest / "LICENSE").write_text("x\n", encoding="utf-8")
+
+        run = self.install(self.manifest_path)
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+        self.assertEqual("MIT\n", (dest / "LICENSE").read_text())
+
+    # -- the table form spells out what the shorthands mean --------------------
+
+    def test_path_in_the_table_lands_where_the_string_form_would(self):
+        for vendor in ('"deps/cobs"', '{ path = "deps/cobs" }'):
+            with self.subTest(vendor=vendor):
+                self.setUp()
+                manifest = self.manifest(
+                    self.entry(
+                        "local.nanocobs@r3",
+                        self.spec("local.nanocobs@r3"),
+                        vendor=vendor,
+                    )
+                )
+                self.assertEqual(0, self.install(manifest).returncode)
+                self.assertEqual(
+                    self.tree_of(self.payload),
+                    self.tree_of(self.project / "deps" / "cobs"),
+                )
+
+    def test_path_and_auto_sync_together(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor='{ path = "deps/cobs", auto_sync = false }',
+            )
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+        dest = self.project / "deps" / "cobs"
+        (dest / "LICENSE").write_text("x\n", encoding="utf-8")
+
+        self.assertVendored(self.install(manifest), "local.nanocobs@r3",
+                            "kept", "mismatch")
+        self.assertEqual("x\n", (dest / "LICENSE").read_text())
+
+    def test_an_empty_table_behaves_like_vendor_true(self):
+        manifest = self.manifest(
+            self.entry("local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor="{}")
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+        self.assertEqual(
+            self.tree_of(self.payload),
+            self.tree_of(self.project / "vendor" / "nanocobs"),
+        )
+
+    # -- refusing what cannot mean anything -----------------------------------
+
+    def test_vendor_overwrite_is_no_longer_a_key(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor_overwrite="false",
+            )
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("vendor_overwrite", run.stderr)
+
+    def test_an_unknown_vendor_table_key_is_refused(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor='{ pathh = "deps/cobs" }',
+            )
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("pathh", run.stderr)
+
+    def test_non_boolean_auto_sync_is_refused(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor='{ auto_sync = "sometimes" }',
+            )
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("auto_sync", run.stderr)
+
+    def test_an_empty_table_path_is_refused(self):
+        manifest = self.manifest(
+            self.entry(
+                "local.nanocobs@r3", self.spec("local.nanocobs@r3"), vendor='{ path = "" }'
+            )
+        )
+        run = self.install(manifest)
+        self.assertNotEqual(0, run.returncode, run.stdout)
+        self.assertIn("empty", run.stderr)
+
+
+class TestVendorProgress(VendorTestCase):
+    """The copy draws a bar, and its last frame says what happened."""
+
+    # Every vendor bar's status ends in one of these; the fetch bar draws on the same
+    # row, so matching on "%" alone picks up someone else's progress.
+    WORDS = ("vendored", "kept:")
+
+    def bar_rows(self, run) -> list[str]:
+        """Vendor progress rows envy drew for the package, in order."""
+        def is_vendor_bar(ln):
+            return ("[local.nanocobs@r3]" in ln and "%" in ln
+                    and any(w in ln for w in self.WORDS))
+
+        return [ln.strip() for ln in run.stderr.splitlines() if is_vendor_bar(ln)]
+
+    def install_drawing(self, *extra, **kw):
+        """Off a TTY a row's last frame prints as it is set: no throttle to wait out."""
+        return self.install(self.manifest_path, *extra, **kw)
+
+    def setUp(self):
+        super().setUp()
+        # Enough files that the copy is worth drawing at all, spread over subdirectories
+        # so the walk has directories to create that the bar does not count.
+        for i in range(40):
+            self.write_payload(f"gen/{i % 4}/file{i}.txt", f"payload {i}\n")
+        self.manifest_path = self.manifest(
+            self.entry("local.nanocobs@r3", self.spec("local.nanocobs@r3"))
+        )
+
+    def test_first_vendor_draws_a_bar_that_finishes_full(self):
+        run = self.install_drawing()
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+
+        rows = self.bar_rows(run)
+        self.assertTrue(rows, f"vendor drew no progress row:\n{run.stderr}")
+        self.assertIn("100.0%", rows[-1], f"bar did not finish full: {rows[-1]}")
+        self.assertIn("vendored", rows[-1])
+        self.assertIn("files", rows[-1])
+        self.assertNotIn("re-vendored", rows[-1], "a first copy is not a re-vendor")
+
+    def test_a_dirty_redeploy_says_so_on_the_bar(self):
+        self.install_drawing()
+        dest = self.project / "vendor" / "nanocobs"
+        (dest / "src" / "lib.c").write_text("tampered\n", encoding="utf-8")
+
+        run = self.install_drawing()
+        self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
+
+        rows = self.bar_rows(run)
+        self.assertTrue(rows, f"vendor drew no progress row:\n{run.stderr}")
+        self.assertIn("100.0%", rows[-1])
+        self.assertIn("re-vendored", rows[-1], f"row does not name the cause: {rows[-1]}")
+        self.assertIn("dirty", rows[-1], f"row does not name the cause: {rows[-1]}")
+
+    def test_the_bar_counts_the_files_it_copied(self):
+        run = self.install_drawing()
+        rows = self.bar_rows(run)
+
+        copied = run.events("vendor_result")[0].raw["files"]
+        self.assertGreater(copied, 40)
+        self.assertIn(f"{copied} files", rows[-1], f"count not on the row: {rows[-1]}")
+
+    def test_an_up_to_date_package_draws_no_bar(self):
+        """Nothing was copied, so there is no progress to report."""
+        self.install_drawing()
+        run = self.install_drawing()
+
+        self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
+        self.assertEqual([], self.bar_rows(run), "nothing was copied, so nothing to draw")
+
+    def test_a_kept_package_reports_on_the_row_instead_of_a_count(self):
+        self.manifest_path = self.manifest(
+            self.entry(
+                "local.nanocobs@r3",
+                self.spec("local.nanocobs@r3"),
+                vendor="{ auto_sync = false }",
+            )
+        )
+        self.install_drawing()
+        dest = self.project / "vendor" / "nanocobs"
+        (dest / "src" / "lib.c").write_text("mine\n", encoding="utf-8")
+
+        run = self.install_drawing()
+        self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
+
+        rows = self.bar_rows(run)
+        self.assertTrue(rows, f"kept package drew no row:\n{run.stderr}")
+        self.assertIn("kept", rows[-1], f"row does not say it was kept: {rows[-1]}")
+        self.assertNotIn("re-vendored", rows[-1])
 
 
 class TestVendorRejections(VendorTestCase):

@@ -145,8 +145,8 @@ taken when the include list is empty or one pattern matches, and no `!` pattern 
 Validated when the spec loads, so a typo fails before anything is fetched.
 
 Vendoring is requested by the *manifest* (`VENDOR_ROOT` and a `vendor` key on a `PACKAGES`
-entry), never by the spec; see `docs/architecture.md`. Only cache-managed packages can be
-vendored.
+entry---`true`, a destination path, or `{ path, auto_sync }`), never by the spec; see
+`docs/architecture.md`. Only cache-managed packages can be vendored.
 
 ---
 

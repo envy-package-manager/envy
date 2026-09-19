@@ -46,10 +46,6 @@ void error(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 
 void print_stdout(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 
-// Diagnostic output a flag asked for: stderr, so it stays out of a pipe reading stdout,
-// and not level-gated, so -q does not swallow what was requested.
-void print_stderr(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
-
 bool is_tty();
 void pause_rendering();
 void resume_rendering();

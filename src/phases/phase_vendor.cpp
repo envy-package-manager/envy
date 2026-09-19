@@ -9,6 +9,7 @@
 #include "util.h"
 #include "vendor.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -21,26 +22,45 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// Goes verbatim into the vendor_result trace, so a test can tell "nothing was there"
-// from "somebody edited it" without parsing prose.
+// What the phase decided. `action` and `reason` go verbatim into the vendor_result
+// trace, so a test can tell these apart without parsing prose.
+enum class outcome { COPIED, REVENDORED, KEPT, CURRENT };
+
 struct verdict {
+  outcome kind;
   char const *action;
   char const *reason;
-  bool deploy;
 };
 
-constexpr verdict kAbsent{ "copied", "absent", true };
-constexpr verdict kMismatch{ "redeployed", "mismatch", true };
-constexpr verdict kCurrent{ "up_to_date", "current", false };
+constexpr verdict kAbsent{ outcome::COPIED, "copied", "absent" };
+constexpr verdict kMismatch{ outcome::REVENDORED, "redeployed", "mismatch" };
+constexpr verdict kKept{ outcome::KEPT, "kept", "mismatch" };
+constexpr verdict kCurrent{ outcome::CURRENT, "up_to_date", "current" };
 
-void draw(pkg *p, std::string const &text) {
+void spin(pkg *p, std::string const &label, std::string text) {
   if (!p->tui_section) { return; }
   tui::section_set_content(
       p->tui_section,
-      tui::section_frame{ .label = "[" + p->cfg->identity + "]",
+      tui::section_frame{ .label = label,
                           .content = tui::spinner_data{
-                              .text = text,
+                              .text = std::move(text),
                               .start_time = std::chrono::steady_clock::now() } });
+}
+
+// A bar, not a spinner: tree_list already counted the work. `terminal` is the row's last
+// word, and lands as soon as it is set.
+void bar(pkg *p,
+         std::string const &label,
+         double percent,
+         std::string status,
+         bool terminal) {
+  if (!p->tui_section) { return; }
+  tui::section_set_content(p->tui_section,
+                           tui::section_frame{ .label = label,
+                                               .content = tui::progress_data{
+                                                   .percent = percent,
+                                                   .status = std::move(status) },
+                                               .terminal = terminal });
 }
 
 // Recreate one payload entry under `dest`. The walk is sorted, so a directory lands
@@ -92,14 +112,15 @@ void run_vendor_phase(pkg *p, engine &eng) {
   }
 
   auto const start{ std::chrono::steady_clock::now() };
+  std::string const label{ "[" + p->cfg->identity + "]" };
   fs::path const &dest{ destination->dir };
   vendor_validate_destination(dest, plan->project_root, p->cfg->identity);
   auto const &filter{ p->vendor_filter };
 
-  draw(p, "hashing payload...");
+  spin(p, label, "hashing payload...");
   auto const pristine{ vendor_pristine_hash(p->pkg_path, filter) };
 
-  auto const [action, reason, deploy]{ [&] {
+  auto const chosen{ [&] {
     std::error_code ec;
     if (!fs::is_directory(dest, ec) || ec) { return kAbsent; }
 
@@ -107,16 +128,26 @@ void run_vendor_phase(pkg *p, engine &eng) {
     // is what makes a stray file a mismatch. The payload's own digest is the only thing
     // worth comparing against -- an edited copy and a moved-on package are both just
     // "this is not what the package holds", and both want the same repair.
-    draw(p, "hashing vendor copy...");
+    spin(p, label, "hashing vendor copy...");
     auto const digest{ tree_hash(dest).digest };
     auto const current{ util_bytes_to_hex(digest.data(), digest.size()) };
-    return current == pristine ? kCurrent : kMismatch;
+    if (current == pristine) { return kCurrent; }
+    return destination->auto_sync ? kMismatch : kKept;
   }() };
+  auto const &[kind, action, reason]{ chosen };
 
   std::uint64_t files{ 0 }, bytes{ 0 };
 
-  if (deploy) {
-    draw(p, "vendoring...");
+  if (kind == outcome::KEPT) {
+    // Exempted by `auto_sync = false`: say so and leave it. A warning, not a log line --
+    // the project asked to own this directory, and it is now out of step with the
+    // package it came from.
+    tui::warn("vendored copy at %s no longer matches the package; left as it is "
+              "(vendor.auto_sync = false)",
+              dest.string().c_str());
+    bar(p, label, 100.0, "kept: contents differ from the package", true);
+  } else if (kind != outcome::CURRENT) {
+    spin(p, label, "vendoring...");
     auto const entries{ tree_list(p->pkg_path, filter) };
 
     // Wipe rather than merge: a file the payload dropped must not survive, and
@@ -132,18 +163,32 @@ void run_vendor_phase(pkg *p, engine &eng) {
                                mk.message());
     }
 
+    // Count files, not entries: directories are free to make, and the file count is what
+    // the row's last word reports.
+    auto const total{ std::ranges::count_if(entries, [](tree_entry const &e) {
+      return e.kind == tree_entry_kind::FILE;
+    }) };
     for (auto const &e : entries) {
       materialize(p->pkg_path, dest, e);
-      if (e.kind == tree_entry_kind::FILE) {
-        ++files;
-        bytes += e.size;
-      }
+      if (e.kind != tree_entry_kind::FILE) { continue; }
+      ++files;
+      bytes += e.size;
+      bar(p,
+          label,
+          100.0 * static_cast<double>(files) / static_cast<double>(total),
+          std::to_string(files) + "/" + std::to_string(total) + " files",
+          false);
     }
 
-    tui::debug("vendored %llu file(s) to %s (%s)",
-               static_cast<unsigned long long>(files),
-               dest.string().c_str(),
-               reason);
+    // The last word on the row names the cause: a wipe-and-recopy over someone's edited
+    // tree is worth more than a file count.
+    std::string const summary{
+      kind == outcome::REVENDORED
+          ? "re-vendored " + std::to_string(files) + " files: contents were dirty"
+          : "vendored " + std::to_string(files) + " files"
+    };
+    bar(p, label, 100.0, summary, true);
+    tui::debug("%s to %s", summary.c_str(), dest.string().c_str());
   } else {
     tui::debug("vendor copy at %s is up to date", dest.string().c_str());
   }

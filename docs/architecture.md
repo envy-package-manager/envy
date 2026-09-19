@@ -4,7 +4,7 @@
 
 All script-global variables are uppercase: manifests export `PACKAGES`, plus optional `BUNDLES`, `DEFAULT_SHELL` and `PACKAGE_DEPOTS`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, `BUNDLES`, `PRODUCTS`, `OPTIONS`, `PLATFORMS`, `USER_MANAGED` and `EXPORTABLE`.
 
-**Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `options`, `platforms`, `needed_by`, `product`, `setup`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
+**Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `options`, `platforms`, `needed_by`, `product`, `setup`, `vendor`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
 
 **Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.extend()` to combine common and OS-specific package lists.
 
@@ -373,6 +373,8 @@ PACKAGES = {
   { spec = "local.nanocobs@r3", source = "cobs.lua",
     options = { build = "debug" }, vendor = true },                          -- auto-disambiguated
   { spec = "fi.armgcc@r1", source = "gcc.lua", vendor = "tools/armgcc" },   -- exact leaf dir
+  { spec = "local.patched@r1", source = "p.lua",
+    vendor = { auto_sync = false } },                                       -- report, do not repair
 }
 ```
 
@@ -381,8 +383,9 @@ identity as it must to stay unique: `name`, then `namespace.name`, then
 `namespace.name@revision`, then that plus a hash of the options. Escalation runs per
 colliding group and to a fixpoint, so two option variants of one spec both vendor. A
 string is the final directory itself, project-relative, and is a fixed point in that
-ladder—a derived name that wanted it steps aside. Only manifest `PACKAGES` entries may
-carry `vendor`; only cache-managed packages can be vendored (a bundle has no payload, and
+ladder—a derived name that wanted it steps aside. A table spells both out: `path` is that
+same override, `auto_sync` is below; `vendor = {}` is `vendor = true` written longhand.
+Only manifest `PACKAGES` entries may carry `vendor`; only cache-managed packages can be vendored (a bundle has no payload, and
 `USER_MANAGED` writes to the host, which `spec_fetch` refuses before any build work).
 
 A spec chooses what of its install directory is worth copying:
@@ -402,6 +405,12 @@ install time. Equal means the copy is what the package holds; anything else—an
 file, a stray one, a package that moved on—is the same fact and wants the same repair, so
 the destination is wiped and recopied. Reconciling two trees entry by entry is the same
 walk plus a way to get it wrong.
+
+**Opting out of the repair.** `vendor = { auto_sync = false }` exempts an entry: a
+destination that no longer matches is reported as a warning and left exactly as it is.
+An absent destination is still copied -- there is nothing to preserve -- and a matching
+one is still quiet. This is for a project that edits its vendored copy on purpose and
+wants to be told when it has diverged, not corrected.
 
 The package's own digest is the only record, so envy keeps no project-side state for
 vendoring. A vendored tree committed to git is adopted as-is on a machine that has never

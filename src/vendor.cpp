@@ -146,7 +146,8 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
     plan.dirs.emplace(
         sorted[i].key,
         vendor_destination{ .dir = dest[i],
-                            .overridden = sorted[i].path_override.has_value() });
+                            .overridden = sorted[i].path_override.has_value(),
+                            .auto_sync = sorted[i].auto_sync });
   }
   return plan;
 }

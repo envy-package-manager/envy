@@ -202,6 +202,23 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
 
 // `vendor = true` derives a name under VENDOR_ROOT; a string is that exact directory.
 // `false` and absent both mean not vendored, so the field toggles without being deleted.
+// `vendor` is true/false, an override path, or a table spelling those out: `path` is the
+// override, `auto_sync = false` exempts the copy from the wipe-and-recopy repair.
+constexpr std::string_view kVendorKeys[]{ "auto_sync", "path" };
+
+void parse_vendor_table(sol::table const &spec, pkg_cfg *cfg) {
+  sol_util_reject_unknown_keys(spec, kVendorKeys, "Package 'vendor'");
+
+  auto path{ sol_util_get_optional<std::string>(spec, "path", "Package 'vendor'") };
+  if (path && path->empty()) {
+    throw std::runtime_error(
+        "Package 'vendor' path cannot be empty; omit it to derive one");
+  }
+  cfg->vendor = path ? std::move(*path) : std::string{};
+  cfg->vendor_auto_sync =
+      sol_util_get_optional<bool>(spec, "auto_sync", "Package 'vendor'");
+}
+
 void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
   sol::object vendor_obj{ table["vendor"] };
   if (!vendor_obj.valid() || vendor_obj.get_type() == sol::type::lua_nil) { return; }
@@ -219,8 +236,12 @@ void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
     cfg->vendor = std::move(path);
     return;
   }
-  throw std::runtime_error(
-      "Package 'vendor' must be a boolean or a project-relative path");
+  if (vendor_obj.is<sol::table>()) {
+    parse_vendor_table(vendor_obj.as<sol::table>(), cfg);
+    return;
+  }
+  throw std::runtime_error("Package 'vendor' must be a boolean, a project-relative path, "
+                           "or a table of { path, auto_sync }");
 }
 
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
@@ -779,7 +800,8 @@ vendor_plan manifest::resolve_vendor_plan() const {
     requests.push_back({ .key = pkg_key{ *cfg },
                          .path_override = cfg->vendor->empty()
                                               ? std::nullopt
-                                              : std::optional{ *cfg->vendor } });
+                                              : std::optional{ *cfg->vendor },
+                         .auto_sync = cfg->vendor_auto_sync.value_or(true) });
   }
   if (requests.empty()) { return {}; }
 

@@ -53,16 +53,12 @@ struct stdout_event {
   std::string message;
 };
 
-struct stderr_event {  // requested diagnostic output: verbatim, no prefix, not gated
-  std::string message;
-};
-
 struct section_line_event {  // a committed progress row: pre-rendered, no prefix, stderr
   std::string text;
 };
 
-using log_entry = std::
-    variant<log_event, stdout_event, stderr_event, section_line_event, envy::trace_record>;
+using log_entry =
+    std::variant<log_event, stdout_event, section_line_event, envy::trace_record>;
 
 struct tui {
   std::queue<log_entry> messages;
@@ -754,13 +750,6 @@ void flush_messages(std::queue<log_entry> &pending,
         std::fwrite(stdout_ptr->message.data(), 1, stdout_ptr->message.size(), stdout);
         std::fflush(stdout);
       }
-    } else if (auto *stderr_ptr{ std::get_if<stderr_event>(&entry) }) {
-      if (handler) {
-        handler(stderr_ptr->message);
-      } else if (!stderr_ptr->message.empty()) {
-        std::fwrite(stderr_ptr->message.data(), 1, stderr_ptr->message.size(), stderr);
-        wrote_to_stderr = true;
-      }
     } else if (auto *trace_ptr{ std::get_if<envy::trace_record>(&entry) }) {
       if (s_tui.trace_stderr) {
         std::string output;
@@ -1095,18 +1084,21 @@ void error(char const *fmt, ...) {
   va_end(args);
 }
 
-// vsnprintf into a std::string, growing once if the first attempt was short. Shared so
-// the two verbatim-output paths cannot format differently.
-std::string format_va(char const *fmt, va_list args) {
+void print_stdout(char const *fmt, ...) {
+  if (!s_tui.initialized || !fmt) { return; }
+
   std::string buffer(1024, '\0');
 
+  va_list args;
+  va_start(args, fmt);
   va_list args_copy;
   va_copy(args_copy, args);
   int written{ std::vsnprintf(buffer.data(), buffer.size(), fmt, args) };
+  va_end(args);
 
   if (written <= 0) {
     va_end(args_copy);
-    return {};
+    return;
   }
 
   if (static_cast<std::size_t>(written) >= buffer.size()) {
@@ -1115,41 +1107,14 @@ std::string format_va(char const *fmt, va_list args) {
   }
   va_end(args_copy);
 
-  if (written <= 0) { return {}; }
+  if (written <= 0) { return; }
   buffer.resize(static_cast<std::size_t>(written));
-  return buffer;
-}
 
-void push_verbatim(log_entry entry) {
   {
     std::lock_guard<std::mutex> lock{ s_tui.mutex };
-    s_tui.messages.push(std::move(entry));
+    s_tui.messages.push(log_entry{ stdout_event{ .message = std::move(buffer) } });
   }
   s_tui.cv.notify_one();
-}
-
-void print_stdout(char const *fmt, ...) {
-  if (!s_tui.initialized || !fmt) { return; }
-
-  va_list args;
-  va_start(args, fmt);
-  auto message{ format_va(fmt, args) };
-  va_end(args);
-  if (message.empty()) { return; }
-
-  push_verbatim(stdout_event{ .message = std::move(message) });
-}
-
-void print_stderr(char const *fmt, ...) {
-  if (!s_tui.initialized || !fmt) { return; }
-
-  va_list args;
-  va_start(args, fmt);
-  auto message{ format_va(fmt, args) };
-  va_end(args);
-  if (message.empty()) { return; }
-
-  push_verbatim(stderr_event{ .message = std::move(message) });
 }
 
 void pause_rendering() {
@@ -1192,16 +1157,38 @@ section_handle section_create() {
 void section_set_content(section_handle h, section_frame const &frame) {
   if (h == 0 || !s_progress.enabled) { return; }
 
-  std::lock_guard lock{ s_tui.mutex };
+  bool const ansi{ is_ansi_supported() };
+  auto const now{ get_now() };
+  bool queued{ false };
 
-  if (auto it{ std::ranges::find_if(s_progress.sections,
-                                    [h](auto const &sec) { return sec.handle == h; }) };
-      it != s_progress.sections.end()) {
+  {
+    std::lock_guard lock{ s_tui.mutex };
+
+    auto const it{ std::ranges::find_if(s_progress.sections, [h](auto const &sec) {
+      return sec.handle == h;
+    }) };
+    if (it == s_progress.sections.end()) { return; }
+
     it->cached_frame = frame;
     it->has_content = true;
     s_progress.max_label_width =
         std::max(s_progress.max_label_width, measure_label_width(frame));
+
+    // A terminal frame is the row's last word. Off a TTY the renderer only samples on a
+    // timer, so a step that finishes between two ticks loses its final frame entirely --
+    // emit it here, and record it so that renderer does not say it twice.
+    if (frame.terminal && !ansi) {
+      std::string text{ render_section_frame_fallback(frame, now) };
+      if (text != it->last_fallback_output) {
+        it->last_fallback_output = text;
+        it->last_fallback_print_time = now;
+        s_tui.messages.push(log_entry{ section_line_event{ .text = std::move(text) } });
+        queued = true;
+      }
+    }
   }
+
+  if (queued) { s_tui.cv.notify_one(); }
 }
 
 void section_set_complete(section_handle h) {

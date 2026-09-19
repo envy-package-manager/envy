@@ -16,11 +16,13 @@ namespace envy {
 struct vendor_request {
   pkg_key key;
   std::optional<std::string> path_override;
+  bool auto_sync{ true };  // false: report a mismatch, do not repair it
 };
 
 struct vendor_destination {
   std::filesystem::path dir;  // absolute, lexically normal
   bool overridden{ false };   // whether `vendor = "..."` named it
+  bool auto_sync{ true };     // false: report a mismatch, do not repair it
 };
 
 // Every destination, proven collision-free. Resolved before the engine runs, so a bad

@@ -37,8 +37,8 @@ void hash_one_file(std::filesystem::path const &file,
   }
 }
 
-// Stage times are summed across workers, so read the share, not the total. Goes to
-// stderr; stdout carries the digest alone so it stays pipeable.
+// Stage times are summed across workers, so read the share, not the total. These are
+// log lines, so stderr; stdout carries the digest alone and stays pipeable.
 void print_stats(tree_hash_stats const &s, tree_hash_result const &result) {
   auto const busy{ s.scan_ns + s.read_ns + s.hash_ns + s.wait_ns };
   auto const pct{ [busy](std::uint64_t ns) {
@@ -46,38 +46,37 @@ void print_stats(tree_hash_stats const &s, tree_hash_result const &result) {
   } };
   auto const ms{ [](std::uint64_t ns) { return static_cast<double>(ns) / 1e6; } };
 
-  tui::print_stderr("  threads %u  dirs %llu  files %llu  bytes %llu  wall %.1fms\n",
-                    s.threads,
-                    static_cast<unsigned long long>(s.dirs),
-                    static_cast<unsigned long long>(result.files),
-                    static_cast<unsigned long long>(result.bytes),
-                    ms(s.wall_ns));
-  tui::print_stderr("  scan %8.1fms %5.1f%%   read %8.1fms %5.1f%%\n",
-                    ms(s.scan_ns),
-                    pct(s.scan_ns),
-                    ms(s.read_ns),
-                    pct(s.read_ns));
-  tui::print_stderr("  hash %8.1fms %5.1f%%   wait %8.1fms %5.1f%%   fold %8.1fms\n",
-                    ms(s.hash_ns),
-                    pct(s.hash_ns),
-                    ms(s.wait_ns),
-                    pct(s.wait_ns),
-                    ms(s.fold_ns));
+  tui::info("  threads %u  dirs %llu  files %llu  bytes %llu  wall %.1fms",
+            s.threads,
+            static_cast<unsigned long long>(s.dirs),
+            static_cast<unsigned long long>(result.files),
+            static_cast<unsigned long long>(result.bytes),
+            ms(s.wall_ns));
+  tui::info("  scan %8.1fms %5.1f%%   read %8.1fms %5.1f%%",
+            ms(s.scan_ns),
+            pct(s.scan_ns),
+            ms(s.read_ns),
+            pct(s.read_ns));
+  tui::info("  hash %8.1fms %5.1f%%   wait %8.1fms %5.1f%%   fold %8.1fms",
+            ms(s.hash_ns),
+            pct(s.hash_ns),
+            ms(s.wait_ns),
+            pct(s.wait_ns),
+            ms(s.fold_ns));
 
   // Spread is the story, so print that rather than N numbers. Bytes matter as much as
   // files: one huge file among a thousand small ones balances by count and not by work.
   if (s.threads && !s.files_per_worker.empty()) {
     auto const [flo, fhi]{ std::ranges::minmax(s.files_per_worker) };
     auto const [blo, bhi]{ std::ranges::minmax(s.bytes_per_worker) };
-    tui::print_stderr(
-        "  files/worker %llu..%llu (ideal %llu)   bytes/worker %llu..%llu "
-        "(ideal %llu)\n",
-        static_cast<unsigned long long>(flo),
-        static_cast<unsigned long long>(fhi),
-        static_cast<unsigned long long>(result.files / s.threads),
-        static_cast<unsigned long long>(blo),
-        static_cast<unsigned long long>(bhi),
-        static_cast<unsigned long long>(result.bytes / s.threads));
+    tui::info("  files/worker %llu..%llu (ideal %llu)   bytes/worker %llu..%llu "
+              "(ideal %llu)",
+              static_cast<unsigned long long>(flo),
+              static_cast<unsigned long long>(fhi),
+              static_cast<unsigned long long>(result.files / s.threads),
+              static_cast<unsigned long long>(blo),
+              static_cast<unsigned long long>(bhi),
+              static_cast<unsigned long long>(result.bytes / s.threads));
   }
 }
 
