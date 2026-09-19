@@ -1157,16 +1157,38 @@ section_handle section_create() {
 void section_set_content(section_handle h, section_frame const &frame) {
   if (h == 0 || !s_progress.enabled) { return; }
 
-  std::lock_guard lock{ s_tui.mutex };
+  bool const ansi{ is_ansi_supported() };
+  auto const now{ get_now() };
+  bool queued{ false };
 
-  if (auto it{ std::ranges::find_if(s_progress.sections,
-                                    [h](auto const &sec) { return sec.handle == h; }) };
-      it != s_progress.sections.end()) {
+  {
+    std::lock_guard lock{ s_tui.mutex };
+
+    auto const it{ std::ranges::find_if(s_progress.sections, [h](auto const &sec) {
+      return sec.handle == h;
+    }) };
+    if (it == s_progress.sections.end()) { return; }
+
     it->cached_frame = frame;
     it->has_content = true;
     s_progress.max_label_width =
         std::max(s_progress.max_label_width, measure_label_width(frame));
+
+    // A terminal frame is the row's last word. Off a TTY the renderer only samples on a
+    // timer, so a step that finishes between two ticks loses its final frame entirely --
+    // emit it here, and record it so that renderer does not say it twice.
+    if (frame.terminal && !ansi) {
+      std::string text{ render_section_frame_fallback(frame, now) };
+      if (text != it->last_fallback_output) {
+        it->last_fallback_output = text;
+        it->last_fallback_print_time = now;
+        s_tui.messages.push(log_entry{ section_line_event{ .text = std::move(text) } });
+        queued = true;
+      }
+    }
   }
+
+  if (queued) { s_tui.cv.notify_one(); }
 }
 
 void section_set_complete(section_handle h) {

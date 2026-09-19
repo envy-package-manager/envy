@@ -10,6 +10,7 @@
 #include "task_engine.h"
 #include "tui.h"
 #include "util.h"
+#include "vendor.h"
 
 #include <atomic>
 #include <filesystem>
@@ -154,6 +155,13 @@ class engine : unmovable {
   // Every wiring site calls this, so a new closure kind is one edit in kAllClosures.
   void propagate_closures(pkg *from, pkg *to);
 
+  // Set before the run, never during it: resolving up front is what makes a collision
+  // fail with nothing written. Null means every vendor step is a no-op.
+  void set_vendor_plan(vendor_plan plan);
+  // Not `vendor_plan()`: a member function of that name would change the meaning of the
+  // type name used just above it, which GCC rejects outright.
+  vendor_plan const *vendor() const;
+
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
   export_phase_config const *export_config() const;
@@ -260,6 +268,9 @@ class engine : unmovable {
 
   // Bundle registry: maps bundle identity → bundle (populated during fetch)
   std::unordered_map<std::string, std::unique_ptr<bundle>> bundle_registry_;
+
+  // Vendor plan (set before the run, read by the vendor phase on worker threads)
+  std::optional<vendor_plan> vendor_plan_;
 
   // Export phase state (set before resolve_graph, read by phase handler)
   std::optional<export_phase_config> export_config_;

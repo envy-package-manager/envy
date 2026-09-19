@@ -1146,3 +1146,51 @@ TEST_CASE("pkg_cfg_source_compare covers every alternative pairing") {
     CHECK(envy::pkg_cfg_source_compare(other, weak) == envy::pkg_source_match::SAME);
   }
 }
+
+TEST_CASE("pkg_cfg::parse refuses vendor outside a manifest PACKAGES entry") {
+  // Vendoring is the project's call: a spec cannot vendor itself, and the key is read
+  // nowhere but the manifest, so accepting it elsewhere would do nothing at all.
+  for (auto const *entry :
+       { "result = { spec = 'a.one@v1', source = '/fake/r.lua', vendor = true }",
+         "result = { spec = 'a.one@v1', source = '/fake/r.lua', vendor = 'deps/one' }",
+         "result = { spec = 'a.one@v1', source = '/fake/r.lua', "
+         "vendor = { path = 'deps/one', auto_sync = false } }" }) {
+    for (auto const shape : { envy::pkg_entry_shape::DEPENDENCY,
+                              envy::pkg_entry_shape::FETCH_DEPENDENCY,
+                              envy::pkg_entry_shape::WEAK_FALLBACK }) {
+      sol::state lua;
+      auto lua_val{ lua_eval(entry, lua) };
+      CHECK_THROWS_AS(envy::pkg_cfg::parse(lua_val, fs::path("/fake"), shape),
+                      std::runtime_error);
+    }
+  }
+}
+
+TEST_CASE("pkg_cfg::parse accepts every vendor form on a manifest PACKAGES entry") {
+  // pkg_cfg's allowlist lets the key through in any shape; the manifest layer reads it.
+  for (auto const *entry :
+       { "result = { spec = 'a.one@v1', source = '/fake/r.lua', vendor = true }",
+         "result = { spec = 'a.one@v1', source = '/fake/r.lua', vendor = false }",
+         "result = { spec = 'a.one@v1', source = '/fake/r.lua', vendor = 'deps/one' }",
+         "result = { spec = 'a.one@v1', source = '/fake/r.lua', "
+         "vendor = { path = 'deps/one', auto_sync = false } }" }) {
+    sol::state lua;
+    auto lua_val{ lua_eval(entry, lua) };
+    CHECK_NOTHROW(envy::pkg_cfg::parse(lua_val,
+                                       fs::path("/fake"),
+                                       envy::pkg_entry_shape::MANIFEST_PACKAGE));
+  }
+}
+
+TEST_CASE("pkg_cfg::parse refuses vendor_overwrite, the key the vendor table replaced") {
+  sol::state lua;
+  auto lua_val{ lua_eval(
+      "result = { spec = 'a.one@v1', source = '/fake/r.lua', "
+      "vendor = true, vendor_overwrite = false }",
+      lua) };
+
+  CHECK_THROWS_AS(envy::pkg_cfg::parse(lua_val,
+                                       fs::path("/fake"),
+                                       envy::pkg_entry_shape::MANIFEST_PACKAGE),
+                  std::runtime_error);
+}

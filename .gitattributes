@@ -6,3 +6,7 @@ src/resources/* eol=lf
 # system cannot find the batch label specified", after which the launcher parses no @envy
 # directives at all. The template stays LF above; util_write_script() converts on the way out.
 examples/bin/envy.bat eol=crlf
+
+# Known-answer digests over these bytes; a CRLF conversion on a Windows checkout would
+# make every tree_hash fixture test fail there and nowhere else.
+test_data/tree_hash/** -text

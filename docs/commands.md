@@ -79,18 +79,21 @@ A manifest `DEFAULT_SHELL` function is evaluated on the first string verb that n
 
 **`envy fetch <url> [destination]`** — Download file from any supported transport (HTTP/HTTPS, FTP/FTPS, SMB, Git, SSH, S3). Destination defaults to current directory with URL's filename. Verifies TLS, supports authentication (SSH keys, AWS credentials). Displays progress, optionally prints SHA256 on completion.
 
-**`envy extract <archive> [destination] [--only <path|glob>]...`** — Extract archive to specified location (defaults to current directory). Supports all libarchive formats: tar, tar.gz, tar.xz, tar.bz2, tar.zst, zip, 7z, rar, iso. Preserves permissions, timestamps, symlinks. Reports file count on completion. `--only` is an archive-relative path or glob—a file takes that entry, a directory takes its whole subtree; repeat for several. Everything unselected stays compressed, so pulling two tools out of a 10 GB toolchain tarball costs one streaming pass, not 10 GB of disk. An `--only` entry that matches nothing is an error, never a silent no-op; so is a malformed pattern. A selected hard link needs its target selected too.
+**`envy extract <archive> [destination] [--only <path|glob>]...`** — Extract archive to specified location (defaults to current directory). Supports all libarchive formats: tar, tar.gz, tar.xz, tar.bz2, tar.zst, zip, 7z, rar, iso. Preserves permissions, timestamps, symlinks. Reports file count on completion. `--only` is an archive-relative path or glob—a file takes that entry, a directory takes its whole subtree; a leading `!` excludes instead, and an exclusion beats an inclusion. Repeat for several. This is envy's one selector language, shared with a spec's `VENDOR` list and `envy hash --tree --only`. Everything unselected stays compressed, so pulling two tools out of a 10 GB toolchain tarball costs one streaming pass, not 10 GB of disk. An *inclusion* that matches nothing is an error, never a silent no-op; an exclusion that matches nothing is fine. A malformed pattern and a bare `!` are errors. A selected hard link needs its target selected too.
 
 Glob syntax: `*` (any run) and `?` (one character) stay inside one path component, `**` spans components, `[a-z]`/`[!a-z]` are character classes (use `[*]`, `[?]`, `[[]` for literals). Matching is case-sensitive on every platform.
 
 ```
 envy extract clang+llvm-20.1.0.tar.xz out --only 'clang+llvm-20.1.0/bin/clang-*' \
                                           --only 'clang+llvm-20.1.0/lib/**/include/*.h'
+envy extract sdk.tar.gz out --only '**' --only '!**/*.pdb'   # everything but the symbols
 ```
 
 **`envy compress <path> [output]`** — Create archive from file or directory. Format auto-detected from output extension (.tar.gz, .tgz, .tar.xz, .tar.bz2, .tar.zst, .tar, .zip). Defaults to `<basename>.tar.gz` if output not specified.
 
 **`envy hash <path...> [--prefix=<url>]`** — Print the SHA256 of each path as `HASH  filename`, `sha256sum`-style. A directory contributes its `*.tar.zst` entries, non-recursively—the shape `envy export` writes. `--prefix` prepends a URL prefix to each name, so the output drops straight into a depot manifest.
+
+**`envy hash --tree <dir...> [--only=<pat>]... [--threads=N] [--json]`** — Print the BLAKE3 subtree digest of each directory instead: the same digest a package records for vendoring, so a mismatch report is reproducible by hand. `--only` repeats and takes envy's one selector language, `!` exclusions included. `--threads` (0 = the performance-core count) and `--json` exist for `tools/bench_tree_hash.py`; `--stats` reports where the time went and how evenly it was spread, on **stderr** so stdout stays the digest alone (under `--json` the numbers move into the JSON object instead; see `docs/tree-hash.md`); the JSON's `duration_ms` times the hash alone, not the process. Excludes `--prefix`, which is depot-manifest-specific. See `docs/tree-hash.md`.
 
 **`envy git-resolve <url> <ref>`** — Resolve a git ref (tag/branch/sha) in a remote repo to a full commit sha via libgit2's ref advertisement (no clone, no `git` binary); prints the sha to stdout. Prefer fully-qualified refs (`refs/tags/…`, `refs/heads/…`); a bare trailing segment (`v1.5.23`) resolves when unambiguous. Annotated tags peel to their commit; a full 40/64-hex sha is echoed back (lowercased, no network). Turns a mutable tag/branch into an immutable sha to pin in a manifest — resolving once at authoring time, not on every script run.
 

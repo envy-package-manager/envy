@@ -5,6 +5,7 @@
 #include "pkg_key.h"
 #include "pkg_phase.h"
 #include "sol_util.h"
+#include "tree_hash.h"
 #include "tui.h"
 
 #include <atomic>
@@ -119,6 +120,11 @@ struct pkg {
 
   // Single-writer fields (set during specific phases, read after)
   std::string canonical_identity_hash;
+
+  // The spec's VENDOR list, parsed and validated during spec_fetch so a malformed glob
+  // fails before any fetch or build work. Empty selects the whole install directory.
+  tree_filter vendor_filter;
+
   std::filesystem::path pkg_path;
   std::optional<std::filesystem::path> spec_file_path;
   std::string result_hash;

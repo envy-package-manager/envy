@@ -6,6 +6,7 @@
 #include "lua_ctx/lua_envy_import.h"
 #include "lua_envy.h"
 #include "lua_shell.h"
+#include "platform.h"
 #include "shell.h"
 #include "sol_util.h"
 #include "trace.h"
@@ -199,6 +200,51 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
   cfg->setup = std::move(names);
 }
 
+// `vendor = true` derives a name under VENDOR_ROOT; a string is that exact directory.
+// `false` and absent both mean not vendored, so the field toggles without being deleted.
+// `vendor` is true/false, an override path, or a table spelling those out: `path` is the
+// override, `auto_sync = false` exempts the copy from the wipe-and-recopy repair.
+constexpr std::string_view kVendorKeys[]{ "auto_sync", "path" };
+
+void parse_vendor_table(sol::table const &spec, pkg_cfg *cfg) {
+  sol_util_reject_unknown_keys(spec, kVendorKeys, "Package 'vendor'");
+
+  auto path{ sol_util_get_optional<std::string>(spec, "path", "Package 'vendor'") };
+  if (path && path->empty()) {
+    throw std::runtime_error(
+        "Package 'vendor' path cannot be empty; omit it to derive one");
+  }
+  cfg->vendor = path ? std::move(*path) : std::string{};
+  cfg->vendor_auto_sync =
+      sol_util_get_optional<bool>(spec, "auto_sync", "Package 'vendor'");
+}
+
+void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
+  sol::object vendor_obj{ table["vendor"] };
+  if (!vendor_obj.valid() || vendor_obj.get_type() == sol::type::lua_nil) { return; }
+
+  if (vendor_obj.get_type() == sol::type::boolean) {
+    if (vendor_obj.as<bool>()) { cfg->vendor = std::string{}; }
+    return;
+  }
+  if (vendor_obj.is<std::string>()) {
+    std::string path{ vendor_obj.as<std::string>() };
+    if (path.empty()) {
+      throw std::runtime_error(
+          "Package 'vendor' path cannot be empty; use vendor = true to derive one");
+    }
+    cfg->vendor = std::move(path);
+    return;
+  }
+  if (vendor_obj.is<sol::table>()) {
+    parse_vendor_table(vendor_obj.as<sol::table>(), cfg);
+    return;
+  }
+  throw std::runtime_error(
+      "Package 'vendor' must be a boolean, a project-relative path, "
+      "or a table of { path, auto_sync }");
+}
+
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
 // set lives with pkg_cfg::parse, which owns that table.
 constexpr std::string_view kBundlePackageKeys[]{
@@ -236,6 +282,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
       }
     }
     parse_setup_field(table, cfg);
+    parse_vendor_field(table, cfg);
     return cfg;
   }
 
@@ -721,6 +768,15 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 
   m->package_depots = parse_package_depots((*m->lua_)["PACKAGE_DEPOTS"]);
 
+  if (sol::object vendor_root_obj{ (*m->lua_)["VENDOR_ROOT"] };
+      vendor_root_obj.valid() && vendor_root_obj.get_type() != sol::type::lua_nil) {
+    if (!vendor_root_obj.is<std::string>()) {
+      throw std::runtime_error(manifest_path.string() +
+                               ": VENDOR_ROOT must be a project-relative path string");
+    }
+    m->vendor_root = vendor_root_obj.as<std::string>();
+  }
+
   return m;
 }
 
@@ -729,6 +785,28 @@ std::unique_ptr<manifest> manifest::load(char const *script,
   tui::debug("Loading manifest from C string");
   return load(std::vector<unsigned char>(script, script + std::strlen(script)),
               manifest_path);
+}
+
+vendor_plan manifest::resolve_vendor_plan() const {
+  std::vector<vendor_request> requests;
+  for (auto const *cfg : packages) {
+    if (!cfg->vendor) { continue; }
+    // A package excluded here never becomes a pkg, so a linux-only and a darwin-only
+    // package may name the same destination.
+    if (!util_platform_matches(cfg->platforms,
+                               platform::os_name(),
+                               platform::arch_name())) {
+      continue;
+    }
+    requests.push_back({ .key = pkg_key{ *cfg },
+                         .path_override = cfg->vendor->empty()
+                                              ? std::nullopt
+                                              : std::optional{ *cfg->vendor },
+                         .auto_sync = cfg->vendor_auto_sync.value_or(true) });
+  }
+  if (requests.empty()) { return {}; }
+
+  return vendor_resolve(requests, vendor_root, manifest_path.parent_path());
 }
 
 default_shell_decl manifest::get_default_shell() const {

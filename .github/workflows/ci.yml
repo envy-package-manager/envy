@@ -183,6 +183,12 @@ jobs:
             [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
           fi
 
+          # Hash envy's own source tree and print the breakdown: a look at how the hasher
+          # behaves per platform, not a check. Nothing here asserts a number, and no
+          # --threads -- a runner's cores and disk are its own business. Correctness
+          # lives in the unit and functional suites.
+          ./out/build/envy hash --tree --stats src
+
       - name: Unit tests under valgrind
         if: matrix.shard == 'main'
         run: valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=valgrind.supp out/build/envy_unit_tests
@@ -235,6 +241,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
@@ -354,6 +377,12 @@ jobs:
             [[ "$got" == "$want"* ]] || { echo "::error::expected '${want}...', got '$got'"; exit 1; }
           fi
 
+          # Hash envy's own source tree and print the breakdown: a look at how the hasher
+          # behaves per platform, not a check. Nothing here asserts a number, and no
+          # --threads -- a runner's cores and disk are its own business. Correctness
+          # lives in the unit and functional suites.
+          ./out/build/envy hash --tree --stats src
+
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
         run: python3.13 -m functional_tests
@@ -386,6 +415,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: python3 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
@@ -520,6 +566,13 @@ jobs:
             if (-not $got.StartsWith($want)) { throw "expected '$want...', got '$got'" }
           }
 
+          # Hash envy's own source tree and print the breakdown: a look at how the hasher
+          # behaves per platform, not a check. Nothing here asserts a number, and no
+          # --threads -- a runner's cores and disk are its own business. Correctness
+          # lives in the unit and functional suites.
+          cmd /c "out\build\envy.exe hash --tree --stats src 2>&1" | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "envy hash --tree exited $LASTEXITCODE" }
+
       - name: Functional tests
         if: startsWith(matrix.shard, 'func-')
         run: py -3.13 -m functional_tests
@@ -558,6 +611,23 @@ jobs:
           DEPS_PREFIX: ${{ runner.os }}-${{ runner.arch }}-deps-
           DEPS_KEEP: ${{ matrix.deps_writer && (steps.deps-save.outcome == 'success' || steps.deps-cache.outputs.cache-hit == 'true') && steps.deps-cache.outputs.cache-primary-key || '' }}
         run: py -3.13 .github/scripts/purge_superseded_caches.py
+
+      # Absolute numbers from a shared runner are noise, so this is not a gate: it
+      # archives a comparable data point per shard and writes the table to the job
+      # summary. The only hard check inside the script is a throughput floor five to ten
+      # times below anything working, which catches a serialized queue rather than a
+      # regression worth arguing about.
+      - name: Tree-hash benchmark
+        if: matrix.shard == 'main'
+        run: py -3.13 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Upload tree-hash benchmark
+        if: always() && matrix.shard == 'main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tree-hash-bench-${{ matrix.name }}
+          path: tree-hash-bench.json
+          retention-days: 90
 
       # Only the 'main' shards, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing

@@ -593,6 +593,89 @@ TEST_CASE("cli_parse: cmd_hash") {
     REQUIRE(cfg->paths.size() == 1);
     CHECK(cfg->paths[0] == temp_dir);
   }
+
+  SUBCASE("subtree defaults are off") {
+    std::vector<std::string> args{ "envy", "hash", "some/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK_FALSE(cfg->tree);
+    CHECK_FALSE(cfg->json);
+    CHECK(cfg->only.empty());
+    CHECK(cfg->threads == 0);
+  }
+
+  SUBCASE("--tree with several directories") {
+    std::vector<std::string> args{ "envy", "hash", "--tree", "a/dir", "b/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->tree);
+    REQUIRE(cfg->paths.size() == 2);
+    CHECK(cfg->paths[0] == std::filesystem::path{ "a/dir" });
+    CHECK(cfg->paths[1] == std::filesystem::path{ "b/dir" });
+  }
+
+  SUBCASE("--only repeats and keeps order, including '!' entries") {
+    std::vector<std::string> args{ "envy",       "hash",   "--tree",       "--only",
+                                   "include/**", "--only", "!**/*_test.c", "some/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    REQUIRE(cfg->only.size() == 2);
+    CHECK(cfg->only[0] == "include/**");
+    CHECK(cfg->only[1] == "!**/*_test.c");
+  }
+
+  SUBCASE("--threads and --json round-trip") {
+    std::vector<std::string> args{ "envy", "hash",   "--tree",  "--threads",
+                                   "8",    "--json", "some/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->threads == 8);
+    CHECK(cfg->json);
+  }
+
+  SUBCASE("--stats round-trips") {
+    std::vector<std::string> args{ "envy", "hash", "--tree", "--stats", "some/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_hash::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->tree);
+    CHECK(cfg->stats);
+  }
+
+  SUBCASE("--tree and --prefix are mutually exclusive") {
+    std::vector<std::string> args{ "envy",     "hash",         "--tree",
+                                   "--prefix", "s3://bucket/", "some/dir" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    CHECK_FALSE(parsed.cmd_cfg.has_value());
+    CHECK_FALSE(parsed.cli_output.empty());
+  }
 }
 
 TEST_CASE("cli_parse: cmd_use") {

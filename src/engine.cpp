@@ -13,6 +13,7 @@
 #include "phases/phase_setup.h"
 #include "phases/phase_spec_fetch.h"
 #include "phases/phase_stage.h"
+#include "phases/phase_vendor.h"
 #include "pkg.h"
 #include "pkg_key.h"
 #include "pkg_phase.h"
@@ -63,6 +64,7 @@ constexpr std::array<phase_func_t, pkg_phase_count> phase_dispatch_table{
   run_install_phase,     // pkg_phase::pkg_install
   run_setup_phase,       // pkg_phase::pkg_setup
   run_export_phase,      // pkg_phase::pkg_export
+  run_vendor_phase,      // pkg_phase::pkg_vendor
   run_completion_phase,  // pkg_phase::completion
 };
 
@@ -772,6 +774,22 @@ void engine::set_depot_index(package_depot_index idx) {
 }
 
 void engine::set_ignore_depot(bool ignore) { depot_ignored_ = ignore; }
+
+void engine::set_vendor_plan(vendor_plan plan) {
+  // Written before any worker exists and read-only after, so the vendor phase needs no
+  // lock to read it from every package thread.
+  for (auto const &[key, dest] : plan.dirs) {
+    ENVY_TRACE(vendor_resolved,
+               std::string{ key.identity() },
+               .path = dest.dir.generic_string(),
+               .origin = dest.overridden ? "override" : "derived");
+  }
+  vendor_plan_ = std::move(plan);
+}
+
+vendor_plan const *engine::vendor() const {
+  return vendor_plan_ ? &*vendor_plan_ : nullptr;
+}
 
 void engine::set_export_config(export_phase_config cfg) {
   export_config_ = std::move(cfg);

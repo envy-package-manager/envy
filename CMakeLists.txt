@@ -292,8 +292,17 @@ set(ENVY_BASE_SOURCES
     src/phases/phase_setup.cpp
     src/phases/phase_spec_fetch.cpp
     src/phases/phase_stage.cpp
+    src/phases/phase_vendor.cpp
     src/luarc.cpp
     src/extract.cpp
+    src/glob.cpp
+    src/file_read.cpp
+    $<$<PLATFORM_ID:Windows>:src/file_read_win.cpp>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:src/file_read_posix.cpp>
+    src/vendor.cpp
+    src/tree_hash.cpp
+    $<$<PLATFORM_ID:Windows>:src/tree_hash_win.cpp>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:src/tree_hash_posix.cpp>
     src/aws_util.cpp
     src/envy_release.cpp
     src/blake3_util.cpp
@@ -347,6 +356,13 @@ endif()
 
 # Common compile options
 set(ENVY_COMMON_COMPILE_OPTIONS
+    # MSVC reads a BOM-less source file in the machine's active code page, so a literal
+    # outside ASCII is decoded from the wrong charset before it is ever compiled. /utf-8
+    # sets the source and execution charsets both to UTF-8, which is what every other
+    # compiler here already does. Scoped to envy's own targets: third-party sources are
+    # configured elsewhere and are not ours to reinterpret.
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-ffunction-sections>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fdata-sections>
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-ffunction-sections>
@@ -499,6 +515,10 @@ set(ENVY_UNIT_TEST_SOURCES
     src/cmds/cmd_version_tests.cpp
     src/bundle_tests.cpp
     src/spec_util_tests.cpp
+    src/file_read_tests.cpp
+    src/glob_tests.cpp
+    src/tree_hash_tests.cpp
+    src/vendor_tests.cpp
     src/extract_tests.cpp
     src/engine_tests.cpp
     src/engine_weak_resolution_tests.cpp

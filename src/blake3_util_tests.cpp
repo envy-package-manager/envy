@@ -2,7 +2,10 @@
 
 #include "doctest.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -46,4 +49,60 @@ TEST_CASE("blake3_hash different inputs produce different outputs") {
   auto const digest1{ envy::blake3_hash(input1.data(), input1.size()) };
   auto const digest2{ envy::blake3_hash(input2.data(), input2.size()) };
   CHECK(digest1 != digest2);
+}
+
+TEST_CASE("blake3_stream in one update equals the one-shot form") {
+  // blake3_hash() is implemented on top of blake3_stream, so this pins that they stay
+  // the same function rather than drifting into two wrappers over the C API.
+  std::string const data{ "the quick brown fox jumps over the lazy dog" };
+  envy::blake3_stream s;
+  s.update(data.data(), data.size());
+  CHECK(s.finalize() == envy::blake3_hash(data.data(), data.size()));
+}
+
+TEST_CASE("blake3_stream is insensitive to how input is split") {
+  // The property the subtree hash depends on: a file read in 1 MiB chunks must hash
+  // exactly as the same bytes hashed whole.
+  std::vector<unsigned char> data(100000);
+  for (size_t i{ 0 }; i < data.size(); ++i) {
+    data[i] = static_cast<unsigned char>((i * 31 + 7) & 0xFF);
+  }
+  auto const want{ envy::blake3_hash(data.data(), data.size()) };
+
+  for (size_t chunk : { size_t{ 1 },
+                        size_t{ 7 },
+                        size_t{ 1024 },
+                        size_t{ 65536 },
+                        data.size(),
+                        data.size() * 2 }) {
+    envy::blake3_stream s;
+    for (size_t off{ 0 }; off < data.size(); off += chunk) {
+      s.update(data.data() + off, std::min(chunk, data.size() - off));
+    }
+    CHECK_MESSAGE(s.finalize() == want, "chunk size ", chunk);
+  }
+}
+
+TEST_CASE("blake3_stream with no input hashes the empty string") {
+  envy::blake3_stream const s;
+  CHECK(s.finalize() == envy::blake3_hash("", 0));
+}
+
+TEST_CASE("blake3_stream finalize does not consume the state") {
+  // Finalizing twice must agree, and updating after finalizing must keep accumulating:
+  // the fold in tree_hash relies on neither being a one-shot.
+  envy::blake3_stream s;
+  s.update("ab", 2);
+  auto const first{ s.finalize() };
+  CHECK(s.finalize() == first);
+  s.update("c", 1);
+  CHECK(s.finalize() == envy::blake3_hash("abc", 3));
+}
+
+TEST_CASE("blake3_stream instances are independent") {
+  envy::blake3_stream a, b;
+  a.update("one", 3);
+  b.update("two", 3);
+  CHECK(a.finalize() == envy::blake3_hash("one", 3));
+  CHECK(b.finalize() == envy::blake3_hash("two", 3));
 }

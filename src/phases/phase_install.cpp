@@ -13,6 +13,7 @@
 #include "tui.h"
 #include "tui_actions.h"
 #include "util.h"
+#include "vendor.h"
 
 #include <filesystem>
 #include <sstream>
@@ -191,7 +192,14 @@ void run_install_phase(pkg *p, engine &eng) {
     if (!exportable) { lock->mark_preserve_fetch(); }
   }
 
-  if (marked_complete) { p->pkg_path = final_pkg_path; }
+  if (!marked_complete) { return; }
+  p->pkg_path = final_pkg_path;
+
+  // Stamp while the entry is still ours and the payload untouched, but only for what
+  // this run vendors. The vendor phase backfills a cache hit or a depot import.
+  if (auto const *plan{ eng.vendor() }; plan && plan->find(p->key)) {
+    vendor_pristine_hash(p->pkg_path, p->vendor_filter);
+  }
 }
 
 }  // namespace envy

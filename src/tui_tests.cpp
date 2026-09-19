@@ -1080,4 +1080,108 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY withholds a complet
   envy::tui::test::g_isatty = true;
 }
 
+namespace {
+
+// A bar's last frame, of the shape the vendor and extract phases publish.
+envy::tui::section_frame last_frame(char const *label, char const *status) {
+  return envy::tui::section_frame{ .label = label,
+                                   .content = envy::tui::progress_data{ .percent = 100.0,
+                                                                        .status = status },
+                                   .terminal = true };
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(captured_output, "a terminal frame off a TTY lands without a commit") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  // The fallback renderer only samples on a timer, so a step that finishes between two
+  // ticks would otherwise lose its last word entirely.
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0].find("vendored 12 files") != std::string::npos);
+  CHECK(messages[0].find("[vendor]") != std::string::npos);
+
+  envy::tui::section_delete(h);
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "a mid-flight frame off a TTY waits for the renderer") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{
+          .label = "vendor",
+          .content = envy::tui::progress_data{ .percent = 40.0, .status = "6 files" } });
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  CHECK(messages.empty());
+
+  envy::tui::section_delete(h);
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "a terminal frame on a TTY stays in the live region") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  CHECK(messages.empty());  // the row itself is on screen; a line would double it
+
+  envy::tui::section_delete(h);
+}
+
+TEST_CASE_FIXTURE(captured_output, "the same terminal frame twice is said once") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+  envy::tui::section_set_content(h, last_frame("vendor", "kept: contents differ"));
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 2);
+  CHECK(messages[0].find("vendored 12 files") != std::string::npos);
+  CHECK(messages[1].find("kept: contents differ") != std::string::npos);
+
+  envy::tui::section_delete(h);
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "committing an already-said frame adds nothing") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+  envy::tui::section_commit(h);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0].find("vendored 12 files") != std::string::npos);
+
+  envy::tui::test::g_isatty = true;
+}
+
 #endif  // ENVY_UNIT_TEST
