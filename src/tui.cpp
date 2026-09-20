@@ -604,8 +604,6 @@ void pause_rendering() {
   std::lock_guard lock{ s_tui.mutex };
   if (!is_ansi_supported()) { return; }
 
-  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
-  // one *less* than the row count. The full count erases a line the region never owned.
   if (s_progress.last_line_count) {
     std::fprintf(stderr, "\r");
     if (s_progress.last_line_count > 1) {
@@ -635,9 +633,6 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
     }
   }
 
-  // No rows, and none on screen to erase: there is no live region, so do not open one.
-  // The wrap toggles alone are output, and a run with no work would otherwise tick a
-  // frame of them out thirty times a second.
   if (rendered_lines.empty() && last_line_count == 0) { return 0; }
 
   hide_cursor_once();
@@ -898,10 +893,6 @@ int render_cycle(std::queue<log_entry> &pending,
   return rendered_line_count;
 }
 
-// One frame, start to finish, with the terminal held throughout. A handoff cannot land
-// between the snapshot and the paint, and no frame -- not a row, not a queued log line --
-// begins while a child owns the screen: acquire_interactive_mode holds this lock across
-// the child, so the whole cycle waits rather than half of it.
 int render_once() {
   std::lock_guard const terminal{ s_progress.interactive_mutex };
 
@@ -1074,8 +1065,7 @@ void shutdown() {
   s_tui.cv.notify_all();
   s_tui.worker.join();
   s_tui.worker = std::thread{};
-  // The renderer hid it, so the renderer's own lifetime gives it back: anyone who calls
-  // run() directly leaves the terminal as they found it, scope or no scope.
+
   show_cursor_if_hidden();
   s_tui.stop_requested = false;
   g_trace_enabled = false;
@@ -1321,8 +1311,6 @@ void acquire_interactive_mode() {
 }
 
 void release_interactive_mode() {
-  // No counterpart to pause_rendering: the next frame redraws, and takes the cursor back
-  // as it does. Pre-hiding it here would hide it for a region that may stay empty.
   s_progress.interactive_mutex.unlock();
 }
 
@@ -1347,8 +1335,6 @@ scope::scope(std::optional<level> threshold, bool decorated_logging) {
   if (!s_tui.initialized) { return; }
   run(std::move(threshold), decorated_logging);
   active = true;
-  // The cursor is left alone until a row actually paints (auto-wrap is managed per-render
-  // in sections), so a session that says nothing costs the terminal nothing.
 }
 
 scope::~scope() {

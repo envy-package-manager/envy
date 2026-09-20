@@ -44,9 +44,6 @@ constexpr verdict kMismatch{ outcome::REVENDORED, "redeployed", "mismatch" };
 constexpr verdict kKept{ outcome::KEPT, "kept", "mismatch" };
 constexpr verdict kCurrent{ outcome::CURRENT, "up_to_date", "current" };
 
-// Only once the phase knows it is going to write. Hashing to find out a copy is already
-// current has nothing to tell anyone, and a row raised for it is one the completion phase
-// deletes again -- a flicker, and an empty live region on a run with no work at all.
 void spin(pkg *p, std::string const &label, std::string text) {
   if (!p->tui_section) { return; }
   tui::section_set_content(
@@ -247,7 +244,6 @@ void run_vendor_phase(pkg *p, engine &eng) {
         shown.c_str());
     p->vendor_outcome = "kept " + shown + ": contents differ from the package";
   } else if (kind != outcome::CURRENT) {
-    // A dry run writes nothing and earns no row; the command speaks for it instead.
     if (!dry) { spin(p, label, "vendoring..."); }
     auto const copy_start{ std::chrono::steady_clock::now() };
     auto const entries{ tree_list(p->pkg_path, filter) };
