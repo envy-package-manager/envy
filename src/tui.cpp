@@ -91,9 +91,9 @@ struct tui_progress_state {
   int last_line_count{ 0 };
   std::size_t max_label_width{ 0 };
   std::size_t max_display_width{ 0 };
-  std::mutex interactive_mutex;
-  bool interactive_paused{ false };
+  std::mutex interactive_mutex;  // held by whoever owns the terminal, renderer included
   bool enabled{ true };
+  std::atomic_bool cursor_hidden{ false };
 } s_progress{};
 
 bool envy::tui::g_trace_enabled{ false };
@@ -584,6 +584,38 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
   return out;
 }
 
+// The cursor goes away when the live region first paints and comes back when the worker
+// stops -- so it never blinks between two rows, and a run that draws none never moves it.
+void hide_cursor_once() {
+  if (!s_progress.cursor_hidden.exchange(true)) {
+    std::fprintf(stderr, "%s", kAnsiHideCursor);
+  }
+}
+
+void show_cursor_if_hidden() {
+  if (s_progress.cursor_hidden.exchange(false)) {
+    std::fprintf(stderr, "%s%s", kAnsiEnableWrap, kAnsiShowCursor);
+    std::fflush(stderr);
+  }
+}
+
+// Take the live region down for whoever is about to own the terminal.
+void pause_rendering() {
+  std::lock_guard lock{ s_tui.mutex };
+  if (!is_ansi_supported()) { return; }
+
+  if (s_progress.last_line_count) {
+    std::fprintf(stderr, "\r");
+    if (s_progress.last_line_count > 1) {
+      std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+    }
+    std::fprintf(stderr, "%s", kAnsiClearToEos);
+    s_progress.last_line_count = 0;
+  }
+  show_cursor_if_hidden();  // whoever takes the terminal takes a visible cursor with it
+  std::fflush(stderr);
+}
+
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
                                   row_widths widths,
                                   int last_line_count,
@@ -601,6 +633,9 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
     }
   }
 
+  if (rendered_lines.empty() && last_line_count == 0) { return 0; }
+
+  hide_cursor_once();
   std::fprintf(stderr, "%s", kAnsiDisableWrap);
 
   // Ensure column 0, then move up to start position
@@ -858,79 +893,54 @@ int render_cycle(std::queue<log_entry> &pending,
   return rendered_line_count;
 }
 
-void worker_thread() {
-  std::unique_lock<std::mutex> lock{ s_tui.mutex };
+int render_once() {
+  std::lock_guard const terminal{ s_progress.interactive_mutex };
 
-  while (!s_tui.stop_requested) {
-    try {
-      std::queue<log_entry> pending;
-      pending.swap(s_tui.messages);
-
-      std::vector<section_state> sections_snapshot;
-      row_widths widths;
-      int last_line_count{ 0 };
-
-      if (s_progress.enabled && !s_progress.interactive_paused) {
-        sections_snapshot = s_progress.sections;
-        widths = { s_progress.max_label_width, s_progress.max_display_width };
-        last_line_count = s_progress.last_line_count;
-      }
-
-      lock.unlock();
-
-      int const rendered_line_count{
-        render_cycle(pending, sections_snapshot, widths, last_line_count)
-      };
-
-      lock.lock();
-
-      if (is_ansi_supported() && s_progress.enabled && !s_progress.interactive_paused) {
-        s_progress.last_line_count = rendered_line_count;
-      }
-      s_tui.cv.wait_until(lock, std::chrono::steady_clock::now() + kRefreshIntervalMs, [] {
-        return s_tui.stop_requested.load();
-      });
-    } catch (std::exception const &e) {
-      if (!lock.owns_lock()) { lock.lock(); }
-      std::fprintf(stderr, "[TUI worker thread exception: %s]\n", e.what());
-      std::fflush(stderr);
-    } catch (...) {
-      if (!lock.owns_lock()) { lock.lock(); }
-      std::fprintf(stderr, "[TUI worker thread exception: unknown]\n");
-      std::fflush(stderr);
-    }
-  }
-
-  // Final render: same as regular render, plus trailing newline if sections rendered
-  try {
-    std::queue<log_entry> pending;
+  std::queue<log_entry> pending;
+  std::vector<section_state> sections_snapshot;
+  row_widths widths;
+  int last_line_count{ 0 };
+  {
+    std::lock_guard const state{ s_tui.mutex };
     pending.swap(s_tui.messages);
-
-    std::vector<section_state> sections_snapshot;
-    row_widths widths;
-    int last_line_count{ 0 };
-
     if (s_progress.enabled) {
       sections_snapshot = s_progress.sections;
       widths = { s_progress.max_label_width, s_progress.max_display_width };
       last_line_count = s_progress.last_line_count;
     }
+  }
 
-    lock.unlock();
+  int const rendered{ render_cycle(pending, sections_snapshot, widths, last_line_count) };
 
-    int const rendered_line_count{
-      render_cycle(pending, sections_snapshot, widths, last_line_count)
-    };
+  if (is_ansi_supported()) {
+    std::lock_guard const state{ s_tui.mutex };
+    if (s_progress.enabled) { s_progress.last_line_count = rendered; }
+  }
+  return rendered;
+}
 
-    if (rendered_line_count > 0) {
-      std::fprintf(stderr, "\n");
-      std::fflush(stderr);
-    }
-  } catch (std::exception const &e) {
-    std::fprintf(stderr, "[TUI final render exception: %s]\n", e.what());
+void worker_thread() {
+  auto const tick{ [] {
+    try {
+      return render_once();
+    } catch (std::exception const &e) {
+      std::fprintf(stderr, "[TUI render exception: %s]\n", e.what());
+    } catch (...) { std::fprintf(stderr, "[TUI render exception: unknown]\n"); }
     std::fflush(stderr);
-  } catch (...) {
-    std::fprintf(stderr, "[TUI final render exception: unknown]\n");
+    return 0;
+  } };
+
+  while (!s_tui.stop_requested) {
+    tick();
+    std::unique_lock<std::mutex> lock{ s_tui.mutex };
+    s_tui.cv.wait_until(lock, std::chrono::steady_clock::now() + kRefreshIntervalMs, [] {
+      return s_tui.stop_requested.load();
+    });
+  }
+
+  // The last frame closes the live region with the newline it has been withholding.
+  if (tick() > 0) {
+    std::fprintf(stderr, "\n");
     std::fflush(stderr);
   }
 }
@@ -1055,6 +1065,8 @@ void shutdown() {
   s_tui.cv.notify_all();
   s_tui.worker.join();
   s_tui.worker = std::thread{};
+
+  show_cursor_if_hidden();
   s_tui.stop_requested = false;
   g_trace_enabled = false;
   if (s_tui.trace_file) {
@@ -1145,31 +1157,6 @@ void print_stdout(char const *fmt, ...) {
     s_tui.messages.push(log_entry{ stdout_event{ .message = std::move(buffer) } });
   }
   s_tui.cv.notify_one();
-}
-
-void pause_rendering() {
-  std::lock_guard lock{ s_tui.mutex };
-  if (!is_ansi_supported() || s_progress.last_line_count == 0) { return; }
-
-  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
-  // one *less* than the row count. The full count erases a line the region never owned.
-  std::fprintf(stderr, "\r");
-  if (s_progress.last_line_count > 1) {
-    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
-  }
-  std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
-  s_progress.last_line_count = 0;
-  std::fflush(stderr);
-}
-
-void resume_rendering() {
-  // No mutex needed: only writes to stderr without accessing shared state
-  // pause_rendering() needs mutex because it reads/modifies s_progress.last_line_count
-  if (is_ansi_supported()) {
-    std::fprintf(stderr, "%s", kAnsiHideCursor);
-    std::fflush(stderr);
-  }
-  // Next render cycle will redraw
 }
 
 section_handle section_create() {
@@ -1319,22 +1306,11 @@ bool section_has_content(section_handle h) {
 }
 
 void acquire_interactive_mode() {
-  s_progress.interactive_mutex.lock();
-  {
-    std::lock_guard lock{ s_tui.mutex };
-    s_progress.interactive_paused = true;
-  }
+  s_progress.interactive_mutex.lock();  // a frame in flight finishes; none starts after
   pause_rendering();
 }
 
-void release_interactive_mode() {
-  {
-    std::lock_guard lock{ s_tui.mutex };
-    s_progress.interactive_paused = false;
-  }
-  resume_rendering();
-  s_progress.interactive_mutex.unlock();
-}
+void release_interactive_mode() { s_progress.interactive_mutex.unlock(); }
 
 interactive_mode_guard::interactive_mode_guard() { acquire_interactive_mode(); }
 
@@ -1357,23 +1333,10 @@ scope::scope(std::optional<level> threshold, bool decorated_logging) {
   if (!s_tui.initialized) { return; }
   run(std::move(threshold), decorated_logging);
   active = true;
-
-  // Hide cursor during TUI session (auto-wrap managed per-render in sections)
-  if (is_ansi_supported()) {
-    std::fprintf(stderr, "%s", kAnsiHideCursor);
-    std::fflush(stderr);
-  }
 }
 
 scope::~scope() {
-  if (active) {
-    shutdown();
-
-    if (is_ansi_supported()) {
-      std::fprintf(stderr, "%s%s", kAnsiEnableWrap, kAnsiShowCursor);
-      std::fflush(stderr);
-    }
-  }
+  if (active) { shutdown(); }
 }
 
 log_ctx_scope::log_ctx_scope(std::string identity) : previous_{ s_log_ctx } {

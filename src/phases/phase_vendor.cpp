@@ -207,7 +207,6 @@ void run_vendor_phase(pkg *p, engine &eng) {
   std::string const shown{ dest.lexically_relative(plan->project_root).generic_string() };
   auto const &filter{ p->vendor_filter };
 
-  spin(p, label, "hashing payload...");
   auto const hash_start{ std::chrono::steady_clock::now() };
   auto const pristine{ vendor_pristine_hash(p->pkg_path, filter) };
 
@@ -223,7 +222,6 @@ void run_vendor_phase(pkg *p, engine &eng) {
     // is what makes a stray file a mismatch. The payload's own digest is the only thing
     // worth comparing against -- an edited copy and a moved-on package are both just
     // "this is not what the package holds", and both want the same repair.
-    spin(p, label, "hashing vendor copy...");
     auto const digest{ tree_hash(dest, {}, 0, nullptr, &present).digest };
     auto const current{ util_bytes_to_hex(digest.data(), digest.size()) };
     if (current == pristine) { return kCurrent; }
@@ -245,9 +243,8 @@ void run_vendor_phase(pkg *p, engine &eng) {
         "(vendor.auto_sync = false; 'envy vendor --force' restores it)",
         shown.c_str());
     p->vendor_outcome = "kept " + shown + ": contents differ from the package";
-    bar(p, label, 100.0, "kept: contents differ from the package", true);
   } else if (kind != outcome::CURRENT) {
-    spin(p, label, dry ? "counting..." : "vendoring...");
+    if (!dry) { spin(p, label, "vendoring..."); }
     auto const copy_start{ std::chrono::steady_clock::now() };
     auto const entries{ tree_list(p->pkg_path, filter) };
 

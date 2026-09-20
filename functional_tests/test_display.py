@@ -291,6 +291,12 @@ class TestNoWorkIsSilent(EnvyTestCase):
     _run_on_pty = TestDisplay._run_on_pty
 
     def test_warm_cache_run_paints_nothing(self):
+        """Not "nothing is left on screen" -- nothing was ever sent.
+
+        `screen()` cannot see a frame that was painted and taken back, and neither can a
+        mode toggle: hiding the cursor for a run that never draws a row blinks it once
+        for no reason. The byte count is the only assertion that covers both.
+        """
         manifest = self._manifest("")
 
         code, first = self._run_on_pty("install", "--manifest", manifest)
@@ -299,7 +305,7 @@ class TestNoWorkIsSilent(EnvyTestCase):
 
         code, second = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, second)
-        self.assertEqual("", screen(second), f"expected a silent run, got: {second!r}")
+        self.assertEqual("", second, f"a no-work run touched the terminal: {second!r}")
 
     def test_no_display_anywhere_means_no_second_column(self):
         """The column exists only if some spec asked for it; nobody pays for dead space."""
@@ -429,7 +435,11 @@ class TestVendorRows(VendorTestCase):
         self.assertNotIn("cache hit", screen(out))
 
     def test_an_exempt_mismatch_reports_but_draws_no_row(self):
-        """`auto_sync = false` writes nothing, so the warning is the whole report."""
+        """`auto_sync = false` writes nothing, so the warning is the whole report.
+
+        Scrollback needs no escapes at all: one of them means a live region opened, and
+        the only row it could have held is one the phase decided not to earn.
+        """
         manifest = self._install_once("false")
         (self.dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
 
@@ -439,13 +449,20 @@ class TestVendorRows(VendorTestCase):
         painted = screen(out)
         self.assertIn("no longer matches", painted)
         self.assertEqual(1, len(painted.splitlines()), painted)
+        self.assertNotIn("\x1b", out, f"a live region opened for a run with no row: {out!r}")
 
     def test_an_up_to_date_vendor_copy_is_silent(self):
+        """The phase hashes before it knows there is nothing to say.
+
+        Both hashes finish in microseconds on this payload, so a spinner raised for them
+        is a row that appears and is deleted -- invisible to `screen()`, a flicker to a
+        person. Nothing the phase decided here is worth a byte.
+        """
         manifest = self._install_once("true")
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertEqual("", screen(out), f"expected a silent run, got: {out!r}")
+        self.assertEqual("", out, f"a no-op vendor phase painted: {out!r}")
 
     def test_envy_vendor_says_where_it_copied_to_once(self):
         """`envy vendor` prints its own report, so the row must not say it a second time."""

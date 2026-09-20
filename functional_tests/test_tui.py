@@ -245,3 +245,154 @@ PACKAGES = {{
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# What sudo does: prompt on the controlling terminal and read the answer back from it,
+# never touching the stdin envy handed the child. Beside it, a package that keeps the
+# renderer busy for the whole exchange. The prompt is spelled in two halves so it does
+# not also match envy's echo of the command, which would end the wait a frame early.
+SPEC_INTERACTIVE = """IDENTITY = "local.interactive@v1"
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return false end,
+    INSTALL = function(pkg_dir, options)
+      envy.run('m=PASS; printf "%sWORD: " "$m" > /dev/tty; read -r pw < /dev/tty; echo "SAW:$pw"',
+               { interactive = true })
+    end,
+  },
+}
+
+"""
+
+SPEC_NOISY = """IDENTITY = "local.noisy@v1"
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return false end,
+    INSTALL = function(pkg_dir, options)
+      envy.run("sleep 3")
+    end,
+  },
+}
+
+"""
+
+
+@unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+class TestInteractiveHandoff(EnvyTestCase):
+    """A child that wants the terminal gets all of it, for as long as it holds it.
+
+    `sudo` asking for a password is the case, and it reads `/dev/tty` rather than stdin --
+    so this needs a *controlling* terminal, which `pty.openpty` alone does not give.
+    A neighbouring package's spinner repainting over the prompt, or its DEBUG lines
+    landing in the middle of one, is at best ugly and at worst eats the keystrokes.
+    """
+
+    envy_watchdog_timeout = 90
+
+    # Comfortably inside the wait, and twenty render frames at 33ms: a renderer that has
+    # not stopped cannot stay quiet this long -- the spinner alone repaints every frame.
+    QUIET_WINDOW_S = 0.66
+
+    def setUp(self):
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.test_dir / "specs"
+        self.specs_dir.mkdir()
+        (self.specs_dir / "interactive.lua").write_text(SPEC_INTERACTIVE)
+        (self.specs_dir / "noisy.lua").write_text(SPEC_NOISY)
+
+    def _spawn_on_controlling_tty(self, manifest):
+        """envy on a pty that is its session's controlling terminal, as a shell gives it.
+
+        `pty.fork` is what buys that: `openpty` plus an inherited fd leaves /dev/tty
+        unopenable in the child, and the prompt this test waits for never arrives.
+        """
+        import pty
+
+        # _wrap_cmd is what puts envy under valgrind on the sanitizer runners; spawning by
+        # hand rather than through test_config.popen would quietly opt this test out.
+        argv = test_config._wrap_cmd(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "--verbose",  # the log stream is the half of the pause that used to leak
+                "install",
+                "--manifest",
+                str(manifest),
+            ]
+        )
+        pid, fd = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(str(self.project_root))
+                os.environ["TERM"] = "xterm-256color"
+                os.execvp(argv[0], argv)  # argv[0] may be a wrapper found on PATH
+            finally:
+                os._exit(127)  # exec failed; never return into the test runner
+        return pid, fd
+
+    def test_the_live_region_stops_while_a_child_owns_the_terminal(self):
+        manifest = self.test_dir / "envy.lua"
+        entry = '  {{ spec = "{0}", source = "{1}", setup = {{ "main" }} }},\n'
+        manifest.write_text(
+            make_manifest(
+                "PACKAGES = {\n"
+                + entry.format(
+                    "local.interactive@v1", (self.specs_dir / "interactive.lua").as_posix()
+                )
+                + entry.format("local.noisy@v1", (self.specs_dir / "noisy.lua").as_posix())
+                + "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        import select
+        import time
+
+        def read_ready(fd, timeout):
+            """Whatever is on the pty right now, b"" once the last writer has gone.
+
+            Linux raises EIO on a primary whose secondary has closed where macOS just
+            returns nothing; both mean the same thing here.
+            """
+            if not select.select([fd], [], [], max(timeout, 0))[0]:
+                return None
+            try:
+                return os.read(fd, 65536)
+            except OSError:
+                return b""
+
+        pid, fd = self._spawn_on_controlling_tty(manifest)
+        painted, seen = b"", b""
+        try:
+
+            def read_until(needle, budget, what):
+                nonlocal seen
+                deadline = time.monotonic() + budget
+                while needle not in seen:
+                    chunk = read_ready(fd, deadline - time.monotonic())
+                    if not chunk:
+                        self.fail(f"{what}; got: {seen!r}")
+                    seen += chunk
+
+            read_until(b"PASSWORD: ", 60.0, "never saw the prompt")
+
+            # The child is blocked on the answer. Anything arriving now is envy's.
+            deadline = time.monotonic() + self.QUIET_WINDOW_S
+            while (remaining := deadline - time.monotonic()) > 0:
+                painted += read_ready(fd, remaining) or b""
+
+            os.write(fd, b"hunter2\n")
+            read_until(b"SAW:hunter2", 60.0, "the child never read its answer")
+
+            while read_ready(fd, 60.0):
+                pass
+        finally:
+            _, status = os.waitpid(pid, 0)
+            os.close(fd)
+
+        self.assertEqual(0, os.waitstatus_to_exitcode(status), seen)
+        self.assertEqual(b"", painted, f"envy painted over a waiting child: {painted!r}")
