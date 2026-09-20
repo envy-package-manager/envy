@@ -96,7 +96,7 @@ struct tui_progress_state {
   std::atomic_bool cursor_hidden{ false };
 } s_progress{};
 
-bool envy::tui::g_trace_enabled{ false };
+std::atomic_bool envy::tui::g_trace_enabled{ false };
 
 #ifdef ENVY_UNIT_TEST
 namespace envy::tui::test {

@@ -41,9 +41,7 @@ void set_output_handler(std::function<void(std::string_view)> handler);
 void run(std::optional<level> threshold = std::nullopt, bool decorated_logging = false);
 void shutdown();
 
-extern bool g_trace_enabled;
-
-// Trace emission lives in trace.h (tui::trace(std::string spec, trace_event_t)).
+// The trace stream lives in trace.h: g_trace_enabled, tui::trace(spec, event), ENVY_TRACE.
 void debug(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 void info(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 void warn(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
