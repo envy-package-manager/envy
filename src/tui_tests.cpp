@@ -1184,4 +1184,98 @@ TEST_CASE_FIXTURE(captured_output, "committing an already-said frame adds nothin
   envy::tui::test::g_isatty = true;
 }
 
+// ============================================================================
+// DISPLAY (row display text) tests
+// ============================================================================
+
+TEST_CASE("display leads column two and never widens column one") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame const frame{
+    .label = "[fi.github@r0]",
+    .display = "libusb/hidapi",
+    .content = envy::tui::progress_data{ .percent = 50.0, .status = "2MB" }
+  };
+
+  // A display string must not widen column one, or one named row indents every other.
+  CHECK(envy::tui::measure_label_width(frame) ==
+        std::string_view{ "[fi.github@r0]" }.size());
+
+  std::string const output{ envy::tui::test::render_section_frame(frame) };
+  CHECK(output.starts_with("[fi.github@r0] libusb/hidapi  50% ["));
+
+  envy::tui::section_frame const done{
+    .label = "[fi.github@r0]",
+    .display = "libusb/hidapi",
+    .content = envy::tui::static_text_data{ .text = "installed (1.2s)" }
+  };
+  CHECK(envy::tui::test::render_section_frame(done) ==
+        "[fi.github@r0] libusb/hidapi installed (1.2s)\n");
+}
+
+TEST_CASE("display names the row, not each child under it") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame parent{
+    .label = "[pkg]",
+    .display = "some/repo",
+    .content = envy::tui::progress_data{ .percent = 50.0, .status = "fetch" }
+  };
+  parent.children.push_back(envy::tui::section_frame{
+      .label = "a.git",
+      .content = envy::tui::progress_data{ .percent = 20.0, .status = "20%" } });
+  parent.children.push_back(envy::tui::section_frame{
+      .label = "b.git",
+      .content = envy::tui::progress_data{ .percent = 80.0, .status = "80%" } });
+
+  std::string const output{ envy::tui::test::render_section_frame(parent) };
+  std::size_t occurrences{ 0 };
+  for (std::size_t at{ output.find("some/repo") }; at != std::string::npos;
+       at = output.find("some/repo", at + 1)) {
+    ++occurrences;
+  }
+  CHECK(occurrences == 1);
+}
+
+TEST_CASE("fallback render puts display after the bracketed label") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame const frame{
+    .label = "pkg@v1",
+    .display = "libusb/hidapi",
+    .content = envy::tui::static_text_data{ .text = "cache hit" }
+  };
+  CHECK(envy::tui::test::render_section_frame(frame) ==
+        "[pkg@v1] libusb/hidapi cache hit\n");
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_set_display stamps every later frame") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_display(h, "libusb/hidapi");  // set once, when the spec loads
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{ .label = "[fi.github@r0]",
+                                .content =
+                                    envy::tui::static_text_data{ .text = "installed" } });
+  envy::tui::section_commit(h);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  // max_label_width is process-wide, so match the columns, not the padding between them.
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0].starts_with("[fi.github@r0]"));
+  CHECK(messages[0].find("libusb/hidapi installed") != std::string::npos);
+}
+
 #endif  // ENVY_UNIT_TEST

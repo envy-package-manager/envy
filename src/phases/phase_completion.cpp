@@ -66,18 +66,26 @@ void run_completion_phase(pkg *p, engine &eng) {
              .outcome = kind,
              .duration_ms = static_cast<std::int64_t>(duration_ms));
 
-  if (p->tui_section && tui::section_has_content(p->tui_section)) {
+  // A row is earned: `timed` is the outcomes that moved bytes, did_side_work the rest.
+  // Neither, and the package leaves nothing on screen -- a run with no work is silent.
+  if (timed || p->did_side_work) {
     tui::section_set_content(
         p->tui_section,
         tui::section_frame{ .label = "[" + p->cfg->identity + "]",
                             .content = tui::static_text_data{ .text = section_text } });
     tui::section_set_complete(p->tui_section);
+  } else {
+    tui::section_delete(p->tui_section);
   }
 
   // Off a TTY there is no live section to carry the outcome, so emit it as an
   // INFO line (auto-prefixed "[identity]" by the ambient log context). On a TTY
   // the section above is the only per-package output — no duplicate scrollback.
-  if (!tui::is_tty()) { tui::info("%s", section_text.c_str()); }
+  if (!tui::is_tty()) {
+    std::string const line{ p->display.empty() ? section_text
+                                               : p->display + " " + section_text };
+    tui::info("%s", line.c_str());
+  }
 }
 
 }  // namespace envy

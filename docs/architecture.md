@@ -2,7 +2,7 @@
 
 ## Project Manifests
 
-All script-global variables are uppercase: manifests export `PACKAGES`, plus optional `BUNDLES`, `DEFAULT_SHELL` and `PACKAGE_DEPOTS`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, `BUNDLES`, `PRODUCTS`, `OPTIONS`, `PLATFORMS`, `USER_MANAGED` and `EXPORTABLE`.
+All script-global variables are uppercase: manifests export `PACKAGES`, plus optional `BUNDLES`, `DEFAULT_SHELL` and `PACKAGE_DEPOTS`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, `BUNDLES`, `PRODUCTS`, `OPTIONS`, `PLATFORMS`, `DISPLAY`, `USER_MANAGED` and `EXPORTABLE`.
 
 **Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `options`, `platforms`, `needed_by`, `product`, `setup`, `vendor`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
 

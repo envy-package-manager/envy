@@ -264,6 +264,7 @@ void run_setup_pair(pkg *p,
   }
 
   tui::debug("setup: running pair '%s' install (check failed)", name.c_str());
+  p->did_side_work = true;
   run_pair_install(p, eng, name, section, log_identity);
 }
 

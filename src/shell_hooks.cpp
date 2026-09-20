@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace envy::shell_hooks {
 
@@ -59,6 +60,7 @@ int ensure(std::filesystem::path const &cache_root) {
   namespace fs = std::filesystem;
   fs::path const shell_dir{ cache_root / "shell" };
   int written{ 0 };
+  std::vector<char const *> refreshed;  // shells whose hook changed, not first written
 
   std::error_code ec;
   fs::create_directories(shell_dir, ec);
@@ -87,10 +89,21 @@ int ensure(std::filesystem::path const &cache_root) {
       bool const was_update{ fs::exists(hook_path) };
       util_write_file(hook_path, want);
       ++written;
-      if (was_update) { tui::info("Shell hook updated (%s) — restart your shell", h.ext); }
+      if (was_update) { refreshed.push_back(h.ext); }
     } catch (std::exception const &e) {
       tui::warn("Failed to write shell hook (%s): %s", h.ext, e.what());
     }
+  }
+
+  if (!refreshed.empty()) {
+    std::string names;
+    for (auto const *ext : refreshed) {
+      if (!names.empty()) { names += ", "; }
+      names += ext;
+    }
+    tui::info("Shell hook%s updated (%s) — restart your shell",
+              refreshed.size() > 1 ? "s" : "",
+              names.c_str());
   }
 
   return written;

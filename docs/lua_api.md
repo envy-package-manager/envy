@@ -41,6 +41,23 @@ envy.error(msg)  -- Error (does not throw)
 envy.stdout(msg) -- Direct stdout (bypasses TUI)
 ```
 
+### DISPLAY (spec global)
+
+Names what this instance of the spec is working on. Printed as the first thing in column
+two of the package's progress rows and its outcome line — after the `[identity]` column,
+before the bar or status. It never replaces the identity. A string, or a function of the
+validated options, which is what a spec many packages share needs to tell its rows apart:
+
+```lua
+OPTIONS = { repo = { type = "string", required = true } }
+DISPLAY = function(options) return options.repo end
+-- [fi.github@r0] libusb/hidapi  42% [========>           ] 4.10MB/9.77MB
+```
+
+Resolved once, after `OPTIONS` validates. Returning `nil` is the same as omitting it. Must
+be a single line. A run where every package is a cache hit prints nothing at all on a TTY,
+so `DISPLAY` costs nothing when there is no work to do.
+
 ---
 
 ## Command Execution

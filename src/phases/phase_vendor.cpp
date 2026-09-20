@@ -227,6 +227,7 @@ void run_vendor_phase(pkg *p, engine &eng) {
   }() };
   hash_ms = elapsed_ms(hash_start);
   auto const &[kind, action, reason]{ chosen };
+  if (kind != outcome::CURRENT) { p->did_side_work = true; }  // never clears setup's
 
   std::uint64_t files{ 0 }, bytes{ 0 };
 

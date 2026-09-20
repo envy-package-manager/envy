@@ -115,11 +115,16 @@ struct pkg {
   bool was_cache_hit{ false };   // set by check when the payload was already cached
   bool bundle_in_situ{ false };  // BUNDLE_ONLY: local bundle used from its source dir
 
+  // Work a cache hit can still have done: a SETUP pair's INSTALL ran, or the vendor phase
+  // wrote. Atomic because the pair tasks write it; read at completion, once they join.
+  std::atomic_bool did_side_work{ false };
+
   sol_state_guard lua;
   cache::scoped_entry_lock::ptr_t lock;
 
   // Single-writer fields (set during specific phases, read after)
   std::string canonical_identity_hash;
+  std::string display;
 
   // The spec's VENDOR list, parsed and validated during spec_fetch so a malformed glob
   // fails before any fetch or build work. Empty selects the whole install directory.

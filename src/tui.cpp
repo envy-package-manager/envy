@@ -76,6 +76,7 @@ struct tui {
 
 struct section_state {
   unsigned handle;
+  std::string display;  // stamped onto every frame this row publishes
   envy::tui::section_frame cached_frame;
   bool has_content{ false };  // True after first set_content call
   bool complete{ false };     // Suppresses fallback rendering
@@ -257,18 +258,29 @@ std::string pad_to_width(std::string const &str, int target_width) {
 
 constexpr char const *kSpinnerFrames[]{ "|", "/", "-", "\\" };
 
+// Column one is the label, padded so every row's column two starts in the same place.
+std::string row_prefix(std::string_view label,
+                       std::size_t max_label_width,
+                       std::string_view display) {
+  std::string out{ label };
+  if (out.size() < max_label_width) { out.append(max_label_width - out.size(), ' '); }
+  if (!display.empty()) {
+    out += ' ';
+    out += display;
+  }
+  return out;
+}
+
 std::string render_progress_bar(envy::tui::progress_data const &data,
                                 std::string_view label,
+                                std::string_view display,
                                 std::size_t max_label_width,
                                 int width) {
   constexpr int kBarChars{ 20 };
   int const filled{ static_cast<int>((data.percent / 100.0) * kBarChars) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, max_label_width, display);
 
   // Right-justified percentage (3 chars: "  5%", " 42%", "100%")
   oss << " " << std::setw(3) << static_cast<int>(data.percent) << "%";
@@ -312,6 +324,7 @@ std::string render_progress_bar(envy::tui::progress_data const &data,
 
 std::string render_text_stream(envy::tui::text_stream_data const &data,
                                std::string_view label,
+                               std::string_view display,
                                std::size_t max_label_width,
                                int width,
                                std::chrono::steady_clock::time_point now) {
@@ -329,10 +342,7 @@ std::string render_text_stream(envy::tui::text_stream_data const &data,
   std::size_t const frame_index{ static_cast<std::size_t>((elapsed_ms / 100) % 4) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, max_label_width, display);
   oss << " " << kSpinnerFrames[frame_index] << " "
       << (data.header_text.empty() ? "build output:" : data.header_text) << "\n";
 
@@ -345,6 +355,7 @@ std::string render_text_stream(envy::tui::text_stream_data const &data,
 
 std::string render_spinner(envy::tui::spinner_data const &data,
                            std::string_view label,
+                           std::string_view display,
                            std::size_t max_label_width,
                            int width,
                            std::chrono::steady_clock::time_point now) {
@@ -356,10 +367,7 @@ std::string render_spinner(envy::tui::spinner_data const &data,
       (elapsed_ms / data.frame_duration.count()) % 4) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, max_label_width, display);
   oss << " " << kSpinnerFrames[frame_index] << " " << data.text << "\n";
 
   return oss.str();
@@ -367,13 +375,11 @@ std::string render_spinner(envy::tui::spinner_data const &data,
 
 std::string render_static_text(envy::tui::static_text_data const &data,
                                std::string_view label,
+                               std::string_view display,
                                std::size_t max_label_width,
                                int width) {
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, max_label_width, display);
   oss << " " << data.text << "\n";
 
   return oss.str();
@@ -399,6 +405,9 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
     return output;
   }
 
+  std::string const prefix{ "[" + frame.label + "] " +
+                            (frame.display.empty() ? "" : frame.display + " ") };
+
   // Elapsed-time dot cycle, 1-4 dots, shared by the two animated rows.
   auto const dots{ [&](std::chrono::steady_clock::time_point start) {
     auto const secs{
@@ -412,7 +421,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
   return std::visit(
       envy::match{ [&](envy::tui::progress_data const &data) {
                     std::ostringstream oss;
-                    oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
+                    oss << prefix << data.status << ": " << std::fixed
                         << std::setprecision(1) << data.percent << "%\n";
                     return oss.str();
                   },
@@ -422,7 +431,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
                                                       ? data.lines.size() - data.line_limit
                                                       : 0 };
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << dots(data.start_time) << " "
+                     oss << prefix << dots(data.start_time) << " "
                          << (data.header_text.empty() ? "build output:" : data.header_text)
                          << "\n";
                      for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
@@ -432,13 +441,12 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
                    },
                    [&](envy::tui::spinner_data const &data) {
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << data.text
-                         << dots(data.start_time) << "\n";
+                     oss << prefix << data.text << dots(data.start_time) << "\n";
                      return oss.str();
                    },
                    [&](envy::tui::static_text_data const &data) {
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << data.text << "\n";
+                     oss << prefix << data.text << "\n";
                      return oss.str();
                    } },
       frame.content);
@@ -475,16 +483,34 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
   return std::visit(
       envy::match{
           [&](envy::tui::progress_data const &data) {
-            return render_progress_bar(data, frame.label, max_label_width, width);
+            return render_progress_bar(data,
+                                       frame.label,
+                                       frame.display,
+                                       max_label_width,
+                                       width);
           },
           [&](envy::tui::text_stream_data const &data) {
-            return render_text_stream(data, frame.label, max_label_width, width, now);
+            return render_text_stream(data,
+                                      frame.label,
+                                      frame.display,
+                                      max_label_width,
+                                      width,
+                                      now);
           },
           [&](envy::tui::spinner_data const &data) {
-            return render_spinner(data, frame.label, max_label_width, width, now);
+            return render_spinner(data,
+                                  frame.label,
+                                  frame.display,
+                                  max_label_width,
+                                  width,
+                                  now);
           },
           [&](envy::tui::static_text_data const &data) {
-            return render_static_text(data, frame.label, max_label_width, width);
+            return render_static_text(data,
+                                      frame.label,
+                                      frame.display,
+                                      max_label_width,
+                                      width);
           } },
       frame.content);
 }
@@ -1154,6 +1180,21 @@ section_handle section_create() {
   return handle;
 }
 
+void section_set_display(section_handle h, std::string text) {
+  if (h == 0 || !s_progress.enabled) { return; }
+
+  std::lock_guard lock{ s_tui.mutex };
+
+  if (auto const it{ std::ranges::find_if(s_progress.sections,
+                                          [h](auto const &sec) {
+                                            return sec.handle == h;
+                                          }) };
+      it != s_progress.sections.end()) {
+    it->cached_frame.display = text;  // a live row picks it up on the next render
+    it->display = std::move(text);
+  }
+}
+
 void section_set_content(section_handle h, section_frame const &frame) {
   if (h == 0 || !s_progress.enabled) { return; }
 
@@ -1170,6 +1211,7 @@ void section_set_content(section_handle h, section_frame const &frame) {
     if (it == s_progress.sections.end()) { return; }
 
     it->cached_frame = frame;
+    it->cached_frame.display = it->display;
     it->has_content = true;
     s_progress.max_label_width =
         std::max(s_progress.max_label_width, measure_label_width(frame));
@@ -1178,7 +1220,7 @@ void section_set_content(section_handle h, section_frame const &frame) {
     // timer, so a step that finishes between two ticks loses its final frame entirely --
     // emit it here, and record it so that renderer does not say it twice.
     if (frame.terminal && !ansi) {
-      std::string text{ render_section_frame_fallback(frame, now) };
+      std::string text{ render_section_frame_fallback(it->cached_frame, now) };
       if (text != it->last_fallback_output) {
         it->last_fallback_output = text;
         it->last_fallback_print_time = now;

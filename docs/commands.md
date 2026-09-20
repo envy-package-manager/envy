@@ -6,6 +6,11 @@ Envy is a multi-tool CLI following Git's subcommand pattern. Each subcommand tar
 
 Logging is per-package narrative. Default (INFO) prints one outcome line per package plus command summaries. The three levels are mutually exclusive:
 
+On a TTY that line is the package's live row, and a package that did no work — a cache hit
+that vendored nothing and ran no SETUP pair — leaves no row at all: a run with nothing to
+do is silent. Off a TTY every package still reports, so logs stay complete. A spec's
+`DISPLAY` leads column two on both (see `docs/lua_api.md`).
+
 **`--verbose`** — DEBUG: per-package decision narrative (why each choice was made); decorated with timestamp and severity tag.
 **`-q`, `--quiet`** — Warnings and errors only.
 **`--trace[=stderr|file:<path>]`** — Emit structured machinery trace events (scheduler, cache/lock, IO) as JSONL to a file and/or human-readable text to stderr. Comma-separate multiple sinks (`--trace=stderr,file:/tmp/t.jsonl`); bare `--trace` defaults to stderr. Orthogonal to log verbosity—does not change the log level.
