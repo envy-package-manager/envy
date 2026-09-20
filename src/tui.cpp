@@ -94,6 +94,7 @@ struct tui_progress_state {
   std::mutex interactive_mutex;
   bool interactive_paused{ false };
   bool enabled{ true };
+  std::atomic_bool cursor_hidden{ false };
 } s_progress{};
 
 bool envy::tui::g_trace_enabled{ false };
@@ -584,6 +585,21 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
   return out;
 }
 
+// The cursor goes away when the live region first paints and comes back when the session
+// ends -- so it never blinks between two rows, and a run that draws none never moves it.
+void hide_cursor_once() {
+  if (!s_progress.cursor_hidden.exchange(true)) {
+    std::fprintf(stderr, "%s", kAnsiHideCursor);
+  }
+}
+
+void show_cursor_if_hidden() {
+  if (s_progress.cursor_hidden.exchange(false)) {
+    std::fprintf(stderr, "%s%s", kAnsiEnableWrap, kAnsiShowCursor);
+    std::fflush(stderr);
+  }
+}
+
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
                                   row_widths widths,
                                   int last_line_count,
@@ -601,6 +617,12 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
     }
   }
 
+  // No rows, and none on screen to erase: there is no live region, so do not open one.
+  // The wrap toggles alone are output, and a run with no work would otherwise tick a
+  // frame of them out thirty times a second.
+  if (rendered_lines.empty() && last_line_count == 0) { return 0; }
+
+  hide_cursor_once();
   std::fprintf(stderr, "%s", kAnsiDisableWrap);
 
   // Ensure column 0, then move up to start position
@@ -1149,27 +1171,25 @@ void print_stdout(char const *fmt, ...) {
 
 void pause_rendering() {
   std::lock_guard lock{ s_tui.mutex };
-  if (!is_ansi_supported() || s_progress.last_line_count == 0) { return; }
+  if (!is_ansi_supported()) { return; }
 
   // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
   // one *less* than the row count. The full count erases a line the region never owned.
-  std::fprintf(stderr, "\r");
-  if (s_progress.last_line_count > 1) {
-    std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+  if (s_progress.last_line_count) {
+    std::fprintf(stderr, "\r");
+    if (s_progress.last_line_count > 1) {
+      std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+    }
+    std::fprintf(stderr, "%s", kAnsiClearToEos);
+    s_progress.last_line_count = 0;
   }
-  std::fprintf(stderr, "%s%s%s", kAnsiClearToEos, kAnsiEnableWrap, kAnsiShowCursor);
-  s_progress.last_line_count = 0;
+  show_cursor_if_hidden();  // whoever takes the terminal takes a visible cursor with it
   std::fflush(stderr);
 }
 
 void resume_rendering() {
-  // No mutex needed: only writes to stderr without accessing shared state
-  // pause_rendering() needs mutex because it reads/modifies s_progress.last_line_count
-  if (is_ansi_supported()) {
-    std::fprintf(stderr, "%s", kAnsiHideCursor);
-    std::fflush(stderr);
-  }
-  // Next render cycle will redraw
+  // Nothing to emit: the next render cycle redraws, and takes the cursor back as it does.
+  // Handing it over visible for a frame beats hiding it for a region that may stay empty.
 }
 
 section_handle section_create() {
@@ -1357,22 +1377,14 @@ scope::scope(std::optional<level> threshold, bool decorated_logging) {
   if (!s_tui.initialized) { return; }
   run(std::move(threshold), decorated_logging);
   active = true;
-
-  // Hide cursor during TUI session (auto-wrap managed per-render in sections)
-  if (is_ansi_supported()) {
-    std::fprintf(stderr, "%s", kAnsiHideCursor);
-    std::fflush(stderr);
-  }
+  // The cursor is left alone until a row actually paints (auto-wrap is managed per-render
+  // in sections), so a session that says nothing costs the terminal nothing.
 }
 
 scope::~scope() {
   if (active) {
     shutdown();
-
-    if (is_ansi_supported()) {
-      std::fprintf(stderr, "%s%s", kAnsiEnableWrap, kAnsiShowCursor);
-      std::fflush(stderr);
-    }
+    show_cursor_if_hidden();
   }
 }
 

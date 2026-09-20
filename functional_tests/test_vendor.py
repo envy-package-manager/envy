@@ -1031,7 +1031,12 @@ class TestVendorProgress(VendorTestCase):
         self.assertVendored(run, "local.nanocobs@r3", "up_to_date", "current")
         self.assertEqual([], self.bar_rows(run), "nothing was copied, so nothing to draw")
 
-    def test_a_kept_package_reports_on_the_row_instead_of_a_count(self):
+    def test_a_kept_package_reports_in_the_warning_and_draws_nothing(self):
+        """`auto_sync = false` copies nothing, so the warning is the whole report.
+
+        A row would say the same thing twice, and the completion phase deletes it again
+        for want of a write -- on a terminal that is a frame painted and taken back.
+        """
         self.manifest_path = self.manifest(
             self.entry(
                 "local.nanocobs@r3",
@@ -1045,11 +1050,8 @@ class TestVendorProgress(VendorTestCase):
 
         run = self.install_drawing()
         self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
-
-        rows = self.bar_rows(run)
-        self.assertTrue(rows, f"kept package drew no row:\n{run.stderr}")
-        self.assertIn("kept", rows[-1], f"row does not say it was kept: {rows[-1]}")
-        self.assertNotIn("re-vendored", rows[-1])
+        self.assertEqual([], self.bar_rows(run), "nothing was copied, so nothing to draw")
+        self.assertIn("no longer matches", run.stderr)
 
 
 class TestVendorRejections(VendorTestCase):
