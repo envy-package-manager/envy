@@ -1310,9 +1310,7 @@ void acquire_interactive_mode() {
   pause_rendering();
 }
 
-void release_interactive_mode() {
-  s_progress.interactive_mutex.unlock();
-}
+void release_interactive_mode() { s_progress.interactive_mutex.unlock(); }
 
 interactive_mode_guard::interactive_mode_guard() { acquire_interactive_mode(); }
 
