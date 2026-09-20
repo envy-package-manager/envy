@@ -213,12 +213,14 @@ class TestDisplay(EnvyTestCase):
 
     def test_display_rejects_control_characters(self):
         """A NUL truncates the row at the %s that writes it; an ESC steers the cursor."""
-        for name, literal in (("nul", '"a\\0b"'), ("esc", '"a\\27[2Jb"'),
-                              ("tab", '"a\\9b"')):
+        cases = (("nul", '"a\\0b"'), ("esc", '"a\\27[2Jb"'), ("tab", '"a\\9b"'))
+        # Numbered directories, not named ones: `nul` is a reserved device on Windows, so
+        # mkdir("nul") leaves nothing to write a manifest into.
+        for i, (name, literal) in enumerate(cases):
             with self.subTest(name):
                 spec = self._spec(f"c{name}.lua", f"local.c{name}@v1",
                                   f"DISPLAY = {literal}")
-                where = self.work / name
+                where = self.work / f"ctl{i}"
                 where.mkdir(exist_ok=True)
                 manifest = test_config.write_spec_manifest(
                     where, [(f"local.c{name}@v1", spec)]
