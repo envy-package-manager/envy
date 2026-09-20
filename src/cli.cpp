@@ -98,9 +98,7 @@ cache_root_resolution deploy_target(cli_args const &args) {
       }
     }
     return resolve_cache_root(req);
-  } catch (std::exception const &) {
-    return resolve_cache_root(cache_root_request{});
-  }
+  } catch (std::exception const &) { return resolve_cache_root(cache_root_request{}); }
 }
 
 cli_args cli_parse(int argc, char **argv) {
