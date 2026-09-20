@@ -96,9 +96,7 @@ class TestDisplay(EnvyTestCase):
     def test_display_string_leads_column_two(self):
         """A literal DISPLAY prints after the identity column, before the outcome."""
         spec = self._spec("d.lua", "local.d@v1", 'DISPLAY = "the payload"')
-        manifest = self.write_manifest(
-            test_config.write_spec_manifest(self.work, [("local.d@v1", spec)]).read_text()
-        )
+        manifest = test_config.write_spec_manifest(self.work, [("local.d@v1", spec)])
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertRegex(run.stderr, r"\[local\.d@v1\] the payload installed \(\d")
@@ -129,9 +127,7 @@ class TestDisplay(EnvyTestCase):
 
     def test_display_nil_return_is_the_same_as_absent(self):
         spec = self._spec("n.lua", "local.n@v1", "DISPLAY = function(options) return nil end")
-        manifest = self.write_manifest(
-            test_config.write_spec_manifest(self.work, [("local.n@v1", spec)]).read_text()
-        )
+        manifest = test_config.write_spec_manifest(self.work, [("local.n@v1", spec)])
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertRegex(run.stderr, r"\[local\.n@v1\] installed \(\d")
@@ -139,27 +135,21 @@ class TestDisplay(EnvyTestCase):
     def test_display_must_be_a_single_line(self):
         """A row is one line; a DISPLAY with a newline would desync the live region."""
         spec = self._spec("m.lua", "local.m@v1", 'DISPLAY = "two\\nlines"')
-        manifest = self.write_manifest(
-            test_config.write_spec_manifest(self.work, [("local.m@v1", spec)]).read_text()
-        )
+        manifest = test_config.write_spec_manifest(self.work, [("local.m@v1", spec)])
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode)
         self.assertIn("DISPLAY must be a single line", run.stderr)
 
     def test_display_wrong_type_is_an_error(self):
         spec = self._spec("t.lua", "local.t@v1", "DISPLAY = 42")
-        manifest = self.write_manifest(
-            test_config.write_spec_manifest(self.work, [("local.t@v1", spec)]).read_text()
-        )
+        manifest = test_config.write_spec_manifest(self.work, [("local.t@v1", spec)])
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode)
         self.assertIn("DISPLAY must be a string or a function", run.stderr)
 
     def test_display_function_must_return_a_string(self):
         spec = self._spec("r.lua", "local.r@v1", "DISPLAY = function(options) return 42 end")
-        manifest = self.write_manifest(
-            test_config.write_spec_manifest(self.work, [("local.r@v1", spec)]).read_text()
-        )
+        manifest = test_config.write_spec_manifest(self.work, [("local.r@v1", spec)])
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode)
         self.assertIn("DISPLAY function must return a string or nil", run.stderr)
@@ -179,9 +169,7 @@ class TestNoWorkIsSilent(EnvyTestCase):
             f'FETCH = {{ source = "file://{self.lua_path(self.payload)}" }}\n'
             f"{body}\n",
         )
-        return self.write_manifest(
-            test_config.write_spec_manifest(self.work, [(identity, spec)]).read_text()
-        )
+        return test_config.write_spec_manifest(self.work, [(identity, spec)])
 
     _run_on_pty = TestDisplay._run_on_pty
 
