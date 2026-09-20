@@ -247,16 +247,18 @@ if __name__ == "__main__":
     unittest.main()
 
 
-# A package that takes the terminal and holds it, and one that keeps the renderer busy
-# while it does. The marker is newline-terminated so it lands the moment it is written,
-# and assembled by the shell so it does not also match envy's echo of the command.
+# What sudo does: prompt on the controlling terminal and read the answer back from it,
+# never touching the stdin envy handed the child. Beside it, a package that keeps the
+# renderer busy for the whole exchange. The prompt is spelled in two halves so it does
+# not also match envy's echo of the command, which would end the wait a frame early.
 SPEC_INTERACTIVE = """IDENTITY = "local.interactive@v1"
 USER_MANAGED = true
 SETUP = {
   main = {
     CHECK = function(pkg_dir, options) return false end,
     INSTALL = function(pkg_dir, options)
-      envy.run('h=HOLD; echo "${h}ING"; sleep 1', { interactive = true })
+      envy.run('m=PASS; printf "%sWORD: " "$m" > /dev/tty; read -r pw < /dev/tty; echo "SAW:$pw"',
+               { interactive = true })
     end,
   },
 }
@@ -281,16 +283,16 @@ SETUP = {
 class TestInteractiveHandoff(EnvyTestCase):
     """A child that wants the terminal gets all of it, for as long as it holds it.
 
-    `sudo` asking for a password is the case: a neighbouring package's spinner repainting
-    over the prompt, or its outcome line landing in the middle of one, is at best ugly and
-    at worst eats the keystrokes.
+    `sudo` asking for a password is the case, and it reads `/dev/tty` rather than stdin --
+    so this needs a *controlling* terminal, which `pty.openpty` alone does not give.
+    A neighbouring package's spinner repainting over the prompt, or its DEBUG lines
+    landing in the middle of one, is at best ugly and at worst eats the keystrokes.
     """
 
     envy_watchdog_timeout = 90
 
-    # Comfortably inside the child's second, and twenty render frames at 33ms: a renderer
-    # that has not stopped cannot stay quiet this long -- the spinner alone repaints every
-    # frame, and the neighbouring package finishes its own row in the middle of it.
+    # Comfortably inside the wait, and twenty render frames at 33ms: a renderer that has
+    # not stopped cannot stay quiet this long -- the spinner alone repaints every frame.
     QUIET_WINDOW_S = 0.66
 
     def setUp(self):
@@ -300,6 +302,33 @@ class TestInteractiveHandoff(EnvyTestCase):
         self.specs_dir.mkdir()
         (self.specs_dir / "interactive.lua").write_text(SPEC_INTERACTIVE)
         (self.specs_dir / "noisy.lua").write_text(SPEC_NOISY)
+
+    def _spawn_on_controlling_tty(self, manifest):
+        """envy on a pty that is its session's controlling terminal, as a shell gives it.
+
+        `pty.fork` is what buys that: `openpty` plus an inherited fd leaves /dev/tty
+        unopenable in the child, and the prompt this test waits for never arrives.
+        """
+        import pty
+
+        argv = [
+            str(self.envy),
+            "--cache-root",
+            str(self.cache_root),
+            "--verbose",  # the log stream is the half of the pause that used to leak
+            "install",
+            "--manifest",
+            str(manifest),
+        ]
+        pid, fd = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(str(self.project_root))
+                os.environ["TERM"] = "xterm-256color"
+                os.execv(argv[0], argv)
+            finally:
+                os._exit(127)  # exec failed; never return into the test runner
+        return pid, fd
 
     def test_the_live_region_stops_while_a_child_owns_the_terminal(self):
         manifest = self.test_dir / "envy.lua"
@@ -316,53 +345,38 @@ class TestInteractiveHandoff(EnvyTestCase):
             encoding="utf-8",
         )
 
-        import pty
         import select
         import time
 
-        primary, secondary = pty.openpty()
-        proc = test_config.popen(
-            [
-                str(self.envy),
-                "--cache-root",
-                str(self.cache_root),
-                "--verbose",
-                "install",
-                "--manifest",
-                str(manifest),
-            ],
-            cwd=str(self.project_root),
-            env={**os.environ, "TERM": "xterm-256color"},
-            stdin=secondary,
-            stdout=secondary,
-            stderr=secondary,
-        )
-        os.close(secondary)
-
-        painted = b""
+        pid, fd = self._spawn_on_controlling_tty(manifest)
+        painted, seen = b"", b""
         try:
-            seen, deadline = b"", time.monotonic() + 60.0
-            while b"HOLDING" not in seen:
+            deadline = time.monotonic() + 60.0
+            while b"PASSWORD: " not in seen:
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or not select.select([primary], [], [], remaining)[0]:
-                    self.fail(f"never saw the marker; got: {seen!r}")
-                seen += os.read(primary, 65536)
+                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                    self.fail(f"never saw the prompt; got: {seen!r}")
+                seen += os.read(fd, 65536)
 
-            # The child has the terminal for another second. Anything now is envy's.
+            # The child is blocked on the answer. Anything arriving now is envy's.
             deadline = time.monotonic() + self.QUIET_WINDOW_S
             while (remaining := deadline - time.monotonic()) > 0:
-                if select.select([primary], [], [], remaining)[0]:
-                    painted += os.read(primary, 65536)
+                if select.select([fd], [], [], remaining)[0]:
+                    painted += os.read(fd, 65536)
 
-            while select.select([primary], [], [], 60.0)[0] and os.read(primary, 65536):
+            os.write(fd, b"hunter2\n")
+            deadline = time.monotonic() + 60.0
+            while b"SAW:hunter2" not in seen:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                    self.fail(f"the child never read its answer; got: {seen!r}")
+                seen += os.read(fd, 65536)
+
+            while select.select([fd], [], [], 60.0)[0] and os.read(fd, 65536):
                 pass
         finally:
-            try:
-                proc.wait(timeout=60)
-            except Exception:
-                proc.kill()
-                proc.wait()
-            os.close(primary)
+            _, status = os.waitpid(pid, 0)
+            os.close(fd)
 
-        self.assertEqual(0, proc.returncode)
-        self.assertEqual(b"", painted, f"envy painted over a running child: {painted!r}")
+        self.assertEqual(0, os.waitstatus_to_exitcode(status), seen)
+        self.assertEqual(b"", painted, f"envy painted over a waiting child: {painted!r}")
