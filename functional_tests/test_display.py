@@ -14,19 +14,24 @@ from __future__ import annotations
 
 import os
 import re
+import select
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .test_vendor import VendorTestCase, rmtree_retry
 
 # Cursor moves, wrap toggles and erases -- everything the live region paints that is not
 # text. What survives is what a person would have read off the screen.
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
-PTY_TIMEOUT_S = 120.0
+# Bounds the whole pty run. The suite's own watchdog would otherwise be the only limit,
+# and it kills the runner rather than failing the test that hung.
+PTY_TIMEOUT_S = 30.0
 
 
 def visible(text: str) -> str:
@@ -75,9 +80,17 @@ class TestDisplay(EnvyTestCase):
         )
         os.close(secondary)
 
+        deadline = time.monotonic() + PTY_TIMEOUT_S
         chunks: list[bytes] = []
+        overran = False
         try:
             while True:
+                remaining = deadline - time.monotonic()
+                # os.read on a pty blocks forever if the child wedges without writing, so
+                # every wait is bounded and the child is killed rather than waited out.
+                if remaining <= 0 or not select.select([primary], [], [], remaining)[0]:
+                    overran = True
+                    break
                 try:
                     data = os.read(primary, 65536)
                 except OSError:  # the last writer closed the pty
@@ -88,8 +101,19 @@ class TestDisplay(EnvyTestCase):
         finally:
             os.close(primary)
 
-        proc.wait(timeout=PTY_TIMEOUT_S)
-        return proc.returncode, b"".join(chunks).decode("utf-8", "replace")
+        painted = b"".join(chunks).decode("utf-8", "replace")
+        if overran:
+            proc.kill()
+            proc.wait()
+            self.fail(f"envy {args} ran past {PTY_TIMEOUT_S}s; painted: {painted!r}")
+
+        try:
+            proc.wait(timeout=max(deadline - time.monotonic(), 1.0))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            self.fail(f"envy {args} closed its pty but never exited")
+        return proc.returncode, painted
 
     # -- DISPLAY -------------------------------------------------------------
 
@@ -157,6 +181,8 @@ class TestDisplay(EnvyTestCase):
 
 @unittest.skipIf(sys.platform == "win32", "no pty on Windows")
 class TestNoWorkIsSilent(EnvyTestCase):
+    envy_watchdog_timeout = 60
+
     def setUp(self):
         super().setUp()
         self.payload = self.work / "payload.txt"
@@ -218,3 +244,51 @@ class TestNoWorkIsSilent(EnvyTestCase):
         self.assertEqual(0, code, second)
         self.assertIn("[local.s@v1]", visible(second))
         self.assertIn("cache hit", visible(second))
+
+
+@unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+class TestVendorRows(VendorTestCase):
+    """Vendoring is work a cache hit can still have done -- but only when it writes."""
+
+    envy_watchdog_timeout = 60
+    _run_on_pty = TestDisplay._run_on_pty
+
+    def setUp(self):
+        super().setUp()
+        self.dest = self.project / "vendor" / "cobs"
+
+    def _install_once(self, auto_sync: str) -> Path:
+        manifest = self.manifest(
+            self.entry(
+                "local.cobs@r1",
+                self.spec("local.cobs@r1"),
+                vendor=f'{{ path = "vendor/cobs", auto_sync = {auto_sync} }}',
+            )
+        )
+        self.assertEqual(0, self.install(manifest).returncode)
+        return manifest
+
+    def test_a_vendor_copy_keeps_a_cache_hit_s_row(self):
+        manifest = self._install_once("true")
+        rmtree_retry(self.dest)  # cached payload, absent destination: the copy is the work
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        self.assertIn("cache hit", visible(out))
+
+    def test_an_exempt_mismatch_reports_but_draws_no_row(self):
+        """`auto_sync = false` writes nothing, so the warning is the whole report."""
+        manifest = self._install_once("false")
+        (self.dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        self.assertIn("no longer matches", visible(out))
+        self.assertNotIn("cache hit", visible(out))
+
+    def test_an_up_to_date_vendor_copy_is_silent(self):
+        manifest = self._install_once("true")
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        self.assertEqual("", visible(out), f"expected a silent run, got: {out!r}")
