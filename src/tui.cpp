@@ -599,9 +599,9 @@ void emit(std::string_view bytes) {
 void emit(char const *fmt, int value) {  // the cursor-up escape, the only formatted one
   char buffer[32]{};
   int const written{ std::snprintf(buffer, sizeof(buffer), fmt, value) };
-  emit(std::string_view{ buffer,
-                         std::min(static_cast<std::size_t>(std::max(0, written)),
-                                  sizeof(buffer) - 1) });
+  emit(std::string_view{
+      buffer,
+      std::min(static_cast<std::size_t>(std::max(0, written)), sizeof(buffer) - 1) });
 }
 
 void emit_flush() {
@@ -629,7 +629,9 @@ void pause_rendering() {
 
   if (s_progress.last_line_count) {
     emit("\r");
-    if (s_progress.last_line_count > 1) { emit(kAnsiCursorUpFmt, s_progress.last_line_count - 1); }
+    if (s_progress.last_line_count > 1) {
+      emit(kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+    }
     emit(kAnsiClearToEos);
     s_progress.last_line_count = 0;
   }
@@ -666,7 +668,9 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
   // Render each line with per-line clear
   int cur_frame_line_count{ 0 };
   for (auto const &line : rendered_lines) {
-    if (cur_frame_line_count > 0) { emit("\n"); }  // a \n before all lines except the first
+    if (cur_frame_line_count > 0) {
+      emit("\n");
+    }  // a \n before all lines except the first
     emit(line);
     emit(kAnsiClearToEol);
     ++cur_frame_line_count;
