@@ -46,6 +46,15 @@ namespace {
 struct captured_output {
   std::vector<std::string> messages;
 
+  // Everything the tui wrote, in order: scrollback lines and the live region's paint, the
+  // same bytes a terminal would have received. The renderer emits a frame as a run of
+  // small chunks (escape, text, escape), so content is what a test can assert on.
+  std::string stream() const {
+    std::string out;
+    for (auto const &message : messages) { out += message; }
+    return out;
+  }
+
   captured_output() {
     envy::tui::set_output_handler(
         [this](std::string_view value) { messages.emplace_back(value); });
@@ -1112,7 +1121,7 @@ TEST_CASE_FIXTURE(captured_output, "a terminal frame off a TTY lands without a c
   envy::tui::test::g_isatty = true;
 }
 
-TEST_CASE_FIXTURE(captured_output, "a mid-flight frame off a TTY waits for the renderer") {
+TEST_CASE_FIXTURE(captured_output, "a mid-flight frame off a TTY says so once") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = false;
 
@@ -1126,7 +1135,11 @@ TEST_CASE_FIXTURE(captured_output, "a mid-flight frame off a TTY waits for the r
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
   CHECK_NOTHROW(envy::tui::shutdown());
 
-  CHECK(messages.empty());
+  // A row's first sample is due immediately -- the 2s throttle governs the ones after it,
+  // so a step that never changes still announces itself. Plain text: off a TTY there is no
+  // live region to paint into, and the line stands in the scrollback like a log line.
+  auto const out{ stream() };
+  CHECK(out == "vendor 6 files: 40.0%\n");
 
   envy::tui::section_delete(h);
   envy::tui::test::g_isatty = true;
@@ -1142,7 +1155,12 @@ TEST_CASE_FIXTURE(captured_output, "a terminal frame on a TTY stays in the live 
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
   CHECK_NOTHROW(envy::tui::shutdown());
 
-  CHECK(messages.empty());  // the row itself is on screen; a line would double it
+  // Painted, not said: the row arrives wrapped in the live region's escapes -- hide the
+  // cursor, clear to end of line -- and never as a bare line that would double it.
+  auto const out{ stream() };
+  CHECK(out.find("\x1b[?25l") != std::string::npos);
+  CHECK(out.find("vendored 12 files\x1b[K") != std::string::npos);
+  CHECK(out.find("vendored 12 files\n") == std::string::npos);
 
   envy::tui::section_delete(h);
 }
@@ -1271,9 +1289,11 @@ TEST_CASE_FIXTURE(captured_output, "section_set_display stamps every later frame
   CHECK_NOTHROW(envy::tui::shutdown());
 
   // max_label_width is process-wide, so match the columns, not the padding between them.
-  REQUIRE(messages.size() == 1);
-  CHECK(messages[0].starts_with("[fi.github@r0]"));
-  CHECK(messages[0].find("libusb/hidapi installed") != std::string::npos);
+  auto const line{ std::ranges::find_if(messages, [](std::string const &message) {
+    return message.starts_with("[fi.github@r0]");
+  }) };
+  REQUIRE(line != messages.end());
+  CHECK(line->find("libusb/hidapi installed") != std::string::npos);
 }
 
 TEST_CASE("the display column pads, so every row's status starts in one place") {

@@ -2,6 +2,7 @@
 
 #include "pkg_phase.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -125,7 +126,8 @@ struct trace_event_schema {
 std::vector<trace_event_schema> trace_schema();
 
 namespace tui {
-extern bool g_trace_enabled;
+// Atomic because the re-exec handoff clears it with the tui worker already running.
+extern std::atomic_bool g_trace_enabled;
 void trace(std::string spec, trace_event_t event);
 
 inline bool trace_enabled() { return g_trace_enabled; }

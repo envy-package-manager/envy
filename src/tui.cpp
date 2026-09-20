@@ -96,7 +96,7 @@ struct tui_progress_state {
   std::atomic_bool cursor_hidden{ false };
 } s_progress{};
 
-bool envy::tui::g_trace_enabled{ false };
+std::atomic_bool envy::tui::g_trace_enabled{ false };
 
 #ifdef ENVY_UNIT_TEST
 namespace envy::tui::test {
@@ -584,18 +584,38 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
   return out;
 }
 
+void emit(std::string_view bytes) {
+  if (bytes.empty()) { return; }
+  if (s_tui.output_handler) {
+    s_tui.output_handler(bytes);
+  } else {
+    std::fwrite(bytes.data(), 1, bytes.size(), stderr);
+  }
+}
+
+void emit(char const *fmt, int value) {  // the cursor-up escape, the only formatted one
+  char buffer[32]{};
+  int const written{ std::snprintf(buffer, sizeof(buffer), fmt, value) };
+  emit(std::string_view{
+      buffer,
+      std::min(static_cast<std::size_t>(std::max(0, written)), sizeof(buffer) - 1) });
+}
+
+void emit_flush() {
+  if (!s_tui.output_handler) { std::fflush(stderr); }
+}
+
 // The cursor goes away when the live region first paints and comes back when the worker
 // stops -- so it never blinks between two rows, and a run that draws none never moves it.
 void hide_cursor_once() {
-  if (!s_progress.cursor_hidden.exchange(true)) {
-    std::fprintf(stderr, "%s", kAnsiHideCursor);
-  }
+  if (!s_progress.cursor_hidden.exchange(true)) { emit(kAnsiHideCursor); }
 }
 
 void show_cursor_if_hidden() {
   if (s_progress.cursor_hidden.exchange(false)) {
-    std::fprintf(stderr, "%s%s", kAnsiEnableWrap, kAnsiShowCursor);
-    std::fflush(stderr);
+    emit(kAnsiEnableWrap);
+    emit(kAnsiShowCursor);
+    emit_flush();
   }
 }
 
@@ -605,15 +625,15 @@ void pause_rendering() {
   if (!is_ansi_supported()) { return; }
 
   if (s_progress.last_line_count) {
-    std::fprintf(stderr, "\r");
+    emit("\r");
     if (s_progress.last_line_count > 1) {
-      std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+      emit(kAnsiCursorUpFmt, s_progress.last_line_count - 1);
     }
-    std::fprintf(stderr, "%s", kAnsiClearToEos);
+    emit(kAnsiClearToEos);
     s_progress.last_line_count = 0;
   }
   show_cursor_if_hidden();  // whoever takes the terminal takes a visible cursor with it
-  std::fflush(stderr);
+  emit_flush();
 }
 
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
@@ -636,34 +656,36 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
   if (rendered_lines.empty() && last_line_count == 0) { return 0; }
 
   hide_cursor_once();
-  std::fprintf(stderr, "%s", kAnsiDisableWrap);
+  emit(kAnsiDisableWrap);
 
   // Ensure column 0, then move up to start position
-  std::fprintf(stderr, "\r");
-  if (last_line_count > 1) { std::fprintf(stderr, kAnsiCursorUpFmt, last_line_count - 1); }
+  emit("\r");
+  if (last_line_count > 1) { emit(kAnsiCursorUpFmt, last_line_count - 1); }
 
   // Render each line with per-line clear
   int cur_frame_line_count{ 0 };
   for (auto const &line : rendered_lines) {
-    if (cur_frame_line_count > 0) {  // Print \n before all lines except first
-      std::fprintf(stderr, "\n");
-    }
-    std::fprintf(stderr, "%s%s", line.c_str(), kAnsiClearToEol);
+    if (cur_frame_line_count > 0) {
+      emit("\n");
+    }  // a \n before all lines except the first
+    emit(line);
+    emit(kAnsiClearToEol);
     ++cur_frame_line_count;
   }
 
   // Clear remaining old lines if shrinking
   if (cur_frame_line_count < last_line_count) {
     if (cur_frame_line_count == 0) {  // cursor already parked on the first stale line
-      std::fprintf(stderr, "%s", kAnsiClearToEos);
+      emit(kAnsiClearToEos);
     } else {
-      std::fprintf(stderr, "\n%s", kAnsiClearToEos);
+      emit("\n");
+      emit(kAnsiClearToEos);
       ++cur_frame_line_count;  // Account for the newline we just printed
     }
   }
 
-  std::fprintf(stderr, "%s", kAnsiEnableWrap);
-  std::fflush(stderr);
+  emit(kAnsiEnableWrap);
+  emit_flush();
 
   return cur_frame_line_count;
 }
@@ -715,8 +737,8 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
     }
   }
 
-  for (auto const &output : to_print) { std::fprintf(stderr, "%s", output.c_str()); }
-  std::fflush(stderr);
+  for (auto const &output : to_print) { emit(output); }
+  emit_flush();
 }
 
 }  // namespace
@@ -774,10 +796,7 @@ std::string format_prefix(std::string_view label) {
   return oss.str();
 }
 
-void flush_messages(std::queue<log_entry> &pending,
-                    std::function<void(std::string_view)> const &handler) {
-  bool wrote_to_stderr{ false };
-
+void flush_messages(std::queue<log_entry> &pending) {
   while (!pending.empty()) {
     auto entry{ std::move(pending.front()) };
     pending.pop();
@@ -799,20 +818,9 @@ void flush_messages(std::queue<log_entry> &pending,
       }
       output.append(log_ptr->message);
       output.push_back('\n');
-
-      if (handler) {
-        handler(output);
-      } else {
-        if (!output.empty()) { std::fwrite(output.data(), 1, output.size(), stderr); }
-        wrote_to_stderr = true;
-      }
+      emit(output);
     } else if (auto *row_ptr{ std::get_if<section_line_event>(&entry) }) {
-      if (handler) {
-        handler(row_ptr->text);
-      } else {
-        std::fwrite(row_ptr->text.data(), 1, row_ptr->text.size(), stderr);
-        wrote_to_stderr = true;
-      }
+      emit(row_ptr->text);
     } else if (auto *stdout_ptr{ std::get_if<stdout_event>(&entry) }) {
       if (!stdout_ptr->message.empty()) {
         std::fwrite(stdout_ptr->message.data(), 1, stdout_ptr->message.size(), stdout);
@@ -831,19 +839,15 @@ void flush_messages(std::queue<log_entry> &pending,
           output = envy::trace_record_to_string(*trace_ptr);
         }
         output.push_back('\n');
-
-        if (handler) {
-          handler(output);
-        } else {
-          std::fwrite(output.data(), 1, output.size(), stderr);
-          wrote_to_stderr = true;
-        }
+        emit(output);
       }
 
       if (s_tui.trace_file) {
         auto const json{ envy::trace_record_to_json(*trace_ptr) + "\n" };
         if (std::fwrite(json.data(), 1, json.size(), s_tui.trace_file) != json.size() ||
             std::fflush(s_tui.trace_file) != 0) {
+          // Raw, like the render-exception notice: a diagnostic on the way to abort() does
+          // not route itself through the machinery that just failed.
           std::fflush(stderr);
           std::fprintf(stderr, "Fatal: failed to write trace file\n");
           std::fflush(stderr);
@@ -853,7 +857,7 @@ void flush_messages(std::queue<log_entry> &pending,
     }
   }
 
-  if (!handler && wrote_to_stderr) { std::fflush(stderr); }
+  emit_flush();
 }
 
 // Single render cycle: clear section area if needed, flush messages, render sections.
@@ -868,15 +872,13 @@ int render_cycle(std::queue<log_entry> &pending,
   bool const has_messages{ !pending.empty() };
 
   if (ansi && has_messages && last_line_count > 0) {
-    std::fprintf(stderr, "\r");
-    if (last_line_count > 1) {
-      std::fprintf(stderr, kAnsiCursorUpFmt, last_line_count - 1);
-    }
-    std::fprintf(stderr, "%s", kAnsiClearToEos);
-    std::fflush(stderr);
+    emit("\r");
+    if (last_line_count > 1) { emit(kAnsiCursorUpFmt, last_line_count - 1); }
+    emit(kAnsiClearToEos);
+    emit_flush();
   }
 
-  flush_messages(pending, s_tui.output_handler);
+  flush_messages(pending);
 
   if (s_progress.enabled) {
     int const width{ get_terminal_width() };
@@ -940,8 +942,8 @@ void worker_thread() {
 
   // The last frame closes the live region with the newline it has been withholding.
   if (tick() > 0) {
-    std::fprintf(stderr, "\n");
-    std::fflush(stderr);
+    emit("\n");
+    emit_flush();
   }
 }
 
@@ -1039,6 +1041,15 @@ void configure_trace_outputs(std::vector<trace_output_spec> outputs) {
 
   // Header record: first line of every trace stream carries the schema version.
   ENVY_TRACE(trace_start, "", .schema = kTraceSchemaVersion);
+}
+
+void trace_file_handoff() {
+  std::lock_guard const terminal{ s_progress.interactive_mutex };
+  if (s_tui.trace_file) {
+    std::fclose(s_tui.trace_file);
+    s_tui.trace_file = nullptr;
+  }
+  g_trace_enabled = s_tui.trace_stderr;
 }
 
 void run(std::optional<level> threshold, bool decorated_logging) {
