@@ -481,39 +481,37 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
     return output;
   }
 
-  return std::visit(
-      envy::match{
-          [&](envy::tui::progress_data const &data) {
-            return render_progress_bar(data,
-                                       frame.label,
-                                       frame.display,
-                                       max_label_width,
-                                       width);
-          },
-          [&](envy::tui::text_stream_data const &data) {
-            return render_text_stream(data,
-                                      frame.label,
-                                      frame.display,
-                                      max_label_width,
-                                      width,
-                                      now);
-          },
-          [&](envy::tui::spinner_data const &data) {
-            return render_spinner(data,
-                                  frame.label,
-                                  frame.display,
-                                  max_label_width,
-                                  width,
-                                  now);
-          },
-          [&](envy::tui::static_text_data const &data) {
-            return render_static_text(data,
-                                      frame.label,
-                                      frame.display,
-                                      max_label_width,
-                                      width);
-          } },
-      frame.content);
+  return std::visit(envy::match{ [&](envy::tui::progress_data const &data) {
+                                  return render_progress_bar(data,
+                                                             frame.label,
+                                                             frame.display,
+                                                             max_label_width,
+                                                             width);
+                                },
+                                 [&](envy::tui::text_stream_data const &data) {
+                                   return render_text_stream(data,
+                                                             frame.label,
+                                                             frame.display,
+                                                             max_label_width,
+                                                             width,
+                                                             now);
+                                 },
+                                 [&](envy::tui::spinner_data const &data) {
+                                   return render_spinner(data,
+                                                         frame.label,
+                                                         frame.display,
+                                                         max_label_width,
+                                                         width,
+                                                         now);
+                                 },
+                                 [&](envy::tui::static_text_data const &data) {
+                                   return render_static_text(data,
+                                                             frame.label,
+                                                             frame.display,
+                                                             max_label_width,
+                                                             width);
+                                 } },
+                    frame.content);
 }
 
 int count_wrapped_lines(std::string const &text, int width_hint) {
@@ -1186,10 +1184,9 @@ void section_set_display(section_handle h, std::string text) {
 
   std::lock_guard lock{ s_tui.mutex };
 
-  if (auto const it{ std::ranges::find_if(s_progress.sections,
-                                          [h](auto const &sec) {
-                                            return sec.handle == h;
-                                          }) };
+  if (auto const it{
+          std::ranges::find_if(s_progress.sections,
+                               [h](auto const &sec) { return sec.handle == h; }) };
       it != s_progress.sections.end()) {
     it->cached_frame.display = text;  // a live row picks it up on the next render
     it->display = std::move(text);

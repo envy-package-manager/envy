@@ -1206,11 +1206,10 @@ TEST_CASE("display leads column two and never widens column one") {
   std::string const output{ envy::tui::test::render_section_frame(frame) };
   CHECK(output.starts_with("[fi.github@r0] libusb/hidapi  50% ["));
 
-  envy::tui::section_frame const done{
-    .label = "[fi.github@r0]",
-    .display = "libusb/hidapi",
-    .content = envy::tui::static_text_data{ .text = "installed (1.2s)" }
-  };
+  envy::tui::section_frame const done{ .label = "[fi.github@r0]",
+                                       .display = "libusb/hidapi",
+                                       .content = envy::tui::static_text_data{
+                                           .text = "installed (1.2s)" } };
   CHECK(envy::tui::test::render_section_frame(done) ==
         "[fi.github@r0] libusb/hidapi installed (1.2s)\n");
 }
@@ -1246,11 +1245,10 @@ TEST_CASE("fallback render puts display after the label, bracketing nothing twic
   envy::tui::test::g_isatty = false;
   envy::tui::test::g_now = std::chrono::steady_clock::now();
 
-  envy::tui::section_frame const frame{
-    .label = "[pkg@v1]",
-    .display = "libusb/hidapi",
-    .content = envy::tui::static_text_data{ .text = "cache hit" }
-  };
+  envy::tui::section_frame const frame{ .label = "[pkg@v1]",
+                                        .display = "libusb/hidapi",
+                                        .content = envy::tui::static_text_data{
+                                            .text = "cache hit" } };
   CHECK(envy::tui::test::render_section_frame(frame) ==
         "[pkg@v1] libusb/hidapi cache hit\n");
   envy::tui::test::g_isatty = true;
