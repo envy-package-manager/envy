@@ -584,9 +584,6 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
   return out;
 }
 
-// The one way the tui reaches the terminal: log lines, committed rows, and every byte the
-// live region paints. An output handler takes them all, so a test captures the whole
-// stream instead of watching the renderer's half of it escape.
 void emit(std::string_view bytes) {
   if (bytes.empty()) { return; }
   if (s_tui.output_handler) {
