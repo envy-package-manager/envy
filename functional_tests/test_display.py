@@ -25,17 +25,64 @@ from . import test_config
 from .env import EnvyTestCase
 from .test_vendor import VendorTestCase, rmtree_retry
 
-# Cursor moves, wrap toggles and erases -- everything the live region paints that is not
-# text. What survives is what a person would have read off the screen.
-ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+ANSI = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+
+
+def visible(painted: str) -> str:
+    """Every character envy painted, escapes stripped -- including ones it later erased."""
+    return ANSI.sub("", painted).replace("\r", "").strip()
+
+
+def screen(painted: str) -> str:
+    """What a terminal would still be showing once `painted` has been replayed.
+
+    The live region redraws in place and erases what it shrinks past, so the bytes envy
+    wrote are not what a person is left looking at: a step that finishes between two
+    render cycles paints a frame and takes it back. Only a screen model can tell that
+    apart from a row left on screen, which is the thing these tests are about.
+    """
+    rows, row, col = [""], 0, 0
+
+    def touch(n):
+        while len(rows) <= n:
+            rows.append("")
+
+    i = 0
+    while i < len(painted):
+        ch = painted[i]
+        if ch == "\x1b":
+            if not (m := ANSI.match(painted, i)):
+                i += 1
+                continue
+            params, final = m.group(1), m.group(2)
+            if final == "F":  # cursor previous line: up N, column 1
+                row = max(0, row - int(params or 1))
+                col = 0
+            elif final == "K":  # erase to end of line
+                rows[row] = rows[row][:col]
+            elif final == "J":  # erase to end of screen
+                rows[row] = rows[row][:col]
+                del rows[row + 1 :]
+            i = m.end()  # every other sequence is a mode toggle, which shows nothing
+            continue
+        if ch == "\r":
+            col = 0
+        elif ch == "\n":
+            row += 1
+            col = 0
+            touch(row)
+        else:
+            line = rows[row].ljust(col)
+            rows[row] = line[:col] + ch + line[col + 1 :]
+            col += 1
+        i += 1
+
+    return "\n".join(rows).strip()
+
 
 # Bounds the whole pty run. The suite's own watchdog would otherwise be the only limit,
 # and it kills the runner rather than failing the test that hung.
 PTY_TIMEOUT_S = 30.0
-
-
-def visible(text: str) -> str:
-    return ANSI.sub("", text).replace("\r", "").strip()
 
 
 class TestDisplay(EnvyTestCase):
@@ -204,11 +251,11 @@ class TestNoWorkIsSilent(EnvyTestCase):
 
         code, first = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, first)
-        self.assertIn("installed", visible(first))
+        self.assertIn("installed", screen(first))
 
         code, second = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, second)
-        self.assertEqual("", visible(second), f"expected a silent run, got: {second!r}")
+        self.assertEqual("", screen(second), f"expected a silent run, got: {second!r}")
 
     def test_off_a_tty_every_package_still_reports(self):
         """The log is a record of the run, so the no-ops stay in it."""
@@ -242,8 +289,8 @@ class TestNoWorkIsSilent(EnvyTestCase):
 
         code, second = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, second)
-        self.assertIn("[local.s@v1]", visible(second))
-        self.assertIn("cache hit", visible(second))
+        self.assertIn("[local.s@v1]", screen(second))
+        self.assertIn("cache hit", screen(second))
 
 
 @unittest.skipIf(sys.platform == "win32", "no pty on Windows")
@@ -274,7 +321,7 @@ class TestVendorRows(VendorTestCase):
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertIn("cache hit", visible(out))
+        self.assertIn("cache hit", screen(out))
 
     def test_an_exempt_mismatch_reports_but_draws_no_row(self):
         """`auto_sync = false` writes nothing, so the warning is the whole report."""
@@ -283,12 +330,12 @@ class TestVendorRows(VendorTestCase):
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertIn("no longer matches", visible(out))
-        self.assertNotIn("cache hit", visible(out))
+        self.assertIn("no longer matches", visible(out))  # a warning, not a row
+        self.assertNotIn("cache hit", screen(out))
 
     def test_an_up_to_date_vendor_copy_is_silent(self):
         manifest = self._install_once("true")
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertEqual("", visible(out), f"expected a silent run, got: {out!r}")
+        self.assertEqual("", screen(out), f"expected a silent run, got: {out!r}")
