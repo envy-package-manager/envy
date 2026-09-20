@@ -492,37 +492,26 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
     return output;
   }
 
-  return std::visit(envy::match{ [&](envy::tui::progress_data const &data) {
-                                  return render_progress_bar(data,
-                                                             frame.label,
-                                                             frame.display,
-                                                             widths,
-                                                             width);
-                                },
-                                 [&](envy::tui::text_stream_data const &data) {
-                                   return render_text_stream(data,
-                                                             frame.label,
-                                                             frame.display,
-                                                             widths,
-                                                             width,
-                                                             now);
-                                 },
-                                 [&](envy::tui::spinner_data const &data) {
-                                   return render_spinner(data,
-                                                         frame.label,
-                                                         frame.display,
-                                                         widths,
-                                                         width,
-                                                         now);
-                                 },
-                                 [&](envy::tui::static_text_data const &data) {
-                                   return render_static_text(data,
-                                                             frame.label,
-                                                             frame.display,
-                                                             widths,
-                                                             width);
-                                 } },
-                    frame.content);
+  return std::visit(
+      envy::match{
+          [&](envy::tui::progress_data const &data) {
+            return render_progress_bar(data, frame.label, frame.display, widths, width);
+          },
+          [&](envy::tui::text_stream_data const &data) {
+            return render_text_stream(data,
+                                      frame.label,
+                                      frame.display,
+                                      widths,
+                                      width,
+                                      now);
+          },
+          [&](envy::tui::spinner_data const &data) {
+            return render_spinner(data, frame.label, frame.display, widths, width, now);
+          },
+          [&](envy::tui::static_text_data const &data) {
+            return render_static_text(data, frame.label, frame.display, widths, width);
+          } },
+      frame.content);
 }
 
 int count_wrapped_lines(std::string const &text, int width_hint) {
@@ -851,11 +840,8 @@ int render_cycle(std::queue<log_entry> &pending,
 
     if (ansi) {
       int const effective_last{ has_messages ? 0 : last_line_count };
-      rendered_line_count = render_progress_sections_ansi(sections,
-                                                          widths,
-                                                          effective_last,
-                                                          width,
-                                                          now);
+      rendered_line_count =
+          render_progress_sections_ansi(sections, widths, effective_last, width, now);
     } else {
       render_fallback_frame_unlocked(sections, now);
     }
@@ -1271,12 +1257,12 @@ void section_commit(section_handle h) {
     if (it == s_progress.sections.end()) { return; }
 
     if (it->has_content) {
-      std::string text{ render_section_frame(it->cached_frame,
-                                             row_widths{ s_progress.max_label_width,
-                                                         s_progress.max_display_width },
-                                             width,
-                                             ansi,
-                                             now) };
+      std::string text{ render_section_frame(
+          it->cached_frame,
+          row_widths{ s_progress.max_label_width, s_progress.max_display_width },
+          width,
+          ansi,
+          now) };
       if (ansi) { text = truncate_frame_to_width(text, width); }
 
       // Off a TTY the row is already scrollback: the fallback renderer prints each frame

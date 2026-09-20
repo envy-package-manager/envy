@@ -1282,11 +1282,10 @@ TEST_CASE("the display column pads, so every row's status starts in one place") 
   envy::tui::test::g_now = std::chrono::steady_clock::now();
 
   auto const row{ [](char const *label, char const *display) {
-    return envy::tui::section_frame{
-      .label = label,
-      .display = display,
-      .content = envy::tui::static_text_data{ .text = "installed" }
-    };
+    return envy::tui::section_frame{ .label = label,
+                                     .display = display,
+                                     .content = envy::tui::static_text_data{
+                                         .text = "installed" } };
   } };
 
   // The widest of each column, as the renderer accumulates them across live rows.
@@ -1294,9 +1293,13 @@ TEST_CASE("the display column pads, so every row's status starts in one place") 
   std::size_t const displays{ std::string_view{ "cesanta/mongoose" }.size() };
 
   std::string const widest{ envy::tui::test::render_section_frame(
-      row("[fi.github@r0]", "cesanta/mongoose"), labels, displays) };
+      row("[fi.github@r0]", "cesanta/mongoose"),
+      labels,
+      displays) };
   std::string const shorter{ envy::tui::test::render_section_frame(
-      row("[fi.arm-none-eabi-gcc@r4]", "13.2.rel1"), labels, displays) };
+      row("[fi.arm-none-eabi-gcc@r4]", "13.2.rel1"),
+      labels,
+      displays) };
   std::string const none{
     envy::tui::test::render_section_frame(row("[fi.nanoprintf@r1]", ""), labels, displays)
   };
@@ -1309,10 +1312,9 @@ TEST_CASE("no spec set a display, so the row carries no display column") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = true;
 
-  envy::tui::section_frame const frame{
-    .label = "[pkg]",
-    .content = envy::tui::static_text_data{ .text = "installed" }
-  };
+  envy::tui::section_frame const frame{ .label = "[pkg]",
+                                        .content = envy::tui::static_text_data{
+                                            .text = "installed" } };
   CHECK(envy::tui::test::render_section_frame(frame, 5, 0) == "[pkg] installed\n");
 }
 
