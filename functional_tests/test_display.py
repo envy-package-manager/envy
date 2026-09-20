@@ -291,26 +291,17 @@ class TestNoWorkIsSilent(EnvyTestCase):
     _run_on_pty = TestDisplay._run_on_pty
 
     def test_warm_cache_run_paints_nothing(self):
+        """Not "nothing is left on screen" -- nothing was ever sent.
+
+        `screen()` cannot see a frame that was painted and taken back, and neither can a
+        mode toggle: hiding the cursor for a run that never draws a row blinks it once
+        for no reason. The byte count is the only assertion that covers both.
+        """
         manifest = self._manifest("")
 
         code, first = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, first)
         self.assertIn("installed", screen(first))
-
-        code, second = self._run_on_pty("install", "--manifest", manifest)
-        self.assertEqual(0, code, second)
-        self.assertEqual("", screen(second), f"expected a silent run, got: {second!r}")
-
-    def test_a_run_with_nothing_to_say_writes_no_bytes(self):
-        """Not "nothing is left on screen" -- nothing was ever sent.
-
-        `screen()` cannot see a frame that was painted and taken back, and neither can a
-        mode toggle: hiding the cursor for a run that never draws a row blinks it once
-        for no reason. The only assertion that covers both is the byte count.
-        """
-        manifest = self._manifest("")
-        code, first = self._run_on_pty("install", "--manifest", manifest)
-        self.assertEqual(0, code, first)
 
         code, second = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, second)
@@ -444,39 +435,7 @@ class TestVendorRows(VendorTestCase):
         self.assertNotIn("cache hit", screen(out))
 
     def test_an_exempt_mismatch_reports_but_draws_no_row(self):
-        """`auto_sync = false` writes nothing, so the warning is the whole report."""
-        manifest = self._install_once("false")
-        (self.dest / "src" / "lib.c").write_text("mine now\n", encoding="utf-8")
-
-        code, out = self._run_on_pty("install", "--manifest", manifest)
-        self.assertEqual(0, code, out)
-        # The warning is scrollback and stays up; what must not follow it is a row.
-        painted = screen(out)
-        self.assertIn("no longer matches", painted)
-        self.assertEqual(1, len(painted.splitlines()), painted)
-
-    def test_an_up_to_date_vendor_copy_is_silent(self):
-        manifest = self._install_once("true")
-
-        code, out = self._run_on_pty("install", "--manifest", manifest)
-        self.assertEqual(0, code, out)
-        self.assertEqual("", screen(out), f"expected a silent run, got: {out!r}")
-
-    def test_an_up_to_date_vendor_copy_paints_no_frame_to_take_back(self):
-        """The phase hashes before it knows there is nothing to say.
-
-        Both hashes finish in microseconds on this payload, so the spinner they raise is
-        a row that appears and is deleted -- invisible to `screen()`, a flicker to a
-        person. Nothing the phase decided is worth a byte here.
-        """
-        manifest = self._install_once("true")
-
-        code, out = self._run_on_pty("install", "--manifest", manifest)
-        self.assertEqual(0, code, out)
-        self.assertEqual("", out, f"a no-op vendor phase painted: {out!r}")
-
-    def test_an_exempt_mismatch_paints_the_warning_and_nothing_else(self):
-        """`auto_sync = false` writes nothing, so the warning is the entire run.
+        """`auto_sync = false` writes nothing, so the warning is the whole report.
 
         Scrollback needs no escapes at all: one of them means a live region opened, and
         the only row it could have held is one the phase decided not to earn.
@@ -486,8 +445,24 @@ class TestVendorRows(VendorTestCase):
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertIn("no longer matches", out)
+        # The warning is scrollback and stays up; what must not follow it is a row.
+        painted = screen(out)
+        self.assertIn("no longer matches", painted)
+        self.assertEqual(1, len(painted.splitlines()), painted)
         self.assertNotIn("\x1b", out, f"a live region opened for a run with no row: {out!r}")
+
+    def test_an_up_to_date_vendor_copy_is_silent(self):
+        """The phase hashes before it knows there is nothing to say.
+
+        Both hashes finish in microseconds on this payload, so a spinner raised for them
+        is a row that appears and is deleted -- invisible to `screen()`, a flicker to a
+        person. Nothing the phase decided here is worth a byte.
+        """
+        manifest = self._install_once("true")
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        self.assertEqual("", out, f"a no-op vendor phase painted: {out!r}")
 
     def test_envy_vendor_says_where_it_copied_to_once(self):
         """`envy vendor` prints its own report, so the row must not say it a second time."""

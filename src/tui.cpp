@@ -585,8 +585,8 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
   return out;
 }
 
-// The cursor goes away when the live region first paints and comes back when the session
-// ends -- so it never blinks between two rows, and a run that draws none never moves it.
+// The cursor goes away when the live region first paints and comes back when the worker
+// stops -- so it never blinks between two rows, and a run that draws none never moves it.
 void hide_cursor_once() {
   if (!s_progress.cursor_hidden.exchange(true)) {
     std::fprintf(stderr, "%s", kAnsiHideCursor);
@@ -1077,6 +1077,9 @@ void shutdown() {
   s_tui.cv.notify_all();
   s_tui.worker.join();
   s_tui.worker = std::thread{};
+  // The renderer hid it, so the renderer's own lifetime gives it back: anyone who calls
+  // run() directly leaves the terminal as they found it, scope or no scope.
+  show_cursor_if_hidden();
   s_tui.stop_requested = false;
   g_trace_enabled = false;
   if (s_tui.trace_file) {
@@ -1382,10 +1385,7 @@ scope::scope(std::optional<level> threshold, bool decorated_logging) {
 }
 
 scope::~scope() {
-  if (active) {
-    shutdown();
-    show_cursor_if_hidden();
-  }
+  if (active) { shutdown(); }
 }
 
 log_ctx_scope::log_ctx_scope(std::string identity) : previous_{ s_log_ctx } {
