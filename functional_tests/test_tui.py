@@ -311,21 +311,25 @@ class TestInteractiveHandoff(EnvyTestCase):
         """
         import pty
 
-        argv = [
-            str(self.envy),
-            "--cache-root",
-            str(self.cache_root),
-            "--verbose",  # the log stream is the half of the pause that used to leak
-            "install",
-            "--manifest",
-            str(manifest),
-        ]
+        # _wrap_cmd is what puts envy under valgrind on the sanitizer runners; spawning by
+        # hand rather than through test_config.popen would quietly opt this test out.
+        argv = test_config._wrap_cmd(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "--verbose",  # the log stream is the half of the pause that used to leak
+                "install",
+                "--manifest",
+                str(manifest),
+            ]
+        )
         pid, fd = pty.fork()
         if pid == 0:
             try:
                 os.chdir(str(self.project_root))
                 os.environ["TERM"] = "xterm-256color"
-                os.execv(argv[0], argv)
+                os.execvp(argv[0], argv)  # argv[0] may be a wrapper found on PATH
             finally:
                 os._exit(127)  # exec failed; never return into the test runner
         return pid, fd
@@ -348,31 +352,43 @@ class TestInteractiveHandoff(EnvyTestCase):
         import select
         import time
 
+        def read_ready(fd, timeout):
+            """Whatever is on the pty right now, b"" once the last writer has gone.
+
+            Linux raises EIO on a primary whose secondary has closed where macOS just
+            returns nothing; both mean the same thing here.
+            """
+            if not select.select([fd], [], [], max(timeout, 0))[0]:
+                return None
+            try:
+                return os.read(fd, 65536)
+            except OSError:
+                return b""
+
         pid, fd = self._spawn_on_controlling_tty(manifest)
         painted, seen = b"", b""
         try:
-            deadline = time.monotonic() + 60.0
-            while b"PASSWORD: " not in seen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
-                    self.fail(f"never saw the prompt; got: {seen!r}")
-                seen += os.read(fd, 65536)
+
+            def read_until(needle, budget, what):
+                nonlocal seen
+                deadline = time.monotonic() + budget
+                while needle not in seen:
+                    chunk = read_ready(fd, deadline - time.monotonic())
+                    if not chunk:
+                        self.fail(f"{what}; got: {seen!r}")
+                    seen += chunk
+
+            read_until(b"PASSWORD: ", 60.0, "never saw the prompt")
 
             # The child is blocked on the answer. Anything arriving now is envy's.
             deadline = time.monotonic() + self.QUIET_WINDOW_S
             while (remaining := deadline - time.monotonic()) > 0:
-                if select.select([fd], [], [], remaining)[0]:
-                    painted += os.read(fd, 65536)
+                painted += read_ready(fd, remaining) or b""
 
             os.write(fd, b"hunter2\n")
-            deadline = time.monotonic() + 60.0
-            while b"SAW:hunter2" not in seen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
-                    self.fail(f"the child never read its answer; got: {seen!r}")
-                seen += os.read(fd, 65536)
+            read_until(b"SAW:hunter2", 60.0, "the child never read its answer")
 
-            while select.select([fd], [], [], 60.0)[0] and os.read(fd, 65536):
+            while read_ready(fd, 60.0):
                 pass
         finally:
             _, status = os.waitpid(pid, 0)
