@@ -1041,6 +1041,15 @@ void configure_trace_outputs(std::vector<trace_output_spec> outputs) {
   ENVY_TRACE(trace_start, "", .schema = kTraceSchemaVersion);
 }
 
+void trace_file_handoff() {
+  std::lock_guard const terminal{ s_progress.interactive_mutex };
+  if (s_tui.trace_file) {
+    std::fclose(s_tui.trace_file);
+    s_tui.trace_file = nullptr;
+  }
+  g_trace_enabled = s_tui.trace_stderr;
+}
+
 void run(std::optional<level> threshold, bool decorated_logging) {
   if (!s_tui.initialized) {
     throw std::logic_error{ "envy::tui::run called before init" };

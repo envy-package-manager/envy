@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .trace_parser import TraceParser
 
 _OS_NAME = (
     "windows"
@@ -226,6 +227,42 @@ class TestReexecDownload(_ReexecTestBase):
         env = self._get_env(ENVY_TEST_SELF_VERSION="9.9.9")
         result = self._run_envy(["install"], cwd=self._project, env=env)
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+
+    def test_only_the_child_writes_the_trace_file(self) -> None:
+        """One writer per trace stream, whatever exec means on this platform.
+
+        Windows' exec is a spawn that waits, so this process kept the file open across it:
+        the child truncated and rewrote it from zero while the parent's handle still sat at
+        its own offset, and the parent's queued records then landed over the child's -- or
+        past its EOF, behind a NUL-filled hole no parser can read. Both tiers exec, and
+        only the cached one is prompt enough to lose the race every time.
+        """
+        for tier in ("cached", "downloaded"):
+            with self.subTest(tier=tier):
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+                self._cache_dir.mkdir()
+                self._setup_reexec_project("1.2.3")
+                if tier == "cached":
+                    test_config.seed_cached_envy(self._cache_dir, "1.2.3", self._envy)
+
+                trace = self._temp_dir / f"{tier}.jsonl"
+                result = self._run_envy(
+                    [f"--trace=file:{trace}", "install"],
+                    cwd=self._project,
+                    env=self._get_env(ENVY_TEST_SELF_VERSION="9.9.9"),
+                )
+                self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+
+                events = TraceParser(trace).parse()  # raises on a torn or padded line
+                starts = [e for e in events if e.event == "trace_start"]
+                self.assertEqual(1, len(starts), "two processes wrote the trace file")
+                # A record older than the header is one this process wrote before the
+                # child opened the file, landed at a stale offset over the child's own.
+                self.assertEqual(
+                    [],
+                    [e.event for e in events if e.ts < starts[0].ts],
+                    "parent records survive in the child's stream",
+                )
 
     def test_cached_binary_reused_no_redownload(self) -> None:
         """Pre-populated cache should be used without downloading again."""

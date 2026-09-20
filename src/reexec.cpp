@@ -116,9 +116,11 @@ int reexec_exec(reexec_request const &request, char **argv) {
   auto child_argv{ reexec_child_argv(request, argv) };  // not const: exec wants char **
   tui::info("reexec: switching to envy at %s", request.binary.string().c_str());
 
-  // The child owns the terminal from here: POSIX replaces this process, Windows waits. The
-  // rows come down first so its output starts clean and no final render paints them back.
+  // The child owns the terminal and the trace file from here: POSIX replaces this process,
+  // Windows waits. The rows come down first so its output starts clean and no final render
+  // paints them back. The trace file goes before the guard, which holds the same lock.
   tui::sections_clear();
+  tui::trace_file_handoff();
   tui::interactive_mode_guard const terminal_handoff;
 
   return platform::exec_process(request.binary, child_argv.data(), build_child_env());
