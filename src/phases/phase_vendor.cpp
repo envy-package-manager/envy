@@ -228,10 +228,7 @@ void run_vendor_phase(pkg *p, engine &eng) {
   hash_ms = elapsed_ms(hash_start);
   auto const &[kind, action, reason]{ chosen };
   // Only a write counts: KEPT leaves the mismatch alone and a dry run touches nothing.
-  // Never clears -- setup ran earlier and may already have set it.
-  if (!dry && (kind == outcome::COPIED || kind == outcome::REVENDORED)) {
-    p->did_side_work = true;
-  }
+  p->vendor_wrote = !dry && (kind == outcome::COPIED || kind == outcome::REVENDORED);
 
   std::uint64_t files{ 0 }, bytes{ 0 };
 

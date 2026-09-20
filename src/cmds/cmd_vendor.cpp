@@ -107,6 +107,7 @@ void cmd_vendor::execute() {
     for (auto &[_, destination] : plan.dirs) { destination.auto_sync = true; }
   }
   plan.dry_run = cfg_.dry_run;
+  plan.command_reports = true;
   plan.threads = static_cast<unsigned>(cfg_.threads);
 
   engine eng{ *c, m.get() };

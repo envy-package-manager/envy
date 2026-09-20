@@ -257,6 +257,33 @@ class TestNoWorkIsSilent(EnvyTestCase):
         self.assertEqual(0, code, second)
         self.assertEqual("", screen(second), f"expected a silent run, got: {second!r}")
 
+    def test_no_display_anywhere_means_no_second_column(self):
+        """The column exists only if some spec asked for it; nobody pays for dead space."""
+        short = self.write_spec(
+            "s.lua",
+            'IDENTITY = "local.s@v1"\n'
+            f'FETCH = {{ source = "file://{self.lua_path(self.payload)}" }}\n',
+        )
+        longer = self.write_spec(
+            "l.lua",
+            'IDENTITY = "local.a-much-longer-name@v1"\n'
+            f'FETCH = {{ source = "file://{self.lua_path(self.payload)}" }}\n',
+        )
+        manifest = test_config.write_spec_manifest(
+            self.work, [("local.s@v1", short), ("local.a-much-longer-name@v1", longer)]
+        )
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+
+        rows = {ln.split("]")[0] + "]": ln for ln in screen(out).splitlines()}
+        # The widest label sets the column, so its own row has exactly one space after it:
+        # anything more is a display column nobody asked for.
+        widest = rows["[local.a-much-longer-name@v1]"]
+        self.assertTrue(
+            widest.startswith("[local.a-much-longer-name@v1] installed"), widest
+        )
+
     def test_off_a_tty_every_package_still_reports(self):
         """The log is a record of the run, so the no-ops stay in it."""
         manifest = self._manifest("")
@@ -315,13 +342,15 @@ class TestVendorRows(VendorTestCase):
         self.assertEqual(0, self.install(manifest).returncode)
         return manifest
 
-    def test_a_vendor_copy_keeps_a_cache_hit_s_row(self):
+    def test_a_vendor_copy_reports_the_copy_not_the_cache_hit(self):
+        """"cache hit" is the payload's verdict; the row is about what vendoring wrote."""
         manifest = self._install_once("true")
         rmtree_retry(self.dest)  # cached payload, absent destination: the copy is the work
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertIn("cache hit", screen(out))
+        self.assertIn("vendored 4 files", screen(out))
+        self.assertNotIn("cache hit", screen(out))
 
     def test_an_exempt_mismatch_reports_but_draws_no_row(self):
         """`auto_sync = false` writes nothing, so the warning is the whole report."""
@@ -330,8 +359,10 @@ class TestVendorRows(VendorTestCase):
 
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
-        self.assertIn("no longer matches", visible(out))  # a warning, not a row
-        self.assertNotIn("cache hit", screen(out))
+        # The warning is scrollback and stays up; what must not follow it is a row.
+        painted = screen(out)
+        self.assertIn("no longer matches", painted)
+        self.assertEqual(1, len(painted.splitlines()), painted)
 
     def test_an_up_to_date_vendor_copy_is_silent(self):
         manifest = self._install_once("true")
@@ -339,3 +370,12 @@ class TestVendorRows(VendorTestCase):
         code, out = self._run_on_pty("install", "--manifest", manifest)
         self.assertEqual(0, code, out)
         self.assertEqual("", screen(out), f"expected a silent run, got: {out!r}")
+
+    def test_envy_vendor_says_where_it_copied_to_once(self):
+        """`envy vendor` prints its own report, so the row must not say it a second time."""
+        manifest = self._install_once("true")
+        rmtree_retry(self.dest)
+
+        run = self.run_envy("vendor", "--all", "--manifest", manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(1, run.stderr.count(str(self.dest)), run.stderr)

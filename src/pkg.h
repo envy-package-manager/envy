@@ -115,9 +115,11 @@ struct pkg {
   bool was_cache_hit{ false };   // set by check when the payload was already cached
   bool bundle_in_situ{ false };  // BUNDLE_ONLY: local bundle used from its source dir
 
-  // Work a cache hit can still have done: a SETUP pair's INSTALL ran, or the vendor phase
-  // wrote. Atomic because the pair tasks write it; read at completion, once they join.
-  std::atomic_bool did_side_work{ false };
+  // Work a cache hit can still have done, and which of the two it was -- the vendor copy
+  // has an outcome worth printing where a pair draws its own row. setup_ran is atomic
+  // because the pair tasks write it; completion reads both once they have joined.
+  std::atomic_bool setup_ran{ false };
+  bool vendor_wrote{ false };
 
   sol_state_guard lua;
   cache::scoped_entry_lock::ptr_t lock;

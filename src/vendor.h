@@ -42,6 +42,10 @@ struct vendor_plan {
   // knob for tools/bench_vendor.py, exactly as `envy hash --tree --threads` is one.
   unsigned threads{ 0 };
 
+  // `envy vendor` prints its own report, in target order and covering the verdicts a
+  // package row stays silent about. Completion leaves the vendor outcome to it.
+  bool command_reports{ false };
+
   bool empty() const { return dirs.empty(); }
   vendor_destination const *find(pkg_key const &key) const {
     auto const it{ dirs.find(key) };

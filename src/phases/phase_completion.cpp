@@ -58,17 +58,26 @@ void run_completion_phase(pkg *p, engine &eng) {
                               std::chrono::steady_clock::now() - p->build_start)
                               .count() };
 
-  // Build/import paths show wall-clock; a cache hit or no-op setup does not.
-  std::string const section_text{ timed ? human + format_duration(duration_ms) : human };
+  std::string const section_text{ [&] {
+    // A package whose only work was the vendor copy reports the copy: "cache hit" is the
+    // payload's verdict, and says nothing about what the vendor phase just wrote. Under
+    // `envy vendor` the command says it instead, once per target and in order.
+    auto const *plan{ eng.vendor() };
+    if (!timed && p->vendor_wrote && !(plan && plan->command_reports)) {
+      return p->vendor_outcome;
+    }
+    // Build/import paths show wall-clock; a cache hit or no-op setup does not.
+    return timed ? human + format_duration(duration_ms) : human;
+  }() };
 
   ENVY_TRACE(pkg_outcome,
              p->cfg->identity,
              .outcome = kind,
              .duration_ms = static_cast<std::int64_t>(duration_ms));
 
-  // A row is earned: `timed` is the outcomes that moved bytes, did_side_work the rest.
-  // Neither, and the package leaves nothing on screen -- a run with no work is silent.
-  if (timed || p->did_side_work) {
+  // A row is earned: `timed` is the outcomes that moved bytes, the two flags the rest.
+  // None of them, and the package leaves nothing on screen -- a no-work run is silent.
+  if (timed || p->setup_ran || p->vendor_wrote) {
     tui::section_set_content(
         p->tui_section,
         tui::section_frame{ .label = "[" + p->cfg->identity + "]",
