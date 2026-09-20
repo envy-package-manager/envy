@@ -115,6 +115,10 @@ class VendorTestCase(EnvyTestCase):
         # package outside `envy vendor --dry-run` is never merely contemplated.
         self.assertEqual(dry_run, results[identity]["dry_run"], results[identity])
 
+    def shown(self, dest: Path) -> str:
+        """How envy names a destination out loud: project-relative, forward slashes."""
+        return dest.relative_to(self.project).as_posix()
+
     def tree_of(self, root: Path) -> dict[str, str]:
         """Relative path -> contents, for every file under `root`."""
         return {
@@ -760,7 +764,7 @@ class TestVendorAutoSyncExemption(VendorTestCase):
         self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
         self.assertEqual(before, self.tree_of(dest), "the edit was overwritten")
         self.assertIn("no longer matches", run.stderr)
-        self.assertPathContains(run.stderr, str(dest))
+        self.assertIn(self.shown(dest), run.stderr)
         self.assertIn("auto_sync", run.stderr)
 
     def test_stray_file_is_kept(self):
@@ -1154,7 +1158,7 @@ class TestVendorCommand(VendorTestCase):
 
         run = self.vendor(manifest, "local.nanocobs@r3")
         self.assertIn("re-vendored", run.stderr)
-        self.assertIn(str(self.dest), run.stderr)
+        self.assertIn(self.shown(self.dest), run.stderr)
 
     def test_the_report_names_the_destination_before_the_cause(self):
         """'N files: contents were dirty to <dir>' reads as if the directory were dirt."""
@@ -1173,7 +1177,7 @@ class TestVendorCommand(VendorTestCase):
 
         run = self.vendor(manifest, "local.nanocobs@r3", "nanocobs")
         self.assertVendored(run, "local.nanocobs@r3", "redeployed", "mismatch")
-        self.assertEqual(1, run.stderr.count(str(self.dest)), run.stderr)
+        self.assertEqual(1, run.stderr.count(self.shown(self.dest)), run.stderr)
 
     def test_an_up_to_date_destination_is_left_alone(self):
         manifest = self.one()

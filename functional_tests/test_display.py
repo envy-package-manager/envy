@@ -452,4 +452,4 @@ class TestVendorRows(VendorTestCase):
 
         run = self.run_envy("vendor", "--all", "--manifest", manifest)
         self.assertEqual(0, run.returncode, run.stderr)
-        self.assertEqual(1, run.stderr.count(str(self.dest)), run.stderr)
+        self.assertEqual(1, run.stderr.count(self.shown(self.dest)), run.stderr)
