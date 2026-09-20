@@ -38,7 +38,70 @@ constexpr int cfg_index() {
   }
 }
 
+// The anchor the selected command will resolve its own manifest from. Reading this
+// pre-step off the cwd instead would deploy envy into one tree and its packages into
+// another whenever `--project` pointed elsewhere.
+std::optional<std::filesystem::path> project_anchor(cli_args::cmd_cfg_t const &cfg) {
+  std::optional<std::filesystem::path> dir;
+  std::visit(
+      [&dir](auto const &c) {
+        if constexpr (std::derived_from<std::decay_t<decltype(c)>, cmd_project_anchor>) {
+          dir = c.project_dir;
+        }
+      },
+      cfg);
+  return dir;
+}
+
+// `envy cache --local|--shared` self-deploys before its own marker exists, so it names
+// the tree it is about to establish rather than the one being abandoned.
+std::optional<cache_mode> mode_being_set(cli_args::cmd_cfg_t const &cfg) {
+  auto const *cc{ std::get_if<cmd_cache::cfg>(&cfg) };
+  if (!cc) { return std::nullopt; }
+  switch (cc->act) {
+    case cmd_cache::cfg::action::SET_LOCAL: return cache_mode::LOCAL;
+    case cmd_cache::cfg::action::SET_SHARED: return cache_mode::SHARED;
+    case cmd_cache::cfg::action::REPORT:
+    case cmd_cache::cfg::action::PRINT_ROOT:
+    case cmd_cache::cfg::action::PRINT_USER_WIDE_ROOT: break;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
+
+cache_root_resolution deploy_target(cli_args const &args) {
+  // Silent on failure, and deliberately so: both discovery and directive parsing throw,
+  // and this runs for every command, including ones that never load a manifest. Letting
+  // either escape meant one bad directive in an ancestor broke `envy --version`, and
+  // blocked the very `envy cache --local` that repairs it. A command that needs the
+  // manifest re-resolves and reports the error properly.
+  try {
+    envy_meta meta;
+    std::filesystem::path manifest_dir;
+
+    // An override already decides the root, so a manifest that cannot change the answer
+    // must not get a chance to throw.
+    if (!args.cache_root && args.cmd_cfg) {
+      if (auto const found{ manifest::discover(
+              false,
+              manifest::discovery_start_dir(project_anchor(*args.cmd_cfg))) }) {
+        meta = found->meta;
+        manifest_dir = found->path.parent_path();
+      }
+    }
+
+    auto const req{ meta.cache_request(args.cache_root, manifest_dir) };
+    if (args.cmd_cfg) {
+      if (auto const mode{ mode_being_set(*args.cmd_cfg) }) {
+        return cache_root_for_mode(req, *mode);
+      }
+    }
+    return resolve_cache_root(req);
+  } catch (std::exception const &) {
+    return resolve_cache_root(cache_root_request{});
+  }
+}
 
 cli_args cli_parse(int argc, char **argv) {
   // A leading '/' never introduces an option, so absolute POSIX-style paths like

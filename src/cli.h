@@ -74,4 +74,8 @@ struct cli_args {
 
 cli_args cli_parse(int argc, char **argv);
 
+// The cache root this process self-deploys into, decided from the parsed arguments and
+// whatever project they anchor on. Best-effort: never throws, defaults on any failure.
+cache_root_resolution deploy_target(cli_args const &args);
+
 }  // namespace envy
