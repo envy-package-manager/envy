@@ -38,19 +38,17 @@ constexpr int cfg_index() {
   }
 }
 
-// The anchor the selected command will resolve its own manifest from. Reading this
-// pre-step off the cwd instead would deploy envy into one tree and its packages into
-// another whenever `--project` pointed elsewhere.
-std::optional<std::filesystem::path> project_anchor(cli_args::cmd_cfg_t const &cfg) {
-  std::optional<std::filesystem::path> dir;
+// Reach the anchor base on whichever alternative is held, or do nothing. One walk, for
+// the reader below and the writer in cli_parse: a command that never loads a manifest
+// does not derive from it and is skipped.
+void with_project_anchor(auto &&cfg, auto &&fn) {
   std::visit(
-      [&dir](auto const &c) {
+      [&fn](auto &&c) {
         if constexpr (std::derived_from<std::decay_t<decltype(c)>, cmd_project_anchor>) {
-          dir = c.project_dir;
+          fn(c);
         }
       },
-      cfg);
-  return dir;
+      std::forward<decltype(cfg)>(cfg));
 }
 
 // `envy cache --local|--shared` self-deploys before its own marker exists, so it names
@@ -69,6 +67,14 @@ std::optional<cache_mode> mode_being_set(cli_args::cmd_cfg_t const &cfg) {
 }
 
 }  // namespace
+
+// Read off the selected config, not the cwd: resolving envy's own deploy from one anchor
+// while the command resolved from another would split a run across two trees.
+std::optional<std::filesystem::path> project_anchor(cli_args::cmd_cfg_t const &cfg) {
+  std::optional<std::filesystem::path> dir;
+  with_project_anchor(cfg, [&dir](auto const &c) { dir = c.project_dir; });
+  return dir;
+}
 
 cache_root_resolution deploy_target(cli_args const &args) {
   // Silent on failure, and deliberately so: both discovery and directive parsing throw,
@@ -270,17 +276,9 @@ cli_args cli_parse(int argc, char **argv) {
 
   if (cmd_cfg) {
     args.cmd_cfg = *cmd_cfg;
-    // One global option, distributed to whichever config was selected; a command that
-    // never loads a manifest does not derive from the anchor base and is skipped.
+    // One global option, distributed to whichever config was selected.
     if (project_dir) {
-      std::visit(
-          [&](auto &c) {
-            if constexpr (std::derived_from<std::decay_t<decltype(c)>,
-                                            cmd_project_anchor>) {
-              c.project_dir = project_dir;
-            }
-          },
-          *args.cmd_cfg);
+      with_project_anchor(*args.cmd_cfg, [&](auto &c) { c.project_dir = project_dir; });
     }
   } else if (args.cli_output.empty()) {
     args.cli_output = parsed.help_text;

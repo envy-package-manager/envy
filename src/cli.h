@@ -74,6 +74,10 @@ struct cli_args {
 
 cli_args cli_parse(int argc, char **argv);
 
+// The `--project` anchor parsing put on the selected command, or nullopt for one that
+// never loads a manifest and so does not derive from cmd_project_anchor.
+std::optional<std::filesystem::path> project_anchor(cli_args::cmd_cfg_t const &cfg);
+
 // The cache root this process self-deploys into, decided from the parsed arguments and
 // whatever project they anchor on. Best-effort: never throws, defaults on any failure.
 cache_root_resolution deploy_target(cli_args const &args);
