@@ -245,3 +245,124 @@ PACKAGES = {{
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# A package that takes the terminal and holds it, and one that keeps the renderer busy
+# while it does. The marker is newline-terminated so it lands the moment it is written,
+# and assembled by the shell so it does not also match envy's echo of the command.
+SPEC_INTERACTIVE = """IDENTITY = "local.interactive@v1"
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return false end,
+    INSTALL = function(pkg_dir, options)
+      envy.run('h=HOLD; echo "${h}ING"; sleep 1', { interactive = true })
+    end,
+  },
+}
+
+"""
+
+SPEC_NOISY = """IDENTITY = "local.noisy@v1"
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return false end,
+    INSTALL = function(pkg_dir, options)
+      envy.run("sleep 3")
+    end,
+  },
+}
+
+"""
+
+
+@unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+class TestInteractiveHandoff(EnvyTestCase):
+    """A child that wants the terminal gets all of it, for as long as it holds it.
+
+    `sudo` asking for a password is the case: a neighbouring package's spinner repainting
+    over the prompt, or its outcome line landing in the middle of one, is at best ugly and
+    at worst eats the keystrokes.
+    """
+
+    envy_watchdog_timeout = 90
+
+    # Comfortably inside the child's second, and twenty render frames at 33ms: a renderer
+    # that has not stopped cannot stay quiet this long -- the spinner alone repaints every
+    # frame, and the neighbouring package finishes its own row in the middle of it.
+    QUIET_WINDOW_S = 0.66
+
+    def setUp(self):
+        super().setUp()
+        self.test_dir = self.make_temp_dir("test_dir")
+        self.specs_dir = self.test_dir / "specs"
+        self.specs_dir.mkdir()
+        (self.specs_dir / "interactive.lua").write_text(SPEC_INTERACTIVE)
+        (self.specs_dir / "noisy.lua").write_text(SPEC_NOISY)
+
+    def test_the_live_region_stops_while_a_child_owns_the_terminal(self):
+        manifest = self.test_dir / "envy.lua"
+        entry = '  {{ spec = "{0}", source = "{1}", setup = {{ "main" }} }},\n'
+        manifest.write_text(
+            make_manifest(
+                "PACKAGES = {\n"
+                + entry.format(
+                    "local.interactive@v1", (self.specs_dir / "interactive.lua").as_posix()
+                )
+                + entry.format("local.noisy@v1", (self.specs_dir / "noisy.lua").as_posix())
+                + "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        import pty
+        import select
+        import time
+
+        primary, secondary = pty.openpty()
+        proc = test_config.popen(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "--verbose",
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=str(self.project_root),
+            env={**os.environ, "TERM": "xterm-256color"},
+            stdin=secondary,
+            stdout=secondary,
+            stderr=secondary,
+        )
+        os.close(secondary)
+
+        painted = b""
+        try:
+            seen, deadline = b"", time.monotonic() + 60.0
+            while b"HOLDING" not in seen:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([primary], [], [], remaining)[0]:
+                    self.fail(f"never saw the marker; got: {seen!r}")
+                seen += os.read(primary, 65536)
+
+            # The child has the terminal for another second. Anything now is envy's.
+            deadline = time.monotonic() + self.QUIET_WINDOW_S
+            while (remaining := deadline - time.monotonic()) > 0:
+                if select.select([primary], [], [], remaining)[0]:
+                    painted += os.read(primary, 65536)
+
+            while select.select([primary], [], [], 60.0)[0] and os.read(primary, 65536):
+                pass
+        finally:
+            try:
+                proc.wait(timeout=60)
+            except Exception:
+                proc.kill()
+                proc.wait()
+            os.close(primary)
+
+        self.assertEqual(0, proc.returncode)
+        self.assertEqual(b"", painted, f"envy painted over a running child: {painted!r}")

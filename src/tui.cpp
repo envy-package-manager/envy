@@ -91,8 +91,7 @@ struct tui_progress_state {
   int last_line_count{ 0 };
   std::size_t max_label_width{ 0 };
   std::size_t max_display_width{ 0 };
-  std::mutex interactive_mutex;
-  bool interactive_paused{ false };
+  std::mutex interactive_mutex;  // held by whoever owns the terminal, renderer included
   bool enabled{ true };
   std::atomic_bool cursor_hidden{ false };
 } s_progress{};
@@ -899,79 +898,60 @@ int render_cycle(std::queue<log_entry> &pending,
   return rendered_line_count;
 }
 
-void worker_thread() {
-  std::unique_lock<std::mutex> lock{ s_tui.mutex };
+// One frame, start to finish, with the terminal held throughout. A handoff cannot land
+// between the snapshot and the paint, and no frame -- not a row, not a queued log line --
+// begins while a child owns the screen: acquire_interactive_mode holds this lock across
+// the child, so the whole cycle waits rather than half of it.
+int render_once() {
+  std::lock_guard const terminal{ s_progress.interactive_mutex };
 
-  while (!s_tui.stop_requested) {
-    try {
-      std::queue<log_entry> pending;
-      pending.swap(s_tui.messages);
-
-      std::vector<section_state> sections_snapshot;
-      row_widths widths;
-      int last_line_count{ 0 };
-
-      if (s_progress.enabled && !s_progress.interactive_paused) {
-        sections_snapshot = s_progress.sections;
-        widths = { s_progress.max_label_width, s_progress.max_display_width };
-        last_line_count = s_progress.last_line_count;
-      }
-
-      lock.unlock();
-
-      int const rendered_line_count{
-        render_cycle(pending, sections_snapshot, widths, last_line_count)
-      };
-
-      lock.lock();
-
-      if (is_ansi_supported() && s_progress.enabled && !s_progress.interactive_paused) {
-        s_progress.last_line_count = rendered_line_count;
-      }
-      s_tui.cv.wait_until(lock, std::chrono::steady_clock::now() + kRefreshIntervalMs, [] {
-        return s_tui.stop_requested.load();
-      });
-    } catch (std::exception const &e) {
-      if (!lock.owns_lock()) { lock.lock(); }
-      std::fprintf(stderr, "[TUI worker thread exception: %s]\n", e.what());
-      std::fflush(stderr);
-    } catch (...) {
-      if (!lock.owns_lock()) { lock.lock(); }
-      std::fprintf(stderr, "[TUI worker thread exception: unknown]\n");
-      std::fflush(stderr);
-    }
-  }
-
-  // Final render: same as regular render, plus trailing newline if sections rendered
-  try {
-    std::queue<log_entry> pending;
+  std::queue<log_entry> pending;
+  std::vector<section_state> sections_snapshot;
+  row_widths widths;
+  int last_line_count{ 0 };
+  {
+    std::lock_guard const state{ s_tui.mutex };
     pending.swap(s_tui.messages);
-
-    std::vector<section_state> sections_snapshot;
-    row_widths widths;
-    int last_line_count{ 0 };
-
     if (s_progress.enabled) {
       sections_snapshot = s_progress.sections;
       widths = { s_progress.max_label_width, s_progress.max_display_width };
       last_line_count = s_progress.last_line_count;
     }
+  }
 
-    lock.unlock();
+  int const rendered{ render_cycle(pending, sections_snapshot, widths, last_line_count) };
 
-    int const rendered_line_count{
-      render_cycle(pending, sections_snapshot, widths, last_line_count)
-    };
+  if (is_ansi_supported()) {
+    std::lock_guard const state{ s_tui.mutex };
+    if (s_progress.enabled) { s_progress.last_line_count = rendered; }
+  }
+  return rendered;
+}
 
-    if (rendered_line_count > 0) {
-      std::fprintf(stderr, "\n");
-      std::fflush(stderr);
+void worker_thread() {
+  auto const tick{ [] {
+    try {
+      return render_once();
+    } catch (std::exception const &e) {
+      std::fprintf(stderr, "[TUI render exception: %s]\n", e.what());
+    } catch (...) {
+      std::fprintf(stderr, "[TUI render exception: unknown]\n");
     }
-  } catch (std::exception const &e) {
-    std::fprintf(stderr, "[TUI final render exception: %s]\n", e.what());
     std::fflush(stderr);
-  } catch (...) {
-    std::fprintf(stderr, "[TUI final render exception: unknown]\n");
+    return 0;
+  } };
+
+  while (!s_tui.stop_requested) {
+    tick();
+    std::unique_lock<std::mutex> lock{ s_tui.mutex };
+    s_tui.cv.wait_until(lock, std::chrono::steady_clock::now() + kRefreshIntervalMs, [] {
+      return s_tui.stop_requested.load();
+    });
+  }
+
+  // The last frame closes the live region with the newline it has been withholding.
+  if (tick() > 0) {
+    std::fprintf(stderr, "\n");
     std::fflush(stderr);
   }
 }
@@ -1338,22 +1318,13 @@ bool section_has_content(section_handle h) {
 }
 
 void acquire_interactive_mode() {
-  s_progress.interactive_mutex.lock();
-  {
-    std::lock_guard lock{ s_tui.mutex };
-    s_progress.interactive_paused = true;
-  }
+  s_progress.interactive_mutex.lock();  // a frame in flight finishes; none starts after
   pause_rendering();
 }
 
 void release_interactive_mode() {
-  {
-    std::lock_guard lock{ s_tui.mutex };
-    s_progress.interactive_paused = false;
-  }
-  // No counterpart to pause_rendering: the next render cycle redraws, and takes the
-  // cursor back as it does. Pre-hiding it here would hide it for a region that may have
-  // nothing left to put in it.
+  // No counterpart to pause_rendering: the next frame redraws, and takes the cursor back
+  // as it does. Pre-hiding it here would hide it for a region that may stay empty.
   s_progress.interactive_mutex.unlock();
 }
 
