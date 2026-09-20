@@ -934,9 +934,7 @@ void worker_thread() {
       return render_once();
     } catch (std::exception const &e) {
       std::fprintf(stderr, "[TUI render exception: %s]\n", e.what());
-    } catch (...) {
-      std::fprintf(stderr, "[TUI render exception: unknown]\n");
-    }
+    } catch (...) { std::fprintf(stderr, "[TUI render exception: unknown]\n"); }
     std::fflush(stderr);
     return 0;
   } };
