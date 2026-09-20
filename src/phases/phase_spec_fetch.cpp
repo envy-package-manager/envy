@@ -18,6 +18,7 @@
 #include "util.h"
 #include "vendor.h"
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <sstream>
@@ -44,6 +45,45 @@ tree_filter parse_vendor_table(sol::state_view lua, std::string const &identity)
   return vendor_parse_selectors(
       sol_util_get_string_list(lua.globals(), "VENDOR", "spec '" + identity + "'"),
       "spec '" + identity + "'");
+}
+
+// What column two of this package's rows leads with. A function of the validated options
+// is how one spec, instantiated many times under one identity, tells its rows apart.
+std::string resolve_display(pkg *p, sol::state_view lua) {
+  sol::object obj{ lua["DISPLAY"] };
+  if (!obj.valid() || obj.get_type() == sol::type::lua_nil) { return {}; }
+
+  std::string const &identity{ p->cfg->identity };
+
+  std::string const text{ [&]() -> std::string {
+    if (obj.get_type() == sol::type::string) { return obj.as<std::string>(); }
+    if (!obj.is<sol::protected_function>()) {
+      throw std::runtime_error(
+          std::string{ "DISPLAY must be a string or a function returning a string "
+                       "(got " } +
+          sol::type_name(lua.lua_state(), obj.get_type()) + ") for " + identity);
+    }
+
+    sol::object ret{ call_lua_function_with_enriched_errors(p, "display", [&] {
+      return obj.as<sol::protected_function>()(
+          sol::object{ lua.registry()[ENVY_OPTIONS_RIDX] });
+    }) };
+    if (ret.get_type() == sol::type::lua_nil) { return {}; }
+    if (!ret.is<std::string>()) {
+      throw std::runtime_error(
+          std::string{ "DISPLAY function must return a string or nil (got " } +
+          sol::type_name(lua.lua_state(), ret.get_type()) + ") for " + identity);
+    }
+    return ret.as<std::string>();
+  }() };
+
+  // A row is one line whose width the live region counts so it can erase it again: a NUL
+  // truncates that row at the %s that writes it, an ESC steers the cursor out of it.
+  if (std::ranges::any_of(text, [](unsigned char c) { return c < 0x20 || c == 0x7f; })) {
+    throw std::runtime_error("DISPLAY must be a single line of printable text for " +
+                             identity);
+  }
+  return text;
 }
 
 bool resolve_user_managed(sol::state_view lua, std::string const &identity) {
@@ -1536,6 +1576,9 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   }
 
   run_options(p, *lua);
+
+  p->display = resolve_display(p, *lua);
+  tui::section_set_display(p->tui_section, p->display);
 
   p->lua.set(std::move(lua));
 

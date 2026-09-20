@@ -201,6 +201,10 @@ void run_vendor_phase(pkg *p, engine &eng) {
   std::string const label{ "[" + p->cfg->identity + "]" };
   fs::path const &dest{ destination->dir };
   vendor_validate_destination(dest, plan->project_root, p->cfg->identity);
+  // Every destination this phase says out loud is project-relative: it always sits under
+  // the project root, and a row is one line. Errors below keep the absolute path, which
+  // is what someone chasing a failed unlink or mkdir needs.
+  std::string const shown{ dest.lexically_relative(plan->project_root).generic_string() };
   auto const &filter{ p->vendor_filter };
 
   spin(p, label, "hashing payload...");
@@ -227,6 +231,8 @@ void run_vendor_phase(pkg *p, engine &eng) {
   }() };
   hash_ms = elapsed_ms(hash_start);
   auto const &[kind, action, reason]{ chosen };
+  // Only a write counts: KEPT leaves the mismatch alone and a dry run touches nothing.
+  p->vendor_wrote = !dry && (kind == outcome::COPIED || kind == outcome::REVENDORED);
 
   std::uint64_t files{ 0 }, bytes{ 0 };
 
@@ -237,8 +243,8 @@ void run_vendor_phase(pkg *p, engine &eng) {
     tui::warn(
         "vendored copy at %s no longer matches the package; left as it is "
         "(vendor.auto_sync = false; 'envy vendor --force' restores it)",
-        dest.string().c_str());
-    p->vendor_outcome = "kept " + dest.string() + ": contents differ from the package";
+        shown.c_str());
+    p->vendor_outcome = "kept " + shown + ": contents differ from the package";
     bar(p, label, 100.0, "kept: contents differ from the package", true);
   } else if (kind != outcome::CURRENT) {
     spin(p, label, dry ? "counting..." : "vendoring...");
@@ -312,12 +318,12 @@ void run_vendor_phase(pkg *p, engine &eng) {
                                std::to_string(files) + " files" };
     char const *const cause{ revendor ? ": contents were dirty" : "" };
     copy_ms = elapsed_ms(copy_start) - wipe_ms;  // the walk and the writes, not the wipe
-    p->vendor_outcome = counted + " to " + dest.string() + cause;
+    p->vendor_outcome = counted + " to " + shown + cause;
     if (!dry) { bar(p, label, 100.0, counted + cause, true); }
     tui::debug("%s", p->vendor_outcome.c_str());
   } else {
-    p->vendor_outcome = "up to date: " + dest.string();
-    tui::debug("vendor copy at %s is up to date", dest.string().c_str());
+    p->vendor_outcome = "up to date: " + shown;
+    tui::debug("vendor copy at %s is up to date", shown.c_str());
   }
 
   auto const duration_ms{ std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace envy::shell_hooks {
 
@@ -55,10 +56,23 @@ std::string read_text(std::filesystem::path const &path) {
 
 }  // namespace
 
+std::string updated_message(std::vector<char const *> const &shells) {
+  if (shells.empty()) { return {}; }
+
+  std::string names;
+  for (auto const *ext : shells) {
+    if (!names.empty()) { names += ", "; }
+    names += ext;
+  }
+  return "Shell hook" + std::string{ shells.size() > 1 ? "s" : "" } + " updated (" +
+         names + ") — restart your shell";
+}
+
 int ensure(std::filesystem::path const &cache_root) {
   namespace fs = std::filesystem;
   fs::path const shell_dir{ cache_root / "shell" };
   int written{ 0 };
+  std::vector<char const *> refreshed;  // shells whose hook changed, not first written
 
   std::error_code ec;
   fs::create_directories(shell_dir, ec);
@@ -87,10 +101,14 @@ int ensure(std::filesystem::path const &cache_root) {
       bool const was_update{ fs::exists(hook_path) };
       util_write_file(hook_path, want);
       ++written;
-      if (was_update) { tui::info("Shell hook updated (%s) — restart your shell", h.ext); }
+      if (was_update) { refreshed.push_back(h.ext); }
     } catch (std::exception const &e) {
       tui::warn("Failed to write shell hook (%s): %s", h.ext, e.what());
     }
+  }
+
+  if (std::string const said{ updated_message(refreshed) }; !said.empty()) {
+    tui::info("%s", said.c_str());
   }
 
   return written;

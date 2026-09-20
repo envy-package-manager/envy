@@ -1045,7 +1045,7 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY renders the fallbac
   auto const h{ envy::tui::section_create() };
   envy::tui::section_set_content(
       h,
-      envy::tui::section_frame{ .label = "extract",
+      envy::tui::section_frame{ .label = "[extract]",
                                 .content =
                                     envy::tui::static_text_data{ .text = "done" } });
   envy::tui::section_commit(h);
@@ -1099,7 +1099,7 @@ TEST_CASE_FIXTURE(captured_output, "a terminal frame off a TTY lands without a c
   // The fallback renderer only samples on a timer, so a step that finishes between two
   // ticks would otherwise lose its last word entirely.
   auto const h{ envy::tui::section_create() };
-  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+  envy::tui::section_set_content(h, last_frame("[vendor]", "vendored 12 files"));
 
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
   CHECK_NOTHROW(envy::tui::shutdown());
@@ -1182,6 +1182,140 @@ TEST_CASE_FIXTURE(captured_output, "committing an already-said frame adds nothin
   CHECK(messages[0].find("vendored 12 files") != std::string::npos);
 
   envy::tui::test::g_isatty = true;
+}
+
+// ============================================================================
+// DISPLAY (row display text) tests
+// ============================================================================
+
+TEST_CASE("display leads column two and never widens column one") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame const frame{
+    .label = "[fi.github@r0]",
+    .display = "libusb/hidapi",
+    .content = envy::tui::progress_data{ .percent = 50.0, .status = "2MB" }
+  };
+
+  // A display string must not widen column one, or one named row indents every other.
+  CHECK(envy::tui::measure_label_width(frame) ==
+        std::string_view{ "[fi.github@r0]" }.size());
+
+  std::string const output{ envy::tui::test::render_section_frame(frame) };
+  CHECK(output.starts_with("[fi.github@r0] libusb/hidapi  50% ["));
+
+  envy::tui::section_frame const done{ .label = "[fi.github@r0]",
+                                       .display = "libusb/hidapi",
+                                       .content = envy::tui::static_text_data{
+                                           .text = "installed (1.2s)" } };
+  CHECK(envy::tui::test::render_section_frame(done) ==
+        "[fi.github@r0] libusb/hidapi installed (1.2s)\n");
+}
+
+TEST_CASE("display names the row, not each child under it") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame parent{
+    .label = "[pkg]",
+    .display = "some/repo",
+    .content = envy::tui::progress_data{ .percent = 50.0, .status = "fetch" }
+  };
+  parent.children.push_back(envy::tui::section_frame{
+      .label = "a.git",
+      .content = envy::tui::progress_data{ .percent = 20.0, .status = "20%" } });
+  parent.children.push_back(envy::tui::section_frame{
+      .label = "b.git",
+      .content = envy::tui::progress_data{ .percent = 80.0, .status = "80%" } });
+
+  std::string const output{ envy::tui::test::render_section_frame(parent) };
+  std::size_t occurrences{ 0 };
+  for (std::size_t at{ output.find("some/repo") }; at != std::string::npos;
+       at = output.find("some/repo", at + 1)) {
+    ++occurrences;
+  }
+  CHECK(occurrences == 1);
+}
+
+TEST_CASE("fallback render puts display after the label, bracketing nothing twice") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  envy::tui::section_frame const frame{ .label = "[pkg@v1]",
+                                        .display = "libusb/hidapi",
+                                        .content = envy::tui::static_text_data{
+                                            .text = "cache hit" } };
+  CHECK(envy::tui::test::render_section_frame(frame) ==
+        "[pkg@v1] libusb/hidapi cache hit\n");
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE_FIXTURE(captured_output, "section_set_display stamps every later frame") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const h{ envy::tui::section_create() };
+  envy::tui::section_set_display(h, "libusb/hidapi");  // set once, when the spec loads
+  envy::tui::section_set_content(
+      h,
+      envy::tui::section_frame{ .label = "[fi.github@r0]",
+                                .content =
+                                    envy::tui::static_text_data{ .text = "installed" } });
+  envy::tui::section_commit(h);
+
+  CHECK_NOTHROW(envy::tui::run(std::nullopt));
+  CHECK_NOTHROW(envy::tui::shutdown());
+
+  // max_label_width is process-wide, so match the columns, not the padding between them.
+  REQUIRE(messages.size() == 1);
+  CHECK(messages[0].starts_with("[fi.github@r0]"));
+  CHECK(messages[0].find("libusb/hidapi installed") != std::string::npos);
+}
+
+TEST_CASE("the display column pads, so every row's status starts in one place") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  auto const row{ [](char const *label, char const *display) {
+    return envy::tui::section_frame{ .label = label,
+                                     .display = display,
+                                     .content = envy::tui::static_text_data{
+                                         .text = "installed" } };
+  } };
+
+  // The widest of each column, as the renderer accumulates them across live rows.
+  std::size_t const labels{ std::string_view{ "[fi.arm-none-eabi-gcc@r4]" }.size() };
+  std::size_t const displays{ std::string_view{ "cesanta/mongoose" }.size() };
+
+  std::string const widest{ envy::tui::test::render_section_frame(
+      row("[fi.github@r0]", "cesanta/mongoose"),
+      labels,
+      displays) };
+  std::string const shorter{ envy::tui::test::render_section_frame(
+      row("[fi.arm-none-eabi-gcc@r4]", "13.2.rel1"),
+      labels,
+      displays) };
+  std::string const none{
+    envy::tui::test::render_section_frame(row("[fi.nanoprintf@r1]", ""), labels, displays)
+  };
+
+  CHECK(widest.find("installed") == shorter.find("installed"));
+  CHECK(shorter.find("installed") == none.find("installed"));
+}
+
+TEST_CASE("no spec set a display, so the row carries no display column") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  envy::tui::section_frame const frame{ .label = "[pkg]",
+                                        .content = envy::tui::static_text_data{
+                                            .text = "installed" } };
+  CHECK(envy::tui::test::render_section_frame(frame, 5, 0) == "[pkg] installed\n");
 }
 
 #endif  // ENVY_UNIT_TEST

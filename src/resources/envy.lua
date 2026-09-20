@@ -368,6 +368,13 @@ OPTIONS = nil
 ---@type boolean|fun(): boolean
 USER_MANAGED = nil
 
+---DISPLAY: what this package's progress rows lead column two with, after the "[identity]"
+---column and before the bar or status. String, or a function of the validated options --
+---the form one spec instantiated many times under one identity needs to tell its rows
+---apart. Resolved once after OPTIONS validates; nil is the same as absent; single line.
+---@type string|fun(options: table): string?
+DISPLAY = nil
+
 ---EXPORTABLE: cache-managed packages with EXPORTABLE=true expose their install output for export.
 ---When false, only fetched bytes are preserved in the cache.
 ---@type boolean

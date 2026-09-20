@@ -58,26 +58,43 @@ void run_completion_phase(pkg *p, engine &eng) {
                               std::chrono::steady_clock::now() - p->build_start)
                               .count() };
 
-  // Build/import paths show wall-clock; a cache hit or no-op setup does not.
-  std::string const section_text{ timed ? human + format_duration(duration_ms) : human };
+  std::string const section_text{ [&] {
+    // A package whose only work was the vendor copy reports the copy: "cache hit" is the
+    // payload's verdict, and says nothing about what the vendor phase just wrote. Under
+    // `envy vendor` the command says it instead, once per target and in order.
+    auto const *plan{ eng.vendor() };
+    if (!timed && p->vendor_wrote && !(plan && plan->command_reports)) {
+      return p->vendor_outcome;
+    }
+    // Build/import paths show wall-clock; a cache hit or no-op setup does not.
+    return timed ? human + format_duration(duration_ms) : human;
+  }() };
 
   ENVY_TRACE(pkg_outcome,
              p->cfg->identity,
              .outcome = kind,
              .duration_ms = static_cast<std::int64_t>(duration_ms));
 
-  if (p->tui_section && tui::section_has_content(p->tui_section)) {
+  // A row is earned: `timed` is the outcomes that moved bytes, the two flags the rest.
+  // None of them, and the package leaves nothing on screen -- a no-work run is silent.
+  if (timed || p->setup_ran || p->vendor_wrote) {
     tui::section_set_content(
         p->tui_section,
         tui::section_frame{ .label = "[" + p->cfg->identity + "]",
                             .content = tui::static_text_data{ .text = section_text } });
     tui::section_set_complete(p->tui_section);
+  } else {
+    tui::section_delete(p->tui_section);
   }
 
   // Off a TTY there is no live section to carry the outcome, so emit it as an
   // INFO line (auto-prefixed "[identity]" by the ambient log context). On a TTY
   // the section above is the only per-package output — no duplicate scrollback.
-  if (!tui::is_tty()) { tui::info("%s", section_text.c_str()); }
+  if (!tui::is_tty()) {
+    std::string const line{ p->display.empty() ? section_text
+                                               : p->display + " " + section_text };
+    tui::info("%s", line.c_str());
+  }
 }
 
 }  // namespace envy

@@ -38,7 +38,74 @@ constexpr int cfg_index() {
   }
 }
 
+// Reach the anchor base on whichever alternative is held, or do nothing. One walk, for
+// the reader below and the writer in cli_parse: a command that never loads a manifest
+// does not derive from it and is skipped.
+void with_project_anchor(auto &&cfg, auto &&fn) {
+  std::visit(
+      [&fn](auto &&c) {
+        if constexpr (std::derived_from<std::decay_t<decltype(c)>, cmd_project_anchor>) {
+          fn(c);
+        }
+      },
+      std::forward<decltype(cfg)>(cfg));
+}
+
+// `envy cache --local|--shared` self-deploys before its own marker exists, so it names
+// the tree it is about to establish rather than the one being abandoned.
+std::optional<cache_mode> mode_being_set(cli_args::cmd_cfg_t const &cfg) {
+  auto const *cc{ std::get_if<cmd_cache::cfg>(&cfg) };
+  if (!cc) { return std::nullopt; }
+  switch (cc->act) {
+    case cmd_cache::cfg::action::SET_LOCAL: return cache_mode::LOCAL;
+    case cmd_cache::cfg::action::SET_SHARED: return cache_mode::SHARED;
+    case cmd_cache::cfg::action::REPORT:
+    case cmd_cache::cfg::action::PRINT_ROOT:
+    case cmd_cache::cfg::action::PRINT_USER_WIDE_ROOT: break;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
+
+// Read off the selected config, not the cwd: resolving envy's own deploy from one anchor
+// while the command resolved from another would split a run across two trees.
+std::optional<std::filesystem::path> project_anchor(cli_args::cmd_cfg_t const &cfg) {
+  std::optional<std::filesystem::path> dir;
+  with_project_anchor(cfg, [&dir](auto const &c) { dir = c.project_dir; });
+  return dir;
+}
+
+cache_root_resolution deploy_target(cli_args const &args) {
+  // Silent on failure, and deliberately so: both discovery and directive parsing throw,
+  // and this runs for every command, including ones that never load a manifest. Letting
+  // either escape meant one bad directive in an ancestor broke `envy --version`, and
+  // blocked the very `envy cache --local` that repairs it. A command that needs the
+  // manifest re-resolves and reports the error properly.
+  try {
+    envy_meta meta;
+    std::filesystem::path manifest_dir;
+
+    // An override already decides the root, so a manifest that cannot change the answer
+    // must not get a chance to throw.
+    if (!args.cache_root && args.cmd_cfg) {
+      if (auto const found{ manifest::discover(
+              false,
+              manifest::discovery_start_dir(project_anchor(*args.cmd_cfg))) }) {
+        meta = found->meta;
+        manifest_dir = found->path.parent_path();
+      }
+    }
+
+    auto const req{ meta.cache_request(args.cache_root, manifest_dir) };
+    if (args.cmd_cfg) {
+      if (auto const mode{ mode_being_set(*args.cmd_cfg) }) {
+        return cache_root_for_mode(req, *mode);
+      }
+    }
+    return resolve_cache_root(req);
+  } catch (std::exception const &) { return resolve_cache_root(cache_root_request{}); }
+}
 
 cli_args cli_parse(int argc, char **argv) {
   // A leading '/' never introduces an option, so absolute POSIX-style paths like
@@ -209,17 +276,9 @@ cli_args cli_parse(int argc, char **argv) {
 
   if (cmd_cfg) {
     args.cmd_cfg = *cmd_cfg;
-    // One global option, distributed to whichever config was selected; a command that
-    // never loads a manifest does not derive from the anchor base and is skipped.
+    // One global option, distributed to whichever config was selected.
     if (project_dir) {
-      std::visit(
-          [&](auto &c) {
-            if constexpr (std::derived_from<std::decay_t<decltype(c)>,
-                                            cmd_project_anchor>) {
-              c.project_dir = project_dir;
-            }
-          },
-          *args.cmd_cfg);
+      with_project_anchor(*args.cmd_cfg, [&](auto &c) { c.project_dir = project_dir; });
     }
   } else if (args.cli_output.empty()) {
     args.cli_output = parsed.help_text;

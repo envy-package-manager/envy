@@ -76,6 +76,7 @@ struct tui {
 
 struct section_state {
   unsigned handle;
+  std::string display;  // stamped onto every frame this row publishes
   envy::tui::section_frame cached_frame;
   bool has_content{ false };  // True after first set_content call
   bool complete{ false };     // Suppresses fallback rendering
@@ -89,6 +90,7 @@ struct tui_progress_state {
   unsigned next_handle{ 1 };
   int last_line_count{ 0 };
   std::size_t max_label_width{ 0 };
+  std::size_t max_display_width{ 0 };
   std::mutex interactive_mutex;
   bool interactive_paused{ false };
   bool enabled{ true };
@@ -257,18 +259,47 @@ std::string pad_to_width(std::string const &str, int target_width) {
 
 constexpr char const *kSpinnerFrames[]{ "|", "/", "-", "\\" };
 
+// Two padded columns ahead of what a row is saying: the label, then the spec's DISPLAY.
+// Both are the widest any row has published, so the bars line up down the screen; a
+// display column of zero means no spec set one and the column is not there at all.
+struct row_widths {
+  std::size_t label{ 0 };
+  std::size_t display{ 0 };
+};
+
+// Columns a display occupies, near enough: a UTF-8 continuation byte advances none, so
+// "café" measures 4 where size() says 5. Wide and combining characters count one --
+// a DISPLAY is a short label its spec author chose, not arbitrary text.
+std::size_t display_columns(std::string_view text) {
+  return static_cast<std::size_t>(
+      std::ranges::count_if(text, [](char c) { return (c & 0xC0) != 0x80; }));
+}
+
+std::string row_prefix(std::string_view label,
+                       std::string_view display,
+                       row_widths widths) {
+  std::string out{ label };
+  if (out.size() < widths.label) { out.append(widths.label - out.size(), ' '); }
+  if (widths.display) {
+    out += ' ';
+    out += display;
+    if (auto const drawn{ display_columns(display) }; drawn < widths.display) {
+      out.append(widths.display - drawn, ' ');
+    }
+  }
+  return out;
+}
+
 std::string render_progress_bar(envy::tui::progress_data const &data,
                                 std::string_view label,
-                                std::size_t max_label_width,
+                                std::string_view display,
+                                row_widths widths,
                                 int width) {
   constexpr int kBarChars{ 20 };
   int const filled{ static_cast<int>((data.percent / 100.0) * kBarChars) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, display, widths);
 
   // Right-justified percentage (3 chars: "  5%", " 42%", "100%")
   oss << " " << std::setw(3) << static_cast<int>(data.percent) << "%";
@@ -312,7 +343,8 @@ std::string render_progress_bar(envy::tui::progress_data const &data,
 
 std::string render_text_stream(envy::tui::text_stream_data const &data,
                                std::string_view label,
-                               std::size_t max_label_width,
+                               std::string_view display,
+                               row_widths widths,
                                int width,
                                std::chrono::steady_clock::time_point now) {
   // Determine which lines to render
@@ -329,10 +361,7 @@ std::string render_text_stream(envy::tui::text_stream_data const &data,
   std::size_t const frame_index{ static_cast<std::size_t>((elapsed_ms / 100) % 4) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, display, widths);
   oss << " " << kSpinnerFrames[frame_index] << " "
       << (data.header_text.empty() ? "build output:" : data.header_text) << "\n";
 
@@ -345,7 +374,8 @@ std::string render_text_stream(envy::tui::text_stream_data const &data,
 
 std::string render_spinner(envy::tui::spinner_data const &data,
                            std::string_view label,
-                           std::size_t max_label_width,
+                           std::string_view display,
+                           row_widths widths,
                            int width,
                            std::chrono::steady_clock::time_point now) {
   auto const elapsed{ now - data.start_time };
@@ -356,10 +386,7 @@ std::string render_spinner(envy::tui::spinner_data const &data,
       (elapsed_ms / data.frame_duration.count()) % 4) };
 
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, display, widths);
   oss << " " << kSpinnerFrames[frame_index] << " " << data.text << "\n";
 
   return oss.str();
@@ -367,13 +394,11 @@ std::string render_spinner(envy::tui::spinner_data const &data,
 
 std::string render_static_text(envy::tui::static_text_data const &data,
                                std::string_view label,
-                               std::size_t max_label_width,
+                               std::string_view display,
+                               row_widths widths,
                                int width) {
   std::ostringstream oss;
-  oss << label;
-  if (label.size() < max_label_width) {
-    oss << std::string(max_label_width - label.size(), ' ');
-  }
+  oss << row_prefix(label, display, widths);
   oss << " " << data.text << "\n";
 
   return oss.str();
@@ -399,6 +424,10 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
     return output;
   }
 
+  // The label already carries its own brackets, and an indented child carries none.
+  std::string const prefix{ frame.label + " " +
+                            (frame.display.empty() ? "" : frame.display + " ") };
+
   // Elapsed-time dot cycle, 1-4 dots, shared by the two animated rows.
   auto const dots{ [&](std::chrono::steady_clock::time_point start) {
     auto const secs{
@@ -412,7 +441,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
   return std::visit(
       envy::match{ [&](envy::tui::progress_data const &data) {
                     std::ostringstream oss;
-                    oss << "[" << frame.label << "] " << data.status << ": " << std::fixed
+                    oss << prefix << data.status << ": " << std::fixed
                         << std::setprecision(1) << data.percent << "%\n";
                     return oss.str();
                   },
@@ -422,7 +451,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
                                                       ? data.lines.size() - data.line_limit
                                                       : 0 };
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << dots(data.start_time) << " "
+                     oss << prefix << dots(data.start_time) << " "
                          << (data.header_text.empty() ? "build output:" : data.header_text)
                          << "\n";
                      for (std::size_t i{ start_idx }; i < data.lines.size(); ++i) {
@@ -432,20 +461,19 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
                    },
                    [&](envy::tui::spinner_data const &data) {
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << data.text
-                         << dots(data.start_time) << "\n";
+                     oss << prefix << data.text << dots(data.start_time) << "\n";
                      return oss.str();
                    },
                    [&](envy::tui::static_text_data const &data) {
                      std::ostringstream oss;
-                     oss << "[" << frame.label << "] " << data.text << "\n";
+                     oss << prefix << data.text << "\n";
                      return oss.str();
                    } },
       frame.content);
 }
 
 std::string render_section_frame(envy::tui::section_frame const &frame,
-                                 std::size_t max_label_width,
+                                 row_widths widths,
                                  int width,
                                  bool ansi_mode,
                                  std::chrono::steady_clock::time_point now) {
@@ -460,14 +488,14 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
       parent_copy.label += " (" + parent_copy.phase_label + ")";
       parent_copy.phase_label.clear();
     }
-    output += render_section_frame(parent_copy, max_label_width, width, ansi_mode, now);
+    output += render_section_frame(parent_copy, widths, width, ansi_mode, now);
 
     for (auto const &child : frame.children) {
       envy::tui::section_frame const child_copy{ .label = "  " + child.label,
                                                  .content = child.content,
                                                  .children = child.children,
                                                  .phase_label = child.phase_label };
-      output += render_section_frame(child_copy, max_label_width, width, ansi_mode, now);
+      output += render_section_frame(child_copy, widths, width, ansi_mode, now);
     }
     return output;
   }
@@ -475,16 +503,21 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
   return std::visit(
       envy::match{
           [&](envy::tui::progress_data const &data) {
-            return render_progress_bar(data, frame.label, max_label_width, width);
+            return render_progress_bar(data, frame.label, frame.display, widths, width);
           },
           [&](envy::tui::text_stream_data const &data) {
-            return render_text_stream(data, frame.label, max_label_width, width, now);
+            return render_text_stream(data,
+                                      frame.label,
+                                      frame.display,
+                                      widths,
+                                      width,
+                                      now);
           },
           [&](envy::tui::spinner_data const &data) {
-            return render_spinner(data, frame.label, max_label_width, width, now);
+            return render_spinner(data, frame.label, frame.display, widths, width, now);
           },
           [&](envy::tui::static_text_data const &data) {
-            return render_static_text(data, frame.label, max_label_width, width);
+            return render_static_text(data, frame.label, frame.display, widths, width);
           } },
       frame.content);
 }
@@ -552,7 +585,7 @@ std::string truncate_frame_to_width(std::string const &frame, int width) {
 }
 
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
-                                  std::size_t max_label_width,
+                                  row_widths widths,
                                   int last_line_count,
                                   int width,
                                   std::chrono::steady_clock::time_point now) {
@@ -561,7 +594,7 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
   for (auto const &sec : sections) {
     if (!sec.has_content) { continue; }
     std::string const frame{
-      render_section_frame(sec.cached_frame, max_label_width, width, true, now)
+      render_section_frame(sec.cached_frame, widths, width, true, now)
     };
     for (auto &line : frame_lines_to_width(frame, width)) {
       rendered_lines.push_back(std::move(line));
@@ -792,7 +825,7 @@ void flush_messages(std::queue<log_entry> &pending,
 // Returns the number of section lines rendered.
 int render_cycle(std::queue<log_entry> &pending,
                  std::vector<section_state> const &sections,
-                 std::size_t max_label_width,
+                 row_widths widths,
                  int last_line_count) {
   int rendered_line_count{ 0 };
   bool const ansi{ is_ansi_supported() };
@@ -815,11 +848,8 @@ int render_cycle(std::queue<log_entry> &pending,
 
     if (ansi) {
       int const effective_last{ has_messages ? 0 : last_line_count };
-      rendered_line_count = render_progress_sections_ansi(sections,
-                                                          max_label_width,
-                                                          effective_last,
-                                                          width,
-                                                          now);
+      rendered_line_count =
+          render_progress_sections_ansi(sections, widths, effective_last, width, now);
     } else {
       render_fallback_frame_unlocked(sections, now);
     }
@@ -837,19 +867,19 @@ void worker_thread() {
       pending.swap(s_tui.messages);
 
       std::vector<section_state> sections_snapshot;
-      std::size_t max_label_width{ 0 };
+      row_widths widths;
       int last_line_count{ 0 };
 
       if (s_progress.enabled && !s_progress.interactive_paused) {
         sections_snapshot = s_progress.sections;
-        max_label_width = s_progress.max_label_width;
+        widths = { s_progress.max_label_width, s_progress.max_display_width };
         last_line_count = s_progress.last_line_count;
       }
 
       lock.unlock();
 
       int const rendered_line_count{
-        render_cycle(pending, sections_snapshot, max_label_width, last_line_count)
+        render_cycle(pending, sections_snapshot, widths, last_line_count)
       };
 
       lock.lock();
@@ -877,19 +907,19 @@ void worker_thread() {
     pending.swap(s_tui.messages);
 
     std::vector<section_state> sections_snapshot;
-    std::size_t max_label_width{ 0 };
+    row_widths widths;
     int last_line_count{ 0 };
 
     if (s_progress.enabled) {
       sections_snapshot = s_progress.sections;
-      max_label_width = s_progress.max_label_width;
+      widths = { s_progress.max_label_width, s_progress.max_display_width };
       last_line_count = s_progress.last_line_count;
     }
 
     lock.unlock();
 
     int const rendered_line_count{
-      render_cycle(pending, sections_snapshot, max_label_width, last_line_count)
+      render_cycle(pending, sections_snapshot, widths, last_line_count)
     };
 
     if (rendered_line_count > 0) {
@@ -1154,6 +1184,20 @@ section_handle section_create() {
   return handle;
 }
 
+void section_set_display(section_handle h, std::string text) {
+  if (h == 0 || !s_progress.enabled) { return; }
+
+  std::lock_guard lock{ s_tui.mutex };
+
+  if (auto const it{
+          std::ranges::find_if(s_progress.sections,
+                               [h](auto const &sec) { return sec.handle == h; }) };
+      it != s_progress.sections.end()) {
+    it->cached_frame.display = text;  // a live row picks it up on the next render
+    it->display = std::move(text);
+  }
+}
+
 void section_set_content(section_handle h, section_frame const &frame) {
   if (h == 0 || !s_progress.enabled) { return; }
 
@@ -1170,15 +1214,20 @@ void section_set_content(section_handle h, section_frame const &frame) {
     if (it == s_progress.sections.end()) { return; }
 
     it->cached_frame = frame;
+    it->cached_frame.display = it->display;
     it->has_content = true;
+    // Only a row that publishes a frame sets the columns. A warm-cache package is deleted
+    // at completion having drawn nothing, and must not pad the row that did.
     s_progress.max_label_width =
         std::max(s_progress.max_label_width, measure_label_width(frame));
+    s_progress.max_display_width =
+        std::max(s_progress.max_display_width, display_columns(it->display));
 
     // A terminal frame is the row's last word. Off a TTY the renderer only samples on a
     // timer, so a step that finishes between two ticks loses its final frame entirely --
     // emit it here, and record it so that renderer does not say it twice.
     if (frame.terminal && !ansi) {
-      std::string text{ render_section_frame_fallback(frame, now) };
+      std::string text{ render_section_frame_fallback(it->cached_frame, now) };
       if (text != it->last_fallback_output) {
         it->last_fallback_output = text;
         it->last_fallback_print_time = now;
@@ -1219,11 +1268,12 @@ void section_commit(section_handle h) {
     if (it == s_progress.sections.end()) { return; }
 
     if (it->has_content) {
-      std::string text{ render_section_frame(it->cached_frame,
-                                             s_progress.max_label_width,
-                                             width,
-                                             ansi,
-                                             now) };
+      std::string text{ render_section_frame(
+          it->cached_frame,
+          row_widths{ s_progress.max_label_width, s_progress.max_display_width },
+          width,
+          ansi,
+          now) };
       if (ansi) { text = truncate_frame_to_width(text, width); }
 
       // Off a TTY the row is already scrollback: the fallback renderer prints each frame
@@ -1341,8 +1391,24 @@ std::string render_section_frame(section_frame const &frame) {
   auto const now{ g_now.time_since_epoch().count() > 0
                       ? g_now
                       : std::chrono::steady_clock::now() };
-  std::size_t const max_width{ measure_label_width(frame) };
-  return ::render_section_frame(frame, max_width, width, g_isatty, now);
+  return ::render_section_frame(frame,
+                                { measure_label_width(frame), frame.display.size() },
+                                width,
+                                g_isatty,
+                                now);
+}
+
+std::string render_section_frame(section_frame const &frame,
+                                 std::size_t label_width,
+                                 std::size_t display_width) {
+  int const width{ g_terminal_width > 0 ? g_terminal_width : 80 };
+  auto const now{ g_now.time_since_epoch().count() ? g_now
+                                                   : std::chrono::steady_clock::now() };
+  return ::render_section_frame(frame,
+                                { label_width, display_width },
+                                width,
+                                g_isatty,
+                                now);
 }
 
 int calculate_visible_length(std::string_view str) {

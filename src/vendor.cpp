@@ -120,6 +120,12 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
     }
   }
 
+  // Every destination named out loud is project-relative: they all sit under the root by
+  // construction, and the absolute prefix is the same noise on each of them.
+  auto const shown{ [&project_root](fs::path const &dest) {
+    return dest.lexically_relative(project_root).generic_string();
+  } };
+
   // What survived escalation must be unique and non-nested. Two colliding overrides land
   // here, since overrides never escalate.
   for (size_t i{ 0 }; i < sorted.size(); ++i) {
@@ -129,14 +135,14 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
       if (dest[i] == dest[j]) {
         throw std::runtime_error(
             "vendor destination collision: '" + std::string{ a.identity() } + "' and '" +
-            std::string{ b.identity() } + "' both vendor to " + dest[i].string());
+            std::string{ b.identity() } + "' both vendor to " + shown(dest[i]));
       }
       // Vendoring wipes before copying, so an outer package would delete an inner one.
       if (contains_path(dest[i], dest[j]) || contains_path(dest[j], dest[i])) {
         throw std::runtime_error(
             "nested vendor destinations: '" + std::string{ a.identity() } +
-            "' vendors to " + dest[i].string() + " and '" + std::string{ b.identity() } +
-            "' vendors to " + dest[j].string() + "; one would be erased by the other");
+            "' vendors to " + shown(dest[i]) + " and '" + std::string{ b.identity() } +
+            "' vendors to " + shown(dest[j]) + "; one would be erased by the other");
       }
     }
   }

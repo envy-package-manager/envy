@@ -12,6 +12,11 @@ Logging is per-package narrative. Default (INFO) prints one outcome line per pac
 **`-v`, `--version`** — Print version information (alias for `envy version`).
 **`-h`, `--help`, `help`** — Print top-level help summarizing available subcommands. Subcommands also support `--help` for detailed usage.
 
+On a TTY that line is the package's live row, and a package that did no work — a cache hit
+that vendored nothing and ran no SETUP pair — leaves no row at all: a run with nothing to
+do is silent. Off a TTY every package still reports, so logs stay complete. A spec's
+`DISPLAY` leads column two on both (see `docs/lua_api.md`).
+
 ## Manifest Discovery
 
 Commands that load a manifest walk upward looking for `envy.lua`, honoring `@envy root "false"` and stopping at a `.git` boundary. Anchor precedence, most specific first:

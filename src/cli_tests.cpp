@@ -25,7 +25,6 @@
 #include "doctest.h"
 
 #include <algorithm>
-#include <concepts>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -941,15 +940,7 @@ TEST_CASE("cli_parse: global --project") {
         auto argv{ make_argv(args) };
         auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
         REQUIRE(parsed.cmd_cfg.has_value());
-        return std::visit(
-            [](auto const &c) -> std::optional<std::filesystem::path> {
-              if constexpr (std::derived_from<std::decay_t<decltype(c)>,
-                                              envy::cmd_project_anchor>) {
-                return c.project_dir;
-              }
-              return std::nullopt;
-            },
-            *parsed.cmd_cfg);
+        return envy::project_anchor(*parsed.cmd_cfg);
       }
     };
 

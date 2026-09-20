@@ -8,6 +8,8 @@
 #include <random>
 #include <set>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -180,4 +182,14 @@ TEST_CASE_FIXTURE(temp_dir_fixture, "shell_hooks: ensure") {
                     ext);
     }
   }
+}
+
+// Four "restart your shell" lines for one restart is noise, not information.
+TEST_CASE("shell_hooks: updated_message") {
+  using envy::shell_hooks::updated_message;
+
+  CHECK(updated_message({}).empty());
+  CHECK(updated_message({ "zsh" }) == "Shell hook updated (zsh) — restart your shell");
+  CHECK(updated_message({ "bash", "zsh", "fish", "ps1" }) ==
+        "Shell hooks updated (bash, zsh, fish, ps1) — restart your shell");
 }
