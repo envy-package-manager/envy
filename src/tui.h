@@ -32,10 +32,7 @@ struct trace_output_spec {
 
 void init();
 void configure_trace_outputs(std::vector<trace_output_spec> outputs);
-
-// Close the trace file before a child process opens the same path. Windows' exec is a
-// spawn, so both would otherwise write one file at two offsets and tear it.
-void trace_file_handoff();
+void trace_file_handoff();  // Close trace file before a child process opens it.
 
 void set_output_handler(std::function<void(std::string_view)> handler);
 void run(std::optional<level> threshold = std::nullopt, bool decorated_logging = false);
