@@ -1045,7 +1045,7 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY renders the fallbac
   auto const h{ envy::tui::section_create() };
   envy::tui::section_set_content(
       h,
-      envy::tui::section_frame{ .label = "extract",
+      envy::tui::section_frame{ .label = "[extract]",
                                 .content =
                                     envy::tui::static_text_data{ .text = "done" } });
   envy::tui::section_commit(h);
@@ -1099,7 +1099,7 @@ TEST_CASE_FIXTURE(captured_output, "a terminal frame off a TTY lands without a c
   // The fallback renderer only samples on a timer, so a step that finishes between two
   // ticks would otherwise lose its last word entirely.
   auto const h{ envy::tui::section_create() };
-  envy::tui::section_set_content(h, last_frame("vendor", "vendored 12 files"));
+  envy::tui::section_set_content(h, last_frame("[vendor]", "vendored 12 files"));
 
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
   CHECK_NOTHROW(envy::tui::shutdown());
@@ -1241,13 +1241,13 @@ TEST_CASE("display names the row, not each child under it") {
   CHECK(occurrences == 1);
 }
 
-TEST_CASE("fallback render puts display after the bracketed label") {
+TEST_CASE("fallback render puts display after the label, bracketing nothing twice") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = false;
   envy::tui::test::g_now = std::chrono::steady_clock::now();
 
   envy::tui::section_frame const frame{
-    .label = "pkg@v1",
+    .label = "[pkg@v1]",
     .display = "libusb/hidapi",
     .content = envy::tui::static_text_data{ .text = "cache hit" }
   };

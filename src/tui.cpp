@@ -405,7 +405,8 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
     return output;
   }
 
-  std::string const prefix{ "[" + frame.label + "] " +
+  // The label already carries its own brackets, and an indented child carries none.
+  std::string const prefix{ frame.label + " " +
                             (frame.display.empty() ? "" : frame.display + " ") };
 
   // Elapsed-time dot cycle, 1-4 dots, shared by the two animated rows.
