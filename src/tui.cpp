@@ -267,6 +267,14 @@ struct row_widths {
   std::size_t display{ 0 };
 };
 
+// Columns a display occupies, near enough: a UTF-8 continuation byte advances none, so
+// "café" measures 4 where size() says 5. Wide and combining characters count one --
+// a DISPLAY is a short label its spec author chose, not arbitrary text.
+std::size_t display_columns(std::string_view text) {
+  return static_cast<std::size_t>(
+      std::ranges::count_if(text, [](char c) { return (c & 0xC0) != 0x80; }));
+}
+
 std::string row_prefix(std::string_view label,
                        std::string_view display,
                        row_widths widths) {
@@ -275,8 +283,8 @@ std::string row_prefix(std::string_view label,
   if (widths.display) {
     out += ' ';
     out += display;
-    if (display.size() < widths.display) {
-      out.append(widths.display - display.size(), ' ');
+    if (auto const drawn{ display_columns(display) }; drawn < widths.display) {
+      out.append(widths.display - drawn, ' ');
     }
   }
   return out;
@@ -1186,7 +1194,6 @@ void section_set_display(section_handle h, std::string text) {
                                [h](auto const &sec) { return sec.handle == h; }) };
       it != s_progress.sections.end()) {
     it->cached_frame.display = text;  // a live row picks it up on the next render
-    s_progress.max_display_width = std::max(s_progress.max_display_width, text.size());
     it->display = std::move(text);
   }
 }
@@ -1209,8 +1216,12 @@ void section_set_content(section_handle h, section_frame const &frame) {
     it->cached_frame = frame;
     it->cached_frame.display = it->display;
     it->has_content = true;
+    // Only a row that publishes a frame sets the columns. A warm-cache package is deleted
+    // at completion having drawn nothing, and must not pad the row that did.
     s_progress.max_label_width =
         std::max(s_progress.max_label_width, measure_label_width(frame));
+    s_progress.max_display_width =
+        std::max(s_progress.max_display_width, display_columns(it->display));
 
     // A terminal frame is the row's last word. Off a TTY the renderer only samples on a
     // timer, so a step that finishes between two ticks loses its final frame entirely --

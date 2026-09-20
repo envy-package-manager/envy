@@ -211,6 +211,48 @@ class TestDisplay(EnvyTestCase):
         self.assertNotEqual(0, run.returncode)
         self.assertIn("DISPLAY must be a single line", run.stderr)
 
+    def test_display_rejects_control_characters(self):
+        """A NUL truncates the row at the %s that writes it; an ESC steers the cursor."""
+        for name, literal in (("nul", '"a\\0b"'), ("esc", '"a\\27[2Jb"'),
+                              ("tab", '"a\\9b"')):
+            with self.subTest(name):
+                spec = self._spec(f"c{name}.lua", f"local.c{name}@v1",
+                                  f"DISPLAY = {literal}")
+                where = self.work / name
+                where.mkdir(exist_ok=True)
+                manifest = test_config.write_spec_manifest(
+                    where, [(f"local.c{name}@v1", spec)]
+                )
+                run = self.install(manifest)
+                self.assertNotEqual(0, run.returncode, run.stderr)
+                self.assertIn("single line of printable text", run.stderr)
+
+    @unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+    def test_display_pads_by_columns_not_bytes(self):
+        """`café` is five bytes but four columns, so padding by size() misaligns it.
+
+        Both identities are the same length, so the label column cancels out and the only
+        thing that can move `installed` is how the display column was measured.
+        """
+        wide = self._spec("w.lua", "local.w@v1", 'DISPLAY = "café"')
+        plain = self._spec("p.lua", "local.p@v1", 'DISPLAY = "abcde"')
+        manifest = self.write_manifest(
+            "PACKAGES = {\n"
+            + test_config.spec_entry("local.w@v1", wide)
+            + "\n"
+            + test_config.spec_entry("local.p@v1", plain)
+            + "\n}\n"
+        )
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+
+        rows = {ln.split("]")[0] + "]": ln for ln in screen(out).splitlines()}
+        self.assertEqual(
+            rows["[local.w@v1]"].index("installed"),
+            rows["[local.p@v1]"].index("installed"),
+            rows,
+        )
+
     def test_display_wrong_type_is_an_error(self):
         spec = self._spec("t.lua", "local.t@v1", "DISPLAY = 42")
         manifest = test_config.write_spec_manifest(self.work, [("local.t@v1", spec)])
@@ -283,6 +325,38 @@ class TestNoWorkIsSilent(EnvyTestCase):
         self.assertTrue(
             widest.startswith("[local.a-much-longer-name@v1] installed"), widest
         )
+
+    def test_a_silent_package_s_display_does_not_pad_the_row_that_drew(self):
+        """A warm-cache package draws nothing and is deleted, so it owns no column."""
+        loud = self.write_spec(
+            "loud.lua",
+            'IDENTITY = "local.loud@v1"\n'
+            f'FETCH = {{ source = "file://{self.lua_path(self.payload)}" }}\n'
+            'DISPLAY = "a-very-long-display-string-indeed"\n',
+        )
+        quiet = self.write_spec(
+            "quiet.lua",
+            'IDENTITY = "local.quiet@v1"\n'
+            f'FETCH = {{ source = "file://{self.lua_path(self.payload)}" }}\n',
+        )
+
+        # Warm `loud` on its own, then add `quiet`: only `quiet` has work left to do.
+        alone = self.work / "alone"
+        alone.mkdir(exist_ok=True)
+        first = test_config.write_spec_manifest(alone, [("local.loud@v1", loud)])
+        self.assertEqual(0, self.install(first).returncode)
+
+        both = self.work / "both"
+        both.mkdir(exist_ok=True)
+        manifest = test_config.write_spec_manifest(
+            both, [("local.loud@v1", loud), ("local.quiet@v1", quiet)]
+        )
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+
+        painted = screen(out)
+        self.assertNotIn("a-very-long-display-string-indeed", painted)
+        self.assertEqual("[local.quiet@v1] installed", painted.split(" (")[0], painted)
 
     def test_off_a_tty_every_package_still_reports(self):
         """The log is a record of the run, so the no-ops stay in it."""

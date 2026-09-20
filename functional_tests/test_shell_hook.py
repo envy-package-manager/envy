@@ -1897,5 +1897,26 @@ class TestPowerShellHook(EnvyTestCase):
         self.assertNotIn("raccoon icon hidden", combined)
 
 
+class TestHookUpdateAnnouncement(EnvyTestCase):
+    """An update is one line naming the shells, not a line apiece for one restart."""
+
+    def test_a_refresh_says_so_once(self) -> None:
+        first = self.run_envy("cache")
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertNotIn("Shell hook", first.stderr, "first write is not an update")
+
+        hooks = sorted((self.cache_root / "shell").glob("hook.*"))
+        self.assertEqual(4, len(hooks), hooks)
+        for hook in hooks:
+            hook.write_text(hook.read_text(encoding="utf-8") + "# drifted\n",
+                            encoding="utf-8")
+
+        again = self.run_envy("cache")
+        self.assertEqual(0, again.returncode, again.stderr)
+        said = [ln for ln in again.stderr.splitlines() if "Shell hook" in ln]
+        self.assertEqual(1, len(said), again.stderr)
+        self.assertIn("Shell hooks updated (bash, zsh, fish, ps1)", said[0])
+
+
 if __name__ == "__main__":
     unittest.main()

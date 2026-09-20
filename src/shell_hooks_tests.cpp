@@ -1,12 +1,10 @@
 #include "shell_hooks.h"
 
 #include "doctest.h"
-#include "tui.h"
 #include "version.h"
 
 #include <filesystem>
 #include <fstream>
-#include <optional>
 #include <random>
 #include <set>
 #include <string>
@@ -176,31 +174,6 @@ TEST_CASE_FIXTURE(temp_dir_fixture, "shell_hooks: ensure") {
     CHECK(digests.size() == 4);
   }
 
-  // Four "restart your shell" lines for one restart is noise, not information.
-  SUBCASE("an update is announced once, naming every shell it touched") {
-    ensure(root);
-    for (auto const *ext : kExts) {
-      auto const hook{ root / "shell" / ("hook." + std::string{ ext }) };
-      write_file(hook, read_file(hook) + "# drifted\n");
-    }
-
-    // The tui queues while idle: drain earlier cases out before capturing this one.
-    envy::tui::run(std::nullopt);
-    envy::tui::shutdown();
-
-    std::vector<std::string> lines;
-    envy::tui::set_output_handler(
-        [&lines](std::string_view value) { lines.emplace_back(value); });
-    envy::tui::run(std::nullopt);
-    CHECK(ensure(root) == 4);
-    envy::tui::shutdown();
-    envy::tui::set_output_handler([](std::string_view) {});
-
-    REQUIRE(lines.size() == 1);
-    CHECK(lines[0].find("Shell hooks updated (bash, zsh, fish, ps1)") !=
-          std::string::npos);
-  }
-
   SUBCASE("written hooks contain managed-by comment") {
     ensure(root);
     for (auto const *ext : kExts) {
@@ -209,4 +182,14 @@ TEST_CASE_FIXTURE(temp_dir_fixture, "shell_hooks: ensure") {
                     ext);
     }
   }
+}
+
+// Four "restart your shell" lines for one restart is noise, not information.
+TEST_CASE("shell_hooks: updated_message") {
+  using envy::shell_hooks::updated_message;
+
+  CHECK(updated_message({}).empty());
+  CHECK(updated_message({ "zsh" }) == "Shell hook updated (zsh) — restart your shell");
+  CHECK(updated_message({ "bash", "zsh", "fish", "ps1" }) ==
+        "Shell hooks updated (bash, zsh, fish, ps1) — restart your shell");
 }

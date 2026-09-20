@@ -55,8 +55,9 @@ DISPLAY = function(options) return options.repo end
 ```
 
 Resolved once, after `OPTIONS` validates. Returning `nil` is the same as omitting it. Must
-be a single line. A run where every package is a cache hit prints nothing at all on a TTY,
-so `DISPLAY` costs nothing when there is no work to do.
+be a single line of printable text: any control character — newline, tab, NUL, ESC — is an
+error, because a row is one line whose width the live region counts. Padded to a column of
+its own, so keep it short; a run with no work to do prints nothing at all on a TTY.
 
 ---
 

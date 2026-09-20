@@ -18,6 +18,7 @@
 #include "util.h"
 #include "vendor.h"
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <sstream>
@@ -76,9 +77,11 @@ std::string resolve_display(pkg *p, sol::state_view lua) {
     return ret.as<std::string>();
   }() };
 
-  // A row is one line, and the live region counts the lines it drew to erase them again.
-  if (text.find_first_of("\r\n") != std::string::npos) {
-    throw std::runtime_error("DISPLAY must be a single line for " + identity);
+  // A row is one line whose width the live region counts so it can erase it again: a NUL
+  // truncates that row at the %s that writes it, an ESC steers the cursor out of it.
+  if (std::ranges::any_of(text, [](unsigned char c) { return c < 0x20 || c == 0x7f; })) {
+    throw std::runtime_error("DISPLAY must be a single line of printable text for " +
+                             identity);
   }
   return text;
 }

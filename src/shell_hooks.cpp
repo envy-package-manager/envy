@@ -56,6 +56,18 @@ std::string read_text(std::filesystem::path const &path) {
 
 }  // namespace
 
+std::string updated_message(std::vector<char const *> const &shells) {
+  if (shells.empty()) { return {}; }
+
+  std::string names;
+  for (auto const *ext : shells) {
+    if (!names.empty()) { names += ", "; }
+    names += ext;
+  }
+  return "Shell hook" + std::string{ shells.size() > 1 ? "s" : "" } + " updated (" +
+         names + ") — restart your shell";
+}
+
 int ensure(std::filesystem::path const &cache_root) {
   namespace fs = std::filesystem;
   fs::path const shell_dir{ cache_root / "shell" };
@@ -95,15 +107,8 @@ int ensure(std::filesystem::path const &cache_root) {
     }
   }
 
-  if (!refreshed.empty()) {
-    std::string names;
-    for (auto const *ext : refreshed) {
-      if (!names.empty()) { names += ", "; }
-      names += ext;
-    }
-    tui::info("Shell hook%s updated (%s) — restart your shell",
-              refreshed.size() > 1 ? "s" : "",
-              names.c_str());
+  if (std::string const said{ updated_message(refreshed) }; !said.empty()) {
+    tui::info("%s", said.c_str());
   }
 
   return written;
