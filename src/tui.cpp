@@ -600,6 +600,25 @@ void show_cursor_if_hidden() {
   }
 }
 
+// Take the live region down for whoever is about to own the terminal.
+void pause_rendering() {
+  std::lock_guard lock{ s_tui.mutex };
+  if (!is_ansi_supported()) { return; }
+
+  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
+  // one *less* than the row count. The full count erases a line the region never owned.
+  if (s_progress.last_line_count) {
+    std::fprintf(stderr, "\r");
+    if (s_progress.last_line_count > 1) {
+      std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
+    }
+    std::fprintf(stderr, "%s", kAnsiClearToEos);
+    s_progress.last_line_count = 0;
+  }
+  show_cursor_if_hidden();  // whoever takes the terminal takes a visible cursor with it
+  std::fflush(stderr);
+}
+
 int render_progress_sections_ansi(std::vector<section_state> const &sections,
                                   row_widths widths,
                                   int last_line_count,
@@ -1172,29 +1191,6 @@ void print_stdout(char const *fmt, ...) {
   s_tui.cv.notify_one();
 }
 
-void pause_rendering() {
-  std::lock_guard lock{ s_tui.mutex };
-  if (!is_ansi_supported()) { return; }
-
-  // Same arithmetic as the renderer, which leaves the cursor on the last row it drew: up
-  // one *less* than the row count. The full count erases a line the region never owned.
-  if (s_progress.last_line_count) {
-    std::fprintf(stderr, "\r");
-    if (s_progress.last_line_count > 1) {
-      std::fprintf(stderr, kAnsiCursorUpFmt, s_progress.last_line_count - 1);
-    }
-    std::fprintf(stderr, "%s", kAnsiClearToEos);
-    s_progress.last_line_count = 0;
-  }
-  show_cursor_if_hidden();  // whoever takes the terminal takes a visible cursor with it
-  std::fflush(stderr);
-}
-
-void resume_rendering() {
-  // Nothing to emit: the next render cycle redraws, and takes the cursor back as it does.
-  // Handing it over visible for a frame beats hiding it for a region that may stay empty.
-}
-
 section_handle section_create() {
   if (!s_progress.enabled) { return 0; }  // Skip if disabled
 
@@ -1355,7 +1351,9 @@ void release_interactive_mode() {
     std::lock_guard lock{ s_tui.mutex };
     s_progress.interactive_paused = false;
   }
-  resume_rendering();
+  // No counterpart to pause_rendering: the next render cycle redraws, and takes the
+  // cursor back as it does. Pre-hiding it here would hide it for a region that may have
+  // nothing left to put in it.
   s_progress.interactive_mutex.unlock();
 }
 

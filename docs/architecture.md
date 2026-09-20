@@ -837,9 +837,8 @@ namespace envy::tui {
   void update_progress(int handle, float percent);
   void complete_progress(int handle);
 
-  // Rendering control (for interactive subprocess handoff)
-  void pause_rendering();   // Stop render loop, clear progress bars
-  void resume_rendering();  // Restart render loop
+  // Interactive subprocess handoff (RAII; takes the live region down, cursor and all)
+  class interactive_mode_guard;
 
   // Output redirection (for testing)
   void set_output_handler(std::function<void(std::string_view)> fn);
@@ -856,7 +855,7 @@ namespace envy::tui {
 
 - default — stdout/stderr piped line-by-line to `tui::info()`, stdin closed; build output appears as logs
 - `capture = true` — stdout/stderr collected into the returned `{ exit_code, stdout, stderr }`; pair with `check = false` for silent probes like `brew list | grep foo`
-- `interactive = true` — stdin/stdout/stderr inherited. TUI calls `pause_rendering()`, clears progress bars, waits for the child, then `resume_rendering()`; the render loop idles on an atomic flag
+- `interactive = true` — stdin/stdout/stderr inherited. An `interactive_mode_guard` clears the progress bars and hands back the cursor, then the child runs; the render loop idles on an atomic flag and redraws on release, hiding the cursor again as it paints
 
 **Platform abstraction:** Unix uses `fork()`/`execvp()`/`pipe()`/`dup2()`. Windows uses `CreateProcess()`/`STARTUPINFO` with redirected handles. Both hide behind `envy::process` interface. Terminal control via `isatty()`/`_isatty()` + ANSI escape codes (Windows 10+ `ENABLE_VIRTUAL_TERMINAL_PROCESSING` via `SetConsoleMode`).
 

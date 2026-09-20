@@ -47,8 +47,6 @@ void error(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 void print_stdout(char const *fmt, ...) ENVY_TUI_PRINTF(1, 2);
 
 bool is_tty();
-void pause_rendering();
-void resume_rendering();
 
 struct scope {  // raii helper
   explicit scope(std::optional<level> threshold, bool decorated_logging);
