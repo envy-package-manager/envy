@@ -434,6 +434,22 @@ class TestVendorRows(VendorTestCase):
         self.assertIn("vendored 4 files", screen(out))
         self.assertNotIn("cache hit", screen(out))
 
+    def test_a_fresh_install_that_vendors_reports_the_copy(self):
+        """A built package vendors last, and the last phase to write owns the row."""
+        manifest = self.manifest(
+            self.entry(
+                "local.cobs@r1",
+                self.spec("local.cobs@r1"),
+                vendor='{ path = "vendor/cobs" }',
+            )
+        )
+
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        painted = screen(out)
+        self.assertIn(f"vendored 4 files to {self.shown(self.dest)}", painted)
+        self.assertNotIn("installed", painted)
+
     def test_an_exempt_mismatch_reports_but_draws_no_row(self):
         """`auto_sync = false` writes nothing, so the warning is the whole report.
 
