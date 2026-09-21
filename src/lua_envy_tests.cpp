@@ -4,6 +4,9 @@
 
 #include "doctest.h"
 
+#include <fstream>
+#include <sstream>
+
 namespace envy {
 
 TEST_CASE("envy.EXE_EXT injected into Lua state") {
@@ -167,6 +170,19 @@ TEST_CASE("envy.loadenv hands back what the module returns") {
     CHECK(result.get<std::string>(1) == "hello");
   }
 
+  SUBCASE("an absolute module path cannot leave the caller's directory") {
+    // `dir / subpath` adopts an absolute subpath whole, dropping dir entirely.
+    auto const result{ lua->safe_script(R"lua(
+      local ok, err = pcall(function() return envy.loadenv("/tmp/helper") end)
+      return ok, err
+    )lua",
+                                        sol::script_pass_on_error,
+                                        kCaller) };
+    REQUIRE(result.valid());
+    CHECK(result.get<bool>(0) == false);
+    CHECK(result.get<std::string>(1).find("resolves outside") != std::string::npos);
+  }
+
   SUBCASE("a non-table return value is an error naming the module") {
     auto const result{ lua->safe_script(R"lua(
       local ok, err = pcall(function() return envy.loadenv("loadenv.mod_number") end)
@@ -194,6 +210,28 @@ TEST_CASE("envy.loadenv_bundle points a spec at envy.loadenv_spec") {
   REQUIRE(result.valid());
   CHECK(result.get<bool>(0) == false);
   CHECK(result.get<std::string>(1).find("envy.loadenv_spec") != std::string::npos);
+}
+
+TEST_CASE("every envy function is declared in the LuaLS type definitions") {
+  // src/resources/envy.lua is what `envy init` hands an editor. Nothing else compares
+  // it against the runtime, so a new envy.* used to reach users as an undefined global.
+  auto lua{ sol_util_make_lua_state() };
+  lua_envy_install(*lua);
+
+  std::ifstream types{ "src/resources/envy.lua" };
+  REQUIRE(types.good());
+  std::stringstream buf;
+  buf << types.rdbuf();
+  std::string const declarations{ buf.str() };
+
+  sol::table const envy_table = (*lua)["envy"];
+  for (auto const &[key, value] : envy_table) {
+    if (!key.is<std::string>() || value.get_type() != sol::type::function) { continue; }
+    std::string const decl{ "function envy." + key.as<std::string>() + "(" };
+    CHECK_MESSAGE(declarations.find(decl) != std::string::npos,
+                  "undeclared in src/resources/envy.lua: ",
+                  key.as<std::string>());
+  }
 }
 
 }  // namespace envy

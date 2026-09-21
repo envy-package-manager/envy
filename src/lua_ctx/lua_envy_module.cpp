@@ -121,16 +121,20 @@ void lua_envy_loadenv_install(sol::table &envy_table) {
       throw std::runtime_error(std::string{ kFn } + ": path must be a non-empty string");
     }
 
-    // Dots are separators here too, but the path is anchored on the caller's own
-    // directory rather than inside a dependency, so it carries no escape to refuse.
+    // Looser than its siblings on purpose: this path is anchored on the caller's own
+    // directory, not inside a dependency, and a separator in it has always just
+    // worked. Containment is not looser -- `operator/` adopts an absolute subpath
+    // whole, so only the assertion below keeps `/tmp/x` from loading /tmp/x.lua.
     std::string subpath{ module_path };
     std::replace(subpath.begin(), subpath.end(), '.', '/');
 
     fs::path const dir{ lua_module_caller_file(L, kFn).parent_path() };
-    return lua_module_load(sol::state_view{ L },
-                           dir / (subpath + ".lua"),
-                           kFn,
-                           module_path);
+    fs::path const full_path{ lua_module_path_under(dir,
+                                                    subpath,
+                                                    kFn,
+                                                    module_path,
+                                                    "the calling file's directory") };
+    return lua_module_load(sol::state_view{ L }, full_path, kFn, module_path);
   };
 }
 
