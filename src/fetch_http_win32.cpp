@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -217,24 +218,32 @@ std::string query_effective_url(HINTERNET request) {
 }
 
 // Retry-After as seconds from now, the same thing CURLINFO_RETRY_AFTER reports: a server
-// naming its own cooldown beats any backoff curve. WinINet is asked to parse both legal
-// spellings rather than either being decoded here; one it cannot parse falls back to the
-// curve, which is what the absence of the header would have done anyway.
+// naming its own cooldown beats any backoff curve. One that cannot be read falls back to
+// the curve, which is what the absence of the header would have done anyway.
+//
+// The header is taken as text rather than through HTTP_QUERY_FLAG_NUMBER: that flag
+// returned nothing for Retry-After on the Windows CI runner, leaving the far commoner
+// delta-seconds form unread. Plain text is the general path and works for any header.
 std::optional<std::chrono::seconds> query_retry_after(HINTERNET request) {
   last_error_guard const preserve_error{};
 
-  DWORD delta{ 0 };
-  DWORD delta_size{ sizeof(delta) };
+  char raw[64]{};
+  DWORD raw_len{ sizeof(raw) - 1 };
   DWORD header_index{ 0 };
-  if (HttpQueryInfoA(request,
-                     HTTP_QUERY_RETRY_AFTER | HTTP_QUERY_FLAG_NUMBER,
-                     &delta,
-                     &delta_size,
-                     &header_index) &&
-      delta > 0) {
-    return std::chrono::seconds{ delta };
+  if (!HttpQueryInfoA(request, HTTP_QUERY_RETRY_AFTER, raw, &raw_len, &header_index)) {
+    return std::nullopt;
   }
 
+  // delta-seconds, which is what a throttler sends in practice. A literal 0 names no
+  // cooldown worth honoring, so it reads the same as an absent header.
+  char *end{ nullptr };
+  if (auto const delta{ std::strtoull(raw, &end, 10) }; end != raw && *end == '\0') {
+    return delta > 0 ? std::optional{ std::chrono::seconds{
+                           static_cast<std::chrono::seconds::rep>(delta) } }
+                     : std::nullopt;
+  }
+
+  // The HTTP-date spelling, handed back to WinINet to parse rather than decoded here.
   SYSTEMTIME when{};
   DWORD when_size{ sizeof(when) };
   header_index = 0;
