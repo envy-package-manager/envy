@@ -9,6 +9,7 @@ log prose: `download_retry` carries the attempt, the jittered delay, and the
 from __future__ import annotations
 
 import threading
+import time
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -90,6 +91,15 @@ class _FlakyOrigin(BaseHTTPRequestHandler):
 
         if parts[0] == "missing":
             self.send_error(404, "Not Found")
+            return
+
+        # /slow-503/<delay_ms>/<name>: fails only after burning real time, so an attempt
+        # costs the budget something even when the backoff between attempts is ~free.
+        if parts[0] == "slow-503":
+            time.sleep(int(parts[1]) / 1000)
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
 
         # /retry-after/<seconds>/<failures>/<name>: a 503 that names its own cooldown,
@@ -249,6 +259,57 @@ class FetchRetryTest(EnvyTestCase):
         retries = self.retries(run)
         self.assertEqual(1, len(retries), f"expected 1 retry, got {retries}")
         self.assertGreaterEqual(retries[0].raw["delay_ms"], 1000)
+
+    def test_budget_counts_time_spent_in_attempts(self) -> None:
+        """The budget is elapsed time from the first failure, not time asleep. Each
+        attempt here burns 300ms of a 700ms budget while the backoff between them costs
+        ~nothing, so accounting only for sleep would never spend it and would run the
+        attempt ceiling out instead."""
+        run, _ = self.fetch(
+            "slow-503/300/pkg.bin",
+            ENVY_FETCH_ATTEMPTS="10",
+            ENVY_FETCH_BUDGET_MS="700",
+            ENVY_FETCH_RETRY_BASE_MS="1",
+        )
+
+        self.assertNotEqual(0, run.returncode)
+        retries = self.retries(run)
+        self.assertGreaterEqual(len(retries), 1, "the budget affords at least one retry")
+        self.assertLess(len(retries), 9, "9 retries means only sleep was charged")
+
+    def test_retry_after_is_jittered_across_threads(self) -> None:
+        """Retry-After is the one wait every thread takes from the same host at the same
+        instant. Handed out verbatim it would stampede the origin it came from -- so it
+        is a floor, jittered upward, never back below what the server asked for."""
+        count = 6
+        sources = "\n".join(
+            f'  {{ source = "{self.base_url}/retry-after/1/1/item{i}.bin" }},'
+            for i in range(count)
+        )
+        spec = self.write_spec(
+            "throttled.lua",
+            f'IDENTITY = "local.throttled@v1"\nFETCH = {{\n{sources}\n}}\n',
+        )
+        manifest = test_config.write_spec_manifest(
+            self.work, [("local.throttled@v1", spec)]
+        )
+
+        env = test_config.get_test_env()
+        env["ENVY_FETCH_ATTEMPTS"] = "3"
+        env["ENVY_FETCH_RETRY_BASE_MS"] = RETRY_BASE_MS
+        run = self.run_envy("install", "--manifest", str(manifest), env=env)
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+
+        retries = self.retries(run)
+        self.assertEqual(count, len(retries), f"expected {count} retries: {retries}")
+
+        delays = [e.raw["delay_ms"] for e in retries]
+        for delay in delays:
+            self.assertGreaterEqual(delay, 1000, "never below the cooldown asked for")
+        self.assertGreater(
+            len(set(delays)), 1, f"all {count} retries waited the same {delays}"
+        )
 
     def test_retry_after_beyond_the_budget_gives_up_at_once(self) -> None:
         """Coming back before the server said to would only earn the same 503, so a

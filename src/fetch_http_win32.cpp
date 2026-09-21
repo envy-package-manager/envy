@@ -230,7 +230,8 @@ std::optional<std::chrono::seconds> query_retry_after(HINTERNET request) {
                      HTTP_QUERY_RETRY_AFTER | HTTP_QUERY_FLAG_NUMBER,
                      &delta,
                      &delta_size,
-                     &header_index)) {
+                     &header_index) &&
+      delta > 0) {
     return std::chrono::seconds{ delta };
   }
 
