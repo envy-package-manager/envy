@@ -59,13 +59,11 @@ void run_completion_phase(pkg *p, engine &eng) {
                               .count() };
 
   std::string const section_text{ [&] {
-    // A package whose only work was the vendor copy reports the copy: "cache hit" is the
-    // payload's verdict, and says nothing about what the vendor phase just wrote. Under
+    // A package that vendored reports the copy: vendoring is the last phase to write, and
+    // "installed" or "cache hit" is the payload's verdict, not the project tree's. Under
     // `envy vendor` the command says it instead, once per target and in order.
     auto const *plan{ eng.vendor() };
-    if (!timed && p->vendor_wrote && !(plan && plan->command_reports)) {
-      return p->vendor_outcome;
-    }
+    if (p->vendor_wrote && !(plan && plan->command_reports)) { return p->vendor_outcome; }
     // Build/import paths show wall-clock; a cache hit or no-op setup does not.
     return timed ? human + format_duration(duration_ms) : human;
   }() };
