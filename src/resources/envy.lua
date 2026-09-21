@@ -85,9 +85,8 @@ function envy.path.stem(path) end
 ---@return string
 function envy.path.extension(path) end
 
----Resolve a path against the calling script's directory, not cwd; absolute paths
----are returned normalized and unchanged
----@param path string
+---Resolve a relative path against the calling script's directory, not cwd
+---@param path string Relative path; an absolute one is an error
 ---@return string abs Absolute, normalized path
 function envy.abspath(path) end
 

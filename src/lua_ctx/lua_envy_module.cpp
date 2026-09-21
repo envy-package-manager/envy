@@ -99,7 +99,7 @@ sol::table lua_module_load(sol::state_view lua,
   return ret.as<sol::table>();
 }
 
-fs::path lua_module_caller_file(lua_State *L, std::string_view fn) {
+fs::path lua_module_caller_file(lua_State *L, std::string_view fn, caller_path how) {
   sol::state_view lua{ L };
   // Copy-init, not braces: MSVC reads a braced sol proxy as an initializer list.
   sol::table const info = lua["debug"]["getinfo"](2, "S");  // 2 = caller of this C fn
@@ -110,7 +110,8 @@ fs::path lua_module_caller_file(lua_State *L, std::string_view fn) {
 
   std::string_view s{ *source };
   if (!s.empty() && s.front() == '@') { s.remove_prefix(1); }  // file-source prefix
-  return fs::absolute(fs::path{ s });
+  fs::path const p{ s };
+  return how == caller_path::CANONICAL ? util_canonical_path(p) : fs::absolute(p);
 }
 
 void lua_envy_loadenv_install(sol::table &envy_table) {

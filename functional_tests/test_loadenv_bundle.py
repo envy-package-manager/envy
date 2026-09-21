@@ -63,14 +63,17 @@ class LoadenvBundleCase(EnvyTestCase):
         helper: str = HELPER,
         helper_path: str = "lib/github.lua",
         spec: str = GENERIC_SPEC,
+        root: Path | None = None,
     ) -> Path:
-        root = self.make_temp_dir("bundle")
+        if root is None:
+            root = self.make_temp_dir("bundle")
+        root.mkdir(parents=True, exist_ok=True)
         (root / "envy-bundle.lua").write_text(
             f'BUNDLE = "{identity}"\n'
             'SPECS = { ["test.generic@r1"] = "specs/generic.lua" }\n',
             encoding="utf-8",
         )
-        (root / "specs").mkdir()
+        (root / "specs").mkdir(exist_ok=True)
         (root / "specs" / "generic.lua").write_text(
             spec.format(identity="test.generic@r1", seed=self.lua_path(self.seed)),
             encoding="utf-8",
@@ -86,10 +89,11 @@ class LoadenvBundleCase(EnvyTestCase):
         path.write_text(test_config.make_manifest(body), encoding="utf-8")
         return path
 
-    def bundles_table(self, root: Path, alias: str = "tools", **extra) -> str:
+    def bundles_table(self, root: Path | str, alias: str = "tools", **extra) -> str:
+        source = root if isinstance(root, str) else self.lua_path(root)
         fields = [
             f'identity = "{extra.pop("identity", "test.tools@r1")}"',
-            f'source = "{self.lua_path(root)}"',
+            f'source = "{source}"',
         ]
         fields += [f'{k} = "{v}"' for k, v in extra.items()]
         return f"BUNDLES = {{\n  {alias} = {{ {', '.join(fields)} }},\n}}\n"
@@ -178,6 +182,68 @@ end
         run = self.install(self.helper_manifest(root))
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(2, len(run.events("pkg_outcome", spec="test.generic@r1")))
+
+    def test_a_relative_source_in_a_fragment_anchors_on_the_fragment(self):
+        sub = self.project / "sub"
+        self.make_bundle(root=sub / "bundles" / "tools")
+        (sub / "envy.lua").write_text(
+            test_config.make_manifest(
+                self.bundles_table("bundles/tools")
+                + 'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+                'PACKAGES = { gh.entry("one") }\n'
+            ),
+            encoding="utf-8",
+        )
+        manifest = self.manifest(
+            'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+        )
+
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+    def test_a_root_alias_reached_from_a_fragment_anchors_on_the_root(self):
+        """A fragment with no BUNDLES of its own sees the root's, which was written
+        over there -- so its relative `source` resolves over there too, exactly as a
+        literal `bundle = "tools"` entry in that fragment already does."""
+        self.make_bundle(root=self.project / "bundles" / "tools")
+        sub = self.project / "sub"
+        sub.mkdir()
+        (sub / "envy.lua").write_text(
+            test_config.make_manifest(
+                'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+                'PACKAGES = { gh.entry("one") }\n'
+            ),
+            encoding="utf-8",
+        )
+        manifest = self.manifest(
+            self.bundles_table("bundles/tools")
+            + 'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+        )
+
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+    def test_a_fragment_alias_wins_over_the_root_one(self):
+        self.make_bundle(root=self.project / "bundles" / "tools")  # never reached
+        sub = self.project / "sub"
+        self.make_bundle(root=sub / "bundles" / "tools", identity="test.own@r1")
+        (sub / "envy.lua").write_text(
+            test_config.make_manifest(
+                self.bundles_table("bundles/tools", identity="test.own@r1")
+                + 'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+                'PACKAGES = { gh.entry("one") }\n'
+            ),
+            encoding="utf-8",
+        )
+        manifest = self.manifest(
+            self.bundles_table("bundles/tools")
+            + 'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+        )
+
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue(self.spec_complete("test.own@r1"))
+        self.assertEqual([], self.spec_entries("test.tools@r1"))
 
     def test_an_imported_fragment_resolves_its_own_alias(self):
         root = self.make_bundle()

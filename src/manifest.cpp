@@ -674,11 +674,7 @@ manifest::discovery manifest::find_and_discover(
     bool nearest,
     std::optional<std::filesystem::path> const &project_dir) {
   if (explicit_path) {
-    auto path{ find_manifest_path(explicit_path, nearest, project_dir) };
-    auto content{ util_load_file(path) };
-    auto meta{ parse_envy_meta(
-        { reinterpret_cast<char const *>(content.data()), content.size() }) };
-    return { std::move(path), std::move(meta), std::move(content) };
+    return read_manifest(find_manifest_path(explicit_path, nearest, project_dir));
   }
 
   auto const start{ discovery_start_dir(project_dir) };
@@ -717,7 +713,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   lua_envy_install(*state);
   lua_envy_import_install(*state, meta.version, manifest_path);
   // Replaces the refusal every other Lua state carries: this is manifest scope.
-  lua_envy_loadenv_bundle_install(*state, c);
+  lua_envy_loadenv_bundle_install(*state, c, manifest_path);
 
   // Use manifest path as chunk name so debug.getinfo can find it for envy.loadenv()
   std::string const chunk_name{ "@" + manifest_path.string() };

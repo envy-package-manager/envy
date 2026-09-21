@@ -34,9 +34,16 @@ sol::table lua_module_load(sol::state_view lua,
                            std::string_view fn,
                            std::string const &module_path);
 
-// The Lua file that called us, absolute. A chunk name can be a bare filename, which
-// names the CWD.
-std::filesystem::path lua_module_caller_file(lua_State *L, std::string_view fn);
+// How a caller's path is spelled once found. ABSOLUTE is enough to anchor a lookup
+// beside it; CANONICAL is what comparing two spellings of one file needs, which is
+// envy.import's cycle test.
+enum class caller_path { ABSOLUTE, CANONICAL };
+
+// The Lua file that called us. Never bare: a chunk name can be a lone filename,
+// which names the CWD.
+std::filesystem::path lua_module_caller_file(lua_State *L,
+                                             std::string_view fn,
+                                             caller_path how = caller_path::ABSOLUTE);
 
 // envy.loadenv(module): a module path resolved against the calling file's directory.
 void lua_envy_loadenv_install(sol::table &envy_table);
