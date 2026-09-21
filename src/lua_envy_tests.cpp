@@ -180,4 +180,20 @@ TEST_CASE("envy.loadenv hands back what the module returns") {
   }
 }
 
+TEST_CASE("envy.loadenv_bundle points a spec at envy.loadenv_spec") {
+  // Only a manifest can reach a bundle by alias; installed on every other state as
+  // a refusal, so a spec gets a sentence rather than a nil field.
+  auto lua{ sol_util_make_lua_state() };
+  lua_envy_install(*lua);
+
+  auto const result{ lua->safe_script(R"lua(
+    local ok, err = pcall(function() envy.loadenv_bundle("tools", "lib.entries") end)
+    return ok, err
+  )lua",
+                                      sol::script_pass_on_error) };
+  REQUIRE(result.valid());
+  CHECK(result.get<bool>(0) == false);
+  CHECK(result.get<std::string>(1).find("envy.loadenv_spec") != std::string::npos);
+}
+
 }  // namespace envy

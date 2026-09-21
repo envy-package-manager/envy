@@ -430,6 +430,41 @@ end
 - File not found → error
 - Lua parse/execution error → error
 
+### envy.loadenv_bundle(alias, module) → table
+
+Load Lua from a bundle at manifest scope, materializing the bundle first. Manifest scope
+only — a spec reaches a bundle it declared with `envy.loadenv_spec`.
+
+**Arguments:**
+- `alias` — key of the `BUNDLES` table of the calling file; an imported fragment resolves its own
+- `module` — module path using Lua dot syntax, same rules as `envy.loadenv_spec`
+
+**Returns:** the module, same rule as `envy.loadenv_spec`.
+
+The bundle is fetched during the manifest's own global scope, earlier than the engine
+fetches bundles, so a helper's entries can go straight into `PACKAGES`. Declare the alias
+above the call: a manifest is read top to bottom. A `local.` bundle is read where it
+stands; every other shape lands in the cache, where the bundle's own package finds it
+already complete.
+
+```lua
+BUNDLES = { tools = { identity = "acme.specs@r1",
+                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d" } }
+
+local gh = envy.loadenv_bundle("tools", "lib.github")
+
+PACKAGES = {                             -- an entry parses exactly as a literal one does,
+  gh.repo("libb64", "libb64/libb64"),    -- so its `bundle` names an alias of this manifest
+  gh.repo("hidapi", "libusb/hidapi"),
+}
+```
+
+**Error conditions:**
+- Called anywhere but manifest scope → error pointing at `envy.loadenv_spec`
+- Alias absent from the calling file's `BUNDLES` → error naming the alias and the file
+- Custom-fetch bundle → error: its fetch needs a phase to run in
+- Module path, missing file, parse/execution error → as `envy.loadenv_spec`
+
 ### envy.loadenv(module) → table
 
 Load Lua file relative to current file into sandboxed environment.
@@ -495,6 +530,7 @@ bootstrap boundary in `docs/commands.md`. Cycles error; nesting is fine.
 - `envy.import(path)` — Compose a manifest from a subproject's manifest (paths and aliases follow the imported file)
 - `envy.loadenv(module)` — Load helpers from same project/bundle (relative to current file)
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency bundle (validates dependency graph)
+- `envy.loadenv_bundle(alias, module)` — Manifest scope: load from a `BUNDLES` alias, materializing it first
 - `require(module)` — Standard Lua module loading (uses package.path, cwd-relative)
 
 ---

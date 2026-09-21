@@ -110,17 +110,52 @@ PACKAGES = {
 |----------|---------|---------|
 | `envy.package(identity)` | Spec phases | Get installed package path (already exists) |
 | `envy.loadenv_spec(identity, module)` | Spec phases only | Load Lua from declared dependency into sandboxed table |
+| `envy.loadenv_bundle(alias, module)` | Manifest scope only | Load Lua from a `BUNDLES` alias, materializing it first |
 | `envy.loadenv(module)` | Any context | Load local file into sandboxed table |
 
-Both hand back what the module returned — its table if it returned one, the globals it
-assigned if it returned nothing, as `require` would. A module returning anything else is
-an error naming it.
+All three hand back what the module returned — its table if it returned one, the globals it
+assigned if it returned nothing, as `require` would. A module returning anything else is an
+error naming it.
 
 **Context clarification:**
 
 - `envy.loadenv(module)`: Allowed in any context (manifest global scope, spec global scope, phase functions). Uses Lua dot syntax (`"lib.utils"` → `lib/utils.lua`). Path is **always relative to the currently-executing Lua file** (uses `debug.getinfo` to determine caller's source file). Intended for loading local helper files in the same project or spec directory—NOT for loading other specs from the cache (users don't know cache paths).
 
 - `envy.loadenv_spec(identity, module)`: **Only callable from within phase functions**. Uses Lua dot syntax (`"lib.common"` → `lib/common.lua`). Uses the `needed_by` dependency system and is runtime-verified. If called at global scope, envy throws an error because the phase context doesn't exist yet.
+
+- `envy.loadenv_bundle(alias, module)`: **Manifest scope only**; a spec reaches a bundle it declared with `envy.loadenv_spec`. `alias` is a key of the `BUNDLES` table of the calling file — assigned above the call, since a manifest is read top to bottom — and an imported fragment resolves its own. The bundle is materialized right there, before the manifest's global scope finishes, so the helper's entries can go straight into `PACKAGES`. A `local.` bundle is read where it stands; every other shape lands in the cache, where the bundle's own package finds it already complete. A custom-fetch bundle is refused: its fetch needs a phase to run in, and its `source.dependencies` cannot be ordered this early.
+
+### A Bundle That Ships Its Own Entry Builder
+
+One generic spec plus the builder that names it: the consumer writes a line per dependency
+instead of restating the spec, the alias and the vendor path every time.
+
+```lua
+-- in the bundle, lib/github.lua
+local M = {}
+function M.repo(name, repo, ref)
+  return { spec = "acme.github@r0", bundle = "tools", vendor = "vendor/" .. name,
+           options = { repo = repo, ref = ref } }
+end
+return M
+```
+
+```lua
+-- consuming manifest
+BUNDLES = { tools = { identity = "acme.specs@r1",
+                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d" } }
+
+local gh = envy.loadenv_bundle("tools", "lib.github")
+
+PACKAGES = {
+  gh.repo("libb64", "libb64/libb64", "ce864b1"),
+  gh.repo("hidapi", "libusb/hidapi", "4ebce6b"),
+}
+```
+
+An entry the builder hands back is parsed exactly like a literal one: its `bundle = "tools"`
+resolves against the consuming manifest's `BUNDLES`, so a helper may name any alias its
+consumer declared, including one from a different bundle.
 
 ### Identity Fuzzy Matching
 

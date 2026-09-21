@@ -59,6 +59,7 @@ EVENT_REGISTRY = {
         "allowed:bool",
         "reason:str",
     ],
+    "lua_ctx_loadenv_bundle": ["alias:str", "target:str", "subpath:str", "root:str"],
     "manifest_resolved": ["path:str", "anchor:str", "mode:str", "nearest:bool"],
     "manifest_imported": ["path:str", "importer:str"],
     "depot_check": ["sha:str", "result:str"],

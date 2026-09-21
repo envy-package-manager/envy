@@ -107,6 +107,14 @@ ENVY_TRACE_EVENT(lua_ctx_loadenv_spec_access,
                  ENVY_TRACE_FIELD_BOOL(allowed)
                  ENVY_TRACE_FIELD_STR(reason))
 
+// A manifest reaching into a bundle before its own global scope has finished.
+// `alias` is the BUNDLES key it named, `root` where the payload landed.
+ENVY_TRACE_EVENT(lua_ctx_loadenv_bundle,
+                 ENVY_TRACE_FIELD_STR(alias)
+                 ENVY_TRACE_FIELD_STR(target)
+                 ENVY_TRACE_FIELD_STR(subpath)
+                 ENVY_TRACE_FIELD_STR(root))
+
 // --- depot / products / deploy ---
 
 ENVY_TRACE_EVENT(depot_check,

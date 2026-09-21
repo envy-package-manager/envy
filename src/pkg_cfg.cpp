@@ -753,4 +753,21 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
       lhs);
 }
 
+std::string source_key(pkg_cfg::remote_source const &r) {
+  return "remote\n" + r.url + "\n" + r.sha256;
+}
+
+std::string source_key(pkg_cfg::git_source const &g) {
+  return "git\n" + g.url + "\n" + g.ref;
+}
+
+std::string source_key(pkg_cfg::local_source const &l) {
+  return "local\n" + l.file_path.generic_string();
+}
+
+std::string custom_fetch_source_key(pkg_cfg const &cfg) {
+  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity +
+         "\n" + cfg.serialized_options;
+}
+
 }  // namespace envy

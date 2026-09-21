@@ -4,6 +4,7 @@
 #include "engine.h"
 #include "envy_release.h"
 #include "lua_ctx/lua_envy_import.h"
+#include "lua_ctx/lua_envy_loadenv_bundle.h"
 #include "lua_envy.h"
 #include "lua_shell.h"
 #include "platform.h"
@@ -668,31 +669,37 @@ std::filesystem::path manifest::find_manifest_path(
   }
 }
 
-std::unique_ptr<manifest> manifest::find_and_load(
+manifest::discovery manifest::find_and_discover(
     std::optional<std::filesystem::path> const &explicit_path,
     bool nearest,
     std::optional<std::filesystem::path> const &project_dir) {
   if (explicit_path) {
-    return load(find_manifest_path(explicit_path, nearest, project_dir));
+    auto path{ find_manifest_path(explicit_path, nearest, project_dir) };
+    auto content{ util_load_file(path) };
+    auto meta{ parse_envy_meta(
+        { reinterpret_cast<char const *>(content.data()), content.size() }) };
+    return { std::move(path), std::move(meta), std::move(content) };
   }
 
   auto const start{ discovery_start_dir(project_dir) };
-  auto const found{ discover(nearest, start) };
+  auto found{ discover(nearest, start) };
   if (!found) {
     throw std::runtime_error("manifest not found (discovery from " + start.string() + ")");
   }
 
   trace_resolved(found->path, start, project_dir ? "project" : "cwd", nearest);
-  return load(found->content, found->path);  // discovery already read the file
+  return std::move(*found);
 }
 
-std::unique_ptr<manifest> manifest::load(std::filesystem::path const &manifest_path) {
+std::unique_ptr<manifest> manifest::load(std::filesystem::path const &manifest_path,
+                                         cache *c) {
   tui::debug("Loading manifest from file: %s", manifest_path.string().c_str());
-  return load(util_load_file(manifest_path), manifest_path);
+  return load(util_load_file(manifest_path), manifest_path, c);
 }
 
 std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &content,
-                                         std::filesystem::path const &manifest_path) {
+                                         std::filesystem::path const &manifest_path,
+                                         cache *c) {
   tui::debug("Loading manifest (%zu bytes)", content.size());
   // Ensure null-termination for Lua (create string with guaranteed null terminator)
   std::string const script{ reinterpret_cast<char const *>(content.data()),
@@ -709,6 +716,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   auto state{ sol_util_make_lua_state() };
   lua_envy_install(*state);
   lua_envy_import_install(*state, meta.version, manifest_path);
+  // Replaces the refusal every other Lua state carries: this is manifest scope.
+  lua_envy_loadenv_bundle_install(*state, c);
 
   // Use manifest path as chunk name so debug.getinfo can find it for envy.loadenv()
   std::string const chunk_name{ "@" + manifest_path.string() };
@@ -782,10 +791,12 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 }
 
 std::unique_ptr<manifest> manifest::load(char const *script,
-                                         std::filesystem::path const &manifest_path) {
+                                         std::filesystem::path const &manifest_path,
+                                         cache *c) {
   tui::debug("Loading manifest from C string");
   return load(std::vector<unsigned char>(script, script + std::strlen(script)),
-              manifest_path);
+              manifest_path,
+              c);
 }
 
 vendor_plan manifest::resolve_vendor_plan() const {

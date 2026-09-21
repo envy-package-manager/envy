@@ -752,11 +752,12 @@ FETCH = function(tmp_dir, options)
 end
 ```
 
-**`envy.loadenv()` vs `envy.loadenv_spec()`:**
+**The three loaders:**
 - `envy.loadenv(module)` — Load Lua file relative to current file. Works at global scope or in phases. Uses dot syntax (`"lib.utils"` → `lib/utils.lua`).
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency. Phase context required; validates `needed_by`. Uses dot syntax.
+- `envy.loadenv_bundle(alias, module)` — Manifest scope only. Resolves a `BUNDLES` alias of the calling file and materializes the bundle then and there, so a helper out of it can build the manifest's `PACKAGES`. Custom-fetch bundles are refused: their fetch needs a phase.
 
-Both hand back the module's return value when it returned a table, the globals it
+All three hand back the module's return value when it returned a table, the globals it
 assigned when it returned nothing — the rule `require` already teaches. Anything else is
 an error naming the module.
 

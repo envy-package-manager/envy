@@ -125,17 +125,27 @@ struct manifest : unmovable {
                              char const *mode,
                              bool nearest);
 
-  // Discover + load, with find_manifest_path's anchor precedence.
-  static std::unique_ptr<manifest> find_and_load(
+  // Discover with find_manifest_path's anchor precedence, reading the bytes and the
+  // '@envy' header but executing nothing. The cache root, the version re-exec and
+  // self-deploy are all decided from that header, and they have to be decided first:
+  // a manifest may reach into a bundle during its own global scope, and the cache
+  // the payload lands in is the one they settle on.
+  static discovery find_and_discover(
       std::optional<std::filesystem::path> const &explicit_path,
       bool nearest = false,
       std::optional<std::filesystem::path> const &project_dir = std::nullopt);
 
-  static std::unique_ptr<manifest> load(std::filesystem::path const &manifest_path);
+  // `c` backs envy.loadenv_bundle, which materializes a bundle while the manifest's
+  // global scope is still running. Null for a caller with no cache in hand; the
+  // manifest then says so by name rather than fetching into nowhere.
+  static std::unique_ptr<manifest> load(std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
   static std::unique_ptr<manifest> load(std::vector<unsigned char> const &content,
-                                        std::filesystem::path const &manifest_path);
+                                        std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
   static std::unique_ptr<manifest> load(char const *script,
-                                        std::filesystem::path const &manifest_path);
+                                        std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
 
   // Parse the DEFAULT_SHELL global. Value forms (ENVY_SHELL constant, custom shell
   // table) resolve here; a function — bare, or the SHELL field of a
