@@ -16,14 +16,12 @@ namespace {
 
 constexpr std::string_view kFn{ "envy.loadenv_bundle" };
 
-// Where the caller's own globals live. An imported fragment assigns into the sandbox
-// envy.import gave it, so the root manifest's _G would not have them.
+// The caller's own globals: an imported fragment assigns into its sandbox, not _G.
 sol::table caller_scope(sol::this_environment const &te, sol::state_view lua) {
   return te.env ? sol::table{ *te.env } : sol::table{ lua.globals() };
 }
 
-// The alias in `table`, parsed against the file that declared it. Nullopt when the
-// table has no such key, so the caller can fall back.
+// The alias in `table`, parsed against `origin`. Nullopt lets the caller fall back.
 std::optional<pkg_cfg::bundle_source> find_alias(sol::object const &table,
                                                  std::string const &alias,
                                                  pkg_decl_origin const &origin) {
@@ -37,9 +35,7 @@ std::optional<pkg_cfg::bundle_source> find_alias(sol::object const &table,
 void lua_envy_loadenv_bundle_install(sol::state &lua_state,
                                      cache *c,
                                      std::filesystem::path root_path) {
-  // A sol reference keyed on this state, so it must not outlive it: taken and dropped
-  // inside this call rather than handed back to a caller that unwinds past the state.
-  sol::table envy_table = lua_state["envy"];
+  sol::table envy_table = lua_state["envy"];  // a state-keyed ref: must not outlive it
   envy_table["loadenv_bundle"] = [c, root = std::move(root_path)](
                                      std::string const &alias,
                                      std::string const &module_path,
@@ -51,12 +47,8 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
     sol::state_view lua{ L };
     std::filesystem::path const caller{ lua_module_caller_file(L, kFn) };
 
-    // Lookup order and anchoring both mirror a literal `bundle = "alias"` entry (see
-    // manifest_parse_ctx::find_alias): the calling file's own BUNDLES wins, since
-    // that file wrote the reference, and the root manifest's is the fallback. Each
-    // is parsed against the file that declared it, so a relative `source` resolves
-    // where it was written -- a raw read, because a fragment's sandbox falls through
-    // to the root's globals and would otherwise adopt the root's table as its own.
+    // Order and anchoring mirror manifest_parse_ctx::find_alias: own BUNDLES, then the
+    // root's, each against its writer. Raw, or a sandbox adopts the root's as its own.
     auto const src{ [&]() -> std::optional<pkg_cfg::bundle_source> {
       sol::table const own{ caller_scope(te, lua) };
       if (sol::object const declared{ own.raw_get<sol::object>("BUNDLES") };

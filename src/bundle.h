@@ -70,41 +70,31 @@ struct bundle {
   void configure_package_path(sol::state &lua) const;
 };
 
-// One transfer of a bundle's payload. The caller owns progress: a BUNDLE_ONLY
-// package draws a row for it, manifest scope has no row to draw on.
+// One transfer of a bundle's payload. The caller owns progress; manifest scope has none.
 using bundle_fetcher =
     std::function<void(fetch_request, std::string const &url, char const *what)>;
 
-// A bundle's custom fetch, which needs a phase context and so stays with whoever
-// has one. Called with the fetch dir it must leave `envy-bundle.lua` in.
+// A bundle's custom fetch. Needs a phase context, so it stays with whoever has one.
 using bundle_custom_fetcher = std::function<void()>;
 
-// Put a bundle's payload in `install_dir`, whatever its source shape. Shared by the
-// BUNDLE_ONLY package's spec_fetch and by manifest scope, so the two cannot drift on
-// what a bundle declaration means.
+// Put a bundle's payload in `install_dir`, whatever its source shape. Shared with the
+// BUNDLE_ONLY package's spec_fetch, so the two cannot drift.
 void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
                           std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &install_dir,
                           bundle_fetcher const &fetch_one,
                           bundle_custom_fetcher const &run_custom);
 
-// The cache entry key for a bundle's payload, the same canonical source description
-// a spec's entry uses. `cfg` is read only for the custom-fetch shape, which has no
-// fingerprint of its own, so a caller that cannot reach one passes null.
+// A bundle payload's cache entry key. `cfg` is read only for the custom-fetch shape,
+// which has no fingerprint of its own; a caller without one passes null.
 std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg);
 
-// Parse, identity-check and validate a materialized bundle. Callers run this while
-// the cache entry is still unfinalized: `envy-complete` is never revalidated, so
-// marking first would make a malformed bundle a permanent entry that fails
-// identically on every later run.
+// Parse, identity-check and validate a materialized bundle, before its entry is
+// finalized: `envy-complete` is never revalidated, so a bad one would be permanent.
 bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id);
 
-// Materialize a bundle with no engine, package or phase behind it -- manifest scope
-// has none of the three -- and hand back its root. Cache-backed, so the BUNDLE_ONLY
-// package the engine schedules later finds the entry already complete. Throws on a
-// custom-fetch bundle, which has nowhere to run this early. A null `c` is a caller
-// with no cache in hand: fine for a 'local.' bundle, which is read where it stands,
-// and refused by name for every shape that has to be fetched.
+// A bundle's root, materialized with no engine, package or phase behind it -- manifest
+// scope has none. Throws on custom fetch; a null `c` suits only a 'local.' bundle.
 std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
                                               cache *c,
                                               std::string_view fn);

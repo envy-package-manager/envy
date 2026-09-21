@@ -108,10 +108,9 @@ void lua_envy_import_install(sol::state &lua,
       "import",
       [chain, root_version](sol::this_state L, std::string const &arg) -> sol::table {
         sol::state_view lua_view{ L };
-        // Canonical: the cycle test below compares resolved paths, so two spellings
-        // of one file have to come out the same.
+        // Canonical: the cycle test compares resolved paths, not spellings.
         fs::path const importer{
-          lua_module_caller_file(L, "envy.import", caller_path::CANONICAL)
+          lua_module_caller_file(L, "envy.import", caller_path::CANONICAL_)
         };
 
         fs::path const resolved{ [&] {

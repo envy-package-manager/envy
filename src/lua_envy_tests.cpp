@@ -138,8 +138,7 @@ TEST_CASE("envy.extend") {
   }
 }
 
-// The chunk name envy.loadenv reads with debug.getinfo to anchor a relative module
-// path; the file need not exist, only its directory.
+// The chunk name envy.loadenv anchors on; only its directory has to exist.
 constexpr char kCaller[]{ "@test_data/lua/caller.lua" };
 
 TEST_CASE("envy.loadenv hands back what the module returns") {
@@ -197,8 +196,7 @@ TEST_CASE("envy.loadenv hands back what the module returns") {
 }
 
 TEST_CASE("envy.loadenv_bundle points a spec at envy.loadenv_spec") {
-  // Only a manifest can reach a bundle by alias; installed on every other state as
-  // a refusal, so a spec gets a sentence rather than a nil field.
+  // Installed as a refusal everywhere but a manifest, so a spec gets a sentence.
   auto lua{ sol_util_make_lua_state() };
   lua_envy_install(*lua);
 

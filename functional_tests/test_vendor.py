@@ -1422,11 +1422,7 @@ end
 
 
 class TestVendorFromBundle(VendorTestCase):
-    """A spec pulled out of a bundle vendors exactly as one named by `source` does.
-
-    A spec whose whole job is to put a source tree in the work tree is the kind worth
-    sharing from a bundle, so the two entry shapes have to agree on `vendor`.
-    """
+    """A spec pulled out of a bundle vendors exactly as one named by `source` does."""
 
     def bundle(self, identity: str, spec_identity: str) -> Path:
         root = self.make_temp_dir("bundle")

@@ -433,8 +433,7 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
             extract(dest, install_dir);
           },
           [&](pkg_cfg::local_source const &local) {
-            // A non-'local.' identity, so the payload is copied into the cache rather
-            // than read where it stands.
+            // A non-'local.' identity: copied into the cache, not read where it stands.
             if (std::filesystem::is_directory(local.file_path)) {
               std::filesystem::copy(local.file_path,
                                     install_dir,
@@ -510,8 +509,7 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
         "reaches one of those, with envy.loadenv_spec");
   }
 
-  // A 'local.' bundle is read where it stands, exactly as its BUNDLE_ONLY package
-  // would read it -- no cache entry, so an edit to it is picked up on the next run.
+  // Read where it stands, as its BUNDLE_ONLY package does: no entry, so edits land.
   if (auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
       local && id.starts_with("local.") &&
       std::filesystem::is_directory(local->file_path)) {
@@ -525,9 +523,8 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
 
   auto result{ c->ensure_spec(id, bundle_source_key(src, nullptr)) };
   if (result.lock) {
-    // No package row to draw on this early, and a clone can take a while, so say what
-    // is happening rather than sit silent. A hit says nothing: the bundle's own
-    // package reports one line for it a moment later.
+    // No package row this early and a clone is slow, so say so. A hit stays quiet:
+    // the bundle's own package reports it a moment later.
     tui::info("bundle %s: fetching, the manifest reads it", id.c_str());
 
     bundle_fetch_payload(

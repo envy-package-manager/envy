@@ -470,9 +470,7 @@ PACKAGES = {{
 class TestLoadenvSpecReturnValue(LoadenvSpecCase):
     """A loaded module's return value is the result, as `require` would give it.
 
-    The same file has to serve a bundle's own specs, which reach it with `require`,
-    and a consumer, which reaches it with envy.loadenv_spec. Returning the globals
-    handed the standard shape back an empty table and failed somewhere else later.
+    One file serves both a bundle's own specs, which `require` it, and a consumer.
     """
 
     def consumer(self, body: str, bundle_path: Path) -> Path:

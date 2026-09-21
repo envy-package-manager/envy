@@ -15,9 +15,8 @@ cmd_startup cmd_startup_load(std::string_view cmd_name,
                              std::optional<std::filesystem::path> const &cli_cache_root,
                              bool subproject,
                              std::optional<std::filesystem::path> const &project_dir) {
-  // Bytes and '@envy' header only. Everything below decides where this project's
-  // cache is, and a manifest may fetch a bundle into it during its own global scope
-  // (envy.loadenv_bundle), so the manifest cannot run until they have.
+  // Bytes and '@envy' header only: everything below picks the cache, and the manifest
+  // may fetch a bundle into it during its own global scope (envy.loadenv_bundle).
   auto const found{ manifest::find_and_discover(manifest_path, subproject, project_dir) };
   auto const manifest_dir{ found.path.parent_path() };
 

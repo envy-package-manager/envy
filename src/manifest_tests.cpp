@@ -2632,8 +2632,7 @@ TEST_CASE("manifest::load reads a vendor table holding both keys") {
 
 namespace {
 
-// A 'local.' bundle is read where it stands, so a manifest can reach into this one
-// without a cache and without writing anything.
+// A 'local.' bundle is read in situ: no cache needed, and nothing written.
 std::string local_bundle_manifest(std::string const &call, std::string const &packages) {
   auto const root{
     (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()
@@ -2679,8 +2678,7 @@ TEST_CASE("manifest::load refuses a module path that is not dot syntax") {
 }
 
 TEST_CASE("manifest::load says so when envy.loadenv_bundle has no cache to fetch into") {
-  // A 'local.' bundle needs none; every other shape does, and this manifest was
-  // loaded without one.
+  // A 'local.' bundle needs no cache; every other shape does.
   char const *script{ R"(
     -- @envy bin "tools"
     BUNDLES = { tools = { identity = "acme.tools@r1",
@@ -2709,8 +2707,7 @@ TEST_CASE("manifest::load refuses a custom-fetch bundle at manifest scope") {
 }
 
 TEST_CASE("manifest::load parses vendor on a bundle package entry") {
-  // A bundled spec whose whole job is to land a source tree is exactly the one worth
-  // sharing, so `vendor` reads the same here as it does beside a `source`.
+  // `vendor` reads the same beside a `bundle` as it does beside a `source`.
   char const *script{ R"(
     -- @envy bin "tools"
     VENDOR_ROOT = "third_party"

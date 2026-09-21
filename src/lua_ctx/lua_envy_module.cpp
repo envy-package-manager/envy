@@ -13,8 +13,7 @@ namespace fs = std::filesystem;
 
 std::string prefix(std::string_view fn) { return std::string{ fn } + ": "; }
 
-// Lua's own name for a value's type, so a refusal reads the way the interpreter's
-// own errors do.
+// Lua's own type name, so a refusal reads like the interpreter's own errors.
 char const *lua_type_name(sol::object const &o) {
   return lua_typename(o.lua_state(), static_cast<int>(o.get_type()));
 }
@@ -77,8 +76,7 @@ sol::table lua_module_load(sol::state_view lua,
     throw std::runtime_error(prefix(fn) + "load error: " + err.what());
   }
 
-  // Assigned globals land here rather than in the caller's; the stdlib stays visible
-  // through the metatable.
+  // Assigned globals land here, not in the caller's; the stdlib shows through _G.
   sol::environment env{ lua, sol::create, lua.globals() };
   sol::protected_function fnc{ chunk };
   sol::set_environment(env, fnc);
@@ -111,7 +109,7 @@ fs::path lua_module_caller_file(lua_State *L, std::string_view fn, caller_path h
   std::string_view s{ *source };
   if (!s.empty() && s.front() == '@') { s.remove_prefix(1); }  // file-source prefix
   fs::path const p{ s };
-  return how == caller_path::CANONICAL ? util_canonical_path(p) : fs::absolute(p);
+  return how == caller_path::CANONICAL_ ? util_canonical_path(p) : fs::absolute(p);
 }
 
 void lua_envy_loadenv_install(sol::table &envy_table) {
@@ -122,10 +120,8 @@ void lua_envy_loadenv_install(sol::table &envy_table) {
       throw std::runtime_error(std::string{ kFn } + ": path must be a non-empty string");
     }
 
-    // Looser than its siblings on purpose: this path is anchored on the caller's own
-    // directory, not inside a dependency, and a separator in it has always just
-    // worked. Containment is not looser -- `operator/` adopts an absolute subpath
-    // whole, so only the assertion below keeps `/tmp/x` from loading /tmp/x.lua.
+    // Looser than its siblings: anchored on the caller's own file, and a separator here
+    // has always worked. Containment is not -- `operator/` would adopt `/tmp/x` whole.
     std::string subpath{ module_path };
     std::replace(subpath.begin(), subpath.end(), '.', '/');
 

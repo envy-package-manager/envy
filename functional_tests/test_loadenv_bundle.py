@@ -1,9 +1,7 @@
 """Functional tests for envy.loadenv_bundle(): a manifest calling out of a bundle.
 
-A bundle can carry one generic spec plus the entry builder that names it, so a
-consumer writes a line per dependency instead of restating the spec, the alias and
-the vendor path every time. The bundle therefore has to be materialized before the
-manifest's global scope finishes -- earlier than the engine fetches bundles.
+The bundle has to be materialized before the manifest's global scope finishes, which
+is earlier than the engine fetches bundles.
 """
 
 from __future__ import annotations
@@ -15,8 +13,7 @@ from . import test_config
 from .env import EnvyTestCase
 
 
-# A spec with nothing to fetch: the tests are about reaching the helper beside it,
-# not about what the helper's entries end up installing.
+# Nothing to fetch: these tests are about reaching the helper beside it.
 GENERIC_SPEC = """IDENTITY = "{identity}"
 DEPENDENCIES = {{}}
 
@@ -37,8 +34,7 @@ INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
 end
 """
 
-# The shape the issue asks for: one builder, one line per dependency. `bundle`
-# names the alias the consuming manifest declared, which is where it resolves.
+# One builder, one line per dependency. `bundle` names the consumer's own alias.
 HELPER = """local M = {}
 function M.entry(name)
   return { spec = "test.generic@r1", bundle = "tools",
@@ -202,9 +198,8 @@ end
         self.assertEqual(0, run.returncode, run.stderr)
 
     def test_a_root_alias_reached_from_a_fragment_anchors_on_the_root(self):
-        """A fragment with no BUNDLES of its own sees the root's, which was written
-        over there -- so its relative `source` resolves over there too, exactly as a
-        literal `bundle = "tools"` entry in that fragment already does."""
+        """A fragment with no BUNDLES of its own sees the root's, written over there,
+        so its relative `source` resolves over there too."""
         self.make_bundle(root=self.project / "bundles" / "tools")
         sub = self.project / "sub"
         sub.mkdir()
