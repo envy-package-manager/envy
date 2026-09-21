@@ -237,6 +237,20 @@ pkg_source_match bundle_source_compare(pkg_cfg::bundle_source const &lhs,
 pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
                                         pkg_cfg::source_t const &rhs);
 
+// Canonical description of where a spec's or bundle's bytes come from. This is the
+// only input to its cache entry key besides identity, so every field a fetch
+// actually reads belongs here: change the URL, the git ref, or the path and you get
+// a different entry rather than yesterday's content under today's declaration.
+//
+// A custom fetch function is the exception -- a Lua closure has no fingerprint, so
+// its entries key on the file that declares it, plus the options it is handed: one
+// function drives down a different path per option set. Editing the function body in
+// place still reuses the entry; move it, or bump the identity, to force a refetch.
+std::string source_key(pkg_cfg::remote_source const &r);
+std::string source_key(pkg_cfg::git_source const &g);
+std::string source_key(pkg_cfg::local_source const &l);
+std::string custom_fetch_source_key(pkg_cfg const &cfg);
+
 // Throw if `table` carries 'platforms': it filters manifest PACKAGES entries and nothing
 // else, so a dependency entry dropped it. Shared, so every such shape says it alike.
 void pkg_cfg_reject_platforms(sol::table const &table, std::string_view context);

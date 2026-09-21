@@ -387,7 +387,10 @@ colliding group and to a fixpoint, so two option variants of one spec both vendo
 string is the final directory itself, project-relative, and is a fixed point in that
 ladder—a derived name that wanted it steps aside. A table spells both out: `path` is that
 same override, `auto_sync` is below; `vendor = {}` is `vendor = true` written longhand.
-Only manifest `PACKAGES` entries may carry `vendor`; only cache-managed packages can be vendored (a bundle has no payload, and
+Only manifest `PACKAGES` entries may carry `vendor` — an entry naming a `bundle` as
+readily as one naming a `source`, since a spec whose job is to put a source tree in the
+work tree is exactly the kind worth sharing. Only cache-managed packages can be vendored
+(a bundle has no payload, and
 `USER_MANAGED` writes to the host, which `spec_fetch` refuses before any build work).
 
 A spec chooses what of its install directory is worth copying:
@@ -749,9 +752,14 @@ FETCH = function(tmp_dir, options)
 end
 ```
 
-**`envy.loadenv()` vs `envy.loadenv_spec()`:**
+**The three loaders:**
 - `envy.loadenv(module)` — Load Lua file relative to current file. Works at global scope or in phases. Uses dot syntax (`"lib.utils"` → `lib/utils.lua`).
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency. Phase context required; validates `needed_by`. Uses dot syntax.
+- `envy.loadenv_bundle(alias, module)` — Manifest scope only. Resolves a `BUNDLES` alias of the calling file and materializes the bundle then and there, so a helper out of it can build the manifest's `PACKAGES`. Custom-fetch bundles are refused: their fetch needs a phase.
+
+All three hand back the module's return value when it returned a table, the globals it
+assigned when it returned nothing — the rule `require` already teaches. Anything else is
+an error naming the module.
 
 **Validation:** Bundle validation runs threaded—each spec's IDENTITY verified against SPECS table keys. All bundles validated on every load.
 

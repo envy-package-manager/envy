@@ -85,6 +85,11 @@ function envy.path.stem(path) end
 ---@return string
 function envy.path.extension(path) end
 
+---Resolve a relative path against the calling script's directory, not cwd
+---@param path string Relative path; an absolute one is an error
+---@return string abs Absolute, normalized path
+function envy.abspath(path) end
+
 --------------------------------------------------------------------------------
 -- File Operations
 --------------------------------------------------------------------------------
@@ -217,14 +222,22 @@ function envy.product(name) end
 ---Must be called within phase function; validates dependency graph and needed_by
 ---@param identity string Dependency identity (fuzzy match supported)
 ---@param module string Module path using Lua dot syntax (e.g., "lib.common" → lib/common.lua)
----@return table env Table containing globals defined in the loaded file
+---@return table module What the file returned if it returned a table, else its globals
 function envy.loadenv_spec(identity, module) end
 
 ---Load Lua file relative to current file into sandboxed environment
 ---Path is resolved relative to the file calling loadenv, not cwd
 ---@param module string Module path using Lua dot syntax (e.g., "lib.utils" → lib/utils.lua)
----@return table env Table containing globals defined in the loaded file
+---@return table module What the file returned if it returned a table, else its globals
 function envy.loadenv(module) end
+
+---Load Lua file from a BUNDLES alias, materializing the bundle first (manifest scope only)
+---The alias is resolved in the calling file's BUNDLES, which must be assigned above the
+---call; a spec reaches a bundle it declared with envy.loadenv_spec instead
+---@param alias string A key of the calling file's BUNDLES table
+---@param module string Module path using Lua dot syntax (e.g., "lib.github" → lib/github.lua)
+---@return table module What the file returned if it returned a table, else its globals
+function envy.loadenv_bundle(alias, module) end
 
 ---Import another project's manifest into a sandboxed environment (manifest scope only)
 ---Path is relative to the calling manifest; a directory argument appends envy.lua
@@ -283,6 +296,12 @@ IDENTITY = ""
 
 ---A bundle declaration: a BUNDLES alias's value, or an inline table on an entry.
 ---@alias envy.bundle_decl { identity: string, source: string|envy.source_table, sha256?: string, ref?: string }
+
+---Where a package's payload is copied into the project tree. `true` derives a leaf name
+---under VENDOR_ROOT, a string is that exact project-relative directory, `false` is not
+---vendored; the table spells both out, `auto_sync = false` exempting the copy from the
+---wipe-and-recopy repair.
+---@alias envy.vendor_spec boolean|string|{ path?: string, auto_sync?: boolean }
 
 ---The fallback under `weak = {...}`: a complete strong declaration. It inherits the
 ---weak entry's needed_by and may not restate it.
@@ -387,12 +406,17 @@ EXPORTABLE = nil
 ---One PACKAGES entry: always a table (there is no bare-string shorthand), naming a
 ---payload with `source` or a bundle with `bundle`. Unknown keys are errors.
 ---@alias envy.package_spec
----| { spec: string, source: string, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[], sha256?: string, ref?: string }
----| { spec: string, bundle: string|envy.bundle_decl, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[] }
+---| { spec: string, source: string, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[], vendor?: envy.vendor_spec, sha256?: string, ref?: string }
+---| { spec: string, bundle: string|envy.bundle_decl, options?: table, needed_by?: envy.needed_by, product?: string, platforms?: string[], setup?: string[], vendor?: envy.vendor_spec }
 
 ---Manifest packages array
 ---@type envy.package_spec[]
 PACKAGES = {}
+
+---Where `vendor = true` entries land, relative to this manifest. No default: an entry
+---that needs one and does not find it is an error naming that entry.
+---@type string|nil
+VENDOR_ROOT = nil
 
 ---Bundle aliases for this file: each key is a short name `bundle = "..."` may use in
 ---this manifest's PACKAGES (or this spec's DEPENDENCIES); each value names the real

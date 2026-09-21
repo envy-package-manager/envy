@@ -2,6 +2,7 @@
 
 #include "envy_release.h"
 #include "lua_envy.h"
+#include "lua_envy_module.h"
 #include "manifest.h"
 #include "pkg_cfg.h"
 #include "trace.h"
@@ -17,23 +18,6 @@ namespace envy {
 namespace {
 
 namespace fs = std::filesystem;
-
-// The Lua file that called us, absolute. Level 2 is the caller of a C function (level
-// 1 being the C function itself), the same walk envy.abspath makes. Absolute because a
-// chunk name can be a bare filename, which names the CWD as envy.loadenv reads it too.
-fs::path caller_file(lua_State *L) {
-  sol::state_view lua{ L };
-  // Copy-init, not braces: MSVC reads a braced sol proxy as an initializer list.
-  sol::table const info = lua["debug"]["getinfo"](2, "S");
-  sol::optional<std::string> const source = info["source"];
-  if (!source) {
-    throw std::runtime_error("envy.import: cannot determine caller's source file");
-  }
-
-  std::string_view s{ *source };
-  if (!s.empty() && s.front() == '@') { s.remove_prefix(1); }  // file-source prefix
-  return util_canonical_path(s);
-}
 
 bool has_field(sol::table const &t, char const *key) {
   sol::object const o{ t[key] };
@@ -124,7 +108,10 @@ void lua_envy_import_install(sol::state &lua,
       "import",
       [chain, root_version](sol::this_state L, std::string const &arg) -> sol::table {
         sol::state_view lua_view{ L };
-        fs::path const importer{ caller_file(L) };
+        // Canonical: the cycle test compares resolved paths, not spellings.
+        fs::path const importer{
+          lua_module_caller_file(L, "envy.import", caller_path::CANONICAL_)
+        };
 
         fs::path const resolved{ [&] {
           fs::path const arg_path{ arg };

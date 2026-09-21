@@ -1,6 +1,9 @@
 #include "bundle.h"
 
+#include "cache.h"
+#include "extract.h"
 #include "manifest.h"
+#include "sha256.h"
 #include "sol_util.h"
 #include "spec_util.h"
 #include "tui.h"
@@ -413,6 +416,136 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
   cfg->bundle_identity = src.bundle_identity;
   memo.emplace(src.bundle_identity, cfg);
   return cfg;
+}
+
+void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
+                          std::filesystem::path const &fetch_dir,
+                          std::filesystem::path const &install_dir,
+                          bundle_fetcher const &fetch_one,
+                          bundle_custom_fetcher const &run_custom) {
+  std::visit(
+      match{
+          [&](pkg_cfg::remote_source const &remote) {
+            std::filesystem::path const dest{ fetch_dir /
+                                              uri_extract_filename(remote.url) };
+            fetch_one(fetch_request_from_url(remote.url, dest), remote.url, "bundle");
+            if (!remote.sha256.empty()) { sha256_verify(remote.sha256, sha256(dest)); }
+            extract(dest, install_dir);
+          },
+          [&](pkg_cfg::local_source const &local) {
+            // A non-'local.' identity: copied into the cache, not read where it stands.
+            if (std::filesystem::is_directory(local.file_path)) {
+              std::filesystem::copy(local.file_path,
+                                    install_dir,
+                                    std::filesystem::copy_options::recursive |
+                                        std::filesystem::copy_options::overwrite_existing);
+            } else {
+              extract(local.file_path, install_dir);
+            }
+          },
+          [&](pkg_cfg::git_source const &git) {
+            fetch_one(fetch_request_git{ .source = git.url,
+                                         .destination = install_dir,
+                                         .ref = git.ref,
+                                         .scheme = uri_classify(git.url).scheme },
+                      git.url,
+                      "git bundle");
+          },
+          [&](pkg_cfg::custom_fetch_source const &) {
+            run_custom();  // commits into fetch_dir via envy.commit_fetch
+
+            if (!std::filesystem::exists(fetch_dir / "envy-bundle.lua")) {
+              throw std::runtime_error(
+                  "Bundle custom fetch did not create "
+                  "envy-bundle.lua: " +
+                  src.bundle_identity);
+            }
+            for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
+              std::filesystem::rename(entry.path(), install_dir / entry.path().filename());
+            }
+          },
+      },
+      src.fetch_source);
+}
+
+std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg) {
+  return std::visit(
+      match{
+          [](pkg_cfg::remote_source const &r) { return source_key(r); },
+          [](pkg_cfg::git_source const &g) { return source_key(g); },
+          [](pkg_cfg::local_source const &l) { return source_key(l); },
+          [&](pkg_cfg::custom_fetch_source const &) {
+            if (!cfg) {
+              throw std::runtime_error("bundle '" + src.bundle_identity +
+                                       "': a custom fetch keys on its declaration");
+            }
+            return custom_fetch_source_key(*cfg);
+          },
+      },
+      src.fetch_source);
+}
+
+bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id) {
+  bundle parsed{ bundle::from_path(root) };
+  if (parsed.identity != expected_id) {
+    throw std::runtime_error("Bundle identity mismatch: expected '" + expected_id +
+                             "' but manifest declares '" + parsed.identity + "'");
+  }
+  parsed.validate();
+  return parsed;
+}
+
+std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
+                                              cache *c,
+                                              std::string_view fn) {
+  std::string const &id{ src.bundle_identity };
+  auto const fail{ [&](std::string const &why) {
+    return std::runtime_error(std::string{ fn } + ": bundle '" + id + "' " + why);
+  } };
+
+  if (std::holds_alternative<pkg_cfg::custom_fetch_source>(src.fetch_source)) {
+    throw fail(
+        "uses a custom fetch, which needs a phase to run in; only a spec "
+        "reaches one of those, with envy.loadenv_spec");
+  }
+
+  // Read where it stands, as its BUNDLE_ONLY package does: no entry, so edits land.
+  if (auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
+      local && id.starts_with("local.") &&
+      std::filesystem::is_directory(local->file_path)) {
+    bundle_verify(local->file_path, id);
+    return local->file_path;
+  }
+
+  if (!c) {
+    throw fail("has to be fetched, and this manifest was loaded without a cache");
+  }
+
+  auto result{ c->ensure_spec(id, bundle_source_key(src, nullptr)) };
+  if (result.lock) {
+    // No package row this early and a clone is slow, so say so. A hit stays quiet:
+    // the bundle's own package reports it a moment later.
+    tui::info("bundle %s: fetching, the manifest reads it", id.c_str());
+
+    bundle_fetch_payload(
+        src,
+        result.lock->fetch_dir(),
+        result.lock->install_dir(),
+        [&](fetch_request req, std::string const &url, char const *what) {
+          auto const results{ fetch({ std::move(req) }) };
+          if (results.empty() || std::holds_alternative<std::string>(results[0])) {
+            throw fail(
+                std::string{ "could not be fetched (" } + what + "): " + url + ": " +
+                (results.empty() ? "no results" : std::get<std::string>(results[0])));
+          }
+        },
+        [] {});
+  }
+
+  // Validated before the entry is finalized: `envy-complete` is never revalidated.
+  bundle_verify(result.pkg_path, id);
+  if (result.lock) { result.lock->mark_install_complete(); }
+  return result.pkg_path;
 }
 
 }  // namespace envy

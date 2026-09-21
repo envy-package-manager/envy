@@ -348,32 +348,6 @@ int load_spec_script(sol::state &lua,
   return meta.schema;
 }
 
-// Canonical description of where a spec's or bundle's bytes come from. This is the
-// only input to its cache entry key besides identity, so every field a fetch
-// actually reads belongs here: change the URL, the git ref, or the path and you get
-// a different entry rather than yesterday's content under today's declaration.
-//
-// A custom fetch function is the exception -- a Lua closure has no fingerprint, so
-// its entries key on the file that declares it, plus the options it is handed: one
-// function drives down a different path per option set. Editing the function body in
-// place still reuses the entry; move it, or bump the identity, to force a refetch.
-std::string source_key(pkg_cfg::remote_source const &r) {
-  return "remote\n" + r.url + "\n" + r.sha256;
-}
-
-std::string source_key(pkg_cfg::git_source const &g) {
-  return "git\n" + g.url + "\n" + g.ref;
-}
-
-std::string source_key(pkg_cfg::local_source const &l) {
-  return "local\n" + l.file_path.generic_string();
-}
-
-std::string custom_fetch_source_key(pkg_cfg const &cfg) {
-  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity +
-         "\n" + cfg.serialized_options;
-}
-
 // Every download this phase makes — a spec file, a git spec repo, a bundle payload —
 // goes through here, so it draws with the same tracker the package fetch phase uses
 // and lands on the requesting package's row. Throws on failure; `what` names the
@@ -1221,12 +1195,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
     if (local_src && std::filesystem::is_directory(local_src->file_path)) {
       tui::debug("spec: local bundle %s", bundle_id.c_str());
 
-      bundle parsed{ bundle::from_path(local_src->file_path) };
-      if (parsed.identity != bundle_id) {
-        throw std::runtime_error("Bundle identity mismatch: expected '" + bundle_id +
-                                 "' but manifest declares '" + parsed.identity + "'");
-      }
-      parsed.validate();
+      bundle parsed{ bundle_verify(local_src->file_path, bundle_id) };
       eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path);
       p->bundle_in_situ = true;
       return;
@@ -1235,159 +1204,97 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
   // Non-local bundle: fetch to cache. The completion phase turns these flags into
   // this package's outcome row, exactly as it does for any other package.
-  std::string const bundle_source_key{ std::visit(
-      match{
-          [](pkg_cfg::remote_source const &r) { return source_key(r); },
-          [](pkg_cfg::git_source const &g) { return source_key(g); },
-          [](pkg_cfg::local_source const &l) { return source_key(l); },
-          [&](pkg_cfg::custom_fetch_source const &) {
-            return custom_fetch_source_key(cfg);
-          },
-      },
-      bundle_src->fetch_source) };
-
   auto cache_result{ p->cache_ptr->ensure_spec(
       bundle_id,
-      bundle_source_key,
+      bundle_source_key(*bundle_src, &cfg),
       tui_actions::lock_wait_spinner(p->tui_section, bundle_id, bundle_id)) };
   p->was_cache_hit = cache_result.lock == nullptr;
 
   if (cache_result.lock) {
     tui::debug("spec: bundle %s", bundle_id.c_str());
-    std::filesystem::path const install_dir{ cache_result.lock->install_dir() };
 
-    // Fetch based on underlying source type
-    std::visit(
-        match{
-            [&](pkg_cfg::remote_source const &remote) {
-              std::filesystem::path fetch_dest{ cache_result.lock->fetch_dir() /
-                                                uri_extract_filename(remote.url) };
-
-              fetch_with_progress(fetch_request_from_url(remote.url, fetch_dest),
-                                  p,
-                                  remote.url,
-                                  "bundle");
-
-              if (!remote.sha256.empty()) {
-                sha256_verify(remote.sha256, sha256(fetch_dest));
-              }
-
-              extract(fetch_dest, install_dir);
-            },
-            [&](pkg_cfg::local_source const &local) {  // non-local. identity
-              if (std::filesystem::is_directory(local.file_path)) {
-                std::filesystem::copy(
-                    local.file_path,
-                    install_dir,
-                    std::filesystem::copy_options::recursive |
-                        std::filesystem::copy_options::overwrite_existing);
-              } else {
-                extract(local.file_path, install_dir);
-              }
-            },
-            [&](pkg_cfg::git_source const &git) {
-              auto const git_info{ uri_classify(git.url) };
-              fetch_with_progress(fetch_request_git{ .source = git.url,
-                                                     .destination = install_dir,
-                                                     .ref = git.ref,
-                                                     .scheme = git_info.scheme },
-                                  p,
-                                  git.url,
-                                  "git bundle");
-            },
-            [&](pkg_cfg::custom_fetch_source const &) {
-              // Custom fetch bundle - execute fetch function
-              // Function location depends on where bundle was declared:
-              // - If parent is set: fetch function is in parent spec's Lua state
-              // - If no parent: fetch function is in manifest's BUNDLES table
-
-              std::filesystem::path const tmp_dir{ cache_result.lock->work_dir() / "tmp" };
-              std::filesystem::create_directories(tmp_dir);
-
-              if (cfg.parent) {
-                // Bundle declared in a spec's DEPENDENCIES - use parent's Lua state
-                pkg *parent{ eng.find_exact(pkg_key(*cfg.parent)) };
-                if (!parent) {
-                  throw std::runtime_error(
-                      "Bundle custom fetch: parent spec Lua state unavailable for " +
-                      bundle_id);
-                }
-                auto const parent_acc{ parent->lua.lock() };
-                if (!parent_acc) {
-                  throw std::runtime_error(
-                      "Bundle custom fetch: parent spec Lua state unavailable for " +
-                      bundle_id);
-                }
-                sol::state_view parent_lua{ *parent_acc };
-
-                auto fetch_func_opt{ find_fetch_function(
-                    parent_lua,
-                    { .what = fetch_fn_query::kind::BUNDLE, .identity = bundle_id }) };
-                if (!fetch_func_opt) {
-                  throw std::runtime_error(
-                      "Bundle custom fetch function not found in parent spec for: " +
-                      bundle_id);
-                }
-
-                // Same split as a spec's custom fetch: the bundle package owns the
-                // declared dependencies, the declaring spec only lends its interpreter.
-                phase_context_guard ctx_guard{ &eng,
-                                               p,
-                                               parent_lua.lua_state(),
-                                               tmp_dir,
-                                               cache_result.lock.get() };
-
-                tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
-                sol::protected_function_result result{ (*fetch_func_opt)(
-                    util_normalized_path(tmp_dir)) };
-
-                if (!result.valid()) {
-                  sol::error err = result;
-                  throw std::runtime_error("Bundle custom fetch function failed for " +
-                                           bundle_id + ": " + err.what());
-                }
-              } else {
-                // Bundle declared in manifest's BUNDLES table
-                manifest const *m{ eng.get_manifest() };
-                if (!m) {
-                  throw std::runtime_error("Bundle custom fetch requires manifest: " +
-                                           bundle_id);
-                }
-
-                // The manifest Lua lock is held for this whole call, so envy.run
-                // inside it gets the platform built-in rather than re-entering it.
-                phase_context ctx{ .eng = &eng,
-                                   .p = p,
-                                   .run_dir = tmp_dir,
-                                   .lock = cache_result.lock.get(),
-                                   .builtin_shell = true };
-                tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
-
-                auto err{ m->run_bundle_fetch(bundle_id, &ctx, tmp_dir) };
-                if (err) {
-                  throw std::runtime_error("Bundle custom fetch function failed for " +
-                                           bundle_id + ": " + *err);
-                }
-              }
-
-              // Custom fetch creates files in fetch_dir via envy.commit_fetch
-              // Move bundle files to install_dir
-              std::filesystem::path const fetch_dir{ cache_result.lock->fetch_dir() };
-              std::filesystem::path const bundle_manifest{ fetch_dir / "envy-bundle.lua" };
-
-              if (!std::filesystem::exists(bundle_manifest)) {
-                throw std::runtime_error(
-                    "Bundle custom fetch did not create envy-bundle.lua: " + bundle_id);
-              }
-
-              // Move all files from fetch_dir to install_dir
-              for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
-                std::filesystem::path const dest{ install_dir / entry.path().filename() };
-                std::filesystem::rename(entry.path(), dest);
-              }
-            },
+    bundle_fetch_payload(
+        *bundle_src,
+        cache_result.lock->fetch_dir(),
+        cache_result.lock->install_dir(),
+        [&](fetch_request req, std::string const &url, char const *what) {
+          fetch_with_progress(std::move(req), p, url, what);
         },
-        bundle_src->fetch_source);
+        [&] {
+          // Custom fetch bundle - execute fetch function
+          // Function location depends on where bundle was declared:
+          // - If parent is set: fetch function is in parent spec's Lua state
+          // - If no parent: fetch function is in manifest's BUNDLES table
+
+          std::filesystem::path const tmp_dir{ cache_result.lock->work_dir() / "tmp" };
+          std::filesystem::create_directories(tmp_dir);
+
+          if (cfg.parent) {
+            // Bundle declared in a spec's DEPENDENCIES - use parent's Lua state
+            pkg *parent{ eng.find_exact(pkg_key(*cfg.parent)) };
+            if (!parent) {
+              throw std::runtime_error(
+                  "Bundle custom fetch: parent spec Lua state unavailable for " +
+                  bundle_id);
+            }
+            auto const parent_acc{ parent->lua.lock() };
+            if (!parent_acc) {
+              throw std::runtime_error(
+                  "Bundle custom fetch: parent spec Lua state unavailable for " +
+                  bundle_id);
+            }
+            sol::state_view parent_lua{ *parent_acc };
+
+            auto fetch_func_opt{ find_fetch_function(
+                parent_lua,
+                { .what = fetch_fn_query::kind::BUNDLE, .identity = bundle_id }) };
+            if (!fetch_func_opt) {
+              throw std::runtime_error(
+                  "Bundle custom fetch function not found in parent spec for: " +
+                  bundle_id);
+            }
+
+            // Same split as a spec's custom fetch: the bundle package owns the
+            // declared dependencies, the declaring spec only lends its interpreter.
+            phase_context_guard ctx_guard{ &eng,
+                                           p,
+                                           parent_lua.lua_state(),
+                                           tmp_dir,
+                                           cache_result.lock.get() };
+
+            tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
+            sol::protected_function_result result{ (*fetch_func_opt)(
+                util_normalized_path(tmp_dir)) };
+
+            if (!result.valid()) {
+              sol::error err = result;
+              throw std::runtime_error("Bundle custom fetch function failed for " +
+                                       bundle_id + ": " + err.what());
+            }
+          } else {
+            // Bundle declared in manifest's BUNDLES table
+            manifest const *m{ eng.get_manifest() };
+            if (!m) {
+              throw std::runtime_error("Bundle custom fetch requires manifest: " +
+                                       bundle_id);
+            }
+
+            // The manifest Lua lock is held for this whole call, so envy.run
+            // inside it gets the platform built-in rather than re-entering it.
+            phase_context ctx{ .eng = &eng,
+                               .p = p,
+                               .run_dir = tmp_dir,
+                               .lock = cache_result.lock.get(),
+                               .builtin_shell = true };
+            tui::debug("spec: custom fetch for bundle %s", bundle_id.c_str());
+
+            auto err{ m->run_bundle_fetch(bundle_id, &ctx, tmp_dir) };
+            if (err) {
+              throw std::runtime_error("Bundle custom fetch function failed for " +
+                                       bundle_id + ": " + *err);
+            }
+          }
+        });
   }
 
   // Parse and validate the bundle manifest while the entry is still unfinalized:
@@ -1395,14 +1302,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
   // bundle a permanent cache entry that fails identically on every later run.
   // Throwing here drops the lock uncompleted, its destructor scrubs the entry, and
   // the next run refetches.
-  bundle parsed{ bundle::from_path(cache_result.pkg_path) };
-
-  if (parsed.identity != bundle_id) {
-    throw std::runtime_error("Bundle identity mismatch: expected '" + bundle_id +
-                             "' but manifest declares '" + parsed.identity + "'");
-  }
-
-  parsed.validate();
+  bundle parsed{ bundle_verify(cache_result.pkg_path, bundle_id) };
 
   if (cache_result.lock) {
     cache_result.lock->mark_install_complete();

@@ -3,50 +3,19 @@
 #include "bundle.h"
 #include "engine.h"
 #include "lua_envy_dep_util.h"
+#include "lua_envy_module.h"
 #include "lua_phase_context.h"
 #include "pkg.h"
 #include "pkg_phase.h"
 #include "trace.h"
 
-#include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace envy {
-
-namespace {
-
-// A module path is Lua dot syntax naming a file inside the dependency, so every
-// spelling that could name something else is refused before the dots become
-// separators: `.etc.passwd` built an absolute path, which `operator/` adopts whole.
-std::string module_path_to_file_path(std::string const &module_path,
-                                     std::string const &identity) {
-  auto const reject{ [&](char const *why) {
-    return std::runtime_error("envy.loadenv_spec: invalid module path '" + module_path +
-                              "' for dependency '" + identity + "': " + why);
-  } };
-
-  if (module_path.empty()) { throw reject("path is empty"); }
-  if (module_path.front() == '.' || module_path.back() == '.') {
-    throw reject("a leading or trailing '.' does not separate modules");
-  }
-  if (module_path.find_first_of("/\\") != std::string::npos) {
-    throw reject("write Lua dot syntax ('lib.common'), not path separators");
-  }
-  if (module_path.find("..") != std::string::npos) {
-    throw reject("'..' cannot reach outside the dependency");
-  }
-
-  std::string file_path{ module_path };
-  std::replace(file_path.begin(), file_path.end(), '.', '/');
-  return file_path;
-}
-
-}  // namespace
+namespace { constexpr std::string_view kFn{ "envy.loadenv_spec" }; }  // namespace
 
 void lua_envy_loadenv_spec_install(sol::table &envy_table) {
   // envy.loadenv_spec(identity, module_path) -> table
@@ -55,7 +24,8 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
   envy_table["loadenv_spec"] = [](std::string const &identity,
                                   std::string const &module_path,
                                   sol::this_state L) -> sol::table {
-    std::string const subpath{ module_path_to_file_path(module_path, identity) };
+    std::string const scope{ "dependency '" + identity + "'" };
+    std::string const subpath{ lua_module_subpath(module_path, kFn, scope) };
     // Verify we're in a phase context (not global scope)
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *consumer{ ctx ? ctx->p : nullptr };
@@ -132,58 +102,14 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       load_root = dep->spec_file_path->parent_path();
     }
 
-    // The validation above forbids every escape the module path could spell; assert
-    // the joined result anyway, since load_root is the only other input to it.
-    std::filesystem::path const root{ load_root.lexically_normal() };
     std::filesystem::path const full_path{
-      (root / (subpath + ".lua")).lexically_normal()
+      lua_module_path_under(load_root, subpath, kFn, module_path, scope)
     };
-    if (auto const rel{ full_path.lexically_relative(root) };
-        rel.empty() || *rel.begin() == "..") {
-      throw std::runtime_error("envy.loadenv_spec: module '" + module_path +
-                               "' resolves outside dependency '" + identity +
-                               "': " + full_path.string());
-    }
-
-    if (!std::filesystem::exists(full_path)) {
-      throw std::runtime_error("envy.loadenv_spec: file not found: " + full_path.string());
-    }
-
-    // Load file content
-    std::ifstream ifs{ full_path };
-    if (!ifs) {
-      throw std::runtime_error("envy.loadenv_spec: failed to open: " + full_path.string());
-    }
-    std::ostringstream oss;
-    oss << ifs.rdbuf();
-    std::string const content{ oss.str() };
-
-    // Create sandboxed environment with access to stdlib via _G (metatable fallback)
-    sol::state_view lua{ L };
-    sol::environment env{ lua, sol::create, lua.globals() };
-
-    // Load chunk
-    sol::load_result chunk{ lua.load(content, full_path.string()) };
-    if (!chunk.valid()) {
-      sol::error err = chunk;
-      throw std::runtime_error("envy.loadenv_spec: load error: " +
-                               std::string(err.what()));
-    }
-
-    // Set environment on the function
-    sol::protected_function fn{ chunk };
-    sol::set_environment(env, fn);
-
-    // Execute with our environment
-    sol::protected_function_result result{ fn() };
-    if (!result.valid()) {
-      sol::error err = result;
-      throw std::runtime_error("envy.loadenv_spec: exec error: " +
-                               std::string(err.what()));
-    }
-
+    sol::table const module{
+      lua_module_load(sol::state_view{ L }, full_path, kFn, module_path)
+    };
     emit_access(true, first_needed_by, full_path.string());
-    return env;
+    return module;
   };
 }
 

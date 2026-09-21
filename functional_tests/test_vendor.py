@@ -1421,5 +1421,74 @@ end
             )
 
 
+class TestVendorFromBundle(VendorTestCase):
+    """A spec pulled out of a bundle vendors exactly as one named by `source` does."""
+
+    def bundle(self, identity: str, spec_identity: str) -> Path:
+        root = self.make_temp_dir("bundle")
+        (root / "specs").mkdir()
+        (root / "envy-bundle.lua").write_text(
+            f'BUNDLE = "{identity}"\n'
+            f'SPECS = {{ ["{spec_identity}"] = "specs/pkg.lua" }}\n',
+            encoding="utf-8",
+        )
+        (root / "specs" / "pkg.lua").write_text(
+            SPEC.format(
+                identity=spec_identity,
+                seed=self.lua_path(self.seed),
+                payload=self.lua_path(self.payload),
+                vendor_list="",
+                install_extra="",
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    def bundled_manifest(self, vendor: str) -> Path:
+        root = self.bundle("test.specs@r1", "local.nanocobs@r3")
+        path = self.project / "envy.lua"
+        path.write_text(
+            test_config.make_manifest(
+                'VENDOR_ROOT = "vendor"\n'
+                "BUNDLES = {\n"
+                f'  tools = {{ identity = "test.specs@r1", '
+                f'source = "{self.lua_path(root)}" }},\n'
+                "}\n"
+                "PACKAGES = {\n"
+                f'  {{ spec = "local.nanocobs@r3", bundle = "tools", '
+                f"vendor = {vendor} }},\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_vendor_true_on_a_bundled_spec_derives_a_name(self):
+        run = self.install(self.bundled_manifest("true"))
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        self.assertEqual(
+            self.tree_of(self.payload),
+            self.tree_of(self.project / "vendor" / "nanocobs"),
+        )
+
+    def test_vendor_override_on_a_bundled_spec_lands_where_it_says(self):
+        run = self.install(self.bundled_manifest('"deps/cobs"'))
+        self.assertVendored(run, "local.nanocobs@r3", "copied", "absent")
+        self.assertEqual(
+            self.tree_of(self.payload), self.tree_of(self.project / "deps" / "cobs")
+        )
+
+    def test_vendor_table_on_a_bundled_spec_reads_auto_sync(self):
+        manifest = self.bundled_manifest("{ auto_sync = false }")
+        dest = self.project / "vendor" / "nanocobs"
+        self.assertEqual(0, self.install(manifest).returncode)
+
+        (dest / "LICENSE").write_text("mine now\n", encoding="utf-8")
+        run = self.install(manifest)
+
+        self.assertVendored(run, "local.nanocobs@r3", "kept", "mismatch")
+        self.assertEqual("mine now\n", (dest / "LICENSE").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

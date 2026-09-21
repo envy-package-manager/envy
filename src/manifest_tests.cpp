@@ -2628,6 +2628,111 @@ TEST_CASE("manifest::load reads a vendor table holding both keys") {
   CHECK_FALSE(*m->packages[0]->vendor_auto_sync);
 }
 
+// -- envy.loadenv_bundle ---------------------------------------------------
+
+namespace {
+
+// A 'local.' bundle is read in situ: no cache needed, and nothing written.
+std::string local_bundle_manifest(std::string const &call, std::string const &packages) {
+  auto const root{
+    (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()
+  };
+  return "-- @envy bin \"tools\"\n"
+         "BUNDLES = { tools = { identity = \"local.tools@r1\", source = \"" +
+         root + "\" } }\n" + call + "\n" + packages + "\n";
+}
+
+}  // namespace
+
+TEST_CASE("manifest::load builds PACKAGES from a helper in a bundle") {
+  auto const script{ local_bundle_manifest(
+      "local gh = envy.loadenv_bundle(\"tools\", \"lib.entries\")",
+      "PACKAGES = { gh.entry(\"one\"), gh.entry(\"two\") }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 2);
+  CHECK(m->packages[0]->identity == "local.generic@r1");
+  CHECK(*m->packages[0]->bundle_identity == "local.tools@r1");
+  CHECK(m->packages[1]->identity == "local.generic@r1");
+}
+
+TEST_CASE("manifest::load names the alias envy.loadenv_bundle could not find") {
+  auto const script{ local_bundle_manifest(
+      "local gh = envy.loadenv_bundle(\"nope\", \"lib.entries\")",
+      "PACKAGES = {}") };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")),
+                       doctest::Contains("no bundle alias 'nope'"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load refuses a module path that is not dot syntax") {
+  auto const script{ local_bundle_manifest(
+      "local gh = envy.loadenv_bundle(\"tools\", \"lib/entries\")",
+      "PACKAGES = {}") };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")),
+                       doctest::Contains("not path separators"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load says so when envy.loadenv_bundle has no cache to fetch into") {
+  // A 'local.' bundle needs no cache; every other shape does.
+  char const *script{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tools = { identity = "acme.tools@r1",
+                          source = "https://example.com/tools.tar.gz" } }
+    local gh = envy.loadenv_bundle("tools", "lib.entries")
+    PACKAGES = {}
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("loaded without a cache"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load refuses a custom-fetch bundle at manifest scope") {
+  char const *script{ R"(
+    -- @envy bin "tools"
+    BUNDLES = { tools = { identity = "acme.tools@r1",
+                          source = { fetch = function(tmp_dir) end } } }
+    local gh = envy.loadenv_bundle("tools", "lib.entries")
+    PACKAGES = {}
+  )" };
+
+  CHECK_THROWS_WITH_AS(envy::manifest::load(script, fs::path("/fake/envy.lua")),
+                       doctest::Contains("uses a custom fetch"),
+                       std::runtime_error);
+}
+
+TEST_CASE("manifest::load parses vendor on a bundle package entry") {
+  // `vendor` reads the same beside a `bundle` as it does beside a `source`.
+  char const *script{ R"(
+    -- @envy bin "tools"
+    VENDOR_ROOT = "third_party"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc" } }
+    PACKAGES = {
+      { spec = "a.one@v1",   bundle = "tc", vendor = "vendor/one" },
+      { spec = "b.two@v1",   bundle = "tc", vendor = true },
+      { spec = "c.three@v1", bundle = "tc", vendor = { path = "vendor/three",
+                                                       auto_sync = false } },
+      { spec = "d.four@v1",  bundle = "tc" },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 4);
+  CHECK(*m->packages[0]->vendor == "vendor/one");
+  REQUIRE(m->packages[1]->vendor.has_value());
+  CHECK(m->packages[1]->vendor->empty());  // engaged but empty: derive a name
+  CHECK(*m->packages[2]->vendor == "vendor/three");
+  REQUIRE(m->packages[2]->vendor_auto_sync.has_value());
+  CHECK_FALSE(*m->packages[2]->vendor_auto_sync);
+  CHECK_FALSE(m->packages[3]->vendor.has_value());
+}
+
 TEST_CASE("manifest::load reads an empty vendor table as vendor = true") {
   // No path is a derived name, and no auto_sync is the default; that is `vendor = true`.
   char const *script{ R"(

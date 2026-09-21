@@ -1,14 +1,19 @@
 #pragma once
 
+#include "fetch.h"
 #include "pkg_cfg.h"
 
 #include "sol/forward.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace envy {
+
+class cache;
 
 // Parsed in-memory representation of envy-bundle.lua
 // Immutable after construction, shared across all specs from this bundle
@@ -64,5 +69,34 @@ struct bundle {
   // Call this before loading any spec files from the bundle.
   void configure_package_path(sol::state &lua) const;
 };
+
+// One transfer of a bundle's payload. The caller owns progress; manifest scope has none.
+using bundle_fetcher =
+    std::function<void(fetch_request, std::string const &url, char const *what)>;
+
+// A bundle's custom fetch. Needs a phase context, so it stays with whoever has one.
+using bundle_custom_fetcher = std::function<void()>;
+
+// Put a bundle's payload in `install_dir`, whatever its source shape. Shared with the
+// BUNDLE_ONLY package's spec_fetch, so the two cannot drift.
+void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
+                          std::filesystem::path const &fetch_dir,
+                          std::filesystem::path const &install_dir,
+                          bundle_fetcher const &fetch_one,
+                          bundle_custom_fetcher const &run_custom);
+
+// A bundle payload's cache entry key. `cfg` is read only for the custom-fetch shape,
+// which has no fingerprint of its own; a caller without one passes null.
+std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg);
+
+// Parse, identity-check and validate a materialized bundle, before its entry is
+// finalized: `envy-complete` is never revalidated, so a bad one would be permanent.
+bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id);
+
+// A bundle's root, materialized with no engine, package or phase behind it -- manifest
+// scope has none. Throws on custom fetch; a null `c` suits only a 'local.' bundle.
+std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
+                                              cache *c,
+                                              std::string_view fn);
 
 }  // namespace envy

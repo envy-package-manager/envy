@@ -53,6 +53,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `lua_ctx_package_access` | target:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
 | `lua_ctx_product_access` | target:str, provider:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
 | `lua_ctx_loadenv_spec_access` | target:str, subpath:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
+| `lua_ctx_loadenv_bundle` | alias:str, target:str, subpath:str, root:str |
 | `depot_check` | sha:str, result:str (hit\|miss\|sha_mismatch) |
 | `depot_wait` | duration_ms:i64, result:str (ready\|bootstrap\|failed) |
 | `default_shell_resolving` | depends:i64 |

@@ -125,17 +125,23 @@ struct manifest : unmovable {
                              char const *mode,
                              bool nearest);
 
-  // Discover + load, with find_manifest_path's anchor precedence.
-  static std::unique_ptr<manifest> find_and_load(
+  // Bytes and '@envy' header, executing nothing: the cache root, the re-exec and
+  // self-deploy come from that header, and a manifest may need the cache they pick.
+  static discovery find_and_discover(
       std::optional<std::filesystem::path> const &explicit_path,
       bool nearest = false,
       std::optional<std::filesystem::path> const &project_dir = std::nullopt);
 
-  static std::unique_ptr<manifest> load(std::filesystem::path const &manifest_path);
+  // `c` backs envy.loadenv_bundle, which fetches mid-global-scope. Null when the
+  // caller has no cache; the manifest then says so by name.
+  static std::unique_ptr<manifest> load(std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
   static std::unique_ptr<manifest> load(std::vector<unsigned char> const &content,
-                                        std::filesystem::path const &manifest_path);
+                                        std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
   static std::unique_ptr<manifest> load(char const *script,
-                                        std::filesystem::path const &manifest_path);
+                                        std::filesystem::path const &manifest_path,
+                                        cache *c = nullptr);
 
   // Parse the DEFAULT_SHELL global. Value forms (ENVY_SHELL constant, custom shell
   // table) resolve here; a function — bare, or the SHELL field of a
