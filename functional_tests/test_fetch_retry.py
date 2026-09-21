@@ -9,6 +9,7 @@ log prose: `download_retry` carries the attempt, the jittered delay, and the
 from __future__ import annotations
 
 import threading
+import time
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,13 +19,18 @@ from .env import EnvyTestCase
 
 PAYLOAD = b"envy retry payload, long enough to truncate in half\n"
 
+# Announced by the interstitial route and never delivered, as github.com did: a 200 HTML
+# page where a 302 to the release CDN belonged, then a reset before the first body byte.
+INTERSTITIAL_LENGTH = 54881
+
 # Short enough that three attempts cost milliseconds, non-zero so the jitter under
 # test still has a range to spread over.
 RETRY_BASE_MS = "20"
 
 
 class _FlakyOrigin(BaseHTTPRequestHandler):
-    """Routes: /transient/<n>/<name>, /truncate/<n>/<name>, /redirect/<name>, /missing.
+    """Routes: /transient/<n>/<name>, /truncate/<n>/<name>, /redirect/<name>, /missing,
+    /interstitial.
 
     <n> is how many times that exact path fails before it starts working, so a case
     picks its own failure budget and concurrent paths never share a counter.
@@ -62,11 +68,50 @@ class _FlakyOrigin(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
+    def _send_interstitial_then_hang_up(self) -> None:
+        # 200 + text/html + an announced length, then zero body bytes and a reset. Without
+        # the status and type in the error this is indistinguishable from a network drop.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(INTERSTITIAL_LENGTH))
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         parts = self.path.strip("/").split("/")
 
+        # Taken before _nth_attempt so the two never nest on the one server lock.
+        with self.server.attempts_lock:
+            self.server.user_agents.add(self.headers.get("User-Agent", ""))
+
+        if parts[0] == "interstitial":
+            self._send_interstitial_then_hang_up()
+            return
+
         if parts[0] == "missing":
             self.send_error(404, "Not Found")
+            return
+
+        # /slow-503/<delay_ms>/<name>: fails only after burning real time, so an attempt
+        # costs the budget something even when the backoff between attempts is ~free.
+        if parts[0] == "slow-503":
+            time.sleep(int(parts[1]) / 1000)
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        # /retry-after/<seconds>/<failures>/<name>: a 503 that names its own cooldown,
+        # as a throttling server does. Nothing else here sends Retry-After.
+        if parts[0] == "retry-after":
+            if self._nth_attempt() > int(parts[2]):
+                self._send_payload()
+                return
+            self.send_response(503)
+            self.send_header("Retry-After", parts[1])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
 
         if parts[0] == "redirect":
@@ -93,6 +138,7 @@ class FetchRetryTest(EnvyTestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), _FlakyOrigin)
         server.attempts = defaultdict(int)
         server.attempts_lock = threading.Lock()
+        server.user_agents = set()
         self.origin = server
 
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -184,19 +230,147 @@ class FetchRetryTest(EnvyTestCase):
         self.assertNotEqual(0, run.returncode)
         self.assertEqual([], self.retries(run))
 
+    def test_budget_stops_retrying_before_the_attempt_ceiling(self) -> None:
+        """Wall-clock is the policy; the attempt count is only a backstop. A 1ms budget
+        affords exactly one wait, however many attempts the ceiling would allow."""
+        run, _ = self.fetch(
+            "transient/99/pkg.bin",
+            ENVY_FETCH_ATTEMPTS="10",
+            ENVY_FETCH_BUDGET_MS="1",
+            ENVY_FETCH_RETRY_BASE_MS="50",
+        )
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertEqual(1, len(self.retries(run)), "a 1ms budget affords one wait")
+        self.assertEqual(
+            {"/transient/99/pkg.bin": 2},
+            dict(self.origin.attempts),
+            "the ceiling of 10 must not have been what stopped it",
+        )
+
+    def test_retry_after_sets_the_wait(self) -> None:
+        """A server that names its own cooldown knows something the backoff curve does
+        not. The base delay here is 20ms; only Retry-After explains a full second."""
+        run, destination = self.fetch("retry-after/1/1/pkg.bin")
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+        self.assertEqual(PAYLOAD, destination.read_bytes())
+
+        retries = self.retries(run)
+        self.assertEqual(1, len(retries), f"expected 1 retry, got {retries}")
+        self.assertGreaterEqual(retries[0].raw["delay_ms"], 1000)
+
+    def test_budget_counts_time_spent_in_attempts(self) -> None:
+        """The budget is elapsed time from the first failure, not time asleep. Each
+        attempt here burns 300ms of a 700ms budget while the backoff between them costs
+        ~nothing, so accounting only for sleep would never spend it and would run the
+        attempt ceiling out instead."""
+        run, _ = self.fetch(
+            "slow-503/300/pkg.bin",
+            ENVY_FETCH_ATTEMPTS="10",
+            ENVY_FETCH_BUDGET_MS="700",
+            ENVY_FETCH_RETRY_BASE_MS="1",
+        )
+
+        self.assertNotEqual(0, run.returncode)
+        retries = self.retries(run)
+        self.assertGreaterEqual(len(retries), 1, "the budget affords at least one retry")
+        self.assertLess(len(retries), 9, "9 retries means only sleep was charged")
+
+    def test_retry_after_is_jittered_across_threads(self) -> None:
+        """Retry-After is the one wait every thread takes from the same host at the same
+        instant. Handed out verbatim it would stampede the origin it came from -- so it
+        is a floor, jittered upward, never back below what the server asked for."""
+        count = 6
+        sources = "\n".join(
+            f'  {{ source = "{self.base_url}/retry-after/1/1/item{i}.bin" }},'
+            for i in range(count)
+        )
+        spec = self.write_spec(
+            "throttled.lua",
+            f'IDENTITY = "local.throttled@v1"\nFETCH = {{\n{sources}\n}}\n',
+        )
+        manifest = test_config.write_spec_manifest(
+            self.work, [("local.throttled@v1", spec)]
+        )
+
+        env = test_config.get_test_env()
+        env["ENVY_FETCH_ATTEMPTS"] = "3"
+        env["ENVY_FETCH_RETRY_BASE_MS"] = RETRY_BASE_MS
+        run = self.run_envy("install", "--manifest", str(manifest), env=env)
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+
+        retries = self.retries(run)
+        self.assertEqual(count, len(retries), f"expected {count} retries: {retries}")
+
+        delays = [e.raw["delay_ms"] for e in retries]
+        for delay in delays:
+            self.assertGreaterEqual(delay, 1000, "never below the cooldown asked for")
+        self.assertGreater(
+            len(set(delays)), 1, f"all {count} retries waited the same {delays}"
+        )
+
+    def test_retry_after_beyond_the_budget_gives_up_at_once(self) -> None:
+        """Coming back before the server said to would only earn the same 503, so a
+        cooldown the budget cannot cover ends the fetch instead of shortening the wait."""
+        run, _ = self.fetch("retry-after/30/99/pkg.bin", ENVY_FETCH_BUDGET_MS="1000")
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertEqual([], self.retries(run))
+        self.assertEqual({"/retry-after/30/99/pkg.bin": 1}, dict(self.origin.attempts))
+
+    def test_backoff_counts_down_in_the_progress_row(self) -> None:
+        """A row holding its last byte count for the whole wait is indistinguishable
+        from a stalled transfer. Read from the fallback renderer, as the git progress
+        test does."""
+        run, destination = self.fetch(
+            "transient/1/pkg.bin",
+            ENVY_FETCH_RETRY_BASE_MS="1200",
+            TERM="dumb",
+            ENVY_TEST_FALLBACK_THROTTLE_MS="0",
+        )
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+        self.assertEqual(PAYLOAD, destination.read_bytes())
+        self.assertRegex(run.stdout + run.stderr, r"retry 1 in \d+s \(http_status\)")
+
     def test_error_names_the_bytes_and_the_post_redirect_url(self) -> None:
         """The mirror a redirect picked is the one that failed; name it, and say
         how far it got. The requested URL alone identifies nobody."""
         run, _ = self.fetch("redirect/pkg.bin")
 
         self.assertNotEqual(0, run.returncode)
-        self.assertIn(f" of {len(PAYLOAD)} bytes from ", run.stderr)
-        self.assertIn(f"{self.base_url}/truncate/99/pkg.bin", run.stderr)
+        self.assertIn(f" of {len(PAYLOAD)} bytes", run.stderr)
+        self.assertIn(f" from {self.base_url}/truncate/99/pkg.bin", run.stderr)
+
+    def test_error_names_the_status_and_content_type(self) -> None:
+        """The incident: github.com served a 200 HTML page instead of the 302 to its CDN,
+        then reset. The curl strerror and byte count alone read as a network fault."""
+        run, destination = self.fetch("interstitial", ENVY_FETCH_ATTEMPTS="1")
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertFalse(destination.exists())
+        self.assertIn(f" after 0 of {INTERSTITIAL_LENGTH} bytes", run.stderr)
+        self.assertIn("(HTTP 200, text/html", run.stderr)
+
+    def test_user_agent_names_envy_and_its_version(self) -> None:
+        """A `0.0` placeholder version is exactly what abuse heuristics flag."""
+        run, _ = self.fetch("transient/0/ua.bin")
+
+        self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
+        self.assertEqual(
+            {
+                f"envy/{test_config.get_envy_version()}"
+                " (+https://github.com/envy-package-manager/envy)"
+            },
+            self.origin.user_agents,
+        )
 
     def test_retry_log_line_is_attributed_to_its_package(self) -> None:
         """fetch() retries on threads it spawns itself, and the engine's log context is
         thread-local -- an unpropagated one leaves parallel installs with anonymous
-        `fetch: attempt 1 of 3 failed` lines."""
+        `fetch: attempt 1 failed` lines."""
         spec = self.write_spec(
             "attributed.lua",
             'IDENTITY = "local.attributed@v1"\n'
@@ -216,7 +390,7 @@ class FetchRetryTest(EnvyTestCase):
         self.assertEqual(0, run.returncode, f"stderr: {run.stderr}")
         self.assertEqual(1, len(self.retries(run)))
 
-        retry_lines = [ln for ln in run.stderr.splitlines() if "attempt 1 of 3" in ln]
+        retry_lines = [ln for ln in run.stderr.splitlines() if "attempt 1 failed" in ln]
         self.assertTrue(retry_lines, f"no retry log line: {run.stderr}")
         for line in retry_lines:
             self.assertIn("[local.attributed@v1]", line)

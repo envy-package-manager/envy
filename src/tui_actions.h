@@ -111,6 +111,7 @@ class fetch_all_progress_tracker {
 
   void update_transfer(std::size_t slot, fetch_transfer_progress const &prog);
   void update_git(std::size_t slot, fetch_git_progress const &prog);
+  void update_retry(std::size_t slot, fetch_retry_progress const &prog);
   void set_frame(std::size_t slot, tui::section_frame child_frame);
   void publish_unlocked(bool terminal);  // push children_ out; caller holds mutex_
   tui::section_frame final_frame_unlocked(std::size_t slot) const;

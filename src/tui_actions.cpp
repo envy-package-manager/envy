@@ -168,7 +168,8 @@ fetch_progress_cb_t fetch_all_progress_tracker::make_callback(std::size_t slot) 
   return [this, slot](fetch_progress_t const &prog) -> bool {
     std::visit(
         envy::match{ [&](fetch_transfer_progress const &p) { update_transfer(slot, p); },
-                     [&](fetch_git_progress const &p) { update_git(slot, p); } },
+                     [&](fetch_git_progress const &p) { update_git(slot, p); },
+                     [&](fetch_retry_progress const &p) { update_retry(slot, p); } },
         prog);
     return true;
   };
@@ -220,6 +221,30 @@ void fetch_all_progress_tracker::update_transfer(std::size_t slot,
             tui::section_frame{ .label = item_label,
                                 .content = tui::progress_data{ .percent = percent,
                                                                .status = oss.str() } });
+}
+
+// A backoff has nothing to count, so it rides a spinner and names what it is waiting on:
+// a row frozen at its last byte count is indistinguishable from a stalled transfer.
+void fetch_all_progress_tracker::update_retry(std::size_t slot,
+                                              fetch_retry_progress const &prog) {
+  if (slot >= children_.size()) { return; }
+
+  std::string const &item_label = children_[slot].label;
+
+  // Rounded up, so the countdown reaches "1s" rather than "0s" before the next attempt.
+  auto const seconds{ std::chrono::duration_cast<std::chrono::seconds>(
+                          prog.remaining + std::chrono::milliseconds{ 999 })
+                          .count() };
+
+  std::ostringstream oss;
+  oss << "retry " << prog.attempt << " in " << seconds << "s (" << prog.reason << ")";
+  if (!grouped_) { oss << " " << item_label; }
+
+  set_frame(
+      slot,
+      tui::section_frame{
+          .label = item_label,
+          .content = tui::spinner_data{ .text = oss.str(), .start_time = start_time_ } });
 }
 
 void fetch_all_progress_tracker::update_git(std::size_t slot,

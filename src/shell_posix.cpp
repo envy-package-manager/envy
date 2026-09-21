@@ -45,7 +45,7 @@ class fd_cleanup {
   explicit fd_cleanup(int fd) : fd_{ fd } {}
   ~fd_cleanup() {
     if (fd_ == -1) { return; }
-    close_with_retry();
+    close_fd();
   }
 
   fd_cleanup(fd_cleanup const &) = delete;
@@ -62,19 +62,17 @@ class fd_cleanup {
 
   void release() {
     if (fd_ == -1) { return; }
-    close_with_retry();
+    close_fd();
     fd_ = -1;
   }
 
  private:
-  void close_with_retry() {
-    for (int attempts{ 0 }; attempts < 3 && ::close(fd_) == -1; ++attempts) {
-      if (errno != EINTR) { break; }
-    }
-  }
+  // No retry on EINTR: POSIX already released the fd, so a second close() could shut a
+  // descriptor the kernel handed another thread meanwhile -- e.g. a live TLS socket.
+  void close_fd() { ::close(fd_); }
 
   void close_and_take(fd_cleanup &other) {
-    if (fd_ != -1) { close_with_retry(); }
+    if (fd_ != -1) { close_fd(); }
     fd_ = other.fd_;
     other.fd_ = -1;
   }
