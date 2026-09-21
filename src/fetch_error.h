@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -25,15 +26,23 @@ class fetch_error : public std::runtime_error {
  public:
   fetch_error(fetch_error_kind kind,
               std::string const &what,
-              std::optional<int> http_status = std::nullopt)
-      : std::runtime_error(what), kind_{ kind }, http_status_{ http_status } {}
+              std::optional<int> http_status = std::nullopt,
+              std::optional<std::chrono::seconds> retry_after = std::nullopt)
+      : std::runtime_error(what),
+        kind_{ kind },
+        http_status_{ http_status },
+        retry_after_{ retry_after } {}
 
   fetch_error_kind kind() const { return kind_; }
   std::optional<int> http_status() const { return http_status_; }
+  std::optional<std::chrono::seconds> retry_after() const { return retry_after_; }
 
  private:
   fetch_error_kind kind_;
   std::optional<int> http_status_;  // set only when kind_ == HTTP_STATUS
+  // The server naming its own cooldown, which no exponential guess improves on. Sent
+  // with 429 and 503; absent otherwise.
+  std::optional<std::chrono::seconds> retry_after_;
 };
 
 // Retry is safe for everything envy fetches: transfers are idempotent GETs (the lone

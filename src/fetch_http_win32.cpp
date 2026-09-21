@@ -13,11 +13,13 @@
 #include <WinInet.h>
 // clang-format on
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -26,7 +28,6 @@ namespace envy {
 
 namespace {
 
-constexpr char kDefaultUserAgent[]{ "envy-fetch/0.0" };
 constexpr DWORD kReadBufferSize{ 65536 };
 constexpr DWORD kCommonFlags{ INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                               INTERNET_FLAG_KEEP_CONNECTION };
@@ -156,7 +157,7 @@ HINTERNET g_session{ nullptr };
 
 HINTERNET ensure_session() {
   std::call_once(g_session_once, [] {
-    g_session = InternetOpenA(kDefaultUserAgent,
+    g_session = InternetOpenA(fetch_user_agent().c_str(),
                               INTERNET_OPEN_TYPE_PRECONFIG,
                               nullptr,
                               nullptr,
@@ -215,8 +216,96 @@ std::string query_effective_url(HINTERNET request) {
                                                                        : std::string{};
 }
 
-// " after 2201600 of 12600000 bytes from https://mirror.example/..." -- the byte count
-// separates "never started" from "stalled at 17%", and the host names the mirror.
+// Retry-After as seconds from now, the same thing CURLINFO_RETRY_AFTER reports: a server
+// naming its own cooldown beats any backoff curve. WinINet is asked to parse both legal
+// spellings rather than either being decoded here; one it cannot parse falls back to the
+// curve, which is what the absence of the header would have done anyway.
+std::optional<std::chrono::seconds> query_retry_after(HINTERNET request) {
+  last_error_guard const preserve_error{};
+
+  DWORD delta{ 0 };
+  DWORD delta_size{ sizeof(delta) };
+  DWORD header_index{ 0 };
+  if (HttpQueryInfoA(request,
+                     HTTP_QUERY_RETRY_AFTER | HTTP_QUERY_FLAG_NUMBER,
+                     &delta,
+                     &delta_size,
+                     &header_index)) {
+    return std::chrono::seconds{ delta };
+  }
+
+  SYSTEMTIME when{};
+  DWORD when_size{ sizeof(when) };
+  header_index = 0;
+  FILETIME deadline{};
+  if (!HttpQueryInfoA(request,
+                      HTTP_QUERY_RETRY_AFTER | HTTP_QUERY_FLAG_SYSTEMTIME,
+                      &when,
+                      &when_size,
+                      &header_index) ||
+      !SystemTimeToFileTime(&when, &deadline)) {
+    return std::nullopt;
+  }
+
+  auto const ticks{ [](FILETIME const &ft) {
+    return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+  } };
+
+  FILETIME now{};
+  GetSystemTimeAsFileTime(&now);
+
+  // The date form is absolute, so it says nothing except as a delta from now. One already
+  // past names no cooldown at all, so let the curve pick the wait rather than retrying
+  // hot.
+  auto const deadline_ticks{ ticks(deadline) };
+  auto const now_ticks{ ticks(now) };
+  if (deadline_ticks <= now_ticks) { return std::nullopt; }
+
+  constexpr std::uint64_t kTicksPerSecond{ 10'000'000 };  // FILETIME counts 100ns
+  return std::chrono::seconds{ static_cast<std::chrono::seconds::rep>(
+      (deadline_ticks - now_ticks) / kTicksPerSecond) };
+}
+
+// " (HTTP 200, text/html)" -- a 200 that then drops the connection is an interstitial,
+// not a network fault, and the transport error alone cannot tell those two apart.
+std::string response_summary(HINTERNET request) {
+  last_error_guard const preserve_error{};
+
+  DWORD status_code{ 0 };
+  DWORD status_size{ sizeof(status_code) };
+  DWORD status_index{ 0 };
+  if (!HttpQueryInfoA(request,
+                      HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                      &status_code,
+                      &status_size,
+                      &status_index)) {
+    status_code = 0;
+  }
+
+  char type[128]{};
+  DWORD type_len{ sizeof(type) - 1 };
+  DWORD type_index{ 0 };
+  if (!HttpQueryInfoA(request, HTTP_QUERY_CONTENT_TYPE, type, &type_len, &type_index)) {
+    type[0] = '\0';
+  }
+
+  if (!status_code && !type[0]) { return {}; }
+
+  char buf[256];
+  auto const status{ static_cast<unsigned long>(status_code) };
+  if (!type[0]) {
+    snprintf(buf, sizeof(buf), " (HTTP %lu)", status);
+  } else if (!status_code) {
+    snprintf(buf, sizeof(buf), " (%s)", type);
+  } else {
+    snprintf(buf, sizeof(buf), " (HTTP %lu, %s)", status, type);
+  }
+  return buf;
+}
+
+// " after 2201600 of 12600000 bytes (HTTP 200, text/html) from https://mirror.example/..."
+// -- the byte count separates "never started" from "stalled at 17%", the status and type
+// separate an interstitial page from a real payload, and the host names the mirror.
 std::string transfer_position(HINTERNET request,
                               std::uint64_t transferred,
                               std::optional<std::uint64_t> content_length) {
@@ -235,6 +324,7 @@ std::string transfer_position(HINTERNET request,
   }
 
   std::string msg{ buf };
+  msg += response_summary(request);
   if (auto const url{ query_effective_url(request) }; !url.empty()) {
     msg += " from " + url;
   }
@@ -261,7 +351,10 @@ void check_http_status(HINTERNET request) {
   if (auto const url{ query_effective_url(request) }; !url.empty()) {
     full += " from " + url;
   }
-  throw fetch_error(fetch_error_kind::HTTP_STATUS, full, static_cast<int>(status_code));
+  throw fetch_error(fetch_error_kind::HTTP_STATUS,
+                    full,
+                    static_cast<int>(status_code),
+                    query_retry_after(request));
 }
 
 void read_response_to_file(HINTERNET request,

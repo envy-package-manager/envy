@@ -19,6 +19,10 @@ namespace envy {
 // both bootstrap scripts are stamped from these constants instead of carrying copies.
 #define ENVY_UPSTREAM_REPO_URL "https://github.com/envy-package-manager/envy"
 
+// The same string for code that needs the URL itself rather than a preprocessor splice,
+// since the macro is undef'd below.
+inline constexpr std::string_view kEnvyUpstreamRepoUrl{ ENVY_UPSTREAM_REPO_URL };
+
 // Default mirror base: release assets hang off this as /v<version>/<archive name>.
 inline constexpr std::string_view kEnvyReleaseDownloadUrl{ ENVY_UPSTREAM_REPO_URL
                                                            "/releases/download" };

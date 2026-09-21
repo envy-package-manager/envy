@@ -6,6 +6,7 @@
 
 #include "curl/curl.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -18,8 +19,6 @@
 namespace envy {
 
 namespace {
-
-constexpr char kDefaultUserAgent[]{ "envy-fetch/0.0" };
 
 void ensure_curl_initialized() {
   static std::once_flag once;
@@ -110,6 +109,26 @@ std::string transfer_position(CURL *handle) {
   return buf;
 }
 
+// " (HTTP 200, text/html)" -- a 200 that then drops the connection is an interstitial,
+// not a network fault, and curl's strerror alone cannot tell those two apart.
+std::string response_summary(CURL *handle) {
+  auto const status{ get_info<long>(handle, CURLINFO_RESPONSE_CODE).value_or(0) };
+  auto const type{ get_info<char *>(handle, CURLINFO_CONTENT_TYPE) };
+  auto const *content_type{ (type && *type && **type) ? *type : nullptr };
+
+  if (!status && !content_type) { return {}; }
+
+  char buf[256];
+  if (!content_type) {
+    snprintf(buf, sizeof(buf), " (HTTP %ld)", status);
+  } else if (!status) {
+    snprintf(buf, sizeof(buf), " (%s)", content_type);
+  } else {
+    snprintf(buf, sizeof(buf), " (HTTP %ld, %s)", status, content_type);
+  }
+  return buf;
+}
+
 [[noreturn]] void throw_curl_error(CURL *handle, CURLcode code) {
   auto const kind{ classify_curl_error(code) };
 
@@ -117,14 +136,23 @@ std::string transfer_position(CURL *handle) {
   // the payload. Everything else needs to say how far the transfer got.
   if (kind == fetch_error_kind::HTTP_STATUS) {
     auto const status{ get_info<long>(handle, CURLINFO_RESPONSE_CODE).value_or(0) };
+    // 429 and 503 usually name their own cooldown; curl reduces both the delta-seconds
+    // and the HTTP-date spellings of Retry-After to seconds from now.
+    auto const retry_after{
+      get_info<curl_off_t>(handle, CURLINFO_RETRY_AFTER).value_or(0)
+    };
     throw fetch_error(kind,
                       "HTTP error " + std::to_string(status) + from_effective_url(handle),
-                      static_cast<int>(status));
+                      static_cast<int>(status),
+                      retry_after > 0
+                          ? std::optional{ std::chrono::seconds{
+                                static_cast<std::chrono::seconds::rep>(retry_after) } }
+                          : std::nullopt);
   }
 
-  throw fetch_error(
-      kind,
-      curl_easy_strerror(code) + transfer_position(handle) + from_effective_url(handle));
+  throw fetch_error(kind,
+                    curl_easy_strerror(code) + transfer_position(handle) +
+                        response_summary(handle) + from_effective_url(handle));
 }
 
 }  // namespace
@@ -186,7 +214,7 @@ std::filesystem::path fetch_http_download(std::string_view url,
     setopt(CURLOPT_CONNECTTIMEOUT, 30L);
     setopt(CURLOPT_LOW_SPEED_LIMIT, 1L);
     setopt(CURLOPT_LOW_SPEED_TIME, 60L);
-    setopt(CURLOPT_USERAGENT, kDefaultUserAgent);
+    setopt(CURLOPT_USERAGENT, fetch_user_agent().c_str());
     setopt(CURLOPT_WRITEFUNCTION, curl_write_file);
     setopt(CURLOPT_WRITEDATA, &output);
     setopt(CURLOPT_NOPROGRESS, progress ? 0L : 1L);

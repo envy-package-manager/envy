@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -323,12 +324,17 @@ fetch_result fetch_single(fetch_request const &request) {
 namespace {
 
 struct retry_policy {
-  int attempts;
+  int attempts;  // hard ceiling; the time budget is what normally binds
   std::chrono::milliseconds base_delay;
+  std::chrono::milliseconds budget;  // total time one fetch may spend asleep in backoff
 };
 
-// A retry that waits longer than the transfer it is retrying helps nobody.
-constexpr std::chrono::milliseconds kMaxRetryDelay{ 60000 };
+// A single wait longer than this buys nothing a shorter one plus another attempt does not.
+constexpr std::chrono::milliseconds kMaxRetryDelay{ 30000 };
+
+// A host that will not finish a handshake is down rather than busy, and rarely recovers
+// inside a minute. Throttling and 5xx storms do, so only those earn the full budget.
+constexpr std::chrono::milliseconds kConnectBudget{ 5000 };
 
 int env_int(char const *name, int fallback, int lo, int hi) {
   char const *val{ std::getenv(name) };
@@ -343,26 +349,75 @@ int env_int(char const *name, int fallback, int lo, int hi) {
 // and re-reading the environment per attempt would only invite it to change mid-fetch.
 retry_policy const &fetch_retry_policy() {
   static retry_policy const policy{
-    .attempts = env_int("ENVY_FETCH_ATTEMPTS", 3, 1, 10),
+    .attempts = env_int("ENVY_FETCH_ATTEMPTS", 10, 1, 100),
     .base_delay =
-        std::chrono::milliseconds{ env_int("ENVY_FETCH_RETRY_BASE_MS", 1000, 0, 60000) }
+        std::chrono::milliseconds{ env_int("ENVY_FETCH_RETRY_BASE_MS", 1000, 0, 60000) },
+    .budget =
+        std::chrono::milliseconds{ env_int("ENVY_FETCH_BUDGET_MS", 90000, 0, 3600000) }
   };
   return policy;
 }
 
-// Exponential (1x, 4x, 16x base) and jittered over +/-50%. fetch() runs a thread per
-// request, so without the jitter a batch that all failed against the same bad mirror
-// would march back onto it in lockstep.
+// Exponential (1x, 2x, 4x ... of base) and jittered over +/-50%. fetch() runs a thread
+// per request, so without the jitter a batch that all failed against the same bad mirror
+// would march back onto it in lockstep. Doubling rather than quadrupling keeps several
+// attempts inside the first few seconds, which is where transient faults live.
 std::chrono::milliseconds retry_delay(int attempt, std::chrono::milliseconds base) {
   if (base.count() <= 0) { return std::chrono::milliseconds::zero(); }
 
-  auto const scaled{ std::min(base.count() << std::min(2 * (attempt - 1), 20),
-                              kMaxRetryDelay.count()) };
+  auto const scaled{ base.count() << std::min(attempt - 1, 20) };
 
   static thread_local std::mt19937 rng{ std::random_device{}() };
   std::uniform_real_distribution<double> jitter{ 0.5, 1.5 };
-  return std::chrono::milliseconds{ static_cast<std::chrono::milliseconds::rep>(
-      static_cast<double>(scaled) * jitter(rng)) };
+  return std::min(kMaxRetryDelay,
+                  std::chrono::milliseconds{ static_cast<std::chrono::milliseconds::rep>(
+                      static_cast<double>(scaled) * jitter(rng)) });
+}
+
+// How long to wait before the next attempt, or nullopt for "stop trying": either the
+// budget is spent, or the server asked for longer than the budget has left and coming
+// back early against an explicit Retry-After would only earn the same answer.
+std::optional<std::chrono::milliseconds> next_delay(int attempt,
+                                                    std::chrono::milliseconds slept,
+                                                    fetch_error const &err,
+                                                    retry_policy const &policy) {
+  auto const budget{ err.kind() == fetch_error_kind::CONNECT
+                         ? std::min(policy.budget, kConnectBudget)
+                         : policy.budget };
+  auto const remaining{ budget - slept };
+  if (remaining <= std::chrono::milliseconds::zero()) { return std::nullopt; }
+
+  if (auto const asked{ err.retry_after() }) {
+    auto const wait{ std::chrono::duration_cast<std::chrono::milliseconds>(*asked) };
+    return wait > remaining ? std::nullopt : std::optional{ wait };
+  }
+
+  return std::min(retry_delay(attempt, policy.base_delay), remaining);
+}
+
+// Sliced so the row can count the wait down, and so an abort does not have to sit
+// through a 30-second nap. False means the caller asked to stop.
+bool sleep_reporting(std::chrono::milliseconds delay,
+                     fetch_progress_cb_t const &progress,
+                     int attempt,
+                     char const *reason) {
+  constexpr std::chrono::milliseconds kTick{ 250 };
+  auto const deadline{ std::chrono::steady_clock::now() + delay };
+
+  for (auto now{ std::chrono::steady_clock::now() }; now < deadline;
+       now = std::chrono::steady_clock::now()) {
+    auto const remaining{ std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+                                                                                now) };
+    if (progress &&
+        !progress(fetch_progress_t{ std::in_place_type<fetch_retry_progress>,
+                                    fetch_retry_progress{ .attempt = attempt,
+                                                          .remaining = remaining,
+                                                          .reason = reason } })) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::min(kTick, remaining));
+  }
+  return true;
 }
 
 // The single retry seam. Retrying here rather than inside a backend gives http, ftp
@@ -376,6 +431,11 @@ fetch_result fetch_with_retry(fetch_request const &request,
                               std::string const &trace_spec,
                               std::string const &url) {
   auto const &policy{ fetch_retry_policy() };
+  auto const &progress{ std::visit(
+      [](auto const &r) -> fetch_progress_cb_t const & { return r.progress; },
+      request) };
+
+  std::chrono::milliseconds slept{ 0 };
 
   for (int attempt{ 1 };; ++attempt) {
     try {
@@ -383,21 +443,26 @@ fetch_result fetch_with_retry(fetch_request const &request,
     } catch (fetch_error const &e) {
       if (attempt >= policy.attempts || !fetch_error_retryable(e)) { throw; }
 
-      auto const delay{ retry_delay(attempt, policy.base_delay) };
-      tui::debug("fetch: attempt %d of %d failed (%s), retrying in %lldms: %s",
+      auto const delay{ next_delay(attempt, slept, e, policy) };
+      if (!delay) { throw; }
+
+      tui::debug("fetch: attempt %d failed (%s), retrying in %lldms: %s",
                  attempt,
-                 policy.attempts,
                  fetch_error_kind_name(e.kind()),
-                 static_cast<long long>(delay.count()),
+                 static_cast<long long>(delay->count()),
                  e.what());
       ENVY_TRACE(download_retry,
                  trace_spec,
                  .url = url,
                  .attempt = attempt,
-                 .delay_ms = static_cast<std::int64_t>(delay.count()),
+                 .delay_ms = static_cast<std::int64_t>(delay->count()),
                  .reason = fetch_error_kind_name(e.kind()),
                  .error = e.what());
-      std::this_thread::sleep_for(delay);
+
+      slept += *delay;
+      if (!sleep_reporting(*delay, progress, attempt, fetch_error_kind_name(e.kind()))) {
+        throw;
+      }
     }
   }
 }

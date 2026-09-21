@@ -2,6 +2,7 @@
 
 #include "uri.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -26,7 +27,16 @@ struct fetch_git_progress {
   std::uint64_t received_bytes{ 0 };
 };
 
-using fetch_progress_t = std::variant<fetch_transfer_progress, fetch_git_progress>;
+// A wait with nothing moving. Without a report of its own a backoff reads as a stall:
+// the row would hold its last byte count for as long as the whole budget.
+struct fetch_retry_progress {
+  int attempt{ 0 };  // the attempt that just failed, not the one being waited for
+  std::chrono::milliseconds remaining{ 0 };
+  char const *reason{ "" };  // fetch_error_kind_name of the failure; always a literal
+};
+
+using fetch_progress_t =
+    std::variant<fetch_transfer_progress, fetch_git_progress, fetch_retry_progress>;
 using fetch_progress_cb_t = std::function<bool(fetch_progress_t const &)>;
 
 struct http_tag {};
