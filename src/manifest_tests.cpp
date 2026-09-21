@@ -2628,6 +2628,34 @@ TEST_CASE("manifest::load reads a vendor table holding both keys") {
   CHECK_FALSE(*m->packages[0]->vendor_auto_sync);
 }
 
+TEST_CASE("manifest::load parses vendor on a bundle package entry") {
+  // A bundled spec whose whole job is to land a source tree is exactly the one worth
+  // sharing, so `vendor` reads the same here as it does beside a `source`.
+  char const *script{ R"(
+    -- @envy bin "tools"
+    VENDOR_ROOT = "third_party"
+    BUNDLES = { tc = { identity = "acme.tc@v1", source = "/bundles/tc" } }
+    PACKAGES = {
+      { spec = "a.one@v1",   bundle = "tc", vendor = "vendor/one" },
+      { spec = "b.two@v1",   bundle = "tc", vendor = true },
+      { spec = "c.three@v1", bundle = "tc", vendor = { path = "vendor/three",
+                                                       auto_sync = false } },
+      { spec = "d.four@v1",  bundle = "tc" },
+    }
+  )" };
+
+  auto m{ envy::manifest::load(script, fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 4);
+  CHECK(*m->packages[0]->vendor == "vendor/one");
+  REQUIRE(m->packages[1]->vendor.has_value());
+  CHECK(m->packages[1]->vendor->empty());  // engaged but empty: derive a name
+  CHECK(*m->packages[2]->vendor == "vendor/three");
+  REQUIRE(m->packages[2]->vendor_auto_sync.has_value());
+  CHECK_FALSE(*m->packages[2]->vendor_auto_sync);
+  CHECK_FALSE(m->packages[3]->vendor.has_value());
+}
+
 TEST_CASE("manifest::load reads an empty vendor table as vendor = true") {
   // No path is a derived name, and no auto_sync is the default; that is `vendor = true`.
   char const *script{ R"(

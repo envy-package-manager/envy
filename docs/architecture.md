@@ -387,7 +387,10 @@ colliding group and to a fixpoint, so two option variants of one spec both vendo
 string is the final directory itself, project-relative, and is a fixed point in that
 ladder—a derived name that wanted it steps aside. A table spells both out: `path` is that
 same override, `auto_sync` is below; `vendor = {}` is `vendor = true` written longhand.
-Only manifest `PACKAGES` entries may carry `vendor`; only cache-managed packages can be vendored (a bundle has no payload, and
+Only manifest `PACKAGES` entries may carry `vendor` — an entry naming a `bundle` as
+readily as one naming a `source`, since a spec whose job is to put a source tree in the
+work tree is exactly the kind worth sharing. Only cache-managed packages can be vendored
+(a bundle has no payload, and
 `USER_MANAGED` writes to the host, which `spec_fetch` refuses before any build work).
 
 A spec chooses what of its install directory is worth copying:

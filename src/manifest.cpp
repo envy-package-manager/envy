@@ -249,7 +249,7 @@ void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
 // set lives with pkg_cfg::parse, which owns that table.
 constexpr std::string_view kBundlePackageKeys[]{
   kEnvyBaseKey, kEnvyBundlesKey, "bundle", "needed_by", "options",
-  "platforms",  "product",       "setup",  "spec"
+  "platforms",  "product",       "setup",  "spec",      "vendor"
 };
 
 // Parse a single package entry that may reference a bundle
@@ -377,6 +377,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
   }
 
   parse_setup_field(table, cfg);
+  parse_vendor_field(table, cfg);
   return cfg;
 }
 
