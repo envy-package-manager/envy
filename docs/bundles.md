@@ -112,6 +112,10 @@ PACKAGES = {
 | `envy.loadenv_spec(identity, module)` | Spec phases only | Load Lua from declared dependency into sandboxed table |
 | `envy.loadenv(module)` | Any context | Load local file into sandboxed table |
 
+Both hand back what the module returned — its table if it returned one, the globals it
+assigned if it returned nothing, as `require` would. A module returning anything else is
+an error naming it.
+
 **Context clarification:**
 
 - `envy.loadenv(module)`: Allowed in any context (manifest global scope, spec global scope, phase functions). Uses Lua dot syntax (`"lib.utils"` → `lib/utils.lua`). Path is **always relative to the currently-executing Lua file** (uses `debug.getinfo` to determine caller's source file). Intended for loading local helper files in the same project or spec directory—NOT for loading other specs from the cache (users don't know cache paths).

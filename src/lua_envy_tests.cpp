@@ -135,4 +135,49 @@ TEST_CASE("envy.extend") {
   }
 }
 
+// The chunk name envy.loadenv reads with debug.getinfo to anchor a relative module
+// path; the file need not exist, only its directory.
+constexpr char kCaller[]{ "@test_data/lua/caller.lua" };
+
+TEST_CASE("envy.loadenv hands back what the module returns") {
+  auto lua{ sol_util_make_lua_state() };
+  lua_envy_install(*lua);
+
+  SUBCASE("a returned table is the result") {
+    auto const result{ lua->safe_script(R"lua(
+      local m = envy.loadenv("loadenv.mod_table")
+      return m.NAME, m.greet()
+    )lua",
+                                        sol::script_pass_on_error,
+                                        kCaller) };
+    REQUIRE(result.valid());
+    CHECK(result.get<std::string>(0) == "table-mod");
+    CHECK(result.get<std::string>(1) == "hi");
+  }
+
+  SUBCASE("a module that returns nothing still hands back its globals") {
+    auto const result{ lua->safe_script(R"lua(
+      local m = envy.loadenv("loadenv.mod_globals")
+      return m.NAME, m.greet()
+    )lua",
+                                        sol::script_pass_on_error,
+                                        kCaller) };
+    REQUIRE(result.valid());
+    CHECK(result.get<std::string>(0) == "globals-mod");
+    CHECK(result.get<std::string>(1) == "hello");
+  }
+
+  SUBCASE("a non-table return value is an error naming the module") {
+    auto const result{ lua->safe_script(R"lua(
+      local ok, err = pcall(function() return envy.loadenv("loadenv.mod_number") end)
+      return ok, err
+    )lua",
+                                        sol::script_pass_on_error,
+                                        kCaller) };
+    REQUIRE(result.valid());
+    CHECK(result.get<bool>(0) == false);
+    CHECK(result.get<std::string>(1).find("loadenv.mod_number") != std::string::npos);
+  }
+}
+
 }  // namespace envy

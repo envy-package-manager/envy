@@ -16,8 +16,8 @@ from .env import EnvyTestCase
 from .test_config import make_manifest
 
 
-class TestLoadenvSpec(EnvyTestCase):
-    """Tests for envy.loadenv_spec() functionality."""
+class LoadenvSpecCase(EnvyTestCase):
+    """Scratch project, scratch bundle, and the authoring helpers both suites share."""
 
     def setUp(self):
         super().setUp()
@@ -104,6 +104,10 @@ SETUP = {{
             text=True,
         )
 
+
+class TestLoadenvSpec(LoadenvSpecCase):
+    """Tests for envy.loadenv_spec() functionality."""
+
     def test_loadenv_spec_in_phase_function(self):
         """envy.loadenv_spec() works within phase functions."""
         # Create bundle with helper
@@ -146,7 +150,8 @@ SETUP = {{
         manifest = self.create_manifest(
             f"""
 PACKAGES = {{
-    {{ spec = "local.consumer@v1", source = "{self.lua_path(spec_path)}" }},
+    {{ spec = "local.consumer@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
 }}
 """
         )
@@ -345,7 +350,8 @@ SETUP = {{
         manifest = self.create_manifest(
             f"""
 PACKAGES = {{
-    {{ spec = "local.fuzzy-consumer@v1", source = "{self.lua_path(spec_path)}" }},
+    {{ spec = "local.fuzzy-consumer@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
 }}
 """
         )
@@ -459,6 +465,92 @@ PACKAGES = {{
         result = self.run_sync(manifest=manifest)
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+
+class TestLoadenvSpecReturnValue(LoadenvSpecCase):
+    """A loaded module's return value is the result, as `require` would give it.
+
+    The same file has to serve a bundle's own specs, which reach it with `require`,
+    and a consumer, which reaches it with envy.loadenv_spec. Returning the globals
+    handed the standard shape back an empty table and failed somewhere else later.
+    """
+
+    def consumer(self, body: str, bundle_path: Path) -> Path:
+        return self.create_spec(
+            "consumer",
+            f"""IDENTITY = "local.consumer@v1"
+DEPENDENCIES = {{
+  {{
+    bundle = "test.helpers@v1",
+    source = "{self.lua_path(bundle_path)}",
+    needed_by = "check",
+  }},
+}}
+
+USER_MANAGED = true
+SETUP = {{
+  main = {{
+    CHECK = function(pkg_dir, options)
+{body}
+    end,
+    INSTALL = function(pkg_dir, options)
+    end,
+  }},
+}}
+""",
+        )
+
+    def run_consumer(self, helper: str, body: str):
+        bundle_path = self.create_bundle_with_helper(
+            "test.helpers@v1",
+            {"test.dummy@v1": "specs/dummy.lua"},
+            "lib/helper.lua",
+            helper,
+        )
+        spec_path = self.consumer(body, bundle_path)
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.consumer@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
+}}
+"""
+        )
+        return self.run_sync(manifest=manifest)
+
+    def test_a_module_that_returns_a_table_hands_that_table_back(self):
+        result = self.run_consumer(
+            """local M = {}
+M.HELPER_VERSION = "1.0.0"
+function M.get_message() return "Hello from helper" end
+return M
+""",
+            '      local helper = envy.loadenv_spec("test.helpers@v1", "lib.helper")\n'
+            '      assert(helper.get_message() == "Hello from helper",\n'
+            '             "got " .. tostring(helper.get_message))\n'
+            '      return helper.HELPER_VERSION == "1.0.0"',
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+    def test_a_module_that_returns_nothing_still_hands_back_its_globals(self):
+        result = self.run_consumer(
+            """HELPER_VERSION = "1.0.0"
+function get_message() return "Hello from helper" end
+""",
+            '      local helper = envy.loadenv_spec("test.helpers@v1", "lib.helper")\n'
+            '      assert(helper.get_message() == "Hello from helper")\n'
+            '      return helper.HELPER_VERSION == "1.0.0"',
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+    def test_a_non_table_return_value_is_an_error_naming_the_module(self):
+        result = self.run_consumer(
+            "return 42\n",
+            '      local helper = envy.loadenv_spec("test.helpers@v1", "lib.helper")\n'
+            "      return true",
+        )
+        self.assertNotEqual(result.returncode, 0, "expected a refusal")
+        self.assertIn("lib.helper", result.stderr)
 
 
 if __name__ == "__main__":

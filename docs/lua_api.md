@@ -397,7 +397,9 @@ Load Lua file from declared dependency into sandboxed environment.
 - `identity` — dependency identity (supports fuzzy matching: `"helpers"` matches `"acme.helpers@v1"`)
 - `module` — module path using Lua dot syntax (e.g., `"lib.common"` → `lib/common.lua`)
 
-**Returns:** Table containing all globals defined in the loaded file.
+**Returns:** What the module returned, if it returned a table — as `require` gives it. A
+module that returns nothing hands back the globals it assigned; anything else is an error
+naming the module.
 
 **Requirements:**
 - Must be called within phase function (not global scope)
@@ -435,11 +437,10 @@ Load Lua file relative to current file into sandboxed environment.
 **Arguments:**
 - `module` — module path using Lua dot syntax (e.g., `"lib.utils"` → `lib/utils.lua`)
 
-**Returns:** Table containing all globals defined in the loaded file.
+**Returns:** the module, same rule as `envy.loadenv_spec`.
 
 **Differences from `require()`:**
 - Path is relative to current file (not cwd)
-- Returns globals table (not return value)
 - Always reloads (no caching)
 
 ```lua

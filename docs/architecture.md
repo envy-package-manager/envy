@@ -756,6 +756,10 @@ end
 - `envy.loadenv(module)` — Load Lua file relative to current file. Works at global scope or in phases. Uses dot syntax (`"lib.utils"` → `lib/utils.lua`).
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency. Phase context required; validates `needed_by`. Uses dot syntax.
 
+Both hand back the module's return value when it returned a table, the globals it
+assigned when it returned nothing — the rule `require` already teaches. Anything else is
+an error naming the module.
+
 **Validation:** Bundle validation runs threaded—each spec's IDENTITY verified against SPECS table keys. All bundles validated on every load.
 
 ## TUI / Output

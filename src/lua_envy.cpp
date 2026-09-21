@@ -4,6 +4,7 @@
 #include "lua_ctx/lua_envy_fetch.h"
 #include "lua_ctx/lua_envy_file_ops.h"
 #include "lua_ctx/lua_envy_loadenv_spec.h"
+#include "lua_ctx/lua_envy_module.h"
 #include "lua_ctx/lua_envy_options.h"
 #include "lua_ctx/lua_envy_package.h"
 #include "lua_ctx/lua_envy_path.h"
@@ -17,54 +18,6 @@
 
 namespace envy {
 namespace {
-
-constexpr char kEnvyLoadenvLua[] = R"lua(
-return function(module_path)
-  if type(module_path) ~= "string" then
-    error("envy.loadenv: path must be a string", 2)
-  end
-
-  -- Convert dots to slashes (Lua module syntax)
-  local file_path = module_path:gsub("%.", "/")
-
-  -- Get caller's source file using debug.getinfo
-  -- Level 2 = caller of loadenv (1 = loadenv itself)
-  local info = debug.getinfo(2, "S")
-  local source = info.source
-  if not source then
-    error("envy.loadenv: cannot determine caller's source file", 2)
-  end
-
-  -- Remove "@" prefix (Lua adds this for file sources)
-  if source:sub(1, 1) == "@" then
-    source = source:sub(2)
-  end
-
-  -- Get directory from source file (handle both / and \ path separators)
-  local dir = source:match("(.*[/\\])")
-  if not dir then dir = "./" end
-
-  -- Construct full path (add .lua extension)
-  local full_path = dir .. file_path .. ".lua"
-
-  -- Create sandboxed environment with access to stdlib
-  local env = setmetatable({}, {__index = _G})
-
-  -- Load file with custom environment
-  local chunk, err = loadfile(full_path, "t", env)
-  if not chunk then
-    error("envy.loadenv: " .. tostring(err), 2)
-  end
-
-  -- Execute chunk (assigned globals go into env)
-  local ok, exec_err = pcall(chunk)
-  if not ok then
-    error("envy.loadenv: " .. tostring(exec_err), 2)
-  end
-
-  return env
-end
-)lua";
 
 constexpr char kEnvyExtendLua[] = R"lua(
 return function(target, ...)
@@ -164,17 +117,6 @@ void lua_envy_install(sol::state &lua) {
   envy_table["error"] = [](std::string_view msg) { tui::error("%s", msg.data()); };
   envy_table["stdout"] = [](std::string_view msg) { tui::print_stdout("%s", msg.data()); };
 
-  // envy.loadenv (load Lua code)
-  sol::protected_function_result loadenv_result{
-    lua.safe_script(kEnvyLoadenvLua, sol::script_pass_on_error)
-  };
-  if (loadenv_result.valid()) {
-    envy_table["loadenv"] = loadenv_result;
-  } else {
-    sol::error err = loadenv_result;
-    tui::error("Failed to load envy.loadenv: %s", err.what());
-  }
-
   // envy.extend (load Lua code)
   sol::protected_function_result extend_result{
     lua.safe_script(kEnvyExtendLua, sol::script_pass_on_error)
@@ -212,6 +154,7 @@ void lua_envy_install(sol::state &lua) {
   lua_envy_package_install(envy_table);
   lua_envy_product_install(envy_table);
   lua_envy_loadenv_spec_install(envy_table);
+  lua_envy_loadenv_install(envy_table);
   lua_envy_options_install(envy_table);
 
   lua["envy"] = envy_table;
