@@ -62,7 +62,8 @@ fs::path lua_module_path_under(fs::path const &root,
 sol::table lua_module_load(sol::state_view lua,
                            fs::path const &full_path,
                            std::string_view fn,
-                           std::string const &module_path) {
+                           std::string const &module_path,
+                           lua_module_bundle const *from) {
   if (!fs::exists(full_path)) {
     throw std::runtime_error(prefix(fn) + "file not found: " + full_path.string());
   }
@@ -78,6 +79,12 @@ sol::table lua_module_load(sol::state_view lua,
 
   // Assigned globals land here, not in the caller's; the stdlib shows through _G.
   sol::environment env{ lua, sol::create, lua.globals() };
+  if (from) {  // seeded before the chunk runs, the way envy.import seeds ENVY_IMPORTER
+    sol::table info{ lua.create_table_with(
+        "identity", from->identity, "root", util_normalized_path(from->root)) };
+    if (!from->alias.empty()) { info["alias"] = from->alias; }
+    env["ENVY_BUNDLE"] = info;
+  }
   sol::protected_function fnc{ chunk };
   sol::set_environment(env, fnc);
 

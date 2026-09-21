@@ -195,6 +195,19 @@ TEST_CASE("envy.loadenv hands back what the module returns") {
   }
 }
 
+TEST_CASE("envy.loadenv leaves ENVY_BUNDLE nil: no bundle is involved") {
+  auto lua{ sol_util_make_lua_state() };
+  lua_envy_install(*lua);
+
+  auto const result{ lua->safe_script(R"lua(
+    return envy.loadenv("loadenv.mod_bundle").FROM_BUNDLE
+  )lua",
+                                      sol::script_pass_on_error,
+                                      kCaller) };
+  REQUIRE(result.valid());
+  CHECK(result.get<bool>(0) == false);
+}
+
 TEST_CASE("envy.loadenv_bundle points a spec at envy.loadenv_spec") {
   // Installed as a refusal everywhere but a manifest, so a spec gets a sentence.
   auto lua{ sol_util_make_lua_state() };

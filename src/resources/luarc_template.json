@@ -6,7 +6,8 @@
   ],
   "diagnostics.globals": [
     "envy", "IDENTITY", "PACKAGES", "DEPENDENCIES", "PRODUCTS",
-    "FETCH", "STAGE", "BUILD", "INSTALL", "SETUP", "ENVY_IMPORTER"
+    "FETCH", "STAGE", "BUILD", "INSTALL", "SETUP", "ENVY_IMPORTER",
+    "ENVY_BUNDLE"
   ],
   "completion.enable": true
 }

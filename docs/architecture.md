@@ -629,8 +629,8 @@ Specs run only on host platform—no cross-deployment. Single spec file adapts v
 - `envy.PLATFORM_ARCH` — combined: `"darwin-arm64"`, `"linux-x86_64"`
 - `envy.EXE_EXT` — `""`, or `".exe"` on Windows
 
-`ENVY_SHELL` (the shell constants) and `ENVY_IMPORTER` are the only bare globals envy
-installs.
+`ENVY_SHELL` (the shell constants), `ENVY_IMPORTER` and `ENVY_BUNDLE` are the only bare
+globals envy installs.
 
 **Single-file with conditionals:**
 ```lua
@@ -759,7 +759,9 @@ end
 
 All three hand back the module's return value when it returned a table, the globals it
 assigned when it returned nothing — the rule `require` already teaches. Anything else is
-an error naming the module.
+an error naming the module. A module out of a bundle sees `ENVY_BUNDLE` (`identity`, `root`,
+and the `alias` the caller reached it by — `nil` when resolved by identity), so a helper can
+name its own bundle without being handed the name; `nil` where no bundle is involved.
 
 **Validation:** Bundle validation runs threaded—each spec's IDENTITY verified against SPECS table keys. All bundles validated on every load.
 

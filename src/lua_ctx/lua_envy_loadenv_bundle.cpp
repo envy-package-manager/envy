@@ -79,7 +79,8 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
                .subpath = module_path,  // original dot syntax
                .root = bundle_root.string());
 
-    return lua_module_load(lua, full_path, kFn, module_path);
+    lua_module_bundle const from{ src->bundle_identity, alias, bundle_root };
+    return lua_module_load(lua, full_path, kFn, module_path, &from);
   };
 }
 

@@ -160,6 +160,60 @@ PACKAGES = {{
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
+    def test_loadenv_spec_names_the_bundle_but_no_alias(self):
+        """ENVY_BUNDLE is set; its alias is nil, since this loader resolves by identity."""
+        bundle_path = self.create_bundle_with_helper(
+            "test.helpers@v1",
+            {"test.dummy@v1": "specs/dummy.lua"},
+            "lib/helper.lua",
+            """local M = {}
+M.identity = ENVY_BUNDLE.identity
+M.has_alias = ENVY_BUNDLE.alias ~= nil
+M.root = ENVY_BUNDLE.root
+return M
+""",
+        )
+
+        spec_content = f"""IDENTITY = "local.consumer@v1"
+DEPENDENCIES = {{
+  {{
+    bundle = "test.helpers@v1",
+    source = "{self.lua_path(bundle_path)}",
+    needed_by = "check",
+  }},
+}}
+
+USER_MANAGED = true
+SETUP = {{
+  main = {{
+    CHECK = function(pkg_dir, options)
+      local h = envy.loadenv_spec("test.helpers@v1", "lib.helper")
+      assert(h.identity == "test.helpers@v1", "identity: " .. tostring(h.identity))
+      assert(not h.has_alias, "alias should be nil when resolved by identity")
+      assert(h.root and #h.root > 0, "root: " .. tostring(h.root))
+      return true
+    end,
+    INSTALL = function(pkg_dir, options)
+    end,
+  }},
+}}
+
+"""
+        spec_path = self.create_spec("bundle_aware_consumer", spec_content)
+
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.consumer@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
+}}
+"""
+        )
+
+        result = self.run_sync(manifest=manifest)
+
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
     def test_loadenv_spec_at_global_scope_errors(self):
         """envy.loadenv_spec() at global scope produces error."""
         # Create bundle with helper

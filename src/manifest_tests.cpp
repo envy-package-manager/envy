@@ -2657,6 +2657,22 @@ TEST_CASE("manifest::load builds PACKAGES from a helper in a bundle") {
   CHECK(m->packages[1]->identity == "local.generic@r1");
 }
 
+TEST_CASE("manifest::load tells a bundled module which bundle it came from") {
+  auto const script{ local_bundle_manifest(
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.from_bundle\")",
+      "PACKAGES = { m.entry() }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  // The alias the helper read resolved, so it was the one the manifest wrote.
+  CHECK(*m->packages[0]->bundle_identity == "local.tools@r1");
+  std::string const &opts{ m->packages[0]->serialized_options };
+  CHECK(opts.find(R"(["identity"]="local.tools@r1")") != std::string::npos);
+  CHECK(opts.find(R"(["alias"]="tools")") != std::string::npos);
+  CHECK(opts.find(R"(["root_tail"]="local-bundle")") != std::string::npos);
+}
+
 TEST_CASE("manifest::load names the alias envy.loadenv_bundle could not find") {
   auto const script{ local_bundle_manifest(
       "local gh = envy.loadenv_bundle(\"nope\", \"lib.entries\")",
