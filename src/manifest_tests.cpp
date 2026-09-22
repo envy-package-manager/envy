@@ -2700,9 +2700,10 @@ TEST_CASE("a bundled module reads the manifest's own globals") {
 
 TEST_CASE("a bundled module reads an importing fragment's globals") {
   // A fragment assigns into its import sandbox; _G alone would leave VENDOR_ROOT nil.
-  auto m{ load_super("local deps = envy.import(\"bundle_globals\")\n"
-                     "VENDOR_ROOT = deps.VENDOR_ROOT\n"
-                     "PACKAGES = deps.PACKAGES") };
+  auto m{ load_super(
+      "local deps = envy.import(\"bundle_globals\")\n"
+      "VENDOR_ROOT = deps.VENDOR_ROOT\n"
+      "PACKAGES = deps.PACKAGES") };
 
   REQUIRE(m->packages.size() == 1);
   CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
