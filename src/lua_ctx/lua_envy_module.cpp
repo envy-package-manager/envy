@@ -80,8 +80,10 @@ sol::table lua_module_load(sol::state_view lua,
   // Assigned globals land here, not in the caller's; the stdlib shows through _G.
   sol::environment env{ lua, sol::create, lua.globals() };
   if (from) {  // seeded before the chunk runs, the way envy.import seeds ENVY_IMPORTER
-    sol::table info{ lua.create_table_with(
-        "identity", from->identity, "root", util_normalized_path(from->root)) };
+    sol::table info{ lua.create_table_with("identity",
+                                           from->identity,
+                                           "root",
+                                           util_normalized_path(from->root)) };
     if (!from->alias.empty()) { info["alias"] = from->alias; }
     env["ENVY_BUNDLE"] = info;
   }
