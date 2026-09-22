@@ -2686,6 +2686,51 @@ TEST_CASE("ENVY_BUNDLE is not one of the globals a module hands back") {
         R"({["BUNDLE_SEEN"]="local.tools@r1",["NAME"]="globals-mod"})");
 }
 
+TEST_CASE("a bundled module reads the manifest's own globals") {
+  auto const script{ local_bundle_manifest(
+      "VENDOR_ROOT = \"third_party\"\n"
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.reads_global\")",
+      "PACKAGES = { m.entry() }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+}
+
+TEST_CASE("a bundled module reads an importing fragment's globals") {
+  // A fragment assigns into its import sandbox; _G alone would leave VENDOR_ROOT nil.
+  auto m{ load_super(
+      "local deps = envy.import(\"bundle_globals\")\n"
+      "VENDOR_ROOT = deps.VENDOR_ROOT\n"
+      "PACKAGES = deps.PACKAGES") };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+}
+
+TEST_CASE("envy.loadenv reads the globals of the fragment that called it") {
+  auto m{ load_super(
+      "local deps = envy.import(\"loadenv_globals\")\n"
+      "VENDOR_ROOT = deps.VENDOR_ROOT\n"
+      "PACKAGES = deps.PACKAGES") };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+}
+
+TEST_CASE("envy.loadenv out of a bundled module resolves no bundle of its own") {
+  // The sibling's globals come from the module that loaded it; its ENVY_BUNDLE does not.
+  auto const script{ local_bundle_manifest(
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.loads_sibling\")",
+      "PACKAGES = { m.entry() }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options == R"({["bundle"]="<nil>",["outer"]="outer"})");
+}
+
 TEST_CASE("manifest::load keeps an empty bundle alias, rather than dropping it") {
   auto const root{
     (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()

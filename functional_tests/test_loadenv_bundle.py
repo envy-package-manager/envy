@@ -286,6 +286,46 @@ end
         self.assertEqual(1, len(run.events("pkg_outcome", spec="test.generic@r1")))
 
 
+    def test_a_helper_reads_the_globals_of_the_fragment_that_loaded_it(self):
+        """A fragment assigns into its import sandbox, not _G; see issue #379."""
+        root = self.make_bundle(
+            spec=VENDOR_SPEC,
+            helper="""local M = {}
+function M.entry(name)
+  return { spec = "test.generic@r1", bundle = "tools", options = { name = name },
+           vendor = VENDOR_ROOT and (VENDOR_ROOT .. "/" .. name) or true }
+end
+return M
+"""
+        )
+        sub = self.project / "sub"
+        sub.mkdir()
+        (sub / "envy.lua").write_text(
+            test_config.make_manifest(
+                'VENDOR_ROOT = "third_party"\n'
+                + self.bundles_table(root)
+                + 'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+                'PACKAGES = { gh.entry("one"), gh.entry("two") }\n'
+            ),
+            encoding="utf-8",
+        )
+        manifest = self.manifest(
+            'local sub = envy.import("sub")\n'
+            "VENDOR_ROOT = sub.VENDOR_ROOT\nPACKAGES = sub.PACKAGES\n"
+        )
+
+        run = self.install(manifest)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(
+            {"third_party/one", "third_party/two"},
+            {
+                Path(e.raw["path"]).relative_to(self.project).as_posix()
+                for e in run.events("vendor_result")
+            },
+        )
+
+
 class TestLoadenvBundleRefusals(LoadenvBundleCase):
     def test_an_unknown_alias_names_the_alias(self):
         manifest = self.manifest(

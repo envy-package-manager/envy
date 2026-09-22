@@ -18,18 +18,44 @@ char const *lua_type_name(sol::object const &o) {
   return lua_typename(o.lua_state(), static_cast<int>(o.get_type()));
 }
 
-// What a module's sandbox falls through to: _G, and `ENVY_BUNDLE` on a layer of its own
-// so a module that returns nothing hands back only the globals it assigned.
-sol::table module_fallback(sol::state_view lua, lua_module_bundle const *from) {
-  if (!from) { return lua.globals(); }
-  sol::table info{ lua.create_table_with("identity",
-                                         from->identity,
-                                         "root",
-                                         util_normalized_path(from->root)) };
-  if (from->alias) { info["alias"] = *from->alias; }
-  sol::environment shim{ lua, sol::create, lua.globals() };
-  shim["ENVY_BUNDLE"] = info;
-  return shim;
+constexpr char kBundleKey[]{ "ENVY_BUNDLE" };
+
+bool has_value(sol::object const &o) {
+  return o.valid() && o.get_type() != sol::type::lua_nil;
+}
+
+// What a module's sandbox falls through to: the caller's globals, and `ENVY_BUNDLE` on a
+// layer of its own so a module that returns nothing hands back only what it assigned.
+// `ENVY_BUNDLE` is always the bundle this load resolved -- never the one the caller came
+// from, which the chain below would otherwise hand down.
+sol::table module_fallback(sol::state_view lua,
+                           sol::table const &caller_scope,
+                           lua_module_bundle const *from) {
+  if (from) {
+    sol::table info{ lua.create_table_with("identity",
+                                           from->identity,
+                                           "root",
+                                           util_normalized_path(from->root)) };
+    if (from->alias) { info["alias"] = *from->alias; }
+    sol::environment shim{ lua, sol::create, caller_scope };
+    shim[kBundleKey] = info;  // raw, so it shadows whatever the caller's chain carries
+    return shim;
+  }
+
+  // No bundle to name, and nothing to hide: chain straight through, as every load that
+  // starts outside a bundle does. Assigning nil would not shadow -- `__index` fires on it.
+  if (!has_value(caller_scope[kBundleKey])) { return caller_scope; }
+
+  sol::table mt{ lua.create_table() };
+  mt.set_function("__index",
+                  [caller_scope](sol::table, sol::object const &key) -> sol::object {
+                    return key.is<std::string>() && key.as<std::string>() == kBundleKey
+                               ? sol::object{ sol::lua_nil }
+                               : caller_scope.get<sol::object>(key);
+                  });
+  sol::table blind{ lua.create_table() };
+  blind[sol::metatable_key] = mt;
+  return blind;
 }
 
 }  // namespace
@@ -73,10 +99,15 @@ fs::path lua_module_path_under(fs::path const &root,
   return full;
 }
 
+sol::table lua_module_caller_scope(sol::this_environment const &te, sol::state_view lua) {
+  return te.env ? sol::table{ *te.env } : sol::table{ lua.globals() };
+}
+
 sol::table lua_module_load(sol::state_view lua,
                            fs::path const &full_path,
                            std::string_view fn,
                            std::string const &module_path,
+                           sol::table const &caller_scope,
                            lua_module_bundle const *from) {
   if (!fs::exists(full_path)) {
     throw std::runtime_error(prefix(fn) + "file not found: " + full_path.string());
@@ -91,8 +122,8 @@ sol::table lua_module_load(sol::state_view lua,
     throw std::runtime_error(prefix(fn) + "load error: " + err.what());
   }
 
-  // Assigned globals land here, not in the caller's; the stdlib shows through _G.
-  sol::environment env{ lua, sol::create, module_fallback(lua, from) };
+  // Assigned globals land here, not in the caller's; the caller's show through.
+  sol::environment env{ lua, sol::create, module_fallback(lua, caller_scope, from) };
   sol::protected_function fnc{ chunk };
   sol::set_environment(env, fnc);
 
@@ -129,6 +160,7 @@ fs::path lua_module_caller_file(lua_State *L, std::string_view fn, caller_path h
 
 void lua_envy_loadenv_install(sol::table &envy_table) {
   envy_table["loadenv"] = [](std::string const &module_path,
+                             sol::this_environment te,
                              sol::this_state L) -> sol::table {
     constexpr std::string_view kFn{ "envy.loadenv" };
     if (module_path.empty()) {
@@ -146,7 +178,12 @@ void lua_envy_loadenv_install(sol::table &envy_table) {
                                                     kFn,
                                                     module_path,
                                                     "the calling file's directory") };
-    return lua_module_load(sol::state_view{ L }, full_path, kFn, module_path);
+    sol::state_view lua{ L };
+    return lua_module_load(lua,
+                           full_path,
+                           kFn,
+                           module_path,
+                           lua_module_caller_scope(te, lua));
   };
 }
 

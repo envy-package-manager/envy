@@ -25,6 +25,7 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
   // module_path uses Lua dot syntax (e.g., "lib.helpers" -> "lib/helpers.lua")
   envy_table["loadenv_spec"] = [](std::string const &identity,
                                   std::string const &module_path,
+                                  sol::this_environment te,
                                   sol::this_state L) -> sol::table {
     std::string const scope{ "dependency '" + identity + "'" };
     std::string const subpath{ lua_module_subpath(module_path, kFn, scope) };
@@ -100,10 +101,12 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       lua_module_path_under(load_root, subpath, kFn, module_path, scope)
     };
     lua_module_bundle const from{ bundle_id, std::nullopt, load_root };
-    sol::table const module{ lua_module_load(sol::state_view{ L },
+    sol::state_view const lua{ L };
+    sol::table const module{ lua_module_load(lua,
                                              full_path,
                                              kFn,
                                              module_path,
+                                             lua_module_caller_scope(te, lua),
                                              bundle_id.empty() ? nullptr : &from) };
     emit_access(true, first_needed_by, full_path.string());
     return module;

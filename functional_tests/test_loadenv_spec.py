@@ -214,6 +214,59 @@ PACKAGES = {{
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
+    def test_loadenv_spec_reads_the_globals_of_the_spec_that_loaded_it(self):
+        """The module's sandbox falls through to the caller's globals; see issue #379."""
+        bundle_path = self.create_bundle_with_helper(
+            "test.helpers@v1",
+            {"test.dummy@v1": "specs/dummy.lua"},
+            "lib/helper.lua",
+            """local M = {}
+M.seen = CONSUMER_GLOBAL or "<nil>"
+M.bundle = ENVY_BUNDLE.identity
+return M
+""",
+        )
+
+        spec_content = f"""IDENTITY = "local.consumer@v1"
+CONSUMER_GLOBAL = "from the spec"
+DEPENDENCIES = {{
+  {{
+    bundle = "test.helpers@v1",
+    source = "{self.lua_path(bundle_path)}",
+    needed_by = "check",
+  }},
+}}
+
+USER_MANAGED = true
+SETUP = {{
+  main = {{
+    CHECK = function(pkg_dir, options)
+      local h = envy.loadenv_spec("test.helpers@v1", "lib.helper")
+      assert(h.seen == "from the spec", "seen: " .. tostring(h.seen))
+      assert(h.bundle == "test.helpers@v1", "bundle: " .. tostring(h.bundle))
+      return true
+    end,
+    INSTALL = function(pkg_dir, options)
+    end,
+  }},
+}}
+
+"""
+        spec_path = self.create_spec("globals_consumer", spec_content)
+
+        manifest = self.create_manifest(
+            f"""
+PACKAGES = {{
+    {{ spec = "local.consumer@v1", source = "{self.lua_path(spec_path)}",
+       setup = {{ "main" }} }},
+}}
+"""
+        )
+
+        result = self.run_sync(manifest=manifest)
+
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
     def test_loadenv_spec_at_global_scope_errors(self):
         """envy.loadenv_spec() at global scope produces error."""
         # Create bundle with helper
