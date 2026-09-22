@@ -133,10 +133,9 @@ instead of restating the spec, the alias and the vendor path every time.
 ```lua
 -- in the bundle, lib/github.lua
 local M = {}
-function M.repo(name, repo, ref)                -- ENVY_BUNDLE.alias: what the caller
-  return { spec = "acme.github@r0",             -- called this bundle to reach the file
-           bundle = ENVY_BUNDLE.alias, vendor = "vendor/" .. name,
-           options = { repo = repo, ref = ref } }
+function M.repo(name, repo, ref)
+  return { spec = "acme.github@r0", bundle = ENVY_BUNDLE.alias,   -- the caller's own alias
+           vendor = "vendor/" .. name, options = { repo = repo, ref = ref } }
 end
 return M
 ```

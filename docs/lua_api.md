@@ -481,7 +481,7 @@ reached.
 ```lua
 -- lib/github.lua, inside bundle acme.specs@r1
 local M = {}
-function M.repo(name, repo, ref)            -- the caller already typed the alias to get here
+function M.repo(name, repo, ref)
   return { spec = "acme.github@r0", bundle = ENVY_BUNDLE.alias,
            options = { repo = repo, ref = ref } }
 end

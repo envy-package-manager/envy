@@ -241,7 +241,7 @@ function envy.loadenv_bundle(alias, module) end
 
 ---@class ENVY_BUNDLE
 ---@field identity string Identity of the bundle this file was loaded from
----@field alias string|nil What the calling file called the bundle; nil when reached by identity
+---@field alias string|nil What the calling file called it; nil when reached by identity
 ---@field root string Absolute path of the bundle's materialized root
 
 ---The bundle this file came from; nil when no bundle is involved

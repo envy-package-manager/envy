@@ -161,7 +161,7 @@ PACKAGES = {{
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
     def test_loadenv_spec_names_the_bundle_but_no_alias(self):
-        """ENVY_BUNDLE is set; its alias is nil, since this loader resolves by identity."""
+        """ENVY_BUNDLE names the bundle; its alias is nil, resolved by identity."""
         bundle_path = self.create_bundle_with_helper(
             "test.helpers@v1",
             {"test.dummy@v1": "specs/dummy.lua"},

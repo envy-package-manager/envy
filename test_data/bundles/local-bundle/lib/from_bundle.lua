@@ -1,4 +1,4 @@
--- Hands its own ENVY_BUNDLE back through an entry, so a test can read what it was told.
+-- Hands its own ENVY_BUNDLE back through an entry, for a test to read.
 local M = {}
 
 function M.entry()

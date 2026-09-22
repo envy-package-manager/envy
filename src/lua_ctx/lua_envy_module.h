@@ -3,6 +3,7 @@
 #include "sol/sol.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -21,11 +22,11 @@ std::filesystem::path lua_module_path_under(std::filesystem::path const &root,
                                             std::string const &module_path,
                                             std::string const &scope);
 
-// The bundle a module was loaded out of, seeded as its `ENVY_BUNDLE`. `alias` is what
-// the calling file called it, empty when the caller reached the bundle by identity.
+// A module's `ENVY_BUNDLE`. `alias` is what the calling file called the bundle, absent
+// when it was reached by identity.
 struct lua_module_bundle {
   std::string identity;
-  std::string alias;
+  std::optional<std::string> alias;
   std::filesystem::path root;
 };
 

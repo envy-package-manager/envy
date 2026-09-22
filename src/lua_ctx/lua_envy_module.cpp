@@ -18,6 +18,18 @@ char const *lua_type_name(sol::object const &o) {
   return lua_typename(o.lua_state(), static_cast<int>(o.get_type()));
 }
 
+// What a module's sandbox falls through to: _G, and `ENVY_BUNDLE` on a layer of its own
+// so a module that returns nothing hands back only the globals it assigned.
+sol::table module_fallback(sol::state_view lua, lua_module_bundle const *from) {
+  if (!from) { return lua.globals(); }
+  sol::table info{ lua.create_table_with(
+      "identity", from->identity, "root", util_normalized_path(from->root)) };
+  if (from->alias) { info["alias"] = *from->alias; }
+  sol::environment shim{ lua, sol::create, lua.globals() };
+  shim["ENVY_BUNDLE"] = info;
+  return shim;
+}
+
 }  // namespace
 
 std::string lua_module_subpath(std::string const &module_path,
@@ -78,15 +90,7 @@ sol::table lua_module_load(sol::state_view lua,
   }
 
   // Assigned globals land here, not in the caller's; the stdlib shows through _G.
-  sol::environment env{ lua, sol::create, lua.globals() };
-  if (from) {  // seeded before the chunk runs, the way envy.import seeds ENVY_IMPORTER
-    sol::table info{ lua.create_table_with("identity",
-                                           from->identity,
-                                           "root",
-                                           util_normalized_path(from->root)) };
-    if (!from->alias.empty()) { info["alias"] = from->alias; }
-    env["ENVY_BUNDLE"] = info;
-  }
+  sol::environment env{ lua, sol::create, module_fallback(lua, from) };
   sol::protected_function fnc{ chunk };
   sol::set_environment(env, fnc);
 
