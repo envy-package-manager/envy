@@ -2690,12 +2690,14 @@ TEST_CASE("manifest::load keeps an empty bundle alias, rather than dropping it")
   auto const root{
     (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()
   };
-  auto const script{ "-- @envy bin \"tools\"\n"
-                     "BUNDLES = { [\"\"] = { identity = \"local.tools@r1\", source = \"" +
-                     root +
-                     "\" } }\n"
-                     "local m = envy.loadenv_bundle(\"\", \"lib.from_bundle\")\n"
-                     "PACKAGES = { m.entry() }\n" };
+  auto const script{
+    "-- @envy bin \"tools\"\n"
+    "BUNDLES = { [\"\"] = { identity = \"local.tools@r1\", source = \"" +
+    root +
+    "\" } }\n"
+    "local m = envy.loadenv_bundle(\"\", \"lib.from_bundle\")\n"
+    "PACKAGES = { m.entry() }\n"
+  };
 
   auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
 

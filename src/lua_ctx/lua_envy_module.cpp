@@ -22,8 +22,10 @@ char const *lua_type_name(sol::object const &o) {
 // so a module that returns nothing hands back only the globals it assigned.
 sol::table module_fallback(sol::state_view lua, lua_module_bundle const *from) {
   if (!from) { return lua.globals(); }
-  sol::table info{ lua.create_table_with(
-      "identity", from->identity, "root", util_normalized_path(from->root)) };
+  sol::table info{ lua.create_table_with("identity",
+                                         from->identity,
+                                         "root",
+                                         util_normalized_path(from->root)) };
   if (from->alias) { info["alias"] = *from->alias; }
   sol::environment shim{ lua, sol::create, lua.globals() };
   shim["ENVY_BUNDLE"] = info;

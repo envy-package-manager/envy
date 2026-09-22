@@ -77,25 +77,24 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
 
     // A bundle, a spec out of one, or an atomic spec -- which has no bundle and loads
     // from its own cache directory.
-    auto const [load_root, bundle_id]{
-      [&]() -> std::pair<std::filesystem::path, std::string> {
-        bool const whole_bundle{ dep->type == pkg_type::BUNDLE_ONLY };
-        if (!whole_bundle && !dep->cfg->bundle_identity) {
-          if (!dep->spec_file_path.has_value() || dep->spec_file_path->empty()) {
-            throw std::runtime_error("envy.loadenv_spec: spec '" + identity +
-                                     "' has no spec_file_path");
-          }
-          return { dep->spec_file_path->parent_path(), std::string{} };
+    auto const [load_root,
+                bundle_id]{ [&]() -> std::pair<std::filesystem::path, std::string> {
+      bool const whole_bundle{ dep->type == pkg_type::BUNDLE_ONLY };
+      if (!whole_bundle && !dep->cfg->bundle_identity) {
+        if (!dep->spec_file_path.has_value() || dep->spec_file_path->empty()) {
+          throw std::runtime_error("envy.loadenv_spec: spec '" + identity +
+                                   "' has no spec_file_path");
         }
-        std::string id{ whole_bundle ? canonical_id : *dep->cfg->bundle_identity };
-        bundle const *b{ eng->find_bundle(id) };
-        if (!b) {
-          throw std::runtime_error("envy.loadenv_spec: bundle '" + id +
-                                   "' not found in registry for '" + identity + "'");
-        }
-        return { b->cache_path, std::move(id) };
-      }()
-    };
+        return { dep->spec_file_path->parent_path(), std::string{} };
+      }
+      std::string id{ whole_bundle ? canonical_id : *dep->cfg->bundle_identity };
+      bundle const *b{ eng->find_bundle(id) };
+      if (!b) {
+        throw std::runtime_error("envy.loadenv_spec: bundle '" + id +
+                                 "' not found in registry for '" + identity + "'");
+      }
+      return { b->cache_path, std::move(id) };
+    }() };
 
     std::filesystem::path const full_path{
       lua_module_path_under(load_root, subpath, kFn, module_path, scope)
