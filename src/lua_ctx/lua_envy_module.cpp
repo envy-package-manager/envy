@@ -18,16 +18,18 @@ char const *lua_type_name(sol::object const &o) {
   return lua_typename(o.lua_state(), static_cast<int>(o.get_type()));
 }
 
-// What a module's sandbox falls through to: _G, and `ENVY_BUNDLE` on a layer of its own
-// so a module that returns nothing hands back only the globals it assigned.
-sol::table module_fallback(sol::state_view lua, lua_module_bundle const *from) {
-  if (!from) { return lua.globals(); }
+// What a module's sandbox falls through to: the caller's globals, and `ENVY_BUNDLE` on a
+// layer of its own so a module that returns nothing hands back only what it assigned.
+sol::table module_fallback(sol::state_view lua,
+                           sol::table const &caller_scope,
+                           lua_module_bundle const *from) {
+  if (!from) { return caller_scope; }
   sol::table info{ lua.create_table_with("identity",
                                          from->identity,
                                          "root",
                                          util_normalized_path(from->root)) };
   if (from->alias) { info["alias"] = *from->alias; }
-  sol::environment shim{ lua, sol::create, lua.globals() };
+  sol::environment shim{ lua, sol::create, caller_scope };
   shim["ENVY_BUNDLE"] = info;
   return shim;
 }
@@ -73,10 +75,15 @@ fs::path lua_module_path_under(fs::path const &root,
   return full;
 }
 
+sol::table lua_module_caller_scope(sol::this_environment const &te, sol::state_view lua) {
+  return te.env ? sol::table{ *te.env } : sol::table{ lua.globals() };
+}
+
 sol::table lua_module_load(sol::state_view lua,
                            fs::path const &full_path,
                            std::string_view fn,
                            std::string const &module_path,
+                           sol::table const &caller_scope,
                            lua_module_bundle const *from) {
   if (!fs::exists(full_path)) {
     throw std::runtime_error(prefix(fn) + "file not found: " + full_path.string());
@@ -91,8 +98,8 @@ sol::table lua_module_load(sol::state_view lua,
     throw std::runtime_error(prefix(fn) + "load error: " + err.what());
   }
 
-  // Assigned globals land here, not in the caller's; the stdlib shows through _G.
-  sol::environment env{ lua, sol::create, module_fallback(lua, from) };
+  // Assigned globals land here, not in the caller's; the caller's show through.
+  sol::environment env{ lua, sol::create, module_fallback(lua, caller_scope, from) };
   sol::protected_function fnc{ chunk };
   sol::set_environment(env, fnc);
 
@@ -129,6 +136,7 @@ fs::path lua_module_caller_file(lua_State *L, std::string_view fn, caller_path h
 
 void lua_envy_loadenv_install(sol::table &envy_table) {
   envy_table["loadenv"] = [](std::string const &module_path,
+                             sol::this_environment te,
                              sol::this_state L) -> sol::table {
     constexpr std::string_view kFn{ "envy.loadenv" };
     if (module_path.empty()) {
@@ -146,7 +154,12 @@ void lua_envy_loadenv_install(sol::table &envy_table) {
                                                     kFn,
                                                     module_path,
                                                     "the calling file's directory") };
-    return lua_module_load(sol::state_view{ L }, full_path, kFn, module_path);
+    sol::state_view lua{ L };
+    return lua_module_load(lua,
+                           full_path,
+                           kFn,
+                           module_path,
+                           lua_module_caller_scope(te, lua));
   };
 }
 

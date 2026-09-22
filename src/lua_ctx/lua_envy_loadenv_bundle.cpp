@@ -16,11 +16,6 @@ namespace {
 
 constexpr std::string_view kFn{ "envy.loadenv_bundle" };
 
-// The caller's own globals: an imported fragment assigns into its sandbox, not _G.
-sol::table caller_scope(sol::this_environment const &te, sol::state_view lua) {
-  return te.env ? sol::table{ *te.env } : sol::table{ lua.globals() };
-}
-
 // The alias in `table`, parsed against `origin`. Nullopt lets the caller fall back.
 std::optional<pkg_cfg::bundle_source> find_alias(sol::object const &table,
                                                  std::string const &alias,
@@ -45,12 +40,12 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
     std::string const subpath{ lua_module_subpath(module_path, kFn, scope) };
 
     sol::state_view lua{ L };
+    sol::table const own{ lua_module_caller_scope(te, lua) };
     std::filesystem::path const caller{ lua_module_caller_file(L, kFn) };
 
     // Order and anchoring mirror manifest_parse_ctx::find_alias: own BUNDLES, then the
     // root's, each against its writer. Raw, or a sandbox adopts the root's as its own.
     auto const src{ [&]() -> std::optional<pkg_cfg::bundle_source> {
-      sol::table const own{ caller_scope(te, lua) };
       if (sol::object const declared{ own.raw_get<sol::object>("BUNDLES") };
           declared.valid() && declared.get_type() != sol::type::lua_nil) {
         if (auto found{ find_alias(declared, alias, pkg_decl_origin{ caller }) }) {
@@ -80,7 +75,7 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
                .root = bundle_root.string());
 
     lua_module_bundle const from{ src->bundle_identity, alias, bundle_root };
-    return lua_module_load(lua, full_path, kFn, module_path, &from);
+    return lua_module_load(lua, full_path, kFn, module_path, own, &from);
   };
 }
 

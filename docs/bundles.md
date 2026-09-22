@@ -115,7 +115,9 @@ PACKAGES = {
 
 All three hand back what the module returned — its table if it returned one, the globals it
 assigned if it returned nothing, as `require` would. A module returning anything else is an
-error naming it.
+error naming it. A module reads the globals of the file that loaded it — an imported
+fragment's own, not just `_G`'s — so a builder sees the `VENDOR_ROOT` that file assigned;
+what the module assigns stays in its sandbox.
 
 **Context clarification:**
 

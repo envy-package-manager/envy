@@ -30,12 +30,19 @@ struct lua_module_bundle {
   std::filesystem::path root;
 };
 
+// The globals the calling file writes to: an imported fragment assigns into its own
+// sandbox, not _G, and every sandbox chains to _G anyway.
+sol::table lua_module_caller_scope(sol::this_environment const &te, sol::state_view lua);
+
 // Execute `full_path` in a sandbox and hand back what it returned: its table, or the
 // globals it assigned when it returned nothing -- the rule `require` already teaches.
+// `caller_scope` is what the sandbox falls through to, so a module reads the globals of
+// the file that loaded it.
 sol::table lua_module_load(sol::state_view lua,
                            std::filesystem::path const &full_path,
                            std::string_view fn,
                            std::string const &module_path,
+                           sol::table const &caller_scope,
                            lua_module_bundle const *from = nullptr);
 
 enum class caller_path { ABSOLUTE_, CANONICAL_ };  // wingdi defines ABSOLUTE

@@ -220,6 +220,8 @@ function envy.product(name) end
 ---Load Lua file from declared dependency into sandboxed environment
 ---Supports fuzzy identity matching (e.g., "helpers" matches "acme.helpers@v1")
 ---Must be called within phase function; validates dependency graph and needed_by
+---The sandbox reads the globals of the file that loaded it, an imported fragment's
+---included; assignments land in the sandbox, never in the caller's globals
 ---@param identity string Dependency identity (fuzzy match supported)
 ---@param module string Module path using Lua dot syntax (e.g., "lib.common" → lib/common.lua)
 ---@return table module What the file returned if it returned a table, else its globals

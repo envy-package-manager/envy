@@ -759,7 +759,8 @@ end
 
 All three hand back the module's return value when it returned a table, the globals it
 assigned when it returned nothing — the rule `require` already teaches. Anything else is
-an error naming the module. A module out of a bundle sees `ENVY_BUNDLE` (`identity`, `root`,
+an error naming the module. The sandbox falls through to the globals of the file that
+loaded it, so a module reads an importing fragment's `VENDOR_ROOT`, not only `_G`'s. A module out of a bundle sees `ENVY_BUNDLE` (`identity`, `root`,
 and the `alias` the caller reached it by — `nil` when resolved by identity), so a helper can
 name its own bundle without being handed the name; `nil` where no bundle is involved.
 

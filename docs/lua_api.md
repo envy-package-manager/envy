@@ -440,7 +440,8 @@ only — a spec reaches a bundle it declared with `envy.loadenv_spec`.
 - `module` — module path using Lua dot syntax, same rules as `envy.loadenv_spec`
 
 **Returns:** the module, same rule as `envy.loadenv_spec`. The module sees `ENVY_BUNDLE`,
-`alias` included.
+`alias` included, and reads the globals of the file that loaded it — an imported fragment's
+`VENDOR_ROOT` included, not only `_G`'s.
 
 The bundle is fetched during the manifest's own global scope, earlier than the engine
 fetches bundles, so a helper's entries can go straight into `PACKAGES`. Declare the alias
