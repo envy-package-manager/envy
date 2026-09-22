@@ -3,6 +3,7 @@
 #include "sol/sol.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -21,12 +22,21 @@ std::filesystem::path lua_module_path_under(std::filesystem::path const &root,
                                             std::string const &module_path,
                                             std::string const &scope);
 
+// A module's `ENVY_BUNDLE`. `alias` is what the calling file called the bundle, absent
+// when it was reached by identity.
+struct lua_module_bundle {
+  std::string identity;
+  std::optional<std::string> alias;
+  std::filesystem::path root;
+};
+
 // Execute `full_path` in a sandbox and hand back what it returned: its table, or the
 // globals it assigned when it returned nothing -- the rule `require` already teaches.
 sol::table lua_module_load(sol::state_view lua,
                            std::filesystem::path const &full_path,
                            std::string_view fn,
-                           std::string const &module_path);
+                           std::string const &module_path,
+                           lua_module_bundle const *from = nullptr);
 
 enum class caller_path { ABSOLUTE_, CANONICAL_ };  // wingdi defines ABSOLUTE
 

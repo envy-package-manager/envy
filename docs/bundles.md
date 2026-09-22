@@ -134,8 +134,8 @@ instead of restating the spec, the alias and the vendor path every time.
 -- in the bundle, lib/github.lua
 local M = {}
 function M.repo(name, repo, ref)
-  return { spec = "acme.github@r0", bundle = "tools", vendor = "vendor/" .. name,
-           options = { repo = repo, ref = ref } }
+  return { spec = "acme.github@r0", bundle = ENVY_BUNDLE.alias,   -- the caller's own alias
+           vendor = "vendor/" .. name, options = { repo = repo, ref = ref } }
 end
 return M
 ```
@@ -153,9 +153,12 @@ PACKAGES = {
 }
 ```
 
-An entry the builder hands back is parsed exactly like a literal one: its `bundle = "tools"`
-resolves against the consuming manifest's `BUNDLES`, so a helper may name any alias its
-consumer declared, including one from a different bundle.
+An entry the builder hands back is parsed exactly like a literal one: its `bundle` resolves
+against the consuming manifest's `BUNDLES`, so a helper may name any alias its consumer
+declared, including one from a different bundle. A file loaded out of a bundle sees
+`ENVY_BUNDLE` — `identity`, `root`, and the `alias` the caller reached it by (`nil` under
+`envy.loadenv_spec`, which resolves by identity) — so the builder need not be handed a name
+the caller already typed. It is `nil` where no bundle is involved.
 
 ### Identity Fuzzy Matching
 

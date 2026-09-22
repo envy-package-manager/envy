@@ -399,7 +399,7 @@ Load Lua file from declared dependency into sandboxed environment.
 
 **Returns:** What the module returned, if it returned a table — as `require` gives it. A
 module that returns nothing hands back the globals it assigned; anything else is an error
-naming the module.
+naming the module. A module out of a bundle sees `ENVY_BUNDLE`, its `alias` `nil`.
 
 **Requirements:**
 - Must be called within phase function (not global scope)
@@ -439,7 +439,8 @@ only — a spec reaches a bundle it declared with `envy.loadenv_spec`.
 - `alias` — key of the `BUNDLES` table of the calling file; an imported fragment resolves its own
 - `module` — module path using Lua dot syntax, same rules as `envy.loadenv_spec`
 
-**Returns:** the module, same rule as `envy.loadenv_spec`.
+**Returns:** the module, same rule as `envy.loadenv_spec`. The module sees `ENVY_BUNDLE`,
+`alias` included.
 
 The bundle is fetched during the manifest's own global scope, earlier than the engine
 fetches bundles, so a helper's entries can go straight into `PACKAGES`. Declare the alias
@@ -464,6 +465,28 @@ PACKAGES = {                             -- an entry parses exactly as a literal
 - Alias absent from the calling file's `BUNDLES` → error naming the alias and the file
 - Custom-fetch bundle → error: its fetch needs a phase to run in
 - Module path, missing file, parse/execution error → as `envy.loadenv_spec`
+
+### ENVY_BUNDLE
+
+Set in a module loaded out of a bundle, so it can name the bundle it came from without
+being told twice. `nil` otherwise — in a manifest, a spec, and anything `envy.loadenv`
+reached.
+
+| Field | |
+|---|---|
+| `identity` | the bundle's identity |
+| `alias` | what the calling file called it; `nil` under `envy.loadenv_spec`, which resolves by identity |
+| `root` | the bundle's materialized root |
+
+```lua
+-- lib/github.lua, inside bundle acme.specs@r1
+local M = {}
+function M.repo(name, repo, ref)
+  return { spec = "acme.github@r0", bundle = ENVY_BUNDLE.alias,
+           options = { repo = repo, ref = ref } }
+end
+return M
+```
 
 ### envy.loadenv(module) → table
 

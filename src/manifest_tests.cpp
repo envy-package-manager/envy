@@ -2657,6 +2657,55 @@ TEST_CASE("manifest::load builds PACKAGES from a helper in a bundle") {
   CHECK(m->packages[1]->identity == "local.generic@r1");
 }
 
+TEST_CASE("manifest::load tells a bundled module which bundle it came from") {
+  auto const script{ local_bundle_manifest(
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.from_bundle\")",
+      "PACKAGES = { m.entry() }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(*m->packages[0]->bundle_identity == "local.tools@r1");  // alias round-tripped
+  std::string const &opts{ m->packages[0]->serialized_options };
+  CHECK(opts.find(R"(["identity"]="local.tools@r1")") != std::string::npos);
+  CHECK(opts.find(R"(["alias"]="tools")") != std::string::npos);
+  CHECK(opts.find(R"(["root_tail"]="local-bundle")") != std::string::npos);
+}
+
+TEST_CASE("ENVY_BUNDLE is not one of the globals a module hands back") {
+  // It falls through to the sandbox, so it is readable but never the module's own key --
+  // a raw one would ride into `options`, putting an absolute path in the cache key.
+  auto const script{ local_bundle_manifest(
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.globals_mod\")",
+      "PACKAGES = { { spec = \"local.generic@r1\", bundle = \"tools\", options = m } }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options ==
+        R"({["BUNDLE_SEEN"]="local.tools@r1",["NAME"]="globals-mod"})");
+}
+
+TEST_CASE("manifest::load keeps an empty bundle alias, rather than dropping it") {
+  auto const root{
+    (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()
+  };
+  auto const script{
+    "-- @envy bin \"tools\"\n"
+    "BUNDLES = { [\"\"] = { identity = \"local.tools@r1\", source = \"" +
+    root +
+    "\" } }\n"
+    "local m = envy.loadenv_bundle(\"\", \"lib.from_bundle\")\n"
+    "PACKAGES = { m.entry() }\n"
+  };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(*m->packages[0]->bundle_identity == "local.tools@r1");
+  CHECK(m->packages[0]->serialized_options.find(R"(["alias"]="")") != std::string::npos);
+}
+
 TEST_CASE("manifest::load names the alias envy.loadenv_bundle could not find") {
   auto const script{ local_bundle_manifest(
       "local gh = envy.loadenv_bundle(\"nope\", \"lib.entries\")",

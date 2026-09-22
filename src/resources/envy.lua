@@ -239,6 +239,15 @@ function envy.loadenv(module) end
 ---@return table module What the file returned if it returned a table, else its globals
 function envy.loadenv_bundle(alias, module) end
 
+---@class ENVY_BUNDLE
+---@field identity string Identity of the bundle this file was loaded from
+---@field alias string|nil What the calling file called it; nil when reached by identity
+---@field root string Absolute path of the bundle's materialized root
+
+---The bundle this file came from; nil when no bundle is involved
+---@type ENVY_BUNDLE|nil
+ENVY_BUNDLE = nil
+
 ---Import another project's manifest into a sandboxed environment (manifest scope only)
 ---Path is relative to the calling manifest; a directory argument appends envy.lua
 ---Imported entries keep resolving their relative paths and bundle aliases against the

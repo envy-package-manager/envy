@@ -113,6 +113,31 @@ class TestLoadenvBundle(LoadenvBundleCase):
         self.assertEqual(2, len(run.events("pkg_outcome", spec="test.generic@r1")))
         self.assertTrue(self.spec_complete("test.tools@r1"))
 
+    def test_a_bundled_helper_is_told_the_bundle_it_came_from(self):
+        """ENVY_BUNDLE spares the helper an alias the caller already typed."""
+        helper = """local M = {}
+M.identity, M.alias, M.root = ENVY_BUNDLE.identity, ENVY_BUNDLE.alias, ENVY_BUNDLE.root
+function M.entry(name)
+  return { spec = "test.generic@r1", bundle = ENVY_BUNDLE.alias,
+           options = { name = name }, setup = { "main" } }
+end
+return M
+"""
+        manifest = self.manifest(
+            self.bundles_table(self.make_bundle(helper=helper))
+            + 'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+            'assert(gh.identity == "test.tools@r1", "identity: " .. tostring(gh.identity))\n'
+            'assert(gh.alias == "tools", "alias: " .. tostring(gh.alias))\n'
+            'assert(gh.root and #gh.root > 0, "root: " .. tostring(gh.root))\n'
+            'PACKAGES = { gh.entry("one") }\n'
+        )
+
+        run = self.install(manifest)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(1, len(run.events("pkg_outcome", spec="test.generic@r1")))
+        self.assertTrue(self.spec_complete("test.tools@r1"))
+
     def test_a_local_bundle_is_read_where_it_stands(self):
         """`local.` bundles are used in situ, at manifest scope as anywhere else."""
         root = self.make_bundle(identity="local.tools@r1")
