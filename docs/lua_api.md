@@ -471,7 +471,8 @@ PACKAGES = {                             -- an entry parses exactly as a literal
 
 Set in a module loaded out of a bundle, so it can name the bundle it came from without
 being told twice. `nil` otherwise — in a manifest, a spec, and anything `envy.loadenv`
-reached.
+reached, a sibling beside a bundled module included: it is always the bundle the loader
+resolved, never one inherited from the file that loaded it.
 
 | Field | |
 |---|---|

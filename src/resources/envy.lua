@@ -220,8 +220,7 @@ function envy.product(name) end
 ---Load Lua file from declared dependency into sandboxed environment
 ---Supports fuzzy identity matching (e.g., "helpers" matches "acme.helpers@v1")
 ---Must be called within phase function; validates dependency graph and needed_by
----The sandbox reads the globals of the file that loaded it, an imported fragment's
----included; assignments land in the sandbox, never in the caller's globals
+---The sandbox reads the globals of the file that loaded it; what it assigns stays inside
 ---@param identity string Dependency identity (fuzzy match supported)
 ---@param module string Module path using Lua dot syntax (e.g., "lib.common" → lib/common.lua)
 ---@return table module What the file returned if it returned a table, else its globals
@@ -229,6 +228,7 @@ function envy.loadenv_spec(identity, module) end
 
 ---Load Lua file relative to current file into sandboxed environment
 ---Path is resolved relative to the file calling loadenv, not cwd
+---The sandbox reads the globals of the file that loaded it; what it assigns stays inside
 ---@param module string Module path using Lua dot syntax (e.g., "lib.utils" → lib/utils.lua)
 ---@return table module What the file returned if it returned a table, else its globals
 function envy.loadenv(module) end
@@ -236,6 +236,7 @@ function envy.loadenv(module) end
 ---Load Lua file from a BUNDLES alias, materializing the bundle first (manifest scope only)
 ---The alias is resolved in the calling file's BUNDLES, which must be assigned above the
 ---call; a spec reaches a bundle it declared with envy.loadenv_spec instead
+---The sandbox reads the globals of the file that loaded it; what it assigns stays inside
 ---@param alias string A key of the calling file's BUNDLES table
 ---@param module string Module path using Lua dot syntax (e.g., "lib.github" → lib/github.lua)
 ---@return table module What the file returned if it returned a table, else its globals

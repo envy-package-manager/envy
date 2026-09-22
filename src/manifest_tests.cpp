@@ -2709,6 +2709,28 @@ TEST_CASE("a bundled module reads an importing fragment's globals") {
   CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
 }
 
+TEST_CASE("envy.loadenv reads the globals of the fragment that called it") {
+  auto m{ load_super("local deps = envy.import(\"loadenv_globals\")\n"
+                     "VENDOR_ROOT = deps.VENDOR_ROOT\n"
+                     "PACKAGES = deps.PACKAGES") };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+}
+
+TEST_CASE("envy.loadenv out of a bundled module resolves no bundle of its own") {
+  // The sibling's globals come from the module that loaded it; its ENVY_BUNDLE does not.
+  auto const script{ local_bundle_manifest(
+      "local m = envy.loadenv_bundle(\"tools\", \"lib.loads_sibling\")",
+      "PACKAGES = { m.entry() }") };
+
+  auto m{ envy::manifest::load(script.c_str(), fs::path("/fake/envy.lua")) };
+
+  REQUIRE(m->packages.size() == 1);
+  CHECK(m->packages[0]->serialized_options ==
+        R"({["bundle"]="<nil>",["outer"]="outer"})");
+}
+
 TEST_CASE("manifest::load keeps an empty bundle alias, rather than dropping it") {
   auto const root{
     (fs::current_path() / "test_data" / "bundles" / "local-bundle").generic_string()
