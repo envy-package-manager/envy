@@ -3,13 +3,13 @@
 #include "cache.h"
 #include "engine.h"
 #include "extract.h"
+#include "lua_ctx/lua_envy_extract.h"
 #include "lua_ctx/lua_phase_context.h"
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "pkg.h"
 #include "platform.h"
 #include "shell.h"
-#include "sol_util.h"
 #include "trace.h"
 #include "tui.h"
 #include "tui_actions.h"
@@ -52,24 +52,6 @@ std::filesystem::path determine_stage_destination(sol::state_view lua,
                                : "stage: extracting to install dir");
 
   return dest_dir;
-}
-
-extract_options parse_stage_options(sol::table const &stage_tbl, std::string const &key) {
-  extract_options opts;
-
-  if (auto strip{ sol_util_get_optional<int>(stage_tbl, "strip", key) }) {
-    if (*strip < 0) {
-      throw std::runtime_error("stage.strip must be non-negative for " + key);
-    }
-    opts.strip_components = *strip;
-  }
-
-  opts.selectors = sol_util_get_string_list(stage_tbl, "only", key);
-  if (opts.selectors.empty() && stage_tbl["only"].valid()) {
-    throw std::runtime_error("stage.only must list at least one path for " + key);
-  }
-
-  return opts;
 }
 
 void run_programmatic_stage(sol::protected_function stage_func,
@@ -151,11 +133,12 @@ void run_stage_phase(pkg *p, engine &eng) {
                            eng,
                            p);
   } else if (stage_obj.is<sol::table>()) {
-    extract_all_archives(lock->fetch_dir(),
-                         stage_dir,
-                         parse_stage_options(stage_obj.as<sol::table>(), identity),
-                         identity,
-                         p->tui_section);
+    extract_all_archives(
+        lock->fetch_dir(),
+        stage_dir,
+        lua_envy_extract_parse_opts(stage_obj.as<sol::table>(), "STAGE of " + identity),
+        identity,
+        p->tui_section);
   } else {
     throw std::runtime_error("STAGE field must be nil, string, table, or function for " +
                              identity);

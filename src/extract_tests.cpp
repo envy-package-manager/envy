@@ -789,6 +789,99 @@ TEST_CASE("extract_all_archives throws when nothing in the fetch dir matches a s
   std::filesystem::remove_all(dest);
 }
 
+TEST_CASE("extract_all_archives unpacks a file 'archives' names, whatever its extension") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.zip"),
+                             fetch_dir / "sdk.pack");
+
+  envy::extract_all_archives(
+      fetch_dir,
+      dest,
+      { .strip_components = 1, .selectors = { "subdir2" }, .archives = { "*.pack" } },
+      "test.pkg@v1",
+      envy::tui::kInvalidSection);
+
+  CHECK(collect_files_recursive(dest) == std::vector<std::string>{ "subdir2/file5.txt" });
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract_all_archives copies a file whole when a '!' archives entry names it") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.zip"),
+                             fetch_dir / "test.zip");
+
+  envy::extract_all_archives(fetch_dir,
+                             dest,
+                             { .strip_components = 1, .archives = { "!*.tar.gz" } },
+                             "test.pkg@v1",
+                             envy::tui::kInvalidSection);
+
+  auto const files{ collect_files_recursive(dest) };
+  CHECK(std::ranges::find(files, "test.tar.gz") != files.end());
+  CHECK(std::ranges::find(files, "subdir2/file5.txt") != files.end());  // zip unpacked
+  CHECK(files.size() == 6);
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract_all_archives rejects an 'archives' entry that names no file") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
+                             fetch_dir / "test.tar.gz");
+
+  try {
+    envy::extract_all_archives(fetch_dir,
+                               dest,
+                               { .archives = { "*.tar.gz", "*.pak" } },
+                               "test.pkg@v1",
+                               envy::tui::kInvalidSection);
+    FAIL("Expected exception for unmatched 'archives' entry");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("'archives'") != std::string::npos);
+    CHECK(msg.find("\"*.pak\"") != std::string::npos);
+    CHECK(msg.find("\"*.tar.gz\"") == std::string::npos);
+  }
+  CHECK(collect_files_recursive(dest).empty());
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
+TEST_CASE("extract_all_archives names the misnamed archive an unmatched 'only' missed") {
+  auto const fetch_dir{ make_temp_dir() };
+  auto const dest{ make_temp_dir() };
+  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.zip"),
+                             fetch_dir / "sdk.pack");
+  { std::ofstream{ fetch_dir / "notes.txt", std::ios::binary } << "notes"; }
+
+  try {
+    envy::extract_all_archives(fetch_dir,
+                               dest,
+                               { .selectors = { "root/file1.txt" } },
+                               "test.pkg@v1",
+                               envy::tui::kInvalidSection);
+    FAIL("Expected exception for unmatched selector");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("\"root/file1.txt\"") != std::string::npos);
+    CHECK(msg.find("\"sdk.pack\"") != std::string::npos);
+    CHECK(msg.find("'archives'") != std::string::npos);
+    CHECK(msg.find("notes.txt") == std::string::npos);  // not an archive, so not named
+  }
+
+  std::filesystem::remove_all(fetch_dir);
+  std::filesystem::remove_all(dest);
+}
+
 TEST_CASE("extract 'only' excludes with a leading '!'") {
   auto const dest{ make_temp_dir() };
   auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };

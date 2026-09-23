@@ -198,15 +198,22 @@ envy.extract(fetch_dir .. "/sdk.tar.gz", ".", { only = { "**", "!docs/**", "!**/
 
 ### envy.extract_all(src_dir, dest_dir, [opts])
 
-Extract all archives in directory; loose (non-archive) files are copied. Same options as
-`envy.extract`—`only` spans the whole directory (matching loose files by filename), so one
-entry per archive is enough to satisfy the list.
+Extract all archives in directory; loose (non-archive) files are copied. Archives are
+known by extension (`.zip`, `.7z`, `.tar.*`, bare `.gz`, …), not content, so a `.jar` or
+`.whl` payload stays whole. Same options as `envy.extract`, plus `archives`: filename globs
+that unpack whatever the extension (`"*.pack"`), or with `!` keep an archive whole
+(`"!docs.zip"`); an inclusion matching no file is an error. `only` spans the whole
+directory (matching loose files by filename), so one entry per archive is enough to satisfy
+the list.
 
 ```lua
 -- Take just the requested tools out of a 10 GB toolchain tarball; leave the rest packed.
 local want = {}
 for _, tool in ipairs(options.tools) do want[#want + 1] = "bin/" .. tool .. envy.EXE_EXT end
 envy.extract_all(fetch_dir, stage_dir, { strip = 1, only = want })
+
+-- A CMSIS-Pack is a zip by another name; a helper forwards archives from its options.
+envy.extract_all(fetch_dir, stage_dir, { archives = { "*.pack" }, only = { "Include/**" } })
 ```
 
 A misspelled tool name fails here, at stage, instead of surfacing later as a missing file
