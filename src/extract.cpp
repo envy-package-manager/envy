@@ -27,6 +27,8 @@ namespace {
 
 // What a rejected selector is called in an error; extract spells its list "only".
 constexpr char kOnlyEntry[]{ "'only' entry" };
+constexpr char kArchivesEntry[]{ "'archives' entry" };
+constexpr char kOnlyUnmatched[]{ ": 'only' entries matched no archive contents:" };
 
 struct archive_reader : unmovable {
   explicit archive_reader(bool enable_raw_format = false) : handle(archive_read_new()) {
@@ -103,19 +105,6 @@ std::optional<std::string> strip_path_components(char const *path, int strip_cou
   return std::string(p);
 }
 
-// Build list of files to extract from fetch_dir
-std::vector<std::string> collect_extract_items(std::filesystem::path const &fetch_dir) {
-  std::vector<std::string> items;
-  if (!std::filesystem::exists(fetch_dir)) { return items; }
-
-  for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
-    if (!entry.is_regular_file()) { continue; }
-    if (entry.path().filename() == "envy-complete") { continue; }
-    items.push_back(entry.path().filename().string());
-  }
-  return items;
-}
-
 // The path extract() would write, canonicalized for selector matching: derived name for a
 // raw stream, else the stripped entry path. nullopt when strip drops the entry.
 std::optional<std::string> selector_match_path(
@@ -187,13 +176,99 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
   }
 }
 
-void throw_on_unmatched_selectors(std::vector<std::string> const &unmatched,
-                                  std::string_view context) {
+// Throws msg, each unmatched selector quoted, then note; no-op when none went unmatched.
+void throw_on_unmatched(std::vector<std::string> const &unmatched,
+                        std::string msg,
+                        std::string_view note = {}) {
   if (unmatched.empty()) { return; }
-  std::string msg{ std::string(context) +
-                   ": 'only' entries matched no archive contents:" };
   for (auto const &u : unmatched) { msg += " \"" + u + "\""; }
-  throw std::runtime_error(msg);
+  throw std::runtime_error(msg.append(note));
+}
+
+struct extract_item {
+  std::filesystem::path path;
+  bool archive;  // by extension or an 'archives' include, unless an 'archives' exclude
+};
+
+// fetch_dir's regular files bar the completion marker. Throws on an 'archives' include
+// that names none of them.
+std::vector<extract_item> collect_extract_items(std::filesystem::path const &fetch_dir,
+                                                std::vector<std::string> const &archives) {
+  auto const filter{ glob_parse_filter(archives, "extract", kArchivesEntry) };
+  std::vector<bool> matched(filter.include.size(), false);
+  std::vector<extract_item> items;
+  for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
+    if (!entry.is_regular_file() || entry.path().filename() == "envy-complete") {
+      continue;
+    }
+    std::string const name{ entry.path().filename().generic_string() };
+    bool const named{ glob_selectors_match(filter.include, name, matched) };
+    items.push_back({ .path = entry.path(),
+                      .archive = (named || extract_is_archive_extension(entry.path())) &&
+                                 !glob_any_match(filter.exclude, name) });
+  }
+  throw_on_unmatched(glob_unmatched_selectors(filter.include, matched),
+                     "extract: 'archives' entries matched no fetched file:");
+  return items;
+}
+
+// For an unmatched-'only' error: the loose files libarchive reads anyway, whose contents
+// no selector could reach. Opens each loose file, so keep it off the success path.
+std::string misnamed_archives_note(std::vector<extract_item> const &items) {
+  std::string names;
+  for (auto const &item : items) {
+    if (item.archive || extract_is_archive_extension(item.path)) { continue; }
+    archive_reader reader;
+    archive_entry *entry{ nullptr };
+    if (archive_read_open_filename(reader.handle, item.path.string().c_str(), 10240) ==
+            ARCHIVE_OK &&
+        archive_read_next_header(reader.handle, &entry) == ARCHIVE_OK) {
+      names += " \"" + item.path.filename().string() + "\"";
+    }
+  }
+  return names.empty() ? names
+                       : "; these read as archives but were copied whole, lacking an "
+                         "archive extension (name them in 'archives' to unpack):" +
+                             names;
+}
+
+// Pre-scan: archives header-scanned, loose files sized, `only` spanning the whole set.
+extract_totals compute_items_totals(std::vector<extract_item> const &items,
+                                    extract_options const &options) {
+  auto const selectors{
+    glob_parse_filter(options.selectors, "compute_extract_totals", kOnlyEntry)
+  };
+  std::vector<bool> selector_matched(selectors.include.size(), false);
+  extract_totals totals{};
+
+  for (auto const &item : items) {
+    if (!item.archive) {
+      // Loose files are copied verbatim, so selectors match their filename.
+      if (!selectors.empty() &&
+          !selectors.selects(item.path.filename().generic_string(), selector_matched)) {
+        continue;
+      }
+      std::error_code ec;
+      totals.bytes += std::filesystem::file_size(item.path, ec);
+      if (ec) {
+        throw std::runtime_error("compute_extract_totals: failed to stat " +
+                                 item.path.string() + ": " + ec.message());
+      }
+      ++totals.files;
+      continue;
+    }
+
+    accumulate_archive_totals(item.path,
+                              selectors,
+                              options.strip_components,
+                              "compute_extract_totals",
+                              totals,
+                              selector_matched);
+  }
+
+  totals.unmatched_selectors =
+      glob_unmatched_selectors(selectors.include, selector_matched);
+  return totals;
 }
 
 // TUI progress state for extract_all_archives
@@ -211,16 +286,16 @@ struct extract_tui_state {
 
   extract_tui_state(tui::section_handle s,
                     std::string const &pkg_identity,
-                    std::vector<std::string> const &filenames,
+                    std::vector<extract_item> const &items,
                     extract_totals const &t)
       : section{ s },
         label{ "[" + pkg_identity + "]" },
-        grouped{ filenames.size() > 1 },
+        grouped{ items.size() > 1 },
         totals{ t } {
-    children.reserve(filenames.size());
-    for (auto const &name : filenames) {
+    children.reserve(items.size());
+    for (auto const &item : items) {
       children.push_back(
-          tui::section_frame{ .label = name,
+          tui::section_frame{ .label = item.path.filename().string(),
                               .content = tui::static_text_data{ .text = "pending" } });
     }
   }
@@ -625,9 +700,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   }
 
   if (options.require_all_selectors) {
-    throw_on_unmatched_selectors(
-        glob_unmatched_selectors(selectors.include, selector_matched),
-        "extract " + archive_path.filename().string());
+    throw_on_unmatched(glob_unmatched_selectors(selectors.include, selector_matched),
+                       "extract " + archive_path.filename().string() + kOnlyUnmatched);
   }
 
   // A selector list legitimately yields zero files (directories only, or nothing this
@@ -698,47 +772,12 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
   return totals;
 }
 
+#ifdef ENVY_UNIT_TEST
 extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
                                       extract_options const &options) {
-  auto const selectors{
-    glob_parse_filter(options.selectors, "compute_extract_totals", kOnlyEntry)
-  };
-  std::vector<bool> selector_matched(selectors.include.size(), false);
-  extract_totals totals{};
-  if (!std::filesystem::exists(fetch_dir)) { return totals; }
-
-  for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
-    if (!entry.is_regular_file()) { continue; }
-    if (entry.path().filename() == "envy-complete") { continue; }
-
-    if (!extract_is_archive_extension(entry.path())) {
-      // Loose files are copied verbatim, so selectors match their filename.
-      if (!selectors.empty() &&
-          !selectors.selects(entry.path().filename().generic_string(), selector_matched)) {
-        continue;
-      }
-      std::error_code ec;
-      totals.bytes += std::filesystem::file_size(entry.path(), ec);
-      if (ec) {
-        throw std::runtime_error("compute_extract_totals: failed to stat " +
-                                 entry.path().string() + ": " + ec.message());
-      }
-      ++totals.files;
-      continue;
-    }
-
-    accumulate_archive_totals(entry.path(),
-                              selectors,
-                              options.strip_components,
-                              "compute_extract_totals",
-                              totals,
-                              selector_matched);
-  }
-
-  totals.unmatched_selectors =
-      glob_unmatched_selectors(selectors.include, selector_matched);
-  return totals;
+  return compute_items_totals(collect_extract_items(fetch_dir, options.archives), options);
 }
+#endif
 
 void extract_all_archives(std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &dest_dir,
@@ -747,8 +786,8 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
                           tui::section_handle section) {
   if (!std::filesystem::exists(fetch_dir)) { return; }
 
-  // Collect items to extract
-  std::vector<std::string> const items{ collect_extract_items(fetch_dir) };
+  std::vector<extract_item> const items{ collect_extract_items(fetch_dir,
+                                                              options.archives) };
   if (items.empty()) { return; }
 
   int const strip_components{ options.strip_components };
@@ -771,10 +810,12 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
 
   // The pre-scan spans every archive — it, not the per-archive extract below, is where
   // a selector that nothing in the fetch dir provides gets caught.
-  extract_totals const totals{ compute_extract_totals(
-      fetch_dir,
-      { .strip_components = strip_components, .selectors = raw_selectors }) };
-  throw_on_unmatched_selectors(totals.unmatched_selectors, "extract");
+  extract_totals const totals{ compute_items_totals(items, options) };
+  if (!totals.unmatched_selectors.empty()) {
+    throw_on_unmatched(totals.unmatched_selectors,
+                       std::string{ "extract" } + kOnlyUnmatched,
+                       misnamed_archives_note(items));
+  }
 
   // Set up TUI state for extraction progress
   if (section != tui::kInvalidSection) {
@@ -788,17 +829,13 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   // Scratch for the loose-file check below; the pre-scan owns selector validation.
   std::vector<bool> loose_selector_matched;
 
-  for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
-    if (!entry.is_regular_file()) { continue; }
-
-    auto const &path{ entry.path() };
+  for (auto const &item : items) {
+    auto const &path{ item.path };
     std::string const filename{ path.filename().string() };
-
-    if (filename == "envy-complete") { continue; }
 
     if (tui_state && items.size() > 1) { tui_state->on_file_start(filename); }
 
-    if (extract_is_archive_extension(path)) {
+    if (item.archive) {
       auto const start{ std::chrono::steady_clock::now() };
 
       ENVY_TRACE(extract_start,

@@ -158,6 +158,10 @@ function envy.run(script, opts) end
 --- one component, '**' across components, '[a-z]'/'[!a-z]' classes. An entry that matches
 --- nothing is an error.
 
+---@class envy.extract_all_opts: envy.extract_opts
+---@field archives? string[] Filename globs to unpack whatever their extension ("*.pack"), or
+--- with '!' to keep whole ("!docs.zip"). Archives are otherwise known by extension alone.
+
 ---Extract single archive to destination directory
 ---@param archive_path string Path to archive file
 ---@param dest_dir string Destination directory
@@ -168,7 +172,7 @@ function envy.extract(archive_path, dest_dir, opts) end
 ---Extract all archives in source directory to destination
 ---@param src_dir string Directory containing archives
 ---@param dest_dir string Destination directory
----@param opts? envy.extract_opts Extraction options
+---@param opts? envy.extract_all_opts Extraction options
 function envy.extract_all(src_dir, dest_dir, opts) end
 
 --------------------------------------------------------------------------------
@@ -356,7 +360,7 @@ PRODUCTS = {}
 ---@type envy.fetch_source|envy.fetch_source[]|fun(tmp_dir: string, options: table): string?, string?
 FETCH = {}
 
----@alias envy.stage_opts { strip?: integer, only?: string[] }
+---@alias envy.stage_opts envy.extract_all_opts
 
 ---STAGE phase: declarative options or function
 ---@type envy.stage_opts|fun(fetch_dir: string, stage_dir: string, tmp_dir: string, options: table)

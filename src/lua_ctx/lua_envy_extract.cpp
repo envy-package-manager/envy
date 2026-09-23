@@ -1,6 +1,5 @@
 #include "lua_envy_extract.h"
 
-#include "extract.h"
 #include "lua_phase_context.h"
 #include "pkg.h"
 #include "sol_util.h"
@@ -24,25 +23,31 @@ std::filesystem::path resolve_relative(std::filesystem::path const &path,
   return std::filesystem::current_path() / path;
 }
 
-// Shared { strip = n, only = { ... } } parse for envy.extract/envy.extract_all.
-extract_options parse_extract_opts(sol::optional<sol::table> const &opts_table,
-                                   std::string const &context) {
-  extract_options opts;
-  if (!opts_table) { return opts; }
-
-  if (auto const strip{ sol_util_get_optional<int>(*opts_table, "strip", context) }) {
-    if (*strip < 0) { throw std::runtime_error(context + ": strip must be non-negative"); }
-    opts.strip_components = *strip;
-  }
-
-  opts.selectors = sol_util_get_string_list(*opts_table, "only", context);
-  if (opts.selectors.empty() && (*opts_table)["only"].valid()) {
-    throw std::runtime_error(context + ": 'only' must list at least one path");
-  }
-  return opts;
+extract_options parse_optional_opts(sol::optional<sol::table> const &opts_table,
+                                    std::string const &context) {
+  return opts_table ? lua_envy_extract_parse_opts(*opts_table, context)
+                    : extract_options{};
 }
 
 }  // namespace
+
+extract_options lua_envy_extract_parse_opts(sol::table const &opts,
+                                            std::string const &context) {
+  int const strip{ sol_util_get_optional<int>(opts, "strip", context).value_or(0) };
+  if (strip < 0) { throw std::runtime_error(context + ": strip must be non-negative"); }
+
+  auto const list{ [&](char const *key) {  // an empty list is a mistake, not "everything"
+    auto entries{ sol_util_get_string_list(opts, key, context) };
+    if (entries.empty() && opts[key].valid()) {
+      throw std::runtime_error(context + ": '" + key + "' must list at least one entry");
+    }
+    return entries;
+  } };
+
+  return { .strip_components = strip,
+           .selectors = list("only"),
+           .archives = list("archives") };
+}
 
 void lua_envy_extract_install(sol::table &envy_table) {
   // envy.extract(archive_path, dest_dir, opts?) - Single archive extraction
@@ -50,7 +55,7 @@ void lua_envy_extract_install(sol::table &envy_table) {
                              std::string const &dest_dir_str,
                              sol::optional<sol::table> opts_table,
                              sol::this_state L) -> int {
-    extract_options opts{ parse_extract_opts(opts_table, "envy.extract") };
+    extract_options opts{ parse_optional_opts(opts_table, "envy.extract") };
 
     std::filesystem::path const archive_path{ resolve_relative(archive_path_str, L) };
     std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };
@@ -79,7 +84,7 @@ void lua_envy_extract_install(sol::table &envy_table) {
                                  std::string const &dest_dir_str,
                                  sol::optional<sol::table> opts_table,
                                  sol::this_state L) {
-    extract_options const opts{ parse_extract_opts(opts_table, "envy.extract_all") };
+    extract_options const opts{ parse_optional_opts(opts_table, "envy.extract_all") };
 
     std::filesystem::path const src_dir{ resolve_relative(src_dir_str, L) };
     std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };

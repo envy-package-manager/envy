@@ -36,6 +36,10 @@ struct extract_options {
   // a directory. Empty extracts everything. Spelled "only" in Lua and on the CLI.
   std::vector<std::string> selectors;
 
+  // Globs over extract_all_archives' filenames: a match unpacks whatever its extension, a
+  // '!' match is copied whole. Includes must each match a file; extract() ignores these.
+  std::vector<std::string> archives;
+
   // Throw when a selector matched nothing. Callers spreading one selector list across
   // several archives clear this and validate the union themselves.
   bool require_all_selectors{ true };

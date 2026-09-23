@@ -9,6 +9,7 @@ import io
 import os
 import subprocess
 import tarfile
+import zipfile
 from pathlib import Path
 import unittest
 
@@ -39,6 +40,16 @@ def create_test_archive(output_path: Path) -> str:
     return hashlib.sha256(archive_data).hexdigest()
 
 
+def create_test_pack(output_path: Path) -> str:
+    """Zip the test files under a name no archive extension covers, like a CMSIS-Pack."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in TEST_ARCHIVE_FILES.items():
+            zf.writestr(name, content)
+    output_path.write_bytes(buf.getvalue())
+    return hashlib.sha256(buf.getvalue()).hexdigest()
+
+
 class TestStagePhase(EnvyTestCase):
     """Tests for stage phase (archive extraction and preparation)."""
 
@@ -50,12 +61,16 @@ class TestStagePhase(EnvyTestCase):
         # Create test archive and get its hash
         self.archive_path = self.test_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
+        self.pack_path = self.test_dir / "sdk.pack"
+        self.pack_hash = create_test_pack(self.pack_path)
 
     def write_spec(self, name: str, content: str) -> str:
         """Write spec to temp dir with placeholder substitution, return path."""
         spec_content = content.format(
             ARCHIVE_PATH=self.archive_path.as_posix(),
             ARCHIVE_HASH=self.archive_hash,
+            PACK_PATH=self.pack_path.as_posix(),
+            PACK_HASH=self.pack_hash,
         )
         path = self.test_dir / f"{name}.lua"
         path.write_text(spec_content, encoding="utf-8")
@@ -287,7 +302,63 @@ STAGE = {{ only = {{}} }}
             should_succeed=False,
         )
 
-        self.assertIn("only must list at least one path", result.stdout + result.stderr)
+        self.assertIn("'only' must list at least one entry", result.stdout + result.stderr)
+
+    def test_declarative_archives_unpacks_misnamed_archive(self):
+        """STAGE archives unpacks a zip whose name carries no archive extension."""
+        spec = """IDENTITY = "local.stage_archives@v1"
+
+FETCH = {{ source = "{PACK_PATH}", sha256 = "{PACK_HASH}" }}
+
+STAGE = {{ strip = 1, archives = {{ "*.pack" }}, only = {{ "file1.txt", "subdir1/subdir2" }} }}
+"""
+        self.write_spec("declarative_archives", spec)
+        self.run_spec("declarative_archives", "local.stage_archives@v1")
+
+        pkg_path = self.get_pkg_path("local.stage_archives@v1")
+        assert pkg_path
+
+        self.assertFalse((pkg_path / "sdk.pack").exists())
+        self.assertTrue((pkg_path / "file1.txt").exists())
+        self.assertTrue((pkg_path / "subdir1" / "subdir2" / "file4.txt").exists())
+        self.assertFalse((pkg_path / "file2.txt").exists())
+
+    def test_declarative_only_miss_names_misnamed_archive(self):
+        """An 'only' miss names the archive copied whole and points at 'archives'."""
+        spec = """IDENTITY = "local.stage_archives_hint@v1"
+
+FETCH = {{ source = "{PACK_PATH}", sha256 = "{PACK_HASH}" }}
+
+STAGE = {{ only = {{ "root/file1.txt" }} }}
+"""
+        self.write_spec("declarative_archives_hint", spec)
+        result = self.run_spec(
+            "declarative_archives_hint",
+            "local.stage_archives_hint@v1",
+            should_succeed=False,
+        )
+
+        self.assertIn('"sdk.pack"', result.stdout + result.stderr)
+        self.assertIn("'archives'", result.stdout + result.stderr)
+
+    def test_imperative_extract_all_archives(self):
+        """envy.extract_all honors archives, so a helper can forward it from opts."""
+        spec = """IDENTITY = "local.stage_archives_fn@v1"
+
+FETCH = {{ source = "{PACK_PATH}", sha256 = "{PACK_HASH}" }}
+
+STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
+  envy.extract_all(fetch_dir, stage_dir, {{ strip = 1, archives = {{ "sdk.pack" }} }})
+end
+"""
+        self.write_spec("imperative_archives", spec)
+        self.run_spec("imperative_archives", "local.stage_archives_fn@v1")
+
+        pkg_path = self.get_pkg_path("local.stage_archives_fn@v1")
+        assert pkg_path
+
+        self.assertFalse((pkg_path / "sdk.pack").exists())
+        self.assertTrue((pkg_path / "subdir1" / "file3.txt").exists())
 
     def test_imperative_extract_all_only(self):
         """envy.extract_all honors only, so opts can drive the selection."""
