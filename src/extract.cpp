@@ -787,7 +787,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   if (!std::filesystem::exists(fetch_dir)) { return; }
 
   std::vector<extract_item> const items{ collect_extract_items(fetch_dir,
-                                                              options.archives) };
+                                                               options.archives) };
   if (items.empty()) { return; }
 
   int const strip_components{ options.strip_components };
