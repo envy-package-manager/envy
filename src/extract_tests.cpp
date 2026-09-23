@@ -808,7 +808,7 @@ TEST_CASE("extract_all_archives unpacks a file 'archives' names, whatever its ex
   std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("extract_all_archives copies whole a file a '!' archives entry names") {
+TEST_CASE("extract_all_archives copies a file whole when a '!' archives entry names it") {
   auto const fetch_dir{ make_temp_dir() };
   auto const dest{ make_temp_dir() };
   std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
