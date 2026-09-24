@@ -21,8 +21,7 @@ extern bool run_pair_check(pkg *p, engine &eng, std::string const &name);
 extern void run_pair_install(pkg *p,
                              engine &eng,
                              std::string const &name,
-                             tui::section_handle section,
-                             std::string const &log_identity);
+                             tui::section_handle section);
 extern std::vector<std::string> compute_selected_pairs(pkg *p);
 
 namespace {
@@ -88,7 +87,7 @@ struct setup_test_fixture {
   }
 
   void run_install(engine &eng, std::string const &name) {
-    run_pair_install(p.get(), eng, name, p->tui_section, p->cfg->identity);
+    run_pair_install(p.get(), eng, name, p->tui_section);
   }
 
   void set_options(std::string_view options_lua) {
@@ -275,7 +274,8 @@ TEST_CASE_FIXTURE(setup_test_fixture, "pair install string non-zero exit throws"
     FAIL("Expected exception");
   } catch (std::runtime_error const &e) {
     std::string msg{ e.what() };
-    CHECK(msg.find("Setup shell script failed") != std::string::npos);
+    CHECK(msg.find("SETUP.main.INSTALL shell script failed for test.package@v1") !=
+          std::string::npos);
     CHECK(msg.find("exit code 1") != std::string::npos);
   }
 }
