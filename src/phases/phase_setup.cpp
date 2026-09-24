@@ -164,13 +164,14 @@ void run_pair_install(pkg *p,
   }
 
   if (script) {
-    tui_actions::run_phase_shell_script(*script,
-                                        context,  // the error names the pair; the row doesn't
-                                        project_root,
-                                        p->cfg->identity,
-                                        pkg_default_shell(p),
-                                        section,
-                                        eng.cache_root());
+    tui_actions::run_phase_shell_script(
+        *script,
+        context,  // the error names the pair; the row doesn't
+        project_root,
+        p->cfg->identity,
+        pkg_default_shell(p),
+        section,
+        eng.cache_root());
   }
 }
 
