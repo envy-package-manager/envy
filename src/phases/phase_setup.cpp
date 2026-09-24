@@ -121,15 +121,14 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
 }
 
 // Run a pair's INSTALL verb against the host (cwd = project_root). Shell output
-// lands in `section` (the pair node's TUI section), labeled with `log_identity`.
+// lands in `section` (the pair node's TUI section), labeled with `p`'s identity.
 // Function form: INSTALL(pkg_dir, options) -> nil | string (string runs as shell).
 // The Lua lock is released before any shell script runs (see run_pair_check).
 // Not in anonymous namespace so tests can call it.
 void run_pair_install(pkg *p,
                       engine &eng,
                       std::string const &name,
-                      tui::section_handle section,
-                      std::string const &log_identity) {
+                      tui::section_handle section) {
   std::string const context{ "SETUP." + name + ".INSTALL" };
   std::filesystem::path const project_root{ pair_project_root(eng, p) };
 
@@ -166,9 +165,9 @@ void run_pair_install(pkg *p,
 
   if (script) {
     tui_actions::run_phase_shell_script(*script,
-                                        "Setup",
+                                        context,  // the error names the pair; the row doesn't
                                         project_root,
-                                        log_identity,
+                                        p->cfg->identity,
                                         pkg_default_shell(p),
                                         section,
                                         eng.cache_root());
@@ -217,13 +216,12 @@ std::vector<std::string> compute_selected_pairs(pkg *p) {
 // One pair: double-check lock pattern shared with legacy user-managed packages.
 // The lock entry is ephemeral (mark_user_managed) — purged on release, never
 // marked complete; the CHECK verb is the only re-run gate. `p` is the declaring
-// (parent) package; `section`/`log_identity` come from the pair task so shell
-// output is attributed per-pair.
+// (parent) package; `section` comes from the pair task so shell output is
+// attributed per-pair.
 void run_setup_pair(pkg *p,
                     engine &eng,
                     std::string const &name,
-                    tui::section_handle section,
-                    std::string const &log_identity) {
+                    tui::section_handle section) {
   auto const &pair_platforms{ p->setup_pairs.at(name).platforms };
   if (!pair_platforms.empty() &&
       !util_platform_matches(pair_platforms, platform::os_name(), platform::arch_name())) {
@@ -247,7 +245,7 @@ void run_setup_pair(pkg *p,
       platform::os_name(),
       platform::arch_name(),
       hash_prefix,
-      tui_actions::lock_wait_spinner(section, log_identity, "setup:" + name)) };
+      tui_actions::lock_wait_spinner(section, p->cfg->identity, "setup:" + name)) };
   if (!cache_result.lock) {
     // Pair entries are always purged on release; a completed entry means a
     // stale/corrupt cache. Mirror legacy user-managed behavior: warn and skip.
@@ -265,7 +263,7 @@ void run_setup_pair(pkg *p,
 
   tui::debug("setup: running pair '%s' install (check failed)", name.c_str());
   p->setup_ran = true;
-  run_pair_install(p, eng, name, section, log_identity);
+  run_pair_install(p, eng, name, section);
 }
 
 void run_setup_phase(pkg *p, engine &eng) {

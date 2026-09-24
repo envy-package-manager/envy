@@ -255,6 +255,54 @@ class TestDisplay(EnvyTestCase):
             rows,
         )
 
+    def _brew_on_pty(self):
+        """A one-pair user-managed spec, shaped like a brew wrapper, installed on a pty.
+
+        INSTALL sleeps so the 30fps live region is sure to paint the pair's row mid-run.
+        """
+        spec = self.write_spec(
+            "brew.lua",
+            'IDENTITY = "local.brew@r0"\n'
+            "USER_MANAGED = true\n"
+            'OPTIONS = { packages = { type = "list", required = true } }\n'
+            'DISPLAY = function(options) return table.concat(options.packages, " ") end\n'
+            "SETUP = { packages = {\n"
+            "  CHECK = function(pkg_dir, options) return false end,\n"
+            '  INSTALL = "sleep 0.3; echo installing",\n'
+            "} }\n",
+        )
+        manifest = self.write_manifest(
+            "PACKAGES = {\n"
+            + test_config.spec_entry(
+                "local.brew@r0",
+                spec,
+                setup=["packages"],
+                options='{ packages = { "pkgconf", "libusb" } }',
+            )
+            + "\n}\n"
+        )
+        code, out = self._run_on_pty("install", "--manifest", manifest)
+        self.assertEqual(0, code, out)
+        return out
+
+    @unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+    def test_a_setup_pair_row_is_labeled_like_its_package(self):
+        """A pair's row is `[identity]` and the spec's DISPLAY, never the pair's task key.
+
+        The key spells out the options and pair name -- a table of brew formulae makes it
+        wider than the terminal -- and the spec already said what its rows should show.
+        """
+        out = self._brew_on_pty()
+        self.assertNotIn("#setup:", visible(out))
+        self.assertRegex(visible(out), r"\[local\.brew@r0\] pkgconf libusb [|/\\-] sleep")
+
+    @unittest.skipIf(sys.platform == "win32", "no pty on Windows")
+    def test_a_setup_pair_that_succeeds_leaves_only_its_package_s_row(self):
+        """The pair's row carries INSTALL's output while it runs; the package's row is the
+        outcome, so a finished pair saying "done" beside it would say it twice."""
+        rows = screen(self._brew_on_pty()).splitlines()
+        self.assertEqual(["[local.brew@r0] pkgconf libusb setup complete"], rows)
+
     def test_display_wrong_type_is_an_error(self):
         spec = self._spec("t.lua", "local.t@v1", "DISPLAY = 42")
         manifest = test_config.write_spec_manifest(self.work, [("local.t@v1", spec)])

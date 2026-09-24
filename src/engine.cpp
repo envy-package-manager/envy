@@ -726,22 +726,18 @@ void engine::run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pa
       sibling_edges.push_back({ key_of.at(dep), 1 });
     }
 
+    // A pair's row is its package's row: `key` spells out options and pair, DISPLAY doesn't.
     tui::section_handle const section{ tui::section_create() };
+    tui::section_set_display(section, parent->display);
 
     task_engine::task_config cfg;
     cfg.key = key;
     cfg.step_count = 1;
     cfg.edges = [edges = std::move(sibling_edges)](int) { return edges; };
-    cfg.step = [this, parent, name, section, key](int) {
+    cfg.step = [this, parent, name, section](int) {
       tui::log_ctx_scope const log_ctx{ parent->cfg->identity };
-      run_setup_pair(parent, *this, name, section, key);
-      if (section && tui::section_has_content(section)) {
-        tui::section_set_content(
-            section,
-            tui::section_frame{ .label = "[" + key + "]",
-                                .content = tui::static_text_data{ .text = "done" } });
-        tui::section_set_complete(section);
-      }
+      run_setup_pair(parent, *this, name, section);
+      tui::section_delete(section);  // the package's row is the outcome; a failure keeps this
       return false;
     };
 
