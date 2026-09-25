@@ -7,9 +7,12 @@
 #include "sol_util.h"
 #include "spec_util.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "uri.h"
 #include "util.h"
 
+#include <chrono>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -521,30 +524,55 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
     throw fail("has to be fetched, and this manifest was loaded without a cache");
   }
 
-  auto result{ c->ensure_spec(id, bundle_source_key(src, nullptr)) };
+  // Drawn as any package is: a bar while it downloads, then its outcome. A hit draws
+  // nothing, as a package's does; a failure keeps its row, and the error speaks for it.
+  tui::log_ctx_scope const log_ctx{ id };
+  tui::section_handle const section{ tui::section_create() };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const result{ c->ensure_spec(id,
+                                    bundle_source_key(src, nullptr),
+                                    tui_actions::lock_wait_spinner(section, id, id)) };
   if (result.lock) {
-    // No package row this early and a clone is slow, so say so. A hit stays quiet:
-    // the bundle's own package reports it a moment later.
-    tui::info("bundle %s: fetching, the manifest reads it", id.c_str());
-
     bundle_fetch_payload(
         src,
         result.lock->fetch_dir(),
         result.lock->install_dir(),
         [&](fetch_request req, std::string const &url, char const *what) {
-          auto const results{ fetch({ std::move(req) }) };
+          tui_actions::fetch_all_progress_tracker tracker{
+            section, id, { uri_extract_filename(url) }, "fetch"
+          };
+          std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
+          auto const results{ fetch({ std::move(req) }, id) };
           if (results.empty() || std::holds_alternative<std::string>(results[0])) {
             throw fail(
                 std::string{ "could not be fetched (" } + what + "): " + url + ": " +
                 (results.empty() ? "no results" : std::get<std::string>(results[0])));
           }
+          tracker.finish();
         },
         [] {});
   }
 
   // Validated before the entry is finalized: `envy-complete` is never revalidated.
   bundle_verify(result.pkg_path, id);
-  if (result.lock) { result.lock->mark_install_complete(); }
+  if (!result.lock) {
+    tui::section_delete(section);
+    return result.pkg_path;
+  }
+
+  result.lock->mark_install_complete();
+  char outcome[32]{};
+  std::snprintf(outcome,
+                sizeof(outcome),
+                "installed (%.1fs)",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+                    .count());
+  tui::section_set_content(
+      section,
+      tui::section_frame{ .label = "[" + id + "]",
+                          .content = tui::static_text_data{ .text = outcome } });
+  tui::section_set_complete(section);
+  if (!tui::is_tty()) { tui::info("%s", outcome); }  // no live row to carry it
   return result.pkg_path;
 }
 

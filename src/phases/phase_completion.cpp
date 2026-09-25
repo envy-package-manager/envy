@@ -49,7 +49,9 @@ void run_completion_phase(pkg *p, engine &eng) {
       return { "bundle_local", "local bundle", false };
     }
     if (p->was_cache_hit) { return { "cache_hit", "cache hit", false }; }
-    if (p->type == pkg_type::BUNDLE_ONLY) { return { "bundle_fetched", "fetched", true }; }
+    if (p->type == pkg_type::BUNDLE_ONLY) {
+      return { "bundle_fetched", "installed", true };
+    }
     if (p->imported) { return { "imported", "imported from depot", true }; }
     return { "installed", "installed", true };
   }() };

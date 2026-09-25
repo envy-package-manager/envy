@@ -6,6 +6,7 @@ is earlier than the engine fetches bundles.
 
 from __future__ import annotations
 
+import tarfile
 import unittest
 from pathlib import Path
 
@@ -169,6 +170,23 @@ return M
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(1, len(run.events("pkg_outcome", spec="test.generic@r1")))
+
+    def test_a_downloaded_bundle_draws_a_package_row(self):
+        """A bar while it downloads, then `installed`: no prose about who asked."""
+        serve = self.make_temp_dir("serve")
+        with tarfile.open(serve / "tools.tar.gz", "w:gz") as tf:
+            root = self.make_bundle()
+            for path in sorted(root.rglob("*")):
+                tf.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+        url = self.serve_directory(serve) + "/tools.tar.gz"
+
+        run = self.install(self.helper_manifest(url))
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertNotIn("manifest reads it", run.stderr)
+        row = r"(?m)^\[test\.tools@r1\] "
+        self.assertRegex(run.stderr, row + r"\S+/\S+ tools\.tar\.gz: 100\.0%$")
+        self.assertRegex(run.stderr, row + r"installed \(\d+\.\ds\)$")
 
     def test_the_helper_may_hand_back_an_entry_that_vendors(self):
         """The builder's whole point is emitting `vendor` too; see issue #373."""

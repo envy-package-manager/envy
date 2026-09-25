@@ -262,7 +262,7 @@ PACKAGES = {
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
             self.assertNotIn("Lua state unavailable", result.stderr)
             # The bundle reported its own outcome row, like any other package.
-            self.assertRegex(result.stderr, r"\[test\.tc@v1\] fetched \(\d+\.\ds\)")
+            self.assertRegex(result.stderr, r"\[test\.tc@v1\] installed \(\d+\.\ds\)")
 
 
 # The payload every shape's fetch function writes: a bundle manifest plus the one

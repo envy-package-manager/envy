@@ -764,14 +764,14 @@ PACKAGES = {{
         return manifest_path
 
     def test_remote_bundle_reports_outcome(self):
-        """Fetch reports 'fetched'; the warm cache reports 'cache hit'."""
+        """Fetch reports 'installed'; the warm cache reports 'cache hit'."""
         manifest_path = self.write_manifest(
             '    { spec = "test.spec_a@v1", bundle = "toolchain", setup = { "main" } },'
         )
 
         first = self.run_install(manifest_path)
         self.assertEqual(first.returncode, 0, f"stderr: {first.stderr}")
-        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] fetched \(\d+\.\ds\)")
+        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] installed \(\d+\.\ds\)")
 
         second = self.run_install(manifest_path)
         self.assertEqual(second.returncode, 0, f"stderr: {second.stderr}")
@@ -791,7 +791,7 @@ PACKAGES = {{
         # Outcome rows only: a slow run also emits throttled progress lines, which the
         # non-TTY fallback renderer prints with a doubled "[[identity]]" label.
         outcome_rows = re.findall(
-            r"^\[test\.simple-bundle@v1\] (?:fetched|cache hit)",
+            r"^\[test\.simple-bundle@v1\] (?:installed|cache hit)",
             result.stderr,
             re.MULTILINE,
         )
@@ -866,7 +866,7 @@ class TestBundleFetchGit(EnvyTestCase):
         )
 
     def test_git_bundle_reports_outcome(self):
-        """Clone reports 'fetched'; the warm cache reports 'cache hit'."""
+        """Clone reports 'installed'; the warm cache reports 'cache hit'."""
         manifest_path = self.test_dir / "envy.lua"
         manifest_path.write_text(
             make_manifest(
@@ -898,7 +898,7 @@ PACKAGES = {{
 
         first = test_config.run(cmd, cwd=self.project_root, capture_output=True, text=True)
         self.assertEqual(first.returncode, 0, f"stderr: {first.stderr}")
-        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] fetched \(\d+\.\ds\)")
+        self.assertRegex(first.stderr, r"\[test\.simple-bundle@v1\] installed \(\d+\.\ds\)")
 
         second = test_config.run(cmd, cwd=self.project_root, capture_output=True, text=True)
         self.assertEqual(second.returncode, 0, f"stderr: {second.stderr}")
