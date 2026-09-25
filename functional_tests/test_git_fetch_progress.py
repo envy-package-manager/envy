@@ -176,7 +176,7 @@ PACKAGES = {{
         self.assertEqual([], barless, f"rows rendered without a bar: {barless}")
 
         # The bundle still finishes with its own outcome row.
-        self.assertRegex(result.stderr, r"\[test\.gitprog@v1\] fetched \(\d+\.\ds\)")
+        self.assertRegex(result.stderr, r"\[test\.gitprog@v1\] installed \(\d+\.\ds\)")
 
     def test_git_clone_reports_delta_resolution(self):
         """After the last object arrives the bar tracks delta resolution."""

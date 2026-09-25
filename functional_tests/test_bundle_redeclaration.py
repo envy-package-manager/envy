@@ -385,7 +385,7 @@ PACKAGES = {{
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertNotIn("conflicting", result.stderr)
         # Still one bundle package, so still one outcome row.
-        self.assertEqual(1, result.stderr.count("[test.tc@v1] fetched"), result.stderr)
+        self.assertEqual(1, result.stderr.count("[test.tc@v1] installed"), result.stderr)
 
     def test_identical_declarations_with_sha_accepted(self):
         """Matching sha256 on both declarations is agreement, not conflict."""

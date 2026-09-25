@@ -3,24 +3,13 @@
 #include "engine.h"
 #include "pkg.h"
 #include "trace.h"
-#include "tui.h"
+#include "tui_actions.h"
 
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <tuple>
 
 namespace envy {
-
-namespace {
-
-std::string format_duration(std::int64_t duration_ms) {
-  char buf[32]{};
-  std::snprintf(buf, sizeof(buf), " (%.1fs)", static_cast<double>(duration_ms) / 1000.0);
-  return buf;
-}
-
-}  // namespace
 
 void run_completion_phase(pkg *p, engine &eng) {
   phase_trace_scope const phase_scope{ p->cfg->identity,
@@ -49,14 +38,17 @@ void run_completion_phase(pkg *p, engine &eng) {
       return { "bundle_local", "local bundle", false };
     }
     if (p->was_cache_hit) { return { "cache_hit", "cache hit", false }; }
-    if (p->type == pkg_type::BUNDLE_ONLY) { return { "bundle_fetched", "fetched", true }; }
+    if (p->type == pkg_type::BUNDLE_ONLY) {
+      return { "bundle_fetched", "installed", true };
+    }
     if (p->imported) { return { "imported", "imported from depot", true }; }
     return { "installed", "installed", true };
   }() };
 
-  auto const duration_ms{ std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - p->build_start)
-                              .count() };
+  auto const elapsed{ std::chrono::steady_clock::now() - p->build_start };
+  auto const duration_ms{
+    std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+  };
 
   std::string const section_text{ [&] {
     // A package that vendored reports the copy: vendoring is the last phase to write, and
@@ -65,7 +57,7 @@ void run_completion_phase(pkg *p, engine &eng) {
     auto const *plan{ eng.vendor() };
     if (p->vendor_wrote && !(plan && plan->command_reports)) { return p->vendor_outcome; }
     // Build/import paths show wall-clock; a cache hit or no-op setup does not.
-    return timed ? human + format_duration(duration_ms) : human;
+    return timed ? tui_actions::timed_outcome(human, elapsed) : human;
   }() };
 
   ENVY_TRACE(pkg_outcome,
@@ -75,24 +67,11 @@ void run_completion_phase(pkg *p, engine &eng) {
 
   // A row is earned: `timed` is the outcomes that moved bytes, the two flags the rest.
   // None of them, and the package leaves nothing on screen -- a no-work run is silent.
-  if (timed || p->setup_ran || p->vendor_wrote) {
-    tui::section_set_content(
-        p->tui_section,
-        tui::section_frame{ .label = "[" + p->cfg->identity + "]",
-                            .content = tui::static_text_data{ .text = section_text } });
-    tui::section_set_complete(p->tui_section);
-  } else {
-    tui::section_delete(p->tui_section);
-  }
-
-  // Off a TTY there is no live section to carry the outcome, so emit it as an
-  // INFO line (auto-prefixed "[identity]" by the ambient log context). On a TTY
-  // the section above is the only per-package output — no duplicate scrollback.
-  if (!tui::is_tty()) {
-    std::string const line{ p->display.empty() ? section_text
-                                               : p->display + " " + section_text };
-    tui::info("%s", line.c_str());
-  }
+  tui_actions::report_outcome(p->tui_section,
+                              p->cfg->identity,
+                              section_text,
+                              timed || p->setup_ran || p->vendor_wrote,
+                              p->display);
 }
 
 }  // namespace envy
