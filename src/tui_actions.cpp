@@ -1,8 +1,10 @@
 #include "tui_actions.h"
 
+#include "uri.h"
 #include "util.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -489,6 +491,57 @@ std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
   }
 
   return results;
+}
+
+fetch_result_t fetch_on_row(fetch_request req,
+                            tui::section_handle section,
+                            std::string const &identity,
+                            std::string const &url) {
+  fetch_all_progress_tracker tracker{ section,
+                                      identity,
+                                      { uri_extract_filename(url) },
+                                      "fetch" };
+  std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
+
+  auto results{ fetch({ std::move(req) }, identity) };
+  if (results.empty()) { return std::string{ "no results" }; }
+  if (std::holds_alternative<fetch_result>(results.front())) { tracker.finish(); }
+  return std::move(results.front());
+}
+
+// ==== outcome rows ====
+
+std::string timed_outcome(std::string_view text,
+                          std::chrono::steady_clock::duration elapsed) {
+  char buf[32]{};
+  std::snprintf(buf,
+                sizeof(buf),
+                " (%.1fs)",
+                std::chrono::duration<double>(elapsed).count());
+  return std::string{ text } + buf;
+}
+
+void report_outcome(tui::section_handle section,
+                    std::string const &identity,
+                    std::string const &text,
+                    bool keep_row,
+                    std::string const &display) {
+  if (keep_row) {
+    tui::section_set_content(
+        section,
+        tui::section_frame{ .label = "[" + identity + "]",
+                            .content = tui::static_text_data{ .text = text } });
+    tui::section_set_complete(section);
+  } else {
+    tui::section_delete(section);
+  }
+
+  // Off a TTY no live row carries it, so it is an INFO line; the ambient log context
+  // prefixes "[identity]". On a TTY the row is the only output: no duplicate scrollback.
+  if (!tui::is_tty()) {
+    std::string const line{ display.empty() ? text : display + " " + text };
+    tui::info("%s", line.c_str());
+  }
 }
 
 shell_result run_shell_with_progress(std::string_view script,

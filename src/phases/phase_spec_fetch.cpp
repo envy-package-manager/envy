@@ -356,20 +356,12 @@ void fetch_with_progress(fetch_request req,
                          pkg const *p,
                          std::string const &url,
                          char const *what) {
-  std::string const &identity{ p->cfg->identity };
-  tui_actions::fetch_all_progress_tracker tracker{ p->tui_section,
-                                                   identity,
-                                                   { uri_extract_filename(url) },
-                                                   "fetch" };
-  std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
-
-  auto const results{ fetch({ std::move(req) }, identity) };
-  if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-    throw std::runtime_error(
-        std::string{ "Failed to fetch " } + what + ": " +
-        (results.empty() ? "no results" : std::get<std::string>(results[0])));
+  auto const result{
+    tui_actions::fetch_on_row(std::move(req), p->tui_section, p->cfg->identity, url)
+  };
+  if (auto const *err{ std::get_if<std::string>(&result) }) {
+    throw std::runtime_error(std::string{ "Failed to fetch " } + what + ": " + *err);
   }
-  tracker.finish();
 }
 
 // A fetched spec together with the cache entry lock that still guards it, if the

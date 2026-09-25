@@ -160,6 +160,25 @@ std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
                                           std::vector<std::string> const &item_labels,
                                           std::string trace_spec = {});
 
+// One download on a row the caller owns (a package's), labeled by `url`'s filename.
+// Success lands the bar at 100%; a failure keeps its last frame, and its error returns.
+fetch_result_t fetch_on_row(fetch_request req,
+                            tui::section_handle section,
+                            std::string const &identity,
+                            std::string const &url);
+
+// "installed (1.2s)": an outcome that moved bytes shows its wall-clock.
+std::string timed_outcome(std::string_view text,
+                          std::chrono::steady_clock::duration elapsed);
+
+// A package's last word: `text` as its row's final frame, or no row unless `keep_row`.
+// Off a TTY it is also an INFO line, led by `display` when set.
+void report_outcome(tui::section_handle section,
+                    std::string const &identity,
+                    std::string const &text,
+                    bool keep_row,
+                    std::string const &display = {});
+
 // Unified shell execution with TUI progress tracking.
 // Creates a run_progress tracker, shows scrubbed command header; the tracker itself
 // controls how much output is displayed (e.g., limiting the visible output to 3 lines).

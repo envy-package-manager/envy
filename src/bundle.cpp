@@ -12,7 +12,6 @@
 #include "util.h"
 
 #include <chrono>
-#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -538,18 +537,11 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
         result.lock->fetch_dir(),
         result.lock->install_dir(),
         [&](fetch_request req, std::string const &url, char const *what) {
-          tui_actions::fetch_all_progress_tracker tracker{ section,
-                                                           id,
-                                                           { uri_extract_filename(url) },
-                                                           "fetch" };
-          std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
-          auto const results{ fetch({ std::move(req) }, id) };
-          if (results.empty() || std::holds_alternative<std::string>(results[0])) {
-            throw fail(
-                std::string{ "could not be fetched (" } + what + "): " + url + ": " +
-                (results.empty() ? "no results" : std::get<std::string>(results[0])));
+          auto const r{ tui_actions::fetch_on_row(std::move(req), section, id, url) };
+          if (auto const *err{ std::get_if<std::string>(&r) }) {
+            throw fail(std::string{ "could not be fetched (" } + what + "): " + url +
+                       ": " + *err);
           }
-          tracker.finish();
         },
         [] {});
   }
@@ -562,18 +554,11 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
   }
 
   result.lock->mark_install_complete();
-  char outcome[32]{};
-  std::snprintf(
-      outcome,
-      sizeof(outcome),
-      "installed (%.1fs)",
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
-  tui::section_set_content(
+  tui_actions::report_outcome(
       section,
-      tui::section_frame{ .label = "[" + id + "]",
-                          .content = tui::static_text_data{ .text = outcome } });
-  tui::section_set_complete(section);
-  if (!tui::is_tty()) { tui::info("%s", outcome); }  // no live row to carry it
+      id,
+      tui_actions::timed_outcome("installed", std::chrono::steady_clock::now() - start),
+      true);
   return result.pkg_path;
 }
 
