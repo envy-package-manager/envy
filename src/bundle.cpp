@@ -538,9 +538,10 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
         result.lock->fetch_dir(),
         result.lock->install_dir(),
         [&](fetch_request req, std::string const &url, char const *what) {
-          tui_actions::fetch_all_progress_tracker tracker{
-            section, id, { uri_extract_filename(url) }, "fetch"
-          };
+          tui_actions::fetch_all_progress_tracker tracker{ section,
+                                                           id,
+                                                           { uri_extract_filename(url) },
+                                                           "fetch" };
           std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
           auto const results{ fetch({ std::move(req) }, id) };
           if (results.empty() || std::holds_alternative<std::string>(results[0])) {
@@ -562,11 +563,11 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
 
   result.lock->mark_install_complete();
   char outcome[32]{};
-  std::snprintf(outcome,
-                sizeof(outcome),
-                "installed (%.1fs)",
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-                    .count());
+  std::snprintf(
+      outcome,
+      sizeof(outcome),
+      "installed (%.1fs)",
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
   tui::section_set_content(
       section,
       tui::section_frame{ .label = "[" + id + "]",
