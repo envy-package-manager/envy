@@ -33,7 +33,7 @@ jobs:
       run:
         shell: /usr/bin/env bash -Eeuo pipefail {0}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
