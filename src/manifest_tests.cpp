@@ -2508,7 +2508,9 @@ TEST_CASE("a superproject merges its own PACKAGE_DEPOTS with two subprojects'") 
         "https://depot.invalid/index.txt");
 
   auto const &fn{ std::get<envy::manifest::depot_fetch_fn>(m->package_depots[2]) };
-  auto const result{ m->run_depot_fetch(fn.lua_index, nullptr, fs::path("/fake/tmp"), {}) };
+  auto const result{
+    m->run_depot_fetch(fn.lua_index, nullptr, fs::path("/fake/tmp"), {})
+  };
   auto const *text{ std::get_if<std::string>(&result) };
   REQUIRE(text);
   CHECK(*text == "depots_fetch");  // read from the subproject's own globals
