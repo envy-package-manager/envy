@@ -2493,6 +2493,29 @@ TEST_CASE("envy.import never stamps the importing manifest's own declarations") 
         fixture_path(fs::path{ "bundles" } / "tools"));
 }
 
+TEST_CASE("a superproject merges its own PACKAGE_DEPOTS with two subprojects'") {
+  auto m{ load_super(R"(
+    PACKAGES = {}
+    PACKAGE_DEPOTS = envy.extend({ "https://root.invalid/index.txt" },
+                                 envy.import("depots_only").PACKAGE_DEPOTS,
+                                 envy.import("depots_fetch").PACKAGE_DEPOTS)
+  )") };
+
+  REQUIRE(m->package_depots.size() == 3);
+  CHECK(std::get<envy::manifest::depot_uri>(m->package_depots[0]).url ==
+        "https://root.invalid/index.txt");
+  CHECK(std::get<envy::manifest::depot_uri>(m->package_depots[1]).url ==
+        "https://depot.invalid/index.txt");
+
+  auto const &fn{ std::get<envy::manifest::depot_fetch_fn>(m->package_depots[2]) };
+  auto const result{
+    m->run_depot_fetch(fn.lua_index, nullptr, fs::path("/fake/tmp"), {})
+  };
+  auto const *text{ std::get_if<std::string>(&result) };
+  REQUIRE(text);
+  CHECK(*text == "depots_fetch");  // read from the subproject's own globals
+}
+
 TEST_CASE("envy.import works from a manifest path with no directory component") {
   std::string const script{ "-- @envy bin \"tools\"\nPACKAGES = envy.import(\"" +
                             (import_root() / "sub").generic_string() + "\").PACKAGES" };

@@ -43,7 +43,18 @@ SERVER_SHUTDOWN_TIMEOUT_S = 10.0
 
 
 class QuietHTTPHandler(SimpleHTTPRequestHandler):
-    """SimpleHTTPRequestHandler without per-request logging."""
+    """SimpleHTTPRequestHandler without per-request logging.
+
+    `requests`, if given, collects the path of every request served, found or not.
+    """
+
+    def __init__(self, *args, requests: list[str] | None = None, **kwargs):
+        self.requests = requests  # before super(): the request is handled in __init__
+        super().__init__(*args, **kwargs)
+
+    def log_request(self, code="-", size="-"):
+        if self.requests is not None:
+            self.requests.append(self.path)
 
     def log_message(self, format, *args):  # noqa: A003
         return
@@ -203,14 +214,15 @@ class EnvyTestCase(unittest.TestCase):
     def sync(self, manifest: Path, *extra, **kwargs) -> EnvyRun:
         return self.run_envy("sync", "--manifest", manifest, *extra, **kwargs)
 
-    def serve_directory(self, directory: Path) -> str:
+    def serve_directory(self, directory: Path, requests: list[str] | None = None) -> str:
         """Serve `directory` over HTTP for the test's lifetime; returns the base URL.
 
         The port comes from the OS and contents are read per request, so a test can
-        change what a fixed URL returns between runs.
+        change what a fixed URL returns between runs. `requests` logs every path asked.
         """
         server = ThreadingHTTPServer(
-            ("127.0.0.1", 0), partial(QuietHTTPHandler, directory=str(directory))
+            ("127.0.0.1", 0),
+            partial(QuietHTTPHandler, directory=str(directory), requests=requests),
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
