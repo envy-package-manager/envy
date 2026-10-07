@@ -49,7 +49,7 @@ The root manifest's header is the sole bootstrap authority. A manifest pulled in
 
 The one exception is advisory and in-binary: an imported `@envy version` above the root pin is an error (bootstrap already chose the binary from the root header), and any other mismatch warns. Imports are visible as `manifest_imported{path, importer}`; discovery never sees the file, so no `manifest_resolved` names it.
 
-Globals follow the same rule. `PACKAGES` and `BUNDLES` are read back out of an import; `DEFAULT_SHELL` and `PACKAGE_DEPOTS` are read only from the root state, so an imported manifest that sets one must have the root adopt it (`DEFAULT_SHELL = envy.import("sub").DEFAULT_SHELL`) or the declaration is an error naming the file—never a silent drop.
+Globals follow the same rule. `PACKAGES` and `BUNDLES` are read back out of an import; `DEFAULT_SHELL` and `VENDOR_ROOT` are read only from the root state, so an imported manifest that sets one must have the root adopt it (`DEFAULT_SHELL = envy.import("sub").DEFAULT_SHELL`) or the declaration is an error naming the file—never a silent drop. `PACKAGE_DEPOTS` is also root-only but exempt: a depot only accelerates, so an imported one sits inert in the import table—never fetched—until the root adopts or merges it.
 
 ## Subcommands
 

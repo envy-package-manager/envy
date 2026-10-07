@@ -55,11 +55,9 @@ void tag_declarations(sol::table const &env, std::string const &base) {
   }
 }
 
-// Globals read only from the root state. PACKAGES and BUNDLES are absent because
-// envy.import already reads those back out of the sandbox itself.
-constexpr char const *kRootOnlyGlobals[]{ "DEFAULT_SHELL",
-                                          "PACKAGE_DEPOTS",
-                                          "VENDOR_ROOT" };
+// Globals read only from the root state. PACKAGES and BUNDLES are read back out of the
+// sandbox; PACKAGE_DEPOTS only accelerates, so leaving one unadopted is harmless.
+constexpr char const *kRootOnlyGlobals[]{ "DEFAULT_SHELL", "VENDOR_ROOT" };
 
 sol::table registry_list(sol::state_view lua, int ridx) {
   if (sol::object const obj{ lua.registry()[ridx] }; obj.is<sol::table>()) {

@@ -192,15 +192,47 @@ class TestImport(EnvyTestCase):
         self.assertIn("DEFAULT_SHELL", run.stderr)
         self.assertPathContains(run.stderr, "sub/envy.lua")
 
-    def test_imported_package_depots_is_refused(self):
-        """PACKAGE_DEPOTS is root-only for the same reason, and was as silent."""
-        run = self.sync(
-            self._super_importing('PACKAGE_DEPOTS = { "https://example.com/d.txt" }\n')
-        )
+    def test_an_unadopted_subproject_depot_is_never_touched(self):
+        """A depot only accelerates, so an imported PACKAGE_DEPOTS waits to be adopted.
 
-        self.assertNotEqual(0, run.returncode, run.stdout)
-        self.assertIn("PACKAGE_DEPOTS", run.stderr)
-        self.assertPathContains(run.stderr, "sub/envy.lua")
+        Both depot forms are tripwires: the URI hits a server that logs every request,
+        and FETCH leaves a marker, then fails. The root's own depots, on the same
+        witnesses, prove they would fire.
+        """
+        served = self.make_temp_dir("depots")
+        (served / "root.txt").write_text("", encoding="utf-8")
+        requests: list[str] = []
+        base = self.serve_directory(served, requests=requests)
+        markers = self.make_temp_dir("markers")
+        poison_fetched, root_fetched = markers / "poison", markers / "root"
+
+        manifest = self._super_importing(
+            "PACKAGE_DEPOTS = {\n"
+            f'  "{base}/poison.txt",\n'
+            "  { FETCH = function(ctx)\n"
+            f'    io.open("{self.lua_path(poison_fetched)}", "w"):close()\n'
+            '    error("poisoned depot FETCH ran")\n'
+            "  end },\n"
+            "}\n"
+        )
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8")
+            + "PACKAGE_DEPOTS = {\n"
+            f'  "{base}/root.txt",\n'
+            "  { FETCH = function(ctx)\n"
+            f'    io.open("{self.lua_path(root_fetched)}", "w"):close()\n'
+            "    return {}\n"
+            "  end },\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        run = self.sync(manifest)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue(self.pkg_complete("local.subtool@v1"))
+        self.assertEqual(["/root.txt"], requests)
+        self.assertTrue(root_fetched.exists(), "the root's own depot FETCH never ran")
+        self.assertFalse(poison_fetched.exists(), "the subproject's depot FETCH ran")
 
     def test_a_conflict_between_two_imports_names_both_subproject_manifests(self):
         """Provenance is the file that wrote the entry, not the root that spliced it in.

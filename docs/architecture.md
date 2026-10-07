@@ -105,6 +105,8 @@ PACKAGE_DEPOTS = {
 
 Semantics: all depot manifests merge into one flat index before any import proceeds (order irrelevant—cache keys are hash-unique; duplicate keys keep the first, differing SHA256 warns). Fetching is lazy: a single-step `#depot` engine task starts on first import that needs it; `DEPENDS` closures are flagged depot-bootstrap—they always source-build (breaks circularity) and must use strong dependencies only. URI download failures warn and degrade to source builds; a failed `DEPENDS` build or throwing `FETCH` is fatal. `--ignore-depot`/`ENVY_IGNORE_DEPOT` skips the task entirely (no deps spawn). Depot config is never hashed.
 
+Root manifest only, but never an error: an imported manifest's `PACKAGE_DEPOTS` is inert—never fetched, its `DEPENDS` never built—until the root adopts it. Adopting trusts the depot's artifacts; merge freely (`PACKAGE_DEPOTS = envy.extend({}, a.PACKAGE_DEPOTS, b.PACKAGE_DEPOTS)`).
+
 ## Shell Configuration
 
 Manifests can specify a `DEFAULT_SHELL` global to control how `envy.run()` executes scripts across all specs. This enables portable build scripts in custom languages without requiring pre-installed interpreters.
@@ -138,7 +140,7 @@ DEFAULT_SHELL = {
 - **Bootstrap-shell rule:** the platform built-in is used wherever the manifest shell cannot exist yet—no package context at all, a package in *any* bootstrap closure (`DEFAULT_SHELL` `DEPENDS`, `PACKAGE_DEPOTS` `DEPENDS`, `source.dependencies`), and any Lua running in the manifest state (a manifest bundle's `source.fetch`, a depot `FETCH`, the `SHELL` function itself). One rule, not three carve-outs: bootstrap work runs before the shell exists, and evaluating the shell needs the manifest's single non-recursive Lua lock, so it can never nest inside itself. Bootstrap specs need no annotation—membership is enough.
 - Lazy: `DEPENDS` starts on the first request for a shell, so a run that executes no string verb never fetches the interpreter—`envy deploy` and a bare `envy product` listing resolve only, and ask for one just if a custom fetch runs a string verb. `DEPENDS` is interned during resolution regardless, so a bad identity still fails early.
 - `DEPENDS` is a strong-only closure, like `source.dependencies`; a weak reference in it is an error. `DEPENDS` without a function `SHELL` is rejected.
-- Root manifest only: an imported manifest that declares `DEFAULT_SHELL` (or `PACKAGE_DEPOTS`) is an error unless the root adopts the value—see the bootstrap boundary in `docs/commands.md`.
+- Root manifest only: an imported manifest that declares `DEFAULT_SHELL` is an error unless the root adopts the value—see the bootstrap boundary in `docs/commands.md`.
 - The function authorizes against a synthetic consumer, `envy.DEFAULT_SHELL@v1`, holding one edge per `DEPENDS` entry—wired through the same `wire_dependency` path as every other edge, so it appears in the access traces and in errors.
 - Traced as `default_shell_resolving{depends}` then `default_shell_resolved{shell}`; a package's block on the depot is `depot_wait{duration_ms, result}`.
 
