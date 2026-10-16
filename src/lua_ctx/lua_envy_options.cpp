@@ -299,8 +299,8 @@ void validate_single_option(std::string const &key,
       // re-parse the already-validated semver value
       std::string const val_str{ value.as<std::string>() };
       semver::version<> ver;
-      semver::parse(val_str, ver);
-      if (!rs.contains(ver, semver::version_compare_option::include_prerelease)) {
+      static_cast<void>(semver::parse(val_str, ver));
+      if (!rs.contains(ver, semver::prerelease_policy::include)) {
         throw std::runtime_error(ctx + " '" + val_str + "' does not satisfy range '" +
                                  range_str + "' for " + identity);
       }
