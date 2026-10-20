@@ -1017,14 +1017,14 @@ void engine::mark_closure(pkg *p, pkg_closure kind, std::string reason) {
       // are a violation; one already resolved at an earlier barrier is wired and
       // ordered.
       auto const unresolved{ std::ranges::find_if(
-          member->weak_references, [](auto const &wr) { return !wr.resolved; }) };
+          member->weak_references,
+          [](auto const &wr) { return !wr.resolved; }) };
       if (unresolved != member->weak_references.end()) {
-        throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
-                                 " must use strong dependencies: '" +
-                                 member->cfg->identity + "' holds a weak reference to '" +
-                                 unresolved->query +
-                                 "' but runs outside the window where weak references "
-                                 "resolve");
+        throw std::runtime_error(
+            std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
+            member->cfg->identity + "' holds a weak reference to '" + unresolved->query +
+            "' but runs outside the window where weak references "
+            "resolve");
       }
       if (!member->spec_setup_selections.empty()) {
         throw std::runtime_error(

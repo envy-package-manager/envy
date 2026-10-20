@@ -718,10 +718,9 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
     auto const elapsed{ now - sec.last_fallback_print_time };
     bool const due{ sec.cached_frame.terminal || elapsed >= kFallbackThrottle };
     if (output != sec.last_fallback_output && due) {
-      candidates.push_back(candidate{
-          .handle = sec.handle,
-          .fallback_writes = sec.fallback_writes,
-          .output = std::move(output) });
+      candidates.push_back(candidate{ .handle = sec.handle,
+                                      .fallback_writes = sec.fallback_writes,
+                                      .output = std::move(output) });
     }
   }
 

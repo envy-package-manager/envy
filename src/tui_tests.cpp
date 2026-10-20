@@ -1071,9 +1071,9 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY renders the fallbac
 TEST_CASE_FIXTURE(captured_output, "fallback renderer leaves an outcome row unpainted") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = false;
-  envy::tui::section_frame const frame{
-    .label = "[pkg]", .content = envy::tui::static_text_data{ .text = "installed" }
-  };
+  envy::tui::section_frame const frame{ .label = "[pkg]",
+                                        .content = envy::tui::static_text_data{
+                                            .text = "installed" } };
   auto const painted{ [&](auto set) {
     messages.clear();
     set(envy::tui::section_create(), frame);
