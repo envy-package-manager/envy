@@ -1,5 +1,4 @@
 #include "aws_util.h"
-#include "platform.h"
 
 #include "aws/core/Aws.h"
 #include "aws/core/auth/AWSCredentialsProvider.h"
@@ -401,8 +400,9 @@ s3_uri_parts aws_s3_parse_uri(std::string_view uri, std::string_view op) {
 }
 
 void aws_init() {
+  // No setenv: this runs on a package thread while others read environ, and the C++ SDK
+  // reads ~/.aws/config without AWS_SDK_LOAD_CONFIG.
   std::call_once(g_init_once, [] {
-    platform::env_var_set("AWS_SDK_LOAD_CONFIG", "1");
     configure_options(g_options);
     Aws::InitAPI(g_options);
     std::lock_guard<std::mutex> lock{ g_state_mutex };
