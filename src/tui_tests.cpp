@@ -1,4 +1,5 @@
 #include "tui.h"
+#include "tui_actions.h"
 
 #include "doctest.h"
 
@@ -951,14 +952,13 @@ TEST_CASE("section_delete does not affect other sections") {
   CHECK_FALSE(envy::tui::section_has_content(h2));
 }
 
-TEST_CASE("section_delete after set_complete") {
+TEST_CASE("section_delete after set_outcome") {
   auto const h{ envy::tui::section_create() };
-  envy::tui::section_set_content(
+  envy::tui::section_set_outcome(
       h,
       envy::tui::section_frame{ .label = "done",
                                 .content =
                                     envy::tui::static_text_data{ .text = "finished" } });
-  envy::tui::section_set_complete(h);
   CHECK(envy::tui::section_has_content(h));
 
   envy::tui::section_delete(h);
@@ -1068,17 +1068,37 @@ TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY renders the fallbac
   envy::tui::test::g_isatty = true;
 }
 
+TEST_CASE_FIXTURE(captured_output, "fallback renderer leaves an outcome row unpainted") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+  envy::tui::section_frame const frame{
+    .label = "[pkg]", .content = envy::tui::static_text_data{ .text = "installed" }
+  };
+  auto const painted{ [&](auto set) {
+    messages.clear();
+    set(envy::tui::section_create(), frame);
+    envy::tui::run(std::nullopt);
+    envy::tui::shutdown();
+    envy::tui::sections_clear();
+    return stream().find("installed") != std::string::npos;
+  } };
+
+  CHECK(painted(envy::tui::section_set_content));  // control: an ordinary row is painted
+  CHECK_FALSE(painted(envy::tui::section_set_outcome));
+
+  envy::tui::test::g_isatty = true;
+}
+
 TEST_CASE_FIXTURE(captured_output, "section_commit off a TTY withholds a complete row") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = false;
 
   auto const h{ envy::tui::section_create() };
-  envy::tui::section_set_content(
+  envy::tui::section_set_outcome(  // the caller prints this row itself
       h,
       envy::tui::section_frame{ .label = "import",
                                 .content =
                                     envy::tui::static_text_data{ .text = "imported" } });
-  envy::tui::section_set_complete(h);  // the caller's own line speaks for this row
   envy::tui::section_commit(h);
 
   CHECK_NOTHROW(envy::tui::run(std::nullopt));
@@ -1339,3 +1359,35 @@ TEST_CASE("no spec set a display, so the row carries no display column") {
 }
 
 #endif  // ENVY_UNIT_TEST
+
+TEST_CASE("fetch_all_progress_tracker: race - one slot reported from several threads") {
+  // S3 reports one slot from several SDK threads. A label read aliasing the slot's frame
+  // crashes here while another thread rewrites it.
+  constexpr int kThreads{ 4 };
+  constexpr int kRounds{ 200 };  // threads collide most just after a gate opens
+  constexpr int kUpdates{ 50 };
+  envy::tui_actions::fetch_all_progress_tracker tracker{
+    envy::tui::kInvalidSection,
+    "local.tracker@v1",
+    { "an-archive-name-too-long-for-the-small-string-buffer.tar.gz" },
+    "fetching"
+  };
+  auto const cb{ tracker.make_callback(0) };
+
+  for (int round{ 0 }; round < kRounds; ++round) {
+    std::atomic_int gate{ 0 };
+    std::vector<std::thread> threads;
+    for (int i{ 0 }; i < kThreads; ++i) {
+      threads.emplace_back([&] {
+        ++gate;
+        while (gate < kThreads) { std::this_thread::yield(); }
+        for (int n{ 0 }; n < kUpdates; ++n) {
+          cb(envy::fetch_transfer_progress{ .transferred = static_cast<std::uint64_t>(n),
+                                            .total = kUpdates });
+        }
+      });
+    }
+    for (auto &t : threads) { t.join(); }
+  }
+  tracker.finish();
+}

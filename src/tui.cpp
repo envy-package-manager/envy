@@ -83,6 +83,7 @@ struct section_state {
 
   std::string last_fallback_output;
   std::chrono::steady_clock::time_point last_fallback_print_time;
+  std::uint64_t fallback_writes{ 0 };  // bumped on each last_fallback_output write
 };
 
 struct tui_progress_state {
@@ -704,6 +705,7 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
 
   struct candidate {
     unsigned handle;
+    std::uint64_t fallback_writes;
     std::string output;
   };
   std::vector<candidate> candidates;
@@ -716,7 +718,10 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
     auto const elapsed{ now - sec.last_fallback_print_time };
     bool const due{ sec.cached_frame.terminal || elapsed >= kFallbackThrottle };
     if (output != sec.last_fallback_output && due) {
-      candidates.push_back(candidate{ .handle = sec.handle, .output = std::move(output) });
+      candidates.push_back(candidate{
+          .handle = sec.handle,
+          .fallback_writes = sec.fallback_writes,
+          .output = std::move(output) });
     }
   }
 
@@ -730,9 +735,13 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
       auto const it{ std::ranges::find_if(s_progress.sections, [&cand](auto const &sec) {
         return sec.handle == cand.handle;
       }) };
-      if (it == s_progress.sections.end()) { continue; }
+      if (it == s_progress.sections.end() || it->complete ||
+          it->fallback_writes != cand.fallback_writes) {  // gone, done, or said newer
+        continue;
+      }
       it->last_fallback_output = cand.output;
       it->last_fallback_print_time = now;
+      ++it->fallback_writes;
       to_print.push_back(std::move(cand.output));
     }
   }
@@ -1095,15 +1104,16 @@ void trace(std::string spec, trace_event_t event) {
   thread_local std::uint32_t const tid{ s_next_tid.fetch_add(1) };
 
   trace_record rec{ .seq = 0,
-                    .ts = std::chrono::system_clock::now(),
+                    .ts = {},
                     .tid = tid,
                     .spec = std::move(spec),
                     .event = std::move(event) };
   {
     std::lock_guard<std::mutex> lock{ s_tui.mutex };
-    // seq assigned under the queue mutex: file order == seq order, strictly.
+    // seq and ts under the queue mutex: file order == seq order == ts order.
     static std::uint64_t s_next_seq{ 0 };
     rec.seq = s_next_seq++;
+    rec.ts = std::chrono::system_clock::now();
     s_tui.messages.push(log_entry{ std::move(rec) });
   }
   s_tui.cv.notify_one();
@@ -1196,7 +1206,11 @@ void section_set_display(section_handle h, std::string text) {
   }
 }
 
-void section_set_content(section_handle h, section_frame const &frame) {
+namespace {
+
+// Frame and completion flag in one critical section: a render tick between two calls
+// would print an outcome row its caller also prints.
+void set_section_content(section_handle h, section_frame const &frame, bool complete) {
   if (h == 0 || !s_progress.enabled) { return; }
 
   bool const ansi{ is_ansi_supported() };
@@ -1211,6 +1225,7 @@ void section_set_content(section_handle h, section_frame const &frame) {
     }) };
     if (it == s_progress.sections.end()) { return; }
 
+    it->complete = it->complete || complete;
     it->cached_frame = frame;
     it->cached_frame.display = it->display;
     it->has_content = true;
@@ -1229,6 +1244,7 @@ void section_set_content(section_handle h, section_frame const &frame) {
       if (text != it->last_fallback_output) {
         it->last_fallback_output = text;
         it->last_fallback_print_time = now;
+        ++it->fallback_writes;
         s_tui.messages.push(log_entry{ section_line_event{ .text = std::move(text) } });
         queued = true;
       }
@@ -1238,16 +1254,14 @@ void section_set_content(section_handle h, section_frame const &frame) {
   if (queued) { s_tui.cv.notify_one(); }
 }
 
-void section_set_complete(section_handle h) {
-  if (h == 0 || !s_progress.enabled) { return; }
+}  // namespace
 
-  std::lock_guard lock{ s_tui.mutex };
+void section_set_content(section_handle h, section_frame const &frame) {
+  set_section_content(h, frame, false);
+}
 
-  if (auto it{ std::ranges::find_if(s_progress.sections,
-                                    [h](auto const &sec) { return sec.handle == h; }) };
-      it != s_progress.sections.end()) {
-    it->complete = true;
-  }
+void section_set_outcome(section_handle h, section_frame const &frame) {
+  set_section_content(h, frame, true);
 }
 
 void section_commit(section_handle h) {

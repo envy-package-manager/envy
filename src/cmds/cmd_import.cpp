@@ -103,11 +103,10 @@ import_result import_one_archive(cache &c,
 
   if (!result.lock) {
     if (section) {
-      tui::section_set_content(
+      tui::section_set_outcome(
           section,
           tui::section_frame{ .label = label,
                               .content = tui::static_text_data{ .text = "cached" } });
-      tui::section_set_complete(section);
     }
     return { parsed->identity, result.pkg_path, true, false };
   }
@@ -127,11 +126,10 @@ import_result import_one_archive(cache &c,
   if (directory_has_entries(result.lock->install_dir())) {
     result.lock->mark_install_complete();
     if (section) {
-      tui::section_set_content(
+      tui::section_set_outcome(
           section,
           tui::section_frame{ .label = label,
                               .content = tui::static_text_data{ .text = "imported" } });
-      tui::section_set_complete(section);
     }
     return { parsed->identity, result.pkg_path, false, false };
   }
@@ -139,11 +137,10 @@ import_result import_one_archive(cache &c,
   if (directory_has_entries(result.lock->fetch_dir())) {
     result.lock->mark_fetch_complete();
     if (section) {
-      tui::section_set_content(section,
+      tui::section_set_outcome(section,
                                tui::section_frame{ .label = label,
                                                    .content = tui::static_text_data{
                                                        .text = "imported (fetch)" } });
-      tui::section_set_complete(section);
     }
     return { parsed->identity, result.entry_path, false, true };
   }

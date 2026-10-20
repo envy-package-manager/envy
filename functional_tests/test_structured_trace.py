@@ -222,6 +222,23 @@ class TestStructuredTrace(EnvyTestCase):
                 expected_type, event_types, f"Expected '{expected_type}' event in trace"
             )
 
+    def test_trace_timestamps_follow_seq_across_threads(self):
+        """ts never decreases along seq, however many workers trace at once."""
+        entries = []
+        for i in range(24):  # wide and flat: every package traces concurrently
+            path = self.test_dir / f"wide{i}.lua"
+            path.write_text(SIMPLE_SPEC.replace("local.simple@v1", f"local.wide{i}@v1"))
+            entries.append(test_config.spec_entry(f"local.wide{i}@v1", path, ["main"]))
+        manifest = test_config.write_spec_manifest(self.test_dir, entries)
+
+        for attempt in range(3):
+            run = self.install(manifest)  # user-managed: each run redoes setup
+            self.assertEqual(run.returncode, 0, run.stderr)
+            events = run.events()
+            self.assertGreater(len(events), 100)
+            for a, b in zip(events, events[1:]):
+                self.assertLessEqual(a.ts, b.ts, f"run {attempt}: seq {a.seq} > {b.seq}")
+
     def test_trace_disabled_by_default(self):
         """Verify trace is not output when --trace flag not provided."""
         trace_file = self.cache_root / "trace.jsonl"
