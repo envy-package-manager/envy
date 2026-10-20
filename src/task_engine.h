@@ -77,7 +77,8 @@ class task_engine : unmovable {
 
   // Scheduling-event callbacks (tracing). Fire on worker/caller threads with no
   // engine locks held; any null member is skipped. blocked/unblocked fire only
-  // for edges that actually block.
+  // for edges that actually block. target_extended fires in the order the target
+  // moved, so a callback may query the engine but must not extend a target.
   struct observer {
     std::function<
         void(std::string const &key, int step, std::string const &dep, int watermark)>
@@ -101,7 +102,8 @@ class task_engine : unmovable {
   // Start the task's worker (idempotent) and ratchet its target to at least
   // `target` (to done if extend_all_to_done already ran). `before_spawn` runs
   // exactly once, only on the call that creates the thread, before the thread
-  // exists (for state the worker must observe). If before_spawn or the thread
+  // exists (for state the worker must observe); a concurrent caller returns only
+  // after it, so must not be called from it. If before_spawn or the thread
   // creation throws, the task is failed (waiters see the error; the worker-side
   // on_failed hook does NOT fire) and the exception rethrows.
   // Returns true if this call created the thread.
@@ -162,7 +164,8 @@ class task_engine : unmovable {
     std::thread worker;          // guarded by mutex: assigned by start_task, moved out
                                  // by join_all — they race when workers spawn tasks
     std::mutex mutex;            // guards worker, spawn_settled, error; pairs with cv
-    std::condition_variable cv;  // target extension / failure wakeups
+    std::condition_variable cv;  // target extension / failure / spawn-settled wakeups
+    std::mutex ratchet_mutex;    // orders target stores with their observer callbacks
     std::atomic<int> completed{ 0 };
     std::atomic<int> target{ 0 };
     std::atomic_bool failed{ false };
