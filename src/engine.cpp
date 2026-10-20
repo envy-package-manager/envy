@@ -536,6 +536,7 @@ task_engine::task_config engine::make_pkg_task_config(pkg *p) {
 
   cfg.on_failed = [this, p] {
     if (!p->spec_fetch_completed) { on_spec_fetch_complete(); }
+    if (p->lock) { p->lock.reset(); }  // on the acquiring thread, not at teardown
   };
 
   return cfg;

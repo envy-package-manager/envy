@@ -17,6 +17,7 @@
 #endif
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -136,17 +138,19 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     std::filesystem::absolute(path).lexically_normal().string()
   };
 
-  // Acquire in-process mutex for this lock path, ensure one thread per cache entry
-  std::unique_lock<std::mutex> path_lock{ [&]() {
+  // Acquire in-process mutex for this lock path, ensure one thread per cache entry.
+  // Blocked on outside the map mutex, so one held entry can't stall every other lock.
+  std::mutex &path_mutex{ [&]() -> std::mutex & {
     std::lock_guard<std::mutex> lock(impl::s_lock_map_mutex);
     auto &mutex_ptr{ impl::s_lock_mutexes[canonical_key] };
     if (!mutex_ptr) { mutex_ptr = std::make_unique<std::mutex>(); }
-    return std::unique_lock<std::mutex>{ *mutex_ptr };
+    return *mutex_ptr;  // never erased, so the reference outlives the map lock
   }() };
+  std::unique_lock<std::mutex> path_lock{ path_mutex };
 
   int fd{ -1 };
   for (;;) {
-    fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0666);
+    fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
     if (fd == -1) {
       throw std::system_error(errno,
                               std::system_category(),
@@ -166,8 +170,14 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     if (::fcntl(fd, F_SETLK, &fl) == -1) {
       if ((errno == EAGAIN || errno == EACCES) && on_contended) { on_contended(); }
 
-      if (::fcntl(fd, F_SETLKW, &fl) == -1) {
+      // The kernel's deadlock check treats each process as one owner, so two envys can
+      // hit EDEADLK on a cycle no thread is in. No waiter here holds a lock: retry.
+      while (::fcntl(fd, F_SETLKW, &fl) == -1) {
         int const err{ errno };
+        if (err == EDEADLK) {
+          std::this_thread::sleep_for(std::chrono::milliseconds{ 10 });
+          continue;
+        }
         ::close(fd);
         throw std::system_error(err,
                                 std::system_category(),
