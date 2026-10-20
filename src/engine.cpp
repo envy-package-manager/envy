@@ -115,23 +115,25 @@ std::string late_setup_selection_error(
   std::map<std::string, std::vector<std::string>> by_spec;
   for (auto const &[pair, spec] : selections) { by_spec[spec].push_back(pair); }
 
-  std::string from;
-  for (auto const &[spec, pairs] : by_spec) {
-    from += (from.empty() ? "spec '" : " or spec '") + spec + "' (pair";
-    from += pairs.size() > 1 ? "s " : " ";
-    for (size_t i{ 0 }; i < pairs.size(); ++i) {
-      from += (i ? ", '" : "'") + pairs[i] + "'";
-    }
-    from += ")";
-  }
-
   auto const &identity{ member.cfg->identity };
-  return "'" + identity + "' cannot take a SETUP selection from " + from + ": it is " +
-         closure_reason(member, kind) +
-         ", so its setup phase can run before every spec's DEPENDENCIES have been read. "
-         "Select " +
-         (selections.size() > 1 ? "the pairs" : "the pair") +
-         " in a manifest PACKAGES entry for '" + identity + "' instead";
+  std::ostringstream oss;
+  oss << "'" << identity << "' cannot take a SETUP selection from ";
+  char const *spec_sep{ "" };
+  for (auto const &[spec, pairs] : by_spec) {
+    oss << spec_sep << "spec '" << spec << "' (pair" << (pairs.size() > 1 ? "s" : "");
+    char const *pair_sep{ " " };
+    for (auto const &pair : pairs) {
+      oss << pair_sep << "'" << pair << "'";
+      pair_sep = ", ";
+    }
+    oss << ")";
+    spec_sep = " or ";
+  }
+  oss << ": it is " << closure_reason(member, kind)
+      << ", so its setup phase can run before every spec's DEPENDENCIES have been read. "
+      << "Select " << (selections.size() > 1 ? "the pairs" : "the pair")
+      << " in a manifest PACKAGES entry for '" << identity << "' instead";
+  return oss.str();
 }
 
 // The edge path from → … → to, or empty when `to` is unreachable. Each node's lock
