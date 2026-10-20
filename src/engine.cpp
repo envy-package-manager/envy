@@ -100,28 +100,38 @@ constexpr std::string_view shell_kind_name(resolved_shell const &shell) {
       shell);
 }
 
-// Walk `root` and everything reachable through its dependencies, calling `visit`
-// once per package. One worklist serves the whole traversal, so this does not copy a
-// node's dependency list per node; a node's lock is held only long enough to append
-// its dependencies, and `visit` runs outside it, so no two pkg locks ever nest.
-// `kind`'s bit doubles as the visited set: subtrees already in this closure are
-// skipped, which also makes this terminate on a dependency cycle and cheap to call
-// repeatedly. A package may be in several closures at once, so the bits are
-// independent — marking one never re-walks or clears another.
-template <typename Fn>
-void walk_closure(pkg *root, pkg_closure kind, Fn &&visit) {
-  auto const bit{ static_cast<uint8_t>(kind) };
-  std::vector<pkg *> work{ root };
-  while (!work.empty()) {
-    pkg *p{ work.back() };
-    work.pop_back();
-    if (p->closures.fetch_or(bit) & bit) { continue; }
+// Why `member` is in `kind`: the recorded reason, else the closure's name.
+std::string closure_reason(pkg const &member, pkg_closure kind) {
+  auto const &reason{ member.closure_reasons[pkg_closure_index(kind)] };
+  return reason.empty() ? "in the " + std::string{ pkg_closure_name(kind) } : reason;
+}
 
-    visit(p);
+// Refuses spec-selected pairs (pair -> spec) on a closure member. Merge and mark build it
+// from the same inputs, so both orders report the same text.
+std::string late_setup_selection_error(
+    pkg const &member,
+    pkg_closure kind,
+    std::map<std::string, std::string> const &selections) {
+  std::map<std::string, std::vector<std::string>> by_spec;
+  for (auto const &[pair, spec] : selections) { by_spec[spec].push_back(pair); }
 
-    std::lock_guard const deps_lock(p->deps_mutex);
-    for (auto const &[_, dep_info] : p->dependencies) { work.push_back(dep_info.p); }
+  std::string from;
+  for (auto const &[spec, pairs] : by_spec) {
+    from += (from.empty() ? "spec '" : " or spec '") + spec + "' (pair";
+    from += pairs.size() > 1 ? "s " : " ";
+    for (size_t i{ 0 }; i < pairs.size(); ++i) {
+      from += (i ? ", '" : "'") + pairs[i] + "'";
+    }
+    from += ")";
   }
+
+  auto const &identity{ member.cfg->identity };
+  return "'" + identity + "' cannot take a SETUP selection from " + from + ": it is " +
+         closure_reason(member, kind) +
+         ", so its setup phase can run before every spec's DEPENDENCIES have been read. "
+         "Select " +
+         (selections.size() > 1 ? "the pairs" : "the pair") +
+         " in a manifest PACKAGES entry for '" + identity + "' instead";
 }
 
 // The edge path from → … → to, or empty when `to` is unreachable. Each node's lock
@@ -205,32 +215,36 @@ void validate_source_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) 
   }
 }
 
-// Merge a weak reference's SETUP selection into the package it resolved to
-// (union with all other referrers). Weak resolution wires to an existing package
-// without an ensure_pkg call, so the selection is merged here instead. A closure
-// member is refused outright: its setup phase runs either before the weak pass
-// (fetch) or after it (depot_bootstrap, default_shell), so the selection would land
-// too late or not at all — refuse deterministically instead of dropping pairs.
-void merge_setup_selection(pkg *dep, std::vector<std::string> const &names) {
+// Union `names` into dep's selection; `selector` is the asking spec, null: the manifest.
+// A spec's pair on a closure member is refused here and in mark_closure, under dep's lock.
+void merge_setup_selection(pkg *dep,
+                           std::vector<std::string> const &names,
+                           pkg_cfg const *selector) {
   if (names.empty()) { return; }
 
-  for (auto const kind : kAllClosures) {
-    if (!dep->in_closure(kind)) { continue; }
-    throw std::runtime_error(
-        "SETUP selection for " + dep->cfg->identity +
-        " cannot come from a weak dependency: it is in the " +
-        std::string{ pkg_closure_name(kind) } +
-        ", whose setup phase runs outside the window where weak references resolve");
+  std::lock_guard const deps_lock(dep->deps_mutex);
+  if (selector) {
+    std::map<std::string, std::string> late;  // pairs the manifest didn't already select
+    for (auto const &name : names) {
+      if (!dep->setup_selected.contains(name) ||
+          dep->spec_setup_selections.contains(name)) {
+        late.try_emplace(name, selector->identity);
+      }
+    }
+    for (auto const kind : kAllClosures) {
+      if (!late.empty() && dep->in_closure(kind)) {
+        throw std::runtime_error(late_setup_selection_error(*dep, kind, late));
+      }
+    }
+    dep->spec_setup_selections.insert(late.begin(), late.end());
   }
 
-  std::lock_guard const deps_lock(dep->deps_mutex);
   size_t const before{ dep->setup_selected.size() };
   dep->setup_selected.insert(names.begin(), names.end());
   if (dep->setup_selection_consumed && dep->setup_selected.size() != before) {
-    throw std::runtime_error(
-        "SETUP selection for " + dep->cfg->identity +
-        " arrived after its setup phase ran; a weak dependency selected a pair "
-        "that resolved too late");
+    throw std::runtime_error("SETUP selection for " + dep->cfg->identity +
+                             " arrived after its setup phase ran; select pairs from "
+                             "entries that resolve before the package executes");
   }
 }
 
@@ -287,7 +301,7 @@ void resolve_identity_ref(pkg *p,
   if (matches.size() == 1) {
     pkg *dep{ matches[0] };
     eng.wire_dependency(p, dep, wr->needed_by);
-    merge_setup_selection(dep, wr->setup);
+    merge_setup_selection(dep, wr->setup, p->cfg);
     // A match can be interned but unstarted (DEFAULT_SHELL.DEPENDS is), and an edge
     // only ratchets a target — it never spawns the worker that would satisfy it.
     eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
@@ -316,7 +330,7 @@ void resolve_identity_ref(pkg *p,
 
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     eng.wire_dependency(p, dep, wr->needed_by);
-    merge_setup_selection(dep, wr->setup);
+    merge_setup_selection(dep, wr->setup, p->cfg);
     eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
     record_resolution(p, wr, dep);
     ++result.fallbacks_started;
@@ -342,7 +356,7 @@ void resolve_product_ref(pkg *p,
     }
 
     eng.wire_dependency(p, dep, wr->needed_by);
-    merge_setup_selection(dep, wr->setup);
+    merge_setup_selection(dep, wr->setup, p->cfg);
     record_resolution(p, wr, dep);
     trace_product_resolution(p, wr, dep, "registry");
     ++result.resolved;
@@ -354,7 +368,7 @@ void resolve_product_ref(pkg *p,
 
     pkg *dep{ eng.ensure_pkg(wr->fallback) };
     eng.wire_dependency(p, dep, wr->needed_by);
-    merge_setup_selection(dep, wr->setup);
+    merge_setup_selection(dep, wr->setup, p->cfg);
     eng.start_pkg_thread(dep, pkg_phase::spec_fetch);
     record_resolution(p, wr, dep);
     trace_product_resolution(p, wr, dep, "fallback");
@@ -589,19 +603,9 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
       validate_source_redeclaration(result->cfg, cfg);
     }
 
-    if (cfg->setup.has_value() && !cfg->setup->empty()) {
-      // Merge explicit SETUP selection across referrers (union). Selection is
-      // explicit-only: a referrer that omits `setup` requests nothing.
-      std::lock_guard const deps_lock(result->deps_mutex);
-      size_t const before{ result->setup_selected.size() };
-      result->setup_selected.insert(cfg->setup->begin(), cfg->setup->end());
-      if (result->setup_selection_consumed && result->setup_selected.size() != before) {
-        throw std::runtime_error(
-            "SETUP selection for " + cfg->identity +
-            " arrived after its setup phase ran; select pairs from entries that "
-            "resolve before the package executes");
-      }
-    }
+    // Merge explicit SETUP selection across referrers (union). Selection is
+    // explicit-only: a referrer that omits `setup` requests nothing.
+    if (cfg->setup) { merge_setup_selection(result, *cfg->setup, cfg->parent); }
 
     // Task creation must be atomic with the packages_ insert (still under
     // mutex_; engine mutex -> core mutex ordering, never reversed): a second
@@ -915,7 +919,7 @@ std::vector<pkg *> engine::spawn_depot_dependencies() {
       fn_deps.reserve(cfgs.size());
       for (auto const *cfg : cfgs) {
         pkg *dep{ ensure_pkg(cfg) };
-        mark_closure(dep, pkg_closure::depot_bootstrap);
+        mark_closure(dep, pkg_closure::depot_bootstrap, "a PACKAGE_DEPOTS dependency");
         fn_deps.push_back(dep);
         if (seen.insert(dep).second) {
           edge_deps.push_back(dep);
@@ -991,36 +995,62 @@ void engine::run_depot_step() {
   tree_remove_best_effort(depot_tmp);
 }
 
-void engine::mark_closure(pkg *p, pkg_closure kind) {
-  walk_closure(p, kind, [this, kind](pkg *member) {
-    // Checked per member here as well as at declaration time, because a package can
-    // complete spec_fetch as a root — registering its weak references and passing that
-    // check — before anything pulls it into a closure. Only *unresolved* references
-    // are a violation; one already resolved at an earlier barrier is wired and
-    // ordered.
-    auto const unresolved{ [member] {
+void engine::mark_closure(pkg *p, pkg_closure kind, std::string reason) {
+  // The bit doubles as the visited set. It is set under the member's lock with the reason
+  // and both checks, so a concurrent append or merge sees it or is seen by them.
+  auto const bit{ static_cast<uint8_t>(kind) };
+  std::vector<std::pair<pkg *, std::string>> work;
+  work.emplace_back(p, std::move(reason));
+  while (!work.empty()) {
+    auto [member, why]{ std::move(work.back()) };
+    work.pop_back();
+    {
       std::lock_guard const deps_lock(member->deps_mutex);
-      auto const it{ std::ranges::find_if(member->weak_references,
-                                          [](auto const &wr) { return !wr.resolved; }) };
-      return it == member->weak_references.end() ? std::string{} : it->query;
-    }() };
-    if (!unresolved.empty()) {
-      throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
-                               " must use strong dependencies: '" + member->cfg->identity +
-                               "' holds a weak reference to '" + unresolved +
-                               "' but runs outside the window where weak references "
-                               "resolve");
+      if (member->closures.fetch_or(bit) & bit) { continue; }
+      member->closure_reasons[pkg_closure_index(kind)] = why;
+
+      // Checked per member here as well as at declaration time, because a package can
+      // complete spec_fetch as a root — registering its weak references and passing that
+      // check — before anything pulls it into a closure. Only *unresolved* references
+      // are a violation; one already resolved at an earlier barrier is wired and
+      // ordered.
+      auto const unresolved{ std::ranges::find_if(
+          member->weak_references, [](auto const &wr) { return !wr.resolved; }) };
+      if (unresolved != member->weak_references.end()) {
+        throw std::runtime_error(std::string{ pkg_closure_name(kind) } +
+                                 " must use strong dependencies: '" +
+                                 member->cfg->identity + "' holds a weak reference to '" +
+                                 unresolved->query +
+                                 "' but runs outside the window where weak references "
+                                 "resolve");
+      }
+      if (!member->spec_setup_selections.empty()) {
+        throw std::runtime_error(
+            late_setup_selection_error(*member, kind, member->spec_setup_selections));
+      }
+
+      std::string const via{ "a dependency of '" + member->cfg->identity + "', " +
+                             closure_reason(*member, kind) };
+      for (auto const &[_, dep_info] : member->dependencies) {
+        work.emplace_back(dep_info.p, via);
+      }
     }
 
     // The bit is what releases a member already parked in a bootstrap wait, so
     // every kind wakes them; kAllClosures grows without another special case here.
     core_.notify_global();
-  });
+  }
 }
 
 void engine::propagate_closures(pkg *from, pkg *to) {
   for (auto const kind : kAllClosures) {
-    if (from->in_closure(kind)) { mark_closure(to, kind); }
+    if (!from->in_closure(kind)) { continue; }
+    std::string reason{ [&] {  // copied out: from's lock must not nest with to's
+      std::lock_guard const deps_lock(from->deps_mutex);
+      return "a dependency of '" + from->cfg->identity + "', " +
+             closure_reason(*from, kind);
+    }() };
+    mark_closure(to, kind, std::move(reason));
   }
 }
 
@@ -1130,7 +1160,7 @@ void engine::intern_default_shell_deps() {
   deps.reserve(cfgs.size());
   for (auto const *cfg : cfgs) {
     pkg *dep{ ensure_pkg(cfg) };
-    mark_closure(dep, pkg_closure::default_shell);
+    mark_closure(dep, pkg_closure::default_shell, "a DEFAULT_SHELL dependency");
     deps.push_back(dep);
   }
   default_shell_deps_ = std::move(deps);
@@ -1266,7 +1296,9 @@ void engine::process_fetch_dependencies(pkg *p) {
     // This package runs its whole ladder during graph resolution, so nothing in its
     // closure may hold a weak reference. Mark before starting its worker, so its own
     // wire_dependency_graph sees the flag.
-    mark_closure(fetch_dep, pkg_closure::fetch);
+    mark_closure(fetch_dep,
+                 pkg_closure::fetch,
+                 "a source.dependencies prerequisite of '" + p->cfg->identity + "'");
 
     // The edge query will block spec_fetch on it.
     wire_dependency(p, fetch_dep, pkg_phase::spec_fetch, "Fetch dependency");
