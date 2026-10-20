@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
 namespace fs = std::filesystem;
 
 // Long enough that waiting on it is unmistakable, short enough to not litter for long.
@@ -268,6 +270,18 @@ TEST_CASE("shell_run delivers all pre-exit output despite lingering descendant")
   CHECK(lines[0].size() == 100);
   CHECK(lines[499].size() == 100);
   CHECK(lines[500] == "tail-no-newline");
+}
+
+TEST_CASE("shell_run child inherits no descriptor beyond stdio") {
+  int sibling[2];  // stands in for another worker's pipe or cache lock
+  REQUIRE(::pipe(sibling) == 0);
+  auto const lines{ run_collect("for fd in " + std::to_string(sibling[0]) + " " +
+                                std::to_string(sibling[1]) +
+                                "; do if (: >&\"$fd\") 2>/dev/null; then "
+                                "echo \"leaked $fd\"; fi; done") };
+  ::close(sibling[0]);
+  ::close(sibling[1]);
+  CHECK(lines.empty());
 }
 
 TEST_CASE("shell_run bash fails on exit 1 mid-script") {
