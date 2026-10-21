@@ -150,13 +150,14 @@ fetch_all_progress_tracker::fetch_all_progress_tracker(
       label_{ "[" + pkg_identity + "]" },
       group_text_{ std::move(group_text) },
       start_time_{ std::chrono::steady_clock::now() },
+      labels_{ labels },
       mutex_{},
       children_{},
       git_states_(labels.size()),
       slot_totals_(labels.size()),
       grouped_{ labels.size() > 1 } {
   children_.reserve(labels.size());
-  for (auto const &label : labels) {
+  for (auto const &label : labels_) {
     children_.push_back(tui::section_frame{
         .label = label,
         .content = tui::spinner_data{ .text = label, .start_time = start_time_ } });
@@ -179,9 +180,9 @@ fetch_progress_cb_t fetch_all_progress_tracker::make_callback(std::size_t slot) 
 
 void fetch_all_progress_tracker::update_transfer(std::size_t slot,
                                                  fetch_transfer_progress const &prog) {
-  if (slot >= children_.size() || slot >= slot_totals_.size()) { return; }
+  if (slot >= labels_.size()) { return; }
 
-  std::string const &item_label = children_[slot].label;
+  std::string const &item_label{ labels_[slot] };
 
   // curl advertises no length until the headers land, and none again as the handle winds
   // down. A total, once seen, sticks — else the bar snaps to 0% just as it completes.
@@ -229,9 +230,9 @@ void fetch_all_progress_tracker::update_transfer(std::size_t slot,
 // a row frozen at its last byte count is indistinguishable from a stalled transfer.
 void fetch_all_progress_tracker::update_retry(std::size_t slot,
                                               fetch_retry_progress const &prog) {
-  if (slot >= children_.size()) { return; }
+  if (slot >= labels_.size()) { return; }
 
-  std::string const &item_label = children_[slot].label;
+  std::string const &item_label{ labels_[slot] };
 
   // Rounded up, so the countdown reaches "1s" rather than "0s" before the next attempt.
   auto const seconds{ std::chrono::duration_cast<std::chrono::seconds>(
@@ -251,7 +252,7 @@ void fetch_all_progress_tracker::update_retry(std::size_t slot,
 
 void fetch_all_progress_tracker::update_git(std::size_t slot,
                                             fetch_git_progress const &prog) {
-  if (slot >= children_.size() || slot >= git_states_.size()) { return; }
+  if (slot >= labels_.size()) { return; }
 
   std::uint32_t snapshot_total{ 0 };
   std::uint32_t snapshot_received{ 0 };
@@ -260,7 +261,7 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
   std::uint64_t snapshot_bytes{ 0 };
   double receive_percent{ 0.0 };
   double delta_percent{ 0.0 };
-  std::string child_label;
+  std::string const &child_label{ labels_[slot] };
 
   {
     std::lock_guard const lock{ mutex_ };
@@ -294,7 +295,6 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
     snapshot_bytes = state.last_bytes;
     receive_percent = state.last_receive_percent;
     delta_percent = state.last_delta_percent;
-    child_label = children_[slot].label;
   }
 
   if (snapshot_total == 0) {
@@ -365,7 +365,7 @@ void fetch_all_progress_tracker::publish_unlocked(bool terminal) {
 tui::section_frame fetch_all_progress_tracker::final_frame_unlocked(
     std::size_t slot) const {
   auto const &total{ slot_totals_[slot] };
-  std::string const &item_label{ children_[slot].label };
+  std::string const &item_label{ labels_[slot] };
 
   std::string status{ [&] {
     if (total.is_git) {  // a clone counts objects, and by now it has them all
@@ -527,11 +527,10 @@ void report_outcome(tui::section_handle section,
                     bool keep_row,
                     std::string const &display) {
   if (keep_row) {
-    tui::section_set_content(
+    tui::section_set_outcome(
         section,
         tui::section_frame{ .label = "[" + identity + "]",
                             .content = tui::static_text_data{ .text = text } });
-    tui::section_set_complete(section);
   } else {
     tui::section_delete(section);
   }

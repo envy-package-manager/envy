@@ -39,21 +39,21 @@ task_engine::task *task_engine::find(std::string const &key) const {
 
 void task_engine::ratchet_target(task &t, int target, bool notify_observer) {
   target = std::min(target, t.cfg.step_count);  // beyond-done is unsatisfiable
-  int current{ t.target.load() };
-  while (current < target) {
-    if (t.target.compare_exchange_weak(current, target)) {
-      {
-        std::lock_guard const lock(t.mutex);
-        t.cv.notify_one();
-      }
-      ++progress_;  // an extension can unpark a worker
-      // Outside the task mutex: observers may reenter the engine, and
-      // fail_all takes engine mutex -> task mutex (lock-order inversion).
-      if (notify_observer && observer_.target_extended) {
-        observer_.target_extended(t.cfg.key, current, target);
-      }
-      return;
-    }
+  if (t.target >= target) { return; }           // the common re-wait: no lock
+
+  std::lock_guard const ratchet_lock(t.ratchet_mutex);  // observers hear stores in order
+  int const current{ t.target };
+  if (current >= target) { return; }
+  t.target = target;
+  {
+    std::lock_guard const lock(t.mutex);
+    t.cv.notify_all();  // the worker, and any start_task loser waiting on the spawn
+  }
+  ++progress_;  // an extension can unpark a worker
+  // Outside the task mutex: observers may reenter the engine, and
+  // fail_all takes engine mutex -> task mutex (lock-order inversion).
+  if (notify_observer && observer_.target_extended) {
+    observer_.target_extended(t.cfg.key, current, target);
   }
 }
 
@@ -64,6 +64,11 @@ bool task_engine::start_task(std::string const &key,
 
   bool expected{ false };
   if (!t->started.compare_exchange_strong(expected, true)) {
+    // Wait out the winner's before_spawn: callers rely on what it publishes.
+    {
+      std::unique_lock lock(t->mutex);
+      t->cv.wait(lock, [t] { return t->spawn_settled; });
+    }
     ratchet_target(*t, target);  // already running: extend
     return false;
   }
@@ -81,6 +86,7 @@ bool task_engine::start_task(std::string const &key,
 #endif
     t->worker = std::thread([this, t] { run_worker(t); });
     t->spawn_settled = true;
+    t->cv.notify_all();  // release start_task losers
   } catch (...) {
     // `started` is latched and no worker will ever exist: settle the spawn so
     // join_all stops rescanning for it, fail the task so waiters see an error
@@ -90,7 +96,7 @@ bool task_engine::start_task(std::string const &key,
       std::lock_guard const task_lock(t->mutex);
       t->spawn_settled = true;
     }
-    fail_task(t, current_exception_message());
+    fail_task(t, current_exception_message());  // notifies start_task losers too
     throw;
   }
 

@@ -8,7 +8,9 @@
 #include "tree_hash.h"
 #include "tui.h"
 
+#include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <filesystem>
 #include <map>
@@ -47,6 +49,10 @@ enum class pkg_closure : uint8_t {
 inline constexpr pkg_closure kAllClosures[]{ pkg_closure::depot_bootstrap,
                                              pkg_closure::fetch,
                                              pkg_closure::default_shell };
+
+constexpr std::size_t pkg_closure_index(pkg_closure kind) {  // slot in per-closure arrays
+  return static_cast<std::size_t>(std::countr_zero(static_cast<unsigned>(kind)));
+}
 
 constexpr std::string_view pkg_closure_name(pkg_closure kind) {
   switch (kind) {
@@ -168,6 +174,10 @@ struct pkg {
   // a merge that adds names afterward is a hard error (selection arrived too late).
   std::unordered_set<std::string> setup_selected;
   bool setup_selection_consumed{ false };
+
+  // Pairs above a spec's DEPENDENCIES chose (pair -> spec); a closure member holds none.
+  std::map<std::string, std::string> spec_setup_selections;
+  std::array<std::string, std::size(kAllClosures)> closure_reasons;  // by closure index
 };
 
 inline bool pkg::in_closure(pkg_closure kind) const {

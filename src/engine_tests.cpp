@@ -9,7 +9,9 @@
 #include "shell.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -834,6 +836,126 @@ TEST_CASE("mark_closure: a bit already set does not stop the other propagating")
 
   CHECK(leaf->in_closure(pkg_closure::fetch));
   CHECK(leaf->in_closure(pkg_closure::depot_bootstrap));
+}
+
+// -- SETUP selection on closure members ------------------------------
+// A spec's selection races a closure member's setup; both orders get the same refusal.
+
+namespace {
+
+constexpr char kFetchReason[]{ "a source.dependencies prerequisite of 'local.a@v1'" };
+
+// A DEPENDENCIES entry for local.f@v1 inside `selector`'s spec (null: a manifest entry).
+pkg_cfg *selecting_entry(pkg_cfg const *selector, std::vector<std::string> pairs) {
+  pkg_cfg *cfg{ make_local_cfg("local.f@v1", "f.lua") };
+  cfg->parent = selector;
+  cfg->setup = std::move(pairs);
+  return cfg;
+}
+
+std::string error_of(std::function<void()> const &fn) {
+  try {
+    fn();
+  } catch (std::exception const &e) { return e.what(); }
+  return {};
+}
+
+}  // namespace
+
+TEST_CASE("setup selection: a spec's pair on a closure member fails the same either way") {
+  pkg_cfg const *b{ make_local_cfg("local.b@v1", "b.lua") };
+
+  std::string const merged_first{ [&] {
+    mark_closure_fixture fx;
+    pkg *f{ fx.eng.ensure_pkg(selecting_entry(b, { "x" })) };
+    return error_of([&] { fx.eng.mark_closure(f, pkg_closure::fetch, kFetchReason); });
+  }() };
+
+  std::string const marked_first{ [&] {
+    mark_closure_fixture fx;
+    pkg *f{ fx.eng.ensure_pkg(make_local_cfg("local.f@v1", "f.lua")) };
+    fx.eng.mark_closure(f, pkg_closure::fetch, kFetchReason);
+    return error_of([&] { fx.eng.ensure_pkg(selecting_entry(b, { "x" })); });
+  }() };
+
+  CHECK(merged_first ==
+        "'local.f@v1' cannot take a SETUP selection from spec 'local.b@v1' (pair 'x'): "
+        "it is a source.dependencies prerequisite of 'local.a@v1', so its setup phase "
+        "can run before every spec's DEPENDENCIES have been read. Select the pair in a "
+        "manifest PACKAGES entry for 'local.f@v1' instead");
+  CHECK(marked_first == merged_first);
+}
+
+TEST_CASE("setup selection: the refusal names the chain into the closure") {
+  mark_closure_fixture fx;
+  auto r{ make_bare_pkg("local.r@v1") };
+  auto mid{ make_bare_pkg("local.mid@v1") };
+  auto leaf{ make_bare_pkg("local.leaf@v1") };
+  r->dependencies["local.mid@v1"] = { mid.get(), pkg_phase::pkg_build };
+  mid->dependencies["local.leaf@v1"] = { leaf.get(), pkg_phase::pkg_build };
+  leaf->spec_setup_selections = { { "y", "local.c@v1" }, { "z", "local.c@v1" } };
+
+  auto const mark{ [&] {
+    fx.eng.mark_closure(r.get(), pkg_closure::fetch, kFetchReason);
+  } };
+  CHECK(error_of(mark) ==
+        "'local.leaf@v1' cannot take a SETUP selection from spec 'local.c@v1' (pairs 'y', "
+        "'z'): it is a dependency of 'local.mid@v1', a dependency of 'local.r@v1', a "
+        "source.dependencies prerequisite of 'local.a@v1', so its setup phase can run "
+        "before every spec's DEPENDENCIES have been read. Select the pairs in a manifest "
+        "PACKAGES entry for 'local.leaf@v1' instead");
+}
+
+TEST_CASE("setup selection: a dependency wired into a closure inherits the chain") {
+  mark_closure_fixture fx;
+  auto parent{ make_bare_pkg("local.parent@v1") };
+  auto dep{ make_bare_pkg("local.dep@v1") };
+  dep->spec_setup_selections = { { "p", "local.b@v1" } };
+  fx.eng.mark_closure(parent.get(), pkg_closure::fetch, kFetchReason);
+
+  CHECK_THROWS_WITH(fx.eng.wire_dependency(parent.get(), dep.get(), pkg_phase::pkg_build),
+                    doctest::Contains("it is a dependency of 'local.parent@v1', a "
+                                      "source.dependencies prerequisite of 'local.a@v1'"));
+}
+
+TEST_CASE("setup selection: every selecting spec is named") {
+  mark_closure_fixture fx;
+  pkg_cfg const *c{ make_local_cfg("local.c@v1", "c.lua") };
+  pkg *f{ fx.eng.ensure_pkg(selecting_entry(c, { "y" })) };
+  fx.eng.ensure_pkg(selecting_entry(make_local_cfg("local.b@v1", "b.lua"), { "x" }));
+
+  CHECK_THROWS_WITH(fx.eng.mark_closure(f, pkg_closure::depot_bootstrap),
+                    doctest::Contains("from spec 'local.b@v1' (pair 'x') or spec "
+                                      "'local.c@v1' (pair 'y'): it is in the "
+                                      "package-depot dependency closure"));
+}
+
+TEST_CASE("setup selection: the manifest may select a closure member's pairs") {
+  mark_closure_fixture fx;
+  pkg *f{ fx.eng.ensure_pkg(selecting_entry(nullptr, { "x" })) };
+  CHECK_NOTHROW(fx.eng.mark_closure(f, pkg_closure::fetch, kFetchReason));
+  CHECK_NOTHROW(fx.eng.ensure_pkg(selecting_entry(nullptr, { "y" })));
+}
+
+TEST_CASE("setup selection: a manifest entry merged after a spec takes over its pairs") {
+  mark_closure_fixture fx;
+  pkg_cfg const *b{ make_local_cfg("local.b@v1", "b.lua") };
+  pkg *f{ fx.eng.ensure_pkg(selecting_entry(b, { "x", "y" })) };
+  fx.eng.ensure_pkg(selecting_entry(nullptr, { "x" }));
+
+  CHECK_THROWS_WITH(fx.eng.mark_closure(f, pkg_closure::depot_bootstrap),
+                    doctest::Contains("from spec 'local.b@v1' (pair 'y'):"));
+}
+
+TEST_CASE("setup selection: a spec repeating a manifest selection has nothing to refuse") {
+  mark_closure_fixture fx;
+  pkg_cfg const *b{ make_local_cfg("local.b@v1", "b.lua") };
+  pkg *f{ fx.eng.ensure_pkg(selecting_entry(nullptr, { "x" })) };
+  fx.eng.mark_closure(f, pkg_closure::fetch, kFetchReason);
+
+  CHECK_NOTHROW(fx.eng.ensure_pkg(selecting_entry(b, { "x" })));
+  CHECK_THROWS_WITH(fx.eng.ensure_pkg(selecting_entry(b, { "x", "y" })),
+                    doctest::Contains("from spec 'local.b@v1' (pair 'y'):"));
 }
 
 // -- ensure_pkg / failure aggregation ---------------------------------

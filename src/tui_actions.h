@@ -120,6 +120,7 @@ class fetch_all_progress_tracker {
   std::string label_;
   std::string group_text_;
   std::chrono::steady_clock::time_point start_time_;
+  std::vector<std::string> const labels_;  // read unlocked: S3 reports from many threads
   std::mutex mutex_;
   std::vector<tui::section_frame> children_;
   std::vector<git_state> git_states_;

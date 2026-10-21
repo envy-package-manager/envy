@@ -144,12 +144,12 @@ class engine : unmovable {
   // depot dependency failed. Mirrors default_shell()'s handshake exactly.
   package_depot_index const *depot_index_for(pkg *p);
 
-  // Flag `p` and its dependency closure as a member of `kind`. Idempotent. Throws
-  // if any member already holds an unresolved weak reference: no closure overlaps
-  // the resolution barrier, so such a reference could only resolve after the phase
-  // that needed it. Every newly flagged member wakes the global condition: the bit
-  // is what releases a package already parked in a depot or default-shell wait.
-  void mark_closure(pkg *p, pkg_closure kind);
+  // Flag `p` and its dependency closure as a member of `kind`. Idempotent. Throws if any
+  // member holds an unresolved weak reference or a spec's SETUP selection: no closure
+  // overlaps the resolution barrier, so either would land after the phase that needed it.
+  // Every newly flagged member wakes the global condition: the bit is what releases a
+  // package already parked in a depot or default-shell wait.
+  void mark_closure(pkg *p, pkg_closure kind, std::string reason = {});  // why p is in it
 
   // Carry every closure membership from a package to a dependency just wired to it.
   // Every wiring site calls this, so a new closure kind is one edit in kAllClosures.

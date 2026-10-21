@@ -508,6 +508,87 @@ TEST_CASE("task_engine: race - concurrent start_task creates exactly one worker"
   }
 }
 
+TEST_CASE("task_engine: race - losing start_task returns only after the spawn settles") {
+  // The engine raises its pending spec-fetch count in before_spawn; a loser returning
+  // early can see the task started with the count still low.
+  task_engine te;
+  task_engine::task_config cfg;
+  cfg.key = "t";
+  cfg.step_count = 1;
+  cfg.step = [](int) { return false; };
+  REQUIRE(te.ensure_task(std::move(cfg)));
+
+  std::atomic_bool in_before_spawn{ false };
+  std::atomic_bool release{ false };
+  std::atomic_bool published{ false };
+  std::thread winner{ [&] {
+    te.start_task("t", 1, [&] {
+      in_before_spawn = true;
+      while (!release) { std::this_thread::yield(); }
+      published = true;
+    });
+  } };
+  REQUIRE(spin_until([&] { return in_before_spawn.load(); }));
+
+  std::atomic_bool loser_returned{ false };
+  std::atomic_bool loser_saw_published{ false };
+  std::thread loser{ [&] {
+    te.start_task("t", 1);
+    loser_saw_published = published.load();
+    loser_returned = true;
+  } };
+  bool const returned_early{ spin_until([&] { return loser_returned.load(); },
+                                        std::chrono::milliseconds{ 200 }) };
+  release = true;
+  winner.join();
+  loser.join();
+  te.join_all();
+
+  CHECK_FALSE(returned_early);
+  CHECK(loser_saw_published);
+}
+
+TEST_CASE("task_engine: race - target_extended reports extensions in landing order") {
+  // Each event's old target must be the previous event's new one, or a trace shows the
+  // target moving backwards.
+  constexpr int kIterations{ 200 };
+  constexpr int kThreads{ 4 };
+  constexpr int kSteps{ 64 };
+
+  bool ordered{ true };
+  for (int iter{ 0 }; iter < kIterations && ordered; ++iter) {
+    std::mutex events_mutex;
+    std::vector<std::pair<int, int>> events;
+    task_engine::observer obs;
+    obs.target_extended = [&](std::string const &, int old_target, int new_target) {
+      std::lock_guard const lock(events_mutex);
+      events.emplace_back(old_target, new_target);
+    };
+    task_engine te{ std::move(obs) };
+
+    task_engine::task_config cfg;
+    cfg.key = "t";
+    cfg.step_count = kSteps;
+    REQUIRE(te.ensure_task(std::move(cfg)));  // never started: ratchets alone
+
+    std::atomic_int gate{ 0 };
+    std::vector<std::thread> threads;
+    for (int i{ 0 }; i < kThreads; ++i) {
+      threads.emplace_back([&, i] {
+        ++gate;
+        while (gate < kThreads) { std::this_thread::yield(); }
+        for (int w{ 1 + i }; w <= kSteps; w += kThreads) { te.extend_target("t", w); }
+      });
+    }
+    for (auto &t : threads) { t.join(); }
+
+    for (size_t k{ 1 }; k < events.size(); ++k) {
+      ordered = ordered && events[k].first == events[k - 1].second;
+    }
+  }
+  CHECK(ordered);
+}
+
 TEST_CASE("task_engine: race - concurrent ensure_task interns exactly once") {
   constexpr int kIterations{ 50 };
   constexpr int kThreads{ 8 };

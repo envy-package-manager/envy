@@ -122,7 +122,9 @@ section_handle section_create();
 
 void section_set_display(section_handle h, std::string text);
 void section_set_content(section_handle h, section_frame const &frame);
-void section_set_complete(section_handle h);
+// The row's last frame, which its caller prints itself off a TTY; renderer and commit
+// stay silent there.
+void section_set_outcome(section_handle h, section_frame const &frame);
 void section_delete(section_handle h);
 
 // Land this row's current frame in the scrollback, in order with the log and stdout

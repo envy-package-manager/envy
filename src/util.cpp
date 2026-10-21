@@ -6,6 +6,8 @@
 #include "zlib_compat.h"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -166,8 +168,12 @@ std::vector<unsigned char> util_load_file(std::filesystem::path const &path) {
 
 void util_write_file(std::filesystem::path const &path, std::string_view content) {
   namespace fs = std::filesystem;
+  // One temp file per writer: a shared one interleaves two envys' bytes.
+  static std::atomic<std::uint64_t> s_seq{ 0 };
   fs::path const temp_path{ path.parent_path() /
-                            (".envy-tmp-" + path.filename().string()) };
+                            (".envy-tmp-" + path.filename().string() + "." +
+                             std::to_string(platform::get_process_id()) + "." +
+                             std::to_string(s_seq++)) };
 
   {
     std::ofstream out{ temp_path, std::ios::binary };

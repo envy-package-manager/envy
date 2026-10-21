@@ -7,13 +7,14 @@
 #include "tui.h"
 #include "util.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <csignal>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -29,6 +30,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <libproc.h>
+#include <sys/proc_info.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
+#endif
 
 extern char **environ;
 
@@ -296,59 +304,76 @@ void stream_pipes(std::array<pipe_state, 2> &pipes,
   }
 }
 
-[[noreturn]] void exec_child_process(fd_cleanup &stdout_read,
-                                     fd_cleanup &stdout_write,
-                                     fd_cleanup &stderr_read,
-                                     fd_cleanup &stderr_write,
-                                     std::optional<std::filesystem::path> const &cwd,
-                                     std::vector<std::string> const &argv_strings,
-                                     std::vector<char *> const &envp) {
-  stdout_read.release();
-  stderr_read.release();
-
-  int const null_fd{ ::open("/dev/null", O_RDONLY) };
-  std::array<std::pair<int, int>, 3> const fd_mappings{
-    std::pair{ null_fd, STDIN_FILENO },
-    std::pair{ stdout_write.get(), STDOUT_FILENO },
-    std::pair{ stderr_write.get(), STDERR_FILENO },
-  };
-
-  if (null_fd == -1) {
-    std::perror("open /dev/null");
-    _exit(kChildErrorExit);
+// Runs in the forked child of a multithreaded parent: async-signal-safe calls only, so
+// write(2) rather than perror, whose stdio lock may have died with another thread.
+[[noreturn]] void child_fail(char const *what) {
+  char const *const why{ std::strerror(errno) };
+  for (char const *part : { what, ": ", why, "\n" }) {
+    [[maybe_unused]] auto const n{ ::write(STDERR_FILENO, part, std::strlen(part)) };
   }
-
-  for (auto const &[src, dst] : fd_mappings) {
-    if (::dup2(src, dst) == -1) {
-      std::perror("dup2");
-      _exit(kChildErrorExit);
-    }
-  }
-
-  if (null_fd != STDIN_FILENO) { ::close(null_fd); }
-  stdout_write.release();
-  stderr_write.release();
-
-  if (cwd) {
-    if (::chdir(cwd->c_str()) == -1) {
-      std::perror("chdir");
-      _exit(kChildErrorExit);
-    }
-  }
-
-  if (argv_strings.empty()) {
-    std::fprintf(stderr, "exec_child_process: argv must be non-empty\n");
-    _exit(kChildErrorExit);
-  }
-
-  std::vector<char *> argv;
-  argv.reserve(argv_strings.size() + 1);
-  for (auto const &arg : argv_strings) { argv.push_back(const_cast<char *>(arg.c_str())); }
-  argv.push_back(nullptr);
-
-  ::execve(argv_strings[0].c_str(), argv.data(), const_cast<char **>(envp.data()));
-  std::perror("execve");
   _exit(kChildErrorExit);
+}
+
+// Closes, in the child, every descriptor past stdio: other workers' pipes, cache locks,
+// downloads in flight. The parent allocates the fd list, since the child may not.
+class inherited_fds {
+ public:
+  inherited_fds() {
+#if defined(__APPLE__)
+    int const bytes{ ::proc_pidinfo(::getpid(), PROC_PIDLISTFDS, 0, nullptr, 0) };
+    list_.resize(static_cast<size_t>(std::max(bytes, 0)) / sizeof(proc_fdinfo) + kSlack);
+#endif
+  }
+
+  void close_all() {  // in the child
+#if defined(__APPLE__)
+    // O(open fds): with a raised ulimit the blind loop below costs milliseconds.
+    int const capacity{ static_cast<int>(list_.size() * sizeof(proc_fdinfo)) };
+    int const bytes{
+      ::proc_pidinfo(::getpid(), PROC_PIDLISTFDS, 0, list_.data(), capacity)
+    };
+    if (bytes > 0 && bytes < capacity) {  // a full buffer may have dropped some
+      for (int i{ 0 }; i < bytes / static_cast<int>(sizeof(proc_fdinfo)); ++i) {
+        if (list_[i].proc_fd > STDERR_FILENO) { ::close(list_[i].proc_fd); }
+      }
+      return;
+    }
+#elif defined(__linux__) && defined(SYS_close_range)
+    if (::syscall(SYS_close_range, STDERR_FILENO + 1, ~0U, 0) == 0) { return; }
+#endif
+    for (int fd{ STDERR_FILENO + 1 }, n{ ::getdtablesize() }; fd < n; ++fd) {
+      ::close(fd);
+    }
+  }
+
+ private:
+#if defined(__APPLE__)
+  static constexpr size_t kSlack{ 64 };  // descriptors siblings open before the fork
+  std::vector<proc_fdinfo> list_;
+#endif
+};
+
+[[noreturn]] void exec_child_process(int stdout_fd,
+                                     int stderr_fd,
+                                     inherited_fds &inherited,
+                                     std::optional<std::filesystem::path> const &cwd,
+                                     std::vector<char *> const &argv,
+                                     std::vector<char *> const &envp) {
+  int const null_fd{ ::open("/dev/null", O_RDONLY) };
+  if (null_fd == -1) { child_fail("open /dev/null"); }
+
+  for (auto const &[src, dst] : { std::pair{ null_fd, STDIN_FILENO },
+                                  std::pair{ stdout_fd, STDOUT_FILENO },
+                                  std::pair{ stderr_fd, STDERR_FILENO } }) {
+    if (::dup2(src, dst) == -1) { child_fail("dup2"); }
+  }
+
+  inherited.close_all();  // the three originals just duplicated go with the rest
+
+  if (cwd && ::chdir(cwd->c_str()) == -1) { child_fail("chdir"); }
+
+  ::execve(argv[0], argv.data(), envp.data());
+  child_fail("execve");
 }
 
 }  // namespace
@@ -436,18 +461,24 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   fd_cleanup stderr_read_end{ stderr_pipefd[0] };
   fd_cleanup stderr_write_end{ stderr_pipefd[1] };
 
+  // Built before the fork: the child may not allocate.
+  std::vector<char *> argv;
+  argv.reserve(argv_strings.size() + 1);
+  for (auto &arg : argv_strings) { argv.push_back(arg.data()); }
+  argv.push_back(nullptr);
+  inherited_fds inherited;
+
   pid_t const child{ ::fork() };
   if (child == -1) {
     throw std::system_error(errno, std::generic_category(), "fork failed");
   }
 
   if (child == 0) {  // child process exits in exec_child_process
-    exec_child_process(stdout_read_end,
-                       stdout_write_end,
-                       stderr_read_end,
-                       stderr_write_end,
+    exec_child_process(stdout_write_end.get(),
+                       stderr_write_end.get(),
+                       inherited,
                        cfg.cwd,
-                       argv_strings,
+                       argv,
                        envp);
   }
 
