@@ -811,6 +811,47 @@ SETUP = {
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not satisfy range", result.stderr)
 
+    def test_options_table_semver_range_trailing_garbage_fails(self):
+        """OPTIONS table semver range with trailing garbage fails as invalid range."""
+        spec = """IDENTITY = "test.options_range_garbage@v1"
+
+OPTIONS = { version = { type = "semver", range = ">=1.0.0 garbage" } }
+
+USER_MANAGED = true
+SETUP = {
+  main = {
+    CHECK = function(pkg_dir, options) return true end,
+    INSTALL = function(pkg_dir, options) end,
+  },
+}
+
+"""
+        spec_path = self.write_spec("options_range_garbage.lua", spec)
+
+        entry = test_config.spec_entry(
+            "test.options_range_garbage@v1", spec_path, options='{ version = "2.0.0" }'
+        )
+        manifest = test_config.write_spec_manifest(self.specs_dir, [entry])
+
+        result = test_config.run(
+            [
+                str(self.envy),
+                f"--cache-root={self.cache_root}",
+                *self.trace_flag,
+                "install",
+                "--manifest",
+                str(manifest),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "option 'version' has invalid range '>=1.0.0 garbage' for "
+            "test.options_range_garbage@v1",
+            result.stderr,
+        )
+
     def test_options_table_numeric_range_pass(self):
         """OPTIONS table numeric range match succeeds."""
         spec = """IDENTITY = "test.options_numrange_ok@v1"

@@ -250,6 +250,133 @@ TEST_CASE("OPTIONS: semver range with equal mismatch") {
                     doctest::Contains("does not satisfy range"));
 }
 
+TEST_CASE("OPTIONS: semver range trailing garbage rejected") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = ">=1.0.0 garbage";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"2.0.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("has invalid range '>=1.0.0 garbage'"));
+}
+
+TEST_CASE("OPTIONS: semver range trailing whitespace pass") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = ">=1.0.0 ";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"2.0.0\" }") };
+  CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+}
+
+TEST_CASE("OPTIONS: semver range or second set pass") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = ">=1.0.0 <2.0.0 || >=3.0.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"3.0.0\" }") };
+  CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+}
+
+TEST_CASE("OPTIONS: semver range or gap") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = ">=1.0.0 <2.0.0 || >=3.0.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"2.5.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("does not satisfy range"));
+}
+
+TEST_CASE("OPTIONS: semver range prerelease pass") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = ">=1.0.0-alpha <2.0.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.0.0-alpha1\" }") };
+  CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+}
+
+TEST_CASE("OPTIONS: semver range caret pass") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "^1.2.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.9.0\" }") };
+  CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+}
+
+TEST_CASE("OPTIONS: semver range caret next major") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "^1.2.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"2.0.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("does not satisfy range"));
+}
+
+TEST_CASE("OPTIONS: semver range tilde next minor") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "~1.2.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.3.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("does not satisfy range"));
+}
+
+TEST_CASE("OPTIONS: semver range x-range pass") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "1.x";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.9.0\" }") };
+  CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+}
+
+TEST_CASE("OPTIONS: semver range not equal mismatch") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "!=1.5.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.5.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("does not satisfy range"));
+}
+
+TEST_CASE("OPTIONS: semver range hyphen rejected") {
+  lua_fixture f;
+  sol::table constraint{ f.lua.create_table() };
+  constraint["type"] = "semver";
+  constraint["range"] = "1.0.0 - 2.0.0";
+  f.schema["version"] = constraint;
+
+  sol::object opts{ f.make_opts("{ version = \"1.5.0\" }") };
+  CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                    doctest::Contains("invalid range"));
+}
+
 // -- Table form: numeric range --
 
 TEST_CASE("OPTIONS: numeric range integer pass") {

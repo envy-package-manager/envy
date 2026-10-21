@@ -90,8 +90,7 @@ bool is_envy_semver_path(std::string_view s) {
   }
   if (ver_str.empty()) { return false; }
 
-  semver::version<> v;
-  return semver::parse(ver_str, v);
+  return semver::try_parse(ver_str).has_value();
 }
 
 }  // namespace
