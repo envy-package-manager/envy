@@ -239,6 +239,8 @@ void merge_setup_selection(pkg *dep,
       }
     }
     dep->spec_setup_selections.insert(late.begin(), late.end());
+  } else {
+    for (auto const &name : names) { dep->spec_setup_selections.erase(name); }  // ours now
   }
 
   size_t const before{ dep->setup_selected.size() };

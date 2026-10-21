@@ -937,6 +937,16 @@ TEST_CASE("setup selection: the manifest may select a closure member's pairs") {
   CHECK_NOTHROW(fx.eng.ensure_pkg(selecting_entry(nullptr, { "y" })));
 }
 
+TEST_CASE("setup selection: a manifest entry merged after a spec takes over its pairs") {
+  mark_closure_fixture fx;
+  pkg_cfg const *b{ make_local_cfg("local.b@v1", "b.lua") };
+  pkg *f{ fx.eng.ensure_pkg(selecting_entry(b, { "x", "y" })) };
+  fx.eng.ensure_pkg(selecting_entry(nullptr, { "x" }));
+
+  CHECK_THROWS_WITH(fx.eng.mark_closure(f, pkg_closure::depot_bootstrap),
+                    doctest::Contains("from spec 'local.b@v1' (pair 'y'):"));
+}
+
 TEST_CASE("setup selection: a spec repeating a manifest selection has nothing to refuse") {
   mark_closure_fixture fx;
   pkg_cfg const *b{ make_local_cfg("local.b@v1", "b.lua") };

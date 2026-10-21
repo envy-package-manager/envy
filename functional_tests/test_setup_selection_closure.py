@@ -133,3 +133,28 @@ PACKAGES = {{
             + TAIL.format("local.f@v1"),
         )
 
+    # -- merge order ----------------------------------------------------------
+
+    def test_manifest_selection_merged_after_the_spec_still_counts(self):
+        """`install app` merges tool's manifest entry only when the depot spawns it, after
+        app's spec selected the same pair."""
+        archive = self.write_spec("payload.txt", "x")
+        self.user_managed("tool")
+        self.write_spec(
+            "app.lua",
+            'IDENTITY = "local.app@v1"\n'
+            f"DEPENDENCIES = {{ {self.entry('tool', ', setup = { \"p\" }')} }}\n"
+            f'FETCH = {{ source = "{self.lua_path(archive)}" }}\n',
+        )
+        manifest = self.write_manifest(
+            "PACKAGES = {\n"
+            f"  {self.entry('tool', ', setup = { \"p\" }')},\n"
+            f"  {self.entry('app')},\n"
+            "}\n"
+            'PACKAGE_DEPOTS = { { DEPENDS = { "local.tool@v1" }, '
+            'FETCH = function() return "" end } }\n'
+        )
+        run = self.run_envy("install", "local.app@v1", "--manifest", manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue((self.work / "tool.ran").exists())
+
