@@ -47,7 +47,7 @@ cli_cmd &cmd_version::register_cli(cli_cmd &app, cfg &c) {
 namespace {
 
 void print_licenses() {
-  std::string const text{ util_inflate_resource(embedded::kLicenses) };
+  std::string const text{ util_unpack_resource(embedded::kLicenses) };
   if (std::fwrite(text.data(), 1, text.size(), stdout) != text.size()) {
     tui::error("Failed to write licenses to stdout");
   }

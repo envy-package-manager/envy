@@ -4,6 +4,7 @@
 #include "manifest.h"
 #include "reexec.h"
 #include "self_deploy.h"
+#include "util.h"
 
 #include <stdexcept>
 #include <string>
@@ -35,9 +36,7 @@ cmd_startup cmd_startup_load(std::string_view cmd_name,
   auto c{ self_deploy::ensure(resolved.root, resolved.mode) };
 
   auto m{ manifest::load(found.content, found.path, c.get()) };
-  if (!m) {
-    throw std::runtime_error(std::string{ cmd_name } + ": could not load manifest");
-  }
+  if (!m) { throw_runtime_error({ cmd_name, ": could not load manifest" }); }
   return { std::move(m), std::move(c) };
 }
 

@@ -9,7 +9,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -35,12 +38,12 @@ TEST_CASE("match with std::variant of int and string") {
   var_t v1{ 42 };
   var_t v2{ std::string("hello") };
 
-  auto result1{ std::visit(
+  auto result1{ envy::visit(
       envy::match{ [](int x) { return x * 2; },
                    [](std::string const &s) { return static_cast<int>(s.size()); } },
       v1) };
 
-  auto result2{ std::visit(
+  auto result2{ envy::visit(
       envy::match{ [](int x) { return x * 2; },
                    [](std::string const &s) { return static_cast<int>(s.size()); } },
       v2) };
@@ -55,13 +58,13 @@ TEST_CASE("match with different return types") {
   var_t v1{ 42 };
   var_t v2{ 3.14 };
 
-  auto result1{ std::visit(envy::match{ [](int x) { return std::to_string(x); },
-                                        [](double d) { return std::to_string(d); } },
-                           v1) };
+  auto result1{ envy::visit(envy::match{ [](int x) { return std::to_string(x); },
+                                         [](double d) { return std::to_string(d); } },
+                            v1) };
 
-  auto result2{ std::visit(envy::match{ [](int x) { return std::to_string(x); },
-                                        [](double d) { return std::to_string(d); } },
-                           v2) };
+  auto result2{ envy::visit(envy::match{ [](int x) { return std::to_string(x); },
+                                         [](double d) { return std::to_string(d); } },
+                            v2) };
 
   CHECK(result1 == "42");
   CHECK(result2 == "3.140000");
@@ -78,9 +81,9 @@ TEST_CASE("match with three alternatives") {
                              [](double) { return 2; },
                              [](std::string const &) { return 3; } } };
 
-  CHECK(std::visit(visitor, v1) == 1);
-  CHECK(std::visit(visitor, v2) == 2);
-  CHECK(std::visit(visitor, v3) == 3);
+  CHECK(envy::visit(visitor, v1) == 1);
+  CHECK(envy::visit(visitor, v2) == 2);
+  CHECK(envy::visit(visitor, v3) == 3);
 }
 
 TEST_CASE("match with capturing lambdas") {
@@ -95,8 +98,8 @@ TEST_CASE("match with capturing lambdas") {
   auto visitor{ envy::match{ [&](int x) { return x * multiplier; },
                              [&](double d) { return static_cast<int>(d / divisor); } } };
 
-  CHECK(std::visit(visitor, v1) == 50);
-  CHECK(std::visit(visitor, v2) == 5);
+  CHECK(envy::visit(visitor, v1) == 50);
+  CHECK(envy::visit(visitor, v2) == 5);
 }
 
 TEST_CASE("match with void return") {
@@ -111,9 +114,9 @@ TEST_CASE("match with void return") {
   auto counter{ envy::match{ [&](int) { ++int_count; },
                              [&](std::string const &) { ++string_count; } } };
 
-  std::visit(counter, v1);
-  std::visit(counter, v2);
-  std::visit(counter, v1);
+  envy::visit(counter, v1);
+  envy::visit(counter, v2);
+  envy::visit(counter, v1);
 
   CHECK(int_count == 2);
   CHECK(string_count == 1);
@@ -247,6 +250,128 @@ TEST_CASE("util_hex_to_bytes and util_bytes_to_hex round-trip") {
   std::string recovered_hex = envy::util_bytes_to_hex(bytes.data(), bytes.size());
   // Result should be lowercase
   CHECK(recovered_hex == "0123456789abcdefabcdef");
+}
+
+TEST_CASE("envy::visit dispatches on the held alternative") {
+  std::variant<int, std::string, double> v{ std::string{ "abc" } };
+  auto const describe{ envy::match{ [](int) { return 'i'; },
+                                    [](std::string const &) { return 's'; },
+                                    [](double) { return 'd'; } } };
+  CHECK(envy::visit(describe, v) == 's');
+  v = 2.5;
+  CHECK(envy::visit(describe, v) == 'd');
+  v = 7;
+  CHECK(envy::visit(describe, v) == 'i');
+}
+
+TEST_CASE("envy::visit returns references and moves from rvalue variants") {
+  std::variant<int, std::string> v{ std::string{ "keep" } };
+  std::string &ref{ envy::visit(
+      envy::match{ [](int &) -> std::string & { throw std::logic_error("int"); },
+                   [](std::string &s) -> std::string & { return s; } },
+      v) };
+  ref += "!";
+  CHECK(std::get<std::string>(v) == "keep!");
+
+  std::string const taken{ envy::visit(
+      envy::match{ [](int &&) { return std::string{}; },
+                   [](std::string &&s) { return std::move(s); } },
+      std::move(v)) };
+  CHECK(taken == "keep!");
+}
+
+TEST_CASE("envy::visit throws bad_variant_access on a valueless variant") {
+  struct boom {
+    boom() = default;
+    boom(boom const &) { throw std::runtime_error("copy"); }
+  };
+  std::variant<int, boom> v{ 1 };
+  boom const b;
+  CHECK_THROWS(v.emplace<boom>(b));
+  REQUIRE(v.valueless_by_exception());
+  CHECK_THROWS_AS(envy::visit([](auto const &) {}, v), std::bad_variant_access);
+}
+
+TEST_CASE("util_sort orders by operator< by default") {
+  std::vector<std::string> v{ "pear", "apple", "fig", "banana" };
+  envy::util_sort(v);
+  CHECK(v == std::vector<std::string>{ "apple", "banana", "fig", "pear" });
+}
+
+TEST_CASE("util_sort keeps equal keys in their original order") {
+  std::vector<std::pair<int, char>> v{ { 2, 'a' }, { 1, 'b' }, { 2, 'c' },
+                                       { 1, 'd' }, { 0, 'e' }, { 2, 'f' } };
+  envy::util_sort(v, [](auto const &a, auto const &b) { return a.first < b.first; });
+  std::string order;
+  for (auto const &[k, c] : v) { order += c; }
+  CHECK(order == "ebdacf");
+}
+
+TEST_CASE("util_sort handles empty, single, and reverse-sorted input") {
+  std::vector<int> empty;
+  envy::util_sort(empty);
+  CHECK(empty.empty());
+  std::vector<int> one{ 7 };
+  envy::util_sort(one);
+  CHECK(one == std::vector<int>{ 7 });
+  std::vector<int> rev{ 5, 4, 3, 2, 1, 0 };
+  envy::util_sort(rev);
+  CHECK(rev == std::vector<int>{ 0, 1, 2, 3, 4, 5 });
+  envy::util_sort(rev, [](int a, int b) { return a > b; });
+  CHECK(rev == std::vector<int>{ 5, 4, 3, 2, 1, 0 });
+}
+
+TEST_CASE("function_ref calls the referenced callable with its captures") {
+  int total{ 0 };
+  auto add{ [&total](int n) { total += n; } };
+  envy::function_ref<void(int)> const ref{ add };
+  REQUIRE(ref);
+  ref(3);
+  ref(4);
+  CHECK(total == 7);
+}
+
+TEST_CASE("function_ref is empty by default and when bound to an empty std::function") {
+  CHECK_FALSE(envy::function_ref<void()>{});
+  std::function<void()> const none;
+  CHECK_FALSE(envy::function_ref<void()>{ none });
+  std::function<int()> const some{ [] { return 42; } };
+  envy::function_ref<int()> const ref{ some };
+  REQUIRE(ref);
+  CHECK(ref() == 42);
+}
+
+// xz (no check, LZMA2) of "helloworld", as embed_resource.py --compress emits.
+constexpr unsigned char kHelloWorldXz[]{
+  0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x00, 0xff, 0x12, 0xd9, 0x41, 0x02, 0x00, 0x21,
+  0x01, 0x00, 0x00, 0x00, 0x00, 0x37, 0x27, 0x97, 0xd6, 0x01, 0x00, 0x09, 0x68, 0x65, 0x6c,
+  0x6c, 0x6f, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x00, 0x00, 0x00, 0x00, 0x01, 0x1a, 0x0a, 0xee,
+  0xa6, 0x7e, 0x70, 0x06, 0x72, 0x9e, 0x7a, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x5a
+};
+
+TEST_CASE("util_unpack_resource returns each slice of the pack") {
+  CHECK(envy::util_unpack_resource({ kHelloWorldXz, sizeof(kHelloWorldXz), 0, 5 }) ==
+        "hello");
+  CHECK(envy::util_unpack_resource({ kHelloWorldXz, sizeof(kHelloWorldXz), 5, 5 }) ==
+        "world");
+  CHECK(
+      envy::util_unpack_resource({ kHelloWorldXz, sizeof(kHelloWorldXz), 3, 0 }).empty());
+}
+
+TEST_CASE("util_unpack_resource rejects a slice past the stream's end") {
+  CHECK_THROWS_AS(
+      envy::util_unpack_resource({ kHelloWorldXz, sizeof(kHelloWorldXz), 5, 6 }),
+      std::runtime_error);
+}
+
+TEST_CASE("util_unpack_resource rejects a truncated or corrupt pack") {
+  CHECK_THROWS_AS(envy::util_unpack_resource({ kHelloWorldXz, 30, 0, 10 }),
+                  std::runtime_error);
+  unsigned char const garbage[]{
+    0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0xde, 0xad, 0xbe, 0xef
+  };
+  CHECK_THROWS_AS(envy::util_unpack_resource({ garbage, sizeof(garbage), 0, 1 }),
+                  std::runtime_error);
 }
 
 TEST_CASE("util_format_bytes uses integer for bytes") {

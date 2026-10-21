@@ -30,8 +30,7 @@ bool directory_has_entries(std::filesystem::path const &dir) {
 
   std::filesystem::directory_iterator it{ dir, ec };
   if (ec) {
-    throw std::runtime_error("Failed to enumerate directory " + dir.string() + ": " +
-                             ec.message());
+    throw_runtime_error({ "Failed to enumerate directory ", dir, ": ", ec.message() });
   }
 
   std::filesystem::directory_iterator end_iter;
@@ -93,9 +92,10 @@ bool run_programmatic_install(sol::protected_function install_func,
   sol::type const result_type{ result_obj.get_type() };
   if (result_type != sol::type::none && result_type != sol::type::lua_nil) {
     if (!result_obj.is<std::string>()) {
-      throw std::runtime_error("install function for " + identity +
-                               " must return nil or string, got " +
-                               sol::type_name(lua.lua_state(), result_type));
+      throw_runtime_error({ "install function for ",
+                            identity,
+                            " must return nil or string, got ",
+                            sol::type_name(lua.lua_state(), result_type) });
     }
 
     // Returned string: spawn fresh shell with manifest defaults
@@ -185,8 +185,8 @@ void run_install_phase(pkg *p, engine &eng) {
                                                eng,
                                                p);
   } else {
-    throw std::runtime_error("INSTALL field must be nil, string, or function for " +
-                             p->cfg->identity);
+    throw_runtime_error(
+        { "INSTALL field must be nil, string, or function for ", p->cfg->identity });
   }
 
   if (marked_complete && lock) {

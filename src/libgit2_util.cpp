@@ -41,7 +41,7 @@ std::unique_ptr<scoped_path_cleanup> write_cert_bundle(
 
   int const fd{ ::mkstemp(path.data()) };
   if (fd == -1) {
-    throw std::runtime_error("Failed to create temp file for CA certificates");
+    throw_runtime_error({ "Failed to create temp file for CA certificates" });
   }
 
   // Immediately register cleanup so file is deleted even if fdopen/fwrite fails
@@ -50,12 +50,12 @@ std::unique_ptr<scoped_path_cleanup> write_cert_bundle(
   FILE *raw_file = ::fdopen(fd, "wb");
   if (!raw_file) {
     ::close(fd);
-    throw std::runtime_error("Failed to open temp file for CA certificates");
+    throw_runtime_error({ "Failed to open temp file for CA certificates" });
   }
   file_ptr_t file{ raw_file };
 
   if (std::fwrite(cert_data.data(), 1, cert_data.size(), file.get()) != cert_data.size()) {
-    throw std::runtime_error("Failed to write CA certificates to temp file");
+    throw_runtime_error({ "Failed to write CA certificates to temp file" });
   }
 
   return cleanup;
@@ -67,7 +67,7 @@ void configure_ssl_certs_macos() {
   auto const &cert_path = cleanup->path();
 
   if (git_libgit2_opts(GIT_OPT_SET_SSL_CERT_LOCATIONS, cert_path.c_str(), nullptr) < 0) {
-    throw std::runtime_error("Failed to configure libgit2 SSL certificate location");
+    throw_runtime_error({ "Failed to configure libgit2 SSL certificate location" });
   }
 
   // Transfer ownership to global only after success
@@ -110,7 +110,7 @@ void ensure_ssl_certs_configured() {
 #endif
 
 libgit2_scope::libgit2_scope() {
-  if (git_libgit2_init() < 0) { throw std::runtime_error("Failed to initialize libgit2"); }
+  if (git_libgit2_init() < 0) { throw_runtime_error({ "Failed to initialize libgit2" }); }
 }
 
 libgit2_scope::~libgit2_scope() { git_libgit2_shutdown(); }
@@ -119,8 +119,8 @@ void libgit2_require_ssl_certs() {
 #ifndef _WIN32
   ensure_ssl_certs_configured();
   if (!g_ssl_certs_configured) {
-    throw std::runtime_error(
-        "No CA certificate bundle found. Install ca-certificates package.");
+    throw_runtime_error(
+        { "No CA certificate bundle found. Install ca-certificates package." });
   }
 #endif
 }

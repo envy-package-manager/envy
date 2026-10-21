@@ -5,6 +5,7 @@
 #include "sol_util.h"
 #include "tui.h"
 #include "tui_actions.h"
+#include "util.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -34,12 +35,12 @@ extract_options parse_optional_opts(sol::optional<sol::table> const &opts_table,
 extract_options lua_envy_extract_parse_opts(sol::table const &opts,
                                             std::string const &context) {
   int const strip{ sol_util_get_optional<int>(opts, "strip", context).value_or(0) };
-  if (strip < 0) { throw std::runtime_error(context + ": strip must be non-negative"); }
+  if (strip < 0) { throw_runtime_error({ context, ": strip must be non-negative" }); }
 
   auto const list{ [&](char const *key) {  // an empty list is a mistake, not "everything"
     auto entries{ sol_util_get_string_list(opts, key, context) };
     if (entries.empty() && opts[key].valid()) {
-      throw std::runtime_error(context + ": '" + key + "' must list at least one entry");
+      throw_runtime_error({ context, ": '", key, "' must list at least one entry" });
     }
     return entries;
   } };
@@ -61,7 +62,7 @@ void lua_envy_extract_install(sol::table &envy_table) {
     std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };
 
     if (!std::filesystem::exists(archive_path)) {
-      throw std::runtime_error("envy.extract: file not found: " + archive_path.string());
+      throw_runtime_error({ "envy.extract: file not found: ", archive_path });
     }
 
     // Set up progress tracking if in phase context
@@ -90,8 +91,7 @@ void lua_envy_extract_install(sol::table &envy_table) {
     std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };
 
     if (!std::filesystem::exists(src_dir)) {
-      throw std::runtime_error("envy.extract_all: source directory not found: " +
-                               src_dir.string());
+      throw_runtime_error({ "envy.extract_all: source directory not found: ", src_dir });
     }
 
     // Get identity and section from phase context if available

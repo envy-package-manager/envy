@@ -106,7 +106,7 @@ void write_all(int fd, char const *data, size_t size) {
     ssize_t const written{ ::write(fd, data, remaining) };
     if (written == -1) {
       if (errno == EINTR) { continue; }
-      throw std::system_error(errno, std::generic_category(), "write failed");
+      throw_system_error(errno, std::generic_category(), { "write failed" });
     }
     remaining -= written;
     data += written;
@@ -122,7 +122,7 @@ std::string create_temp_script(std::string_view script) {
 
   int const fd{ ::mkstemp(path_buffer.data()) };
   if (fd == -1) {
-    throw std::system_error(errno, std::generic_category(), "mkstemp failed");
+    throw_system_error(errno, std::generic_category(), { "mkstemp failed" });
   }
   fd_cleanup fd_guard{ fd };
 
@@ -132,11 +132,11 @@ std::string create_temp_script(std::string_view script) {
   write_all(fd_guard.get(), content.data(), content.size());
 
   if (::fchmod(fd_guard.get(), S_IRUSR | S_IWUSR | S_IXUSR) == -1) {
-    throw std::system_error(errno, std::generic_category(), "fchmod failed");
+    throw_system_error(errno, std::generic_category(), { "fchmod failed" });
   }
 
   if (::fsync(fd_guard.get()) == -1) {
-    throw std::system_error(errno, std::generic_category(), "fsync failed");
+    throw_system_error(errno, std::generic_category(), { "fsync failed" });
   }
 
   return std::string{ path_buffer.data() };
@@ -184,7 +184,7 @@ read_status read_pipe(pipe_state &pipe, shell_run_cfg const &cfg, std::string &c
   if (read_bytes == -1) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) { return read_status::would_block; }
     if (errno == EINTR) { return read_status::progress; }
-    throw std::system_error(errno, std::generic_category(), "read failed");
+    throw_system_error(errno, std::generic_category(), { "read failed" });
   }
   pipe.pending.append(chunk.data(), static_cast<size_t>(read_bytes));
   emit_complete_lines(pipe, cfg);
@@ -207,7 +207,7 @@ class child_process {
 
   shell_result wait() {
     if (pid_ != -1 && !reap(true)) {
-      throw std::system_error(errno, std::generic_category(), "waitpid failed");
+      throw_system_error(errno, std::generic_category(), { "waitpid failed" });
     }
     return result_;
   }
@@ -246,7 +246,7 @@ void drain_after_exit(std::array<pipe_state, 2> &pipes, shell_run_cfg const &cfg
 
     int const flags{ ::fcntl(pipe.read_fd.get(), F_GETFL, 0) };
     if (flags == -1 || ::fcntl(pipe.read_fd.get(), F_SETFL, flags | O_NONBLOCK) == -1) {
-      throw std::system_error(errno, std::generic_category(), "fcntl failed");
+      throw_system_error(errno, std::generic_category(), { "fcntl failed" });
     }
 
     read_status status{ read_status::progress };
@@ -278,14 +278,14 @@ void stream_pipes(std::array<pipe_state, 2> &pipes,
   while (closed_count < pipes.size()) {
     if (::poll(poll_fds.data(), poll_fds.size(), kPollIntervalMs) == -1) {
       if (errno == EINTR) { continue; }
-      throw std::system_error(errno, std::generic_category(), "poll failed");
+      throw_system_error(errno, std::generic_category(), { "poll failed" });
     }
 
     for (size_t i{ 0 }; i < pipes.size(); ++i) {
       short const revents{ poll_fds[i].revents };
       if (pipes[i].closed || revents == 0) { continue; }
       if (revents & (POLLERR | POLLNVAL)) {
-        throw std::runtime_error("poll failed on child pipe");
+        throw_runtime_error({ "poll failed on child pipe" });
       }
       if (read_pipe(pipes[i], cfg, chunk) != read_status::eof) { continue; }
 
@@ -411,7 +411,7 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   }
 
   // Build argv based on shell type
-  std::vector<std::string> argv_strings{ std::visit(
+  std::vector<std::string> argv_strings{ envy::visit(
       match{
           [&script_path](shell_choice const &shell_cfg) -> std::vector<std::string> {
             if (shell_cfg != shell_choice::bash && shell_cfg != shell_choice::sh) {
@@ -448,12 +448,12 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
 
   int stdout_pipefd[2];
   if (::pipe(stdout_pipefd) == -1) {
-    throw std::system_error(errno, std::generic_category(), "pipe failed");
+    throw_system_error(errno, std::generic_category(), { "pipe failed" });
   }
 
   int stderr_pipefd[2];
   if (::pipe(stderr_pipefd) == -1) {
-    throw std::system_error(errno, std::generic_category(), "pipe failed");
+    throw_system_error(errno, std::generic_category(), { "pipe failed" });
   }
 
   fd_cleanup stdout_read_end{ stdout_pipefd[0] };
@@ -470,7 +470,7 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
 
   pid_t const child{ ::fork() };
   if (child == -1) {
-    throw std::system_error(errno, std::generic_category(), "fork failed");
+    throw_system_error(errno, std::generic_category(), { "fork failed" });
   }
 
   if (child == 0) {  // child process exits in exec_child_process

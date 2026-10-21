@@ -2,6 +2,7 @@
 
 #include "libgit2_util.h"
 #include "trace.h"
+#include "util.h"
 
 #include <git2.h>
 
@@ -46,7 +47,7 @@ bool git_ref_is_full_sha(std::string_view s) {
 }
 
 std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_view ref) {
-  if (ref.empty()) { throw std::runtime_error("git-resolve: ref must be non-empty"); }
+  if (ref.empty()) { throw_runtime_error({ "git-resolve: ref must be non-empty" }); }
 
   // Collapse the advertisement into one oid per base name. Plain entries carry
   // the ref's own oid; peeled ("<name>^{}") entries carry the underlying commit
@@ -59,14 +60,15 @@ std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_
       std::string base{ e.name.substr(0, e.name.size() - kPeelSuffix.size()) };
       auto const [it, inserted]{ peeled.try_emplace(std::move(base), e.oid) };
       if (!inserted && it->second != e.oid) {
-        throw std::runtime_error("git-resolve: ref '" + it->first +
-                                 "' advertised with conflicting peeled oids");
+        throw_runtime_error({ "git-resolve: ref '",
+                              it->first,
+                              "' advertised with conflicting peeled oids" });
       }
     } else {
       auto const [it, inserted]{ plain.try_emplace(e.name, e.oid) };
       if (!inserted && it->second != e.oid) {
-        throw std::runtime_error("git-resolve: ref '" + e.name +
-                                 "' advertised with conflicting oids");
+        throw_runtime_error(
+            { "git-resolve: ref '", e.name, "' advertised with conflicting oids" });
       }
     }
   }
@@ -90,9 +92,7 @@ std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_
     if (ends_with(name, needle)) { matches.emplace_back(name, oid); }
   }
 
-  if (matches.empty()) {
-    throw std::runtime_error("git-resolve: ref not found: " + std::string{ ref });
-  }
+  if (matches.empty()) { throw_runtime_error({ "git-resolve: ref not found: ", ref }); }
 
   bool const all_same{ std::all_of(matches.begin(), matches.end(), [&](auto const &m) {
     return m.second == matches.front().second;
@@ -101,15 +101,15 @@ std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_
     std::ostringstream msg;
     msg << "git-resolve: ref '" << ref << "' is ambiguous; matches:";
     for (auto const &[name, oid] : matches) { msg << "\n  " << name << " -> " << oid; }
-    throw std::runtime_error(msg.str());
+    throw_runtime_error({ msg.str() });
   }
 
   return matches.front().second;
 }
 
 std::string git_resolve_remote(std::string const &repo, std::string const &ref) {
-  if (repo.empty()) { throw std::runtime_error("git-resolve: repo must be non-empty"); }
-  if (ref.empty()) { throw std::runtime_error("git-resolve: ref must be non-empty"); }
+  if (repo.empty()) { throw_runtime_error({ "git-resolve: repo must be non-empty" }); }
+  if (ref.empty()) { throw_runtime_error({ "git-resolve: ref must be non-empty" }); }
 
   // A full object id needs no lookup -- return it (no network). Normalize to
   // lowercase so it matches the lowercase oids the ref-advertisement path emits.

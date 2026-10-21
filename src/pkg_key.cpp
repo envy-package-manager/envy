@@ -1,5 +1,6 @@
 #include "pkg_key.h"
 #include "pkg_cfg.h"
+#include "util.h"
 
 #include <stdexcept>
 #include <utility>
@@ -45,16 +46,14 @@ void pkg_key::parse_components() {
 
   size_t const dot{ identity_.find('.') };  // namespace: everything before first '.'
   if (dot == std::string_view::npos) {
-    throw std::runtime_error("Invalid identity (missing namespace): " +
-                             std::string(identity_));
+    throw_runtime_error({ "Invalid identity (missing namespace): ", identity_ });
   }
 
   // Parse name and revision: "name@revision"
   std::string_view const name_and_revision{ identity_.substr(dot + 1) };
   size_t at{ name_and_revision.find('@') };
   if (at == std::string_view::npos) {
-    throw std::runtime_error("Invalid identity (missing revision): " +
-                             std::string(identity_));
+    throw_runtime_error({ "Invalid identity (missing revision): ", identity_ });
   }
 
   ns_ = identity_.substr(0, dot);

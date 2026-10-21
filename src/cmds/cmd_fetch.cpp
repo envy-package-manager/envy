@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "tui_actions.h"
 #include "uri.h"
+#include "util.h"
 
 #include "cli_parse.h"
 
@@ -31,15 +32,15 @@ cmd_fetch::cmd_fetch(cmd_fetch::cfg cfg,
     : cfg_{ std::move(cfg) } {}
 
 void cmd_fetch::execute() {
-  if (cfg_.source.empty()) { throw std::runtime_error("fetch: source URI is empty"); }
+  if (cfg_.source.empty()) { throw_runtime_error({ "fetch: source URI is empty" }); }
   if (cfg_.destination.empty()) {
-    throw std::runtime_error("fetch: destination path is empty");
+    throw_runtime_error({ "fetch: destination path is empty" });
   }
 
   auto const scheme{ uri_classify(cfg_.source).scheme };
   if ((scheme == uri_scheme::GIT || scheme == uri_scheme::GIT_HTTPS) &&
       (!cfg_.ref.has_value() || cfg_.ref->empty())) {
-    throw std::runtime_error("fetch: git sources require --ref <branch|tag|sha>");
+    throw_runtime_error({ "fetch: git sources require --ref <branch|tag|sha>" });
   }
 
   auto req{ url_to_fetch_request(cfg_.source,
@@ -53,10 +54,10 @@ void cmd_fetch::execute() {
   auto const results{
     tui_actions::fetch_tracked({ std::move(req) }, "fetch", { cfg_.source })
   };
-  if (results.empty()) { throw std::runtime_error("fetch: no result returned"); }
+  if (results.empty()) { throw_runtime_error({ "fetch: no result returned" }); }
 
   if (std::holds_alternative<std::string>(results[0])) {
-    throw std::runtime_error("fetch: " + std::get<std::string>(results[0]));
+    throw_runtime_error({ "fetch: ", std::get<std::string>(results[0]) });
   }
 
   auto const &result{ std::get<fetch_result>(results[0]) };

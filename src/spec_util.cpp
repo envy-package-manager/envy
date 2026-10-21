@@ -2,6 +2,7 @@
 
 #include "lua_envy.h"
 #include "sol_util.h"
+#include "util.h"
 
 #include <stdexcept>
 
@@ -10,7 +11,7 @@ namespace envy {
 std::string extract_spec_identity(std::filesystem::path const &spec_path,
                                   std::filesystem::path const &package_path_root) {
   if (!std::filesystem::exists(spec_path)) {
-    throw std::runtime_error("spec file not found: " + spec_path.string());
+    throw_runtime_error({ "spec file not found: ", spec_path });
   }
 
   auto lua{ sol_util_make_lua_state() };
@@ -31,28 +32,24 @@ std::string extract_spec_identity(std::filesystem::path const &spec_path,
 
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error("failed to execute spec '" + spec_path.string() +
-                             "': " + err.what());
+    throw_runtime_error({ "failed to execute spec '", spec_path, "': ", err.what() });
   }
 
   // Extract IDENTITY
   sol::object id_obj{ (*lua)["IDENTITY"] };
 
   if (!id_obj.valid() || id_obj.get_type() == sol::type::lua_nil) {
-    throw std::runtime_error("spec '" + spec_path.string() +
-                             "' is missing required IDENTITY field");
+    throw_runtime_error({ "spec '", spec_path, "' is missing required IDENTITY field" });
   }
 
   if (!id_obj.is<std::string>()) {
-    throw std::runtime_error("spec '" + spec_path.string() +
-                             "': IDENTITY must be a string");
+    throw_runtime_error({ "spec '", spec_path, "': IDENTITY must be a string" });
   }
 
   std::string identity{ id_obj.as<std::string>() };
 
   if (identity.empty()) {
-    throw std::runtime_error("spec '" + spec_path.string() +
-                             "': IDENTITY cannot be empty");
+    throw_runtime_error({ "spec '", spec_path, "': IDENTITY cannot be empty" });
   }
 
   return identity;

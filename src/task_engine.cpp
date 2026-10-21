@@ -1,5 +1,7 @@
 #include "task_engine.h"
 
+#include "util.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
@@ -33,7 +35,7 @@ bool task_engine::contains(std::string const &key) const {
 task_engine::task *task_engine::find(std::string const &key) const {
   std::lock_guard const lock(mutex_);
   auto const it{ tasks_.find(key) };
-  if (it == tasks_.end()) { throw std::runtime_error("Unknown task: " + key); }
+  if (it == tasks_.end()) { throw_runtime_error({ "Unknown task: ", key }); }
   return it->second.get();
 }
 
@@ -59,7 +61,7 @@ void task_engine::ratchet_target(task &t, int target, bool notify_observer) {
 
 bool task_engine::start_task(std::string const &key,
                              int target,
-                             std::function<void()> const &before_spawn) {
+                             function_ref<void()> before_spawn) {
   task *t{ find(key) };
 
   bool expected{ false };
@@ -147,11 +149,12 @@ void task_engine::wait_on(task *t,
   if (t->completed >= watermark) { return; }
   lock.unlock();
   std::lock_guard const task_lock(t->mutex);
-  throw std::runtime_error(t->error.empty() ? "Task failed: " + key : t->error);
+  if (t->error.empty()) { throw_runtime_error({ "Task failed: ", key }); }
+  throw_runtime_error({ t->error });
 }
 
 void task_engine::wait_locked(std::unique_lock<std::mutex> &lock,
-                              std::function<bool()> const &pred,
+                              function_ref<bool()> const &pred,
                               wait_record &rec) {
   if (pred()) { return; }  // satisfied: no wait, and nothing for the watchdog to see
 
@@ -194,7 +197,7 @@ void task_engine::wait_locked(std::unique_lock<std::mutex> &lock,
     if (running_ == 0 && progress_ == mark && !any_wait_ready_locked()) {
       std::string const msg{ deadlock_report_locked() };
       fail_all_locked(msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
     mark = progress_;
     deadline = std::chrono::steady_clock::now() + interval;
@@ -217,7 +220,7 @@ std::string task_engine::deadlock_report_locked() const {
                    : " waits for a global condition";
     lines.push_back(std::move(line));
   }
-  std::ranges::sort(lines);  // wake order must not change the message
+  util_sort(lines);  // wake order must not change the message
 
   std::string msg{ "Deadlock: no task is running while " + std::to_string(lines.size()) +
                    " wait(s) are blocked:" };
@@ -327,7 +330,7 @@ void task_engine::set_watchdog_interval(std::chrono::milliseconds interval) {
 }
 #endif
 
-void task_engine::wait_global(std::function<bool()> const &pred) {
+void task_engine::wait_global(function_ref<bool()> pred) {
   std::unique_lock lock(mutex_);
   wait_record rec{};
   wait_locked(lock, pred, rec);

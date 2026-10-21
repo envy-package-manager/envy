@@ -32,7 +32,7 @@ constexpr char kOnlyUnmatched[]{ ": 'only' entries matched no archive contents:"
 
 struct archive_reader : unmovable {
   explicit archive_reader(bool enable_raw_format = false) : handle(archive_read_new()) {
-    if (!handle) { throw std::runtime_error("archive_read_new failed"); }
+    if (!handle) { throw_runtime_error({ "archive_read_new failed" }); }
     archive_read_support_filter_all(handle);
     archive_read_support_format_all(handle);
     // libarchive matches raw last; opt in only when we expect a bare compressed
@@ -52,7 +52,7 @@ struct archive_reader : unmovable {
 
 struct archive_writer : unmovable {
   archive_writer() : handle(archive_write_disk_new()) {
-    if (!handle) { throw std::runtime_error("archive_write_disk_new failed"); }
+    if (!handle) { throw_runtime_error({ "archive_write_disk_new failed" }); }
     archive_write_disk_set_options(handle,
                                    ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
                                        ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS |
@@ -77,8 +77,7 @@ void ensure_directory(std::filesystem::path const &path) {
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   if (ec) {
-    throw std::runtime_error(std::string("Failed to create directory ") + dir.string() +
-                             ": " + ec.message());
+    throw_runtime_error({ "Failed to create directory ", dir, ": ", ec.message() });
   }
 }
 
@@ -131,9 +130,11 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
   archive_reader reader{ bare_name.has_value() };
   if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
       ARCHIVE_OK) {
-    throw std::runtime_error(std::string(context) + ": failed to open " +
-                             archive_path.string() + ": " +
-                             archive_error_string(reader.handle));
+    throw_runtime_error({ context,
+                          ": failed to open ",
+                          archive_path,
+                          ": ",
+                          archive_error_string(reader.handle) });
   }
 
   archive_entry *entry{ nullptr };
@@ -141,17 +142,18 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
     int const r{ archive_read_next_header(reader.handle, &entry) };
     if (r == ARCHIVE_EOF) { break; }
     if (r != ARCHIVE_OK) {
-      throw std::runtime_error(std::string(context) + ": header error in " +
-                               archive_path.string() + ": " +
-                               archive_error_string(reader.handle));
+      throw_runtime_error({ context,
+                            ": header error in ",
+                            archive_path,
+                            ": ",
+                            archive_error_string(reader.handle) });
     }
     bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
     // Mirror extract()'s validation: if the suffix promised compression but no
     // decompression filter actually matched, this is corrupt or misnamed input.
     if (is_raw_stream && bare_name &&
         archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-      throw std::runtime_error(std::string(context) + ": not a valid compressed stream: " +
-                               archive_path.string());
+      throw_runtime_error({ context, ": not a valid compressed stream: ", archive_path });
     }
 
     if (!selectors.empty()) {
@@ -182,7 +184,7 @@ void throw_on_unmatched(std::vector<std::string> const &unmatched,
                         std::string_view note = {}) {
   if (unmatched.empty()) { return; }
   for (auto const &u : unmatched) { msg += " \"" + u + "\""; }
-  throw std::runtime_error(msg.append(note));
+  throw_runtime_error({ msg.append(note) });
 }
 
 struct extract_item {
@@ -251,8 +253,8 @@ extract_totals compute_items_totals(std::vector<extract_item> const &items,
       std::error_code ec;
       totals.bytes += std::filesystem::file_size(item.path, ec);
       if (ec) {
-        throw std::runtime_error("compute_extract_totals: failed to stat " +
-                                 item.path.string() + ": " + ec.message());
+        throw_runtime_error(
+            { "compute_extract_totals: failed to stat ", item.path, ": ", ec.message() });
       }
       ++totals.files;
       continue;
@@ -412,7 +414,7 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
                                      std::string const &prefix,
                                      extract_progress_cb_t const &progress) {
   archive *a{ archive_write_new() };
-  if (!a) { throw std::runtime_error("archive_write_new failed"); }
+  if (!a) { throw_runtime_error({ "archive_write_new failed" }); }
 
   archive_write_set_format_pax_restricted(a);
   archive_write_add_filter_zstd(a);
@@ -422,7 +424,7 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
   if (archive_write_open_filename(a, output_path.string().c_str()) != ARCHIVE_OK) {
     std::string msg{ std::string("Failed to open output: ") + archive_error_string(a) };
     archive_write_free(a);
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
 
   archive_entry *entry{ archive_entry_new() };
@@ -472,7 +474,7 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
       archive_entry_free(entry);
       archive_write_close(a);
       archive_write_free(a);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     if (is_regular) {
@@ -481,7 +483,7 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
         archive_entry_free(entry);
         archive_write_close(a);
         archive_write_free(a);
-        throw std::runtime_error("Failed to open file: " + dir_entry.path().string());
+        throw_runtime_error({ "Failed to open file: ", dir_entry.path() });
       }
 
       while (in) {
@@ -494,7 +496,7 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
             archive_entry_free(entry);
             archive_write_close(a);
             archive_write_free(a);
-            throw std::runtime_error(msg);
+            throw_runtime_error({ msg });
           }
           bytes_processed += static_cast<std::uint64_t>(bytes_read);
           if (progress) {
@@ -525,10 +527,10 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       destination_in) };
   auto const bare_name{ extract_bare_compressed_output_name(archive_path) };
   if (bare_name && options.strip_components > 0) {
-    throw std::runtime_error(
-        std::string("extract: strip_components is not valid for single-stream "
-                    "compressed file: ") +
-        archive_path.string());
+    throw_runtime_error(
+        { "extract: strip_components is not valid for single-stream "
+          "compressed file: ",
+          archive_path });
   }
 
   auto const selectors{ glob_parse_filter(options.selectors, "extract", kOnlyEntry) };
@@ -538,8 +540,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
 
   if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
       ARCHIVE_OK) {
-    throw std::runtime_error(std::string("Failed to open archive: ") +
-                             archive_error_string(reader.handle));
+    throw_runtime_error(
+        { "Failed to open archive: ", archive_error_string(reader.handle) });
   }
 
   archive_entry *entry{ nullptr };
@@ -552,8 +554,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     if (r == ARCHIVE_EOF) { break; }
 
     if (r != ARCHIVE_OK) {
-      throw std::runtime_error(std::string("Failed to read archive header: ") +
-                               archive_error_string(reader.handle));
+      throw_runtime_error(
+          { "Failed to read archive header: ", archive_error_string(reader.handle) });
     }
 
     bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
@@ -564,8 +566,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       // Suffix promised compression, but no decompression filter matched — the file
       // is corrupt or has the wrong extension. Don't silently emit raw bytes.
       if (archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-        throw std::runtime_error(std::string("extract: not a valid compressed stream: ") +
-                                 archive_path.string());
+        throw_runtime_error({ "extract: not a valid compressed stream: ", archive_path });
       }
       std::string const raw_pathname{ bare_name->string() };
       archive_entry_copy_pathname(entry, raw_pathname.c_str());
@@ -573,7 +574,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     }
 
     char const *entry_path{ archive_entry_pathname(entry) };
-    if (!entry_path) { throw std::runtime_error("Archive entry has null pathname"); }
+    if (!entry_path) { throw_runtime_error({ "Archive entry has null pathname" }); }
 
     bool const is_regular_file{ archive_entry_filetype(entry) == AE_IFREG };
 
@@ -586,8 +587,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
     }
 
     if (!glob_is_safe_relative_path(entry_path)) {
-      throw std::runtime_error(std::string("extract: unsafe archive entry path: ") +
-                               entry_path);
+      throw_runtime_error({ "extract: unsafe archive entry path: ", entry_path });
     }
 
     // Kept past the pathname rewrite below so hardlink diagnostics can name the entry.
@@ -613,8 +613,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         if (stripped) { hardlink_str = *stripped; }
       }
       if (!glob_is_safe_relative_path(hardlink_str.c_str())) {
-        throw std::runtime_error(std::string("extract: unsafe hardlink target: ") +
-                                 hardlink_str);
+        throw_runtime_error({ "extract: unsafe hardlink target: ", hardlink_str });
       }
       std::filesystem::path const hardlink_path{ destination / hardlink_str };
       // A hard link needs its target on disk. Blame the selectors only when they really
@@ -626,14 +625,18 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         // The whole filter, not just the includes: an exclude-only list selects the
         // target, and an exclude that names it means the filter really does reject it.
         if (!selectors.selects(target)) {
-          throw std::runtime_error("extract: \"" + canonical_entry +
-                                   "\" is a hard link to \"" + target +
-                                   "\", which 'only' does not select; name it too");
+          throw_runtime_error({ "extract: \"",
+                                canonical_entry,
+                                "\" is a hard link to \"",
+                                target,
+                                "\", which 'only' does not select; name it too" });
         }
         if (!std::filesystem::exists(hardlink_path)) {
-          throw std::runtime_error("extract: hard link target \"" + target + "\" for \"" +
-                                   canonical_entry +
-                                   "\" is selected but appears later in the archive");
+          throw_runtime_error({ "extract: hard link target \"",
+                                target,
+                                "\" for \"",
+                                canonical_entry,
+                                "\" is selected but appears later in the archive" });
         }
       }
       std::string const hardlink_full{ hardlink_path.string() };
@@ -647,13 +650,13 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
                                             .total_files = std::nullopt,
                                             .current_entry = full_path,
                                             .is_regular_file = is_regular_file })) {
-      throw std::runtime_error("extract: aborted by progress callback");
+      throw_runtime_error({ "extract: aborted by progress callback" });
     }
 
     if (int const write_header_result{ archive_write_header(writer.handle, entry) };
         write_header_result != ARCHIVE_OK && write_header_result != ARCHIVE_WARN) {
-      throw std::runtime_error(std::string("Failed to write entry header: ") +
-                               archive_error_string(writer.handle));
+      throw_runtime_error(
+          { "Failed to write entry header: ", archive_error_string(writer.handle) });
     }
 
     // Raw-format entries report size as -1 (unknown); read regardless.
@@ -668,8 +671,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
                                    buffer.data(),
                                    static_cast<size_t>(bytes_read)) };
             bytes_written < 0) {
-          throw std::runtime_error(std::string("Failed to write entry data: ") +
-                                   archive_error_string(writer.handle));
+          throw_runtime_error(
+              { "Failed to write entry data: ", archive_error_string(writer.handle) });
         }
 
         processed += static_cast<std::uint64_t>(bytes_read);
@@ -681,19 +684,19 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
                                                 .total_files = std::nullopt,
                                                 .current_entry = full_path,
                                                 .is_regular_file = is_regular_file })) {
-          throw std::runtime_error("extract: aborted by progress callback");
+          throw_runtime_error({ "extract: aborted by progress callback" });
         }
       }
 
       if (bytes_read < 0) {
-        throw std::runtime_error(std::string("Failed to read entry data: ") +
-                                 archive_error_string(reader.handle));
+        throw_runtime_error(
+            { "Failed to read entry data: ", archive_error_string(reader.handle) });
       }
     }
 
     if (archive_write_finish_entry(writer.handle) != ARCHIVE_OK) {
-      throw std::runtime_error(std::string("Failed to finish entry: ") +
-                               archive_error_string(writer.handle));
+      throw_runtime_error(
+          { "Failed to finish entry: ", archive_error_string(writer.handle) });
     }
 
     if (is_regular_file) { ++files_extracted; }
@@ -714,7 +717,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
              ". Check if strip value matches archive structure";
     }
     msg += " (archive may be empty, corrupt, or unsupported format)";
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
 
   return files_extracted;
@@ -892,8 +895,8 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
       std::error_code ec;
       processed_bytes += std::filesystem::file_size(path, ec);
       if (ec) {
-        throw std::runtime_error("extract_all_archives: failed to stat " + path.string() +
-                                 ": " + ec.message());
+        throw_runtime_error(
+            { "extract_all_archives: failed to stat ", path, ": ", ec.message() });
       }
 
       ++total_files_copied;

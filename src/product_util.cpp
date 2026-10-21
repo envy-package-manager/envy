@@ -24,9 +24,12 @@ void require_renderable_type(pkg_type type,
                              std::string const &product_name,
                              std::string const &provider) {
   if (type == pkg_type::USER_MANAGED || type == pkg_type::CACHE_MANAGED) { return; }
-  throw std::runtime_error("Product '" + product_name + "' provider '" + provider +
-                           "' has no resolved package type; its spec did not finish "
-                           "loading");
+  throw_runtime_error({ "Product '",
+                        product_name,
+                        "' provider '",
+                        provider,
+                        "' has no resolved package type; its spec did not finish "
+                        "loading" });
 }
 
 }  // namespace
@@ -36,7 +39,7 @@ std::string product_util_predict(product_info const &pi, pkg *provider, cache &c
   if (pi.type == pkg_type::USER_MANAGED) { return pi.value; }
 
   if (!provider) {
-    throw std::runtime_error("Product '" + pi.product_name + "' has no provider");
+    throw_runtime_error({ "Product '", pi.product_name, "' has no provider" });
   }
 
   // Where the payload will land: the same key the cache will hash when it installs it,
@@ -56,27 +59,36 @@ std::string product_util_predict(product_info const &pi, pkg *provider, cache &c
 
 std::string product_util_resolve(pkg *provider, std::string const &product_name) {
   if (!provider) {
-    throw std::runtime_error("Product '" + product_name + "' has no provider");
+    throw_runtime_error({ "Product '", product_name, "' has no provider" });
   }
 
   auto const it{ provider->products.find(product_name) };
   if (it == provider->products.end()) {
-    throw std::runtime_error("Product '" + product_name + "' not found in provider '" +
-                             provider->cfg->identity + "'");
+    throw_runtime_error({ "Product '",
+                          product_name,
+                          "' not found in provider '",
+                          provider->cfg->identity,
+                          "'" });
   }
 
   std::string const &value{ it->second.value };
   if (value.empty()) {
-    throw std::runtime_error("Product '" + product_name + "' is empty in provider '" +
-                             provider->cfg->identity + "'");
+    throw_runtime_error({ "Product '",
+                          product_name,
+                          "' is empty in provider '",
+                          provider->cfg->identity,
+                          "'" });
   }
 
   require_renderable_type(provider->type, product_name, provider->cfg->identity);
   if (provider->type == pkg_type::USER_MANAGED) { return value; }
 
   if (provider->pkg_path.empty()) {
-    throw std::runtime_error("Product '" + product_name + "' provider '" +
-                             provider->cfg->identity + "' missing pkg path");
+    throw_runtime_error({ "Product '",
+                          product_name,
+                          "' provider '",
+                          provider->cfg->identity,
+                          "' missing pkg path" });
   }
 
   return util_normalized_path(provider->pkg_path / value);

@@ -46,8 +46,8 @@ void cmd_deploy::execute() {
                                    subproject_anchor(cfg_.subproject, cfg_.project_dir)) };
 
   if (!m->meta.bin) {
-    throw std::runtime_error(
-        "deploy: manifest missing '@envy bin' directive (required for deploy)");
+    throw_runtime_error(
+        { "deploy: manifest missing '@envy bin' directive (required for deploy)" });
   }
 
   auto const platforms{ util_parse_platform_flag(cfg_.platform_flag) };
@@ -61,8 +61,8 @@ void cmd_deploy::execute() {
     std::error_code ec;
     fs::create_directories(bin_dir, ec);
     if (ec) {
-      throw std::runtime_error("deploy: failed to create bin directory " +
-                               bin_dir.string() + ": " + ec.message());
+      throw_runtime_error(
+          { "deploy: failed to create bin directory ", bin_dir, ": ", ec.message() });
     }
   }
 

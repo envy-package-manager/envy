@@ -20,7 +20,7 @@ void lua_envy_package_install(sol::table &envy_table) {
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *consumer{ ctx ? ctx->p : nullptr };
     if (!consumer) {
-      throw std::runtime_error("envy.package: not in phase context (missing pkg)");
+      throw_runtime_error({ "envy.package: not in phase context (missing pkg)" });
     }
 
     pkg_phase const current_phase{ consumer->current_phase.load() };
@@ -40,7 +40,7 @@ void lua_envy_package_install(sol::table &envy_table) {
       std::string const msg{ "envy.package: pkg '" + consumer->cfg->identity +
                              "' has no strong dependency on '" + identity + "'" };
       emit_access(false, pkg_phase::none, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     if (current_phase < edge->needed_by) {
@@ -49,7 +49,7 @@ void lua_envy_package_install(sol::table &envy_table) {
                              "' but accessed during '" +
                              std::string(pkg_phase_name(current_phase)) + "'" };
       emit_access(false, edge->needed_by, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     pkg const *dep{ edge->p };
@@ -58,14 +58,14 @@ void lua_envy_package_install(sol::table &envy_table) {
       std::string const msg{ "envy.package: dependency '" + identity +
                              "' is user-managed and has no pkg path" };
       emit_access(false, edge->needed_by, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     if (dep->pkg_path.empty()) {
       std::string const msg{ "envy.package: dependency '" + identity +
                              "' has no pkg path (phase ordering issue?)" };
       emit_access(false, edge->needed_by, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     std::string const pkg_path{ util_normalized_path(dep->pkg_path) };

@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "util.h"
 
 #include "tui.h"
 
@@ -54,9 +55,9 @@ char const *get_default_cache_root_env_vars() { return "LOCALAPPDATA or USERPROF
 std::filesystem::path get_exe_path() {
   std::vector<wchar_t> buf(32768);
   if (::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size())) == 0) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "GetModuleFileNameW failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "GetModuleFileNameW failed" });
   }
   return std::filesystem::path{ buf.data() };
 }
@@ -67,14 +68,14 @@ void env_var_set(char const *name, char const *value) {
   }
 
   if (::_putenv_s(name, value) != 0) {
-    throw std::runtime_error(std::string("env_var_set: failed to set ") + name);
+    throw_runtime_error({ "env_var_set: failed to set ", name });
   }
 }
 
 void env_var_unset(char const *name) {
   if (name == nullptr) { throw std::invalid_argument("env_var_unset: null name"); }
   if (::_putenv_s(name, "") != 0) {
-    throw std::runtime_error(std::string("env_var_unset: failed to unset ") + name);
+    throw_runtime_error({ "env_var_unset: failed to unset ", name });
   }
 }
 
@@ -87,9 +88,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
                                 FILE_ATTRIBUTE_NORMAL,
                                 nullptr) };
   if (h == INVALID_HANDLE_VALUE) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to open lock file: " + path.string());
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to open lock file: ", path });
   }
 
   // Probe first: a refusal means someone else holds the entry, so the wait below is
@@ -108,9 +109,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
     if (!::LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ovlp)) {
       DWORD const err{ ::GetLastError() };
       ::CloseHandle(h);
-      throw std::system_error(err,
-                              std::system_category(),
-                              "Failed to acquire file lock: " + path.string());
+      throw_system_error(err,
+                         std::system_category(),
+                         { "Failed to acquire file lock: ", path });
     }
   }
 
@@ -123,9 +124,9 @@ void atomic_rename(std::filesystem::path const &from, std::filesystem::path cons
   if (!::MoveFileExW(from.c_str(),
                      to.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to rename " + from.string() + " to " + to.string());
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to rename ", from, " to ", to });
   }
 }
 
@@ -145,9 +146,9 @@ std::filesystem::path create_unique_temp_file(std::string_view prefix) {
                                 FILE_ATTRIBUTE_NORMAL,
                                 nullptr) };
   if (h == INVALID_HANDLE_VALUE) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to create temp file: " + p.string());
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to create temp file: ", p });
   }
   ::CloseHandle(h);
   return p;
@@ -167,13 +168,13 @@ std::filesystem::path create_unique_temp_dir(std::string_view prefix) {
     auto p{ std::filesystem::temp_directory_path() / name };
     if (::CreateDirectoryW(p.c_str(), nullptr)) { return p; }
     if (::GetLastError() != ERROR_ALREADY_EXISTS) {
-      throw std::system_error(::GetLastError(),
-                              std::system_category(),
-                              "Failed to create temp directory: " + p.string());
+      throw_system_error(::GetLastError(),
+                         std::system_category(),
+                         { "Failed to create temp directory: ", p });
     }
   }
-  throw std::runtime_error("Failed to create a unique temp directory under " +
-                           std::filesystem::temp_directory_path().string());
+  throw_runtime_error({ "Failed to create a unique temp directory under ",
+                        std::filesystem::temp_directory_path() });
 }
 
 void touch_file(std::filesystem::path const &path) {
@@ -186,9 +187,9 @@ void touch_file(std::filesystem::path const &path) {
                                 nullptr) };
 
   if (h == INVALID_HANDLE_VALUE) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to touch file: " + path.string());
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to touch file: ", path });
   }
 
   // Flush file buffers to ensure file metadata is committed to disk
@@ -196,9 +197,9 @@ void touch_file(std::filesystem::path const &path) {
   // cache synchronization on Windows.
   if (!::FlushFileBuffers(h)) {
     ::CloseHandle(h);
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to flush file buffers: " + path.string());
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to flush file buffers: ", path });
   }
 
   ::CloseHandle(h);
@@ -294,7 +295,7 @@ dir_scan_string dir_scan_root(std::filesystem::path const &root) {
   return out;  // relative: leave alone, MAX_PATH applies
 }
 
-void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push const &push) {
+void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push push) {
   WIN32_FIND_DATAW fd;
   HANDLE const h{ find_first(dir_join(dir, L"*"), fd) };
   if (h == INVALID_HANDLE_VALUE) { return; }
@@ -613,8 +614,7 @@ int exec_process(std::filesystem::path const &binary,
                       nullptr,
                       &si,
                       &pi)) {
-    throw std::runtime_error("exec_process: CreateProcess failed: " +
-                             std::to_string(GetLastError()));
+    throw_runtime_error({ "exec_process: CreateProcess failed: ", GetLastError() });
   }
 
   WaitForSingleObject(pi.hProcess, INFINITE);

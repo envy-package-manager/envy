@@ -1,5 +1,7 @@
 #include "ssl_certs_macos.h"
 
+#include "util.h"
+
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
 
@@ -104,7 +106,7 @@ std::vector<unsigned char> extract_system_ca_certs() {
     extract_from_domain(kSecTrustSettingsDomainUser, pem_bundle);
 
     if (pem_bundle.empty()) {
-      throw std::runtime_error("No trusted CA certificates found in system keychain");
+      throw_runtime_error({ "No trusted CA certificates found in system keychain" });
     }
 
     return pem_bundle;

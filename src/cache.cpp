@@ -74,9 +74,11 @@ cache_mode resolve_cache_mode(bool local_marker,
                               std::optional<cache_mode> declared,
                               bool has_cache_local) {
   if (local_marker && shared_marker) {
-    throw std::runtime_error(std::string{ "cache: both '" } + kCacheLocalMarker +
-                             "' and '" + kCacheSharedMarker +
-                             "' exist; envy never writes both. Delete one.");
+    throw_runtime_error({ "cache: both '",
+                          kCacheLocalMarker,
+                          "' and '",
+                          kCacheSharedMarker,
+                          "' exist; envy never writes both. Delete one." });
   }
   if (local_marker) { return cache_mode::LOCAL; }
   if (shared_marker) { return cache_mode::SHARED; }
@@ -92,7 +94,7 @@ std::optional<path> resolve_state_dir(std::optional<std::string> const &state_di
   if (!state_dir) { return normalized(manifest_dir); }
 
   if (auto const bad{ validate_project_relative_path(*state_dir) }) {
-    throw std::runtime_error("'@envy state-dir' " + *bad + ": '" + *state_dir + "'");
+    throw_runtime_error({ "'@envy state-dir' ", *bad, ": '", *state_dir, "'" });
   }
   return normalized(manifest_dir / *state_dir);
 }
@@ -150,8 +152,7 @@ struct project_trees {
 project_trees resolve_project_trees(cache_root_request const &req) {
   if (req.cache_local) {
     if (auto const bad{ validate_project_relative_path(*req.cache_local) }) {
-      throw std::runtime_error("'@envy cache-local' " + *bad + ": '" + *req.cache_local +
-                               "'");
+      throw_runtime_error({ "'@envy cache-local' ", *bad, ": '", *req.cache_local, "'" });
     }
   }
 
@@ -167,11 +168,12 @@ project_trees resolve_project_trees(cache_root_request const &req) {
   // wipe, and a cache root under the state dir makes `state-dir` mean something else.
   if (req.state_dir && state && !local.empty() && *state != local) {
     if (strictly_inside(*state, local) || strictly_inside(local, *state)) {
-      throw std::runtime_error(
-          "'@envy state-dir' and '@envy cache-local' must not nest: '" + state->string() +
-          "' vs '" + local.string() +
-          "'. Point them at the same directory to keep "
-          "the override markers with the cache tree.");
+      throw_runtime_error({ "'@envy state-dir' and '@envy cache-local' must not nest: '",
+                            state->string(),
+                            "' vs '",
+                            local,
+                            "'. Point them at the same directory to keep "
+                            "the override markers with the cache tree." });
     }
   }
 
@@ -181,14 +183,15 @@ project_trees resolve_project_trees(cache_root_request const &req) {
 path root_in_mode(path const &local_tree, cache_mode mode) {
   if (mode == cache_mode::LOCAL) {
     if (local_tree.empty()) {
-      throw std::runtime_error(
-          "cache: local mode needs a manifest directory to anchor to, and none was found");
+      throw_runtime_error(
+          { "cache: local mode needs a manifest directory to anchor to, and none was "
+            "found" });
     }
     return local_tree;
   }
 
   if (auto def{ platform::get_default_cache_root() }) { return normalized(*def); }
-  throw std::runtime_error("cannot determine cache root");
+  throw_runtime_error({ "cannot determine cache root" });
 }
 
 // Absolute only -- the binary used to absolutize against its own cwd while the launchers
@@ -196,8 +199,9 @@ path root_in_mode(path const &local_tree, cache_mode mode) {
 std::optional<cache_root_resolution> override_resolution(cache_root_request const &req) {
   if (!req.cli_override) { return std::nullopt; }
   if (!req.cli_override->is_absolute()) {
-    throw std::runtime_error("cache root override must be an absolute path: '" +
-                             req.cli_override->string() + "'");
+    throw_runtime_error({ "cache root override must be an absolute path: '",
+                          req.cli_override->string(),
+                          "'" });
   }
   return cache_root_resolution{ normalized(*req.cli_override),
                                 cache_mode::SHARED,
@@ -508,7 +512,7 @@ cache::cache(std::optional<path> root) : m{ std::make_unique<impl>() } {
   std::ostringstream oss;
   oss << "Unable to determine default cache root: "
       << platform::get_default_cache_root_env_vars() << " not set";
-  throw std::runtime_error(oss.str());
+  throw_runtime_error({ oss.str() });
 }
 
 cache::~cache() = default;
@@ -544,8 +548,7 @@ cache::ensure_result cache::ensure_pkg(
     std::string_view hash_prefix,
     envy::platform::file_lock::contended_cb_t on_lock_contended) {
   if (!util_is_safe_path_component(identity)) {
-    throw std::runtime_error("cache: invalid package identity: '" +
-                             std::string{ identity } + "'");
+    throw_runtime_error({ "cache: invalid package identity: '", identity, "'" });
   }
   path const pkg_path{ compute_pkg_path(identity, platform, arch, hash_prefix) };
   path const entry_dir{ pkg_path.parent_path() };
@@ -568,8 +571,7 @@ cache::ensure_result cache::ensure_spec(
     std::string_view source_key,
     envy::platform::file_lock::contended_cb_t on_lock_contended) {
   if (!util_is_safe_path_component(identity)) {
-    throw std::runtime_error("cache: invalid spec identity: '" + std::string{ identity } +
-                             "'");
+    throw_runtime_error({ "cache: invalid spec identity: '", identity, "'" });
   }
   auto const digest{ blake3_hash(source_key.data(), source_key.size()) };
   std::string const id{ identity };

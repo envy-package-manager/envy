@@ -6,6 +6,7 @@
 #include "pkg_phase.h"
 #include "product_util.h"
 #include "trace.h"
+#include "util.h"
 
 #include <mutex>
 #include <optional>
@@ -21,10 +22,10 @@ void lua_envy_product_install(sol::table &envy_table) {
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *consumer{ ctx ? ctx->p : nullptr };
     if (!consumer) {
-      throw std::runtime_error("envy.product: not in phase context (missing pkg)");
+      throw_runtime_error({ "envy.product: not in phase context (missing pkg)" });
     }
     if (product_name.empty()) {
-      throw std::runtime_error("envy.product: product name cannot be empty");
+      throw_runtime_error({ "envy.product: product name cannot be empty" });
     }
 
     pkg_phase const current_phase{ consumer->current_phase.load() };

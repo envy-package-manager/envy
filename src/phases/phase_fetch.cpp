@@ -39,7 +39,7 @@ fetch_request url_to_fetch_request(std::string const &url,
   auto const info{ uri_classify(url) };
 
   if (post_data && info.scheme != uri_scheme::HTTP && info.scheme != uri_scheme::HTTPS) {
-    throw std::runtime_error("post_data only valid for HTTP/HTTPS in " + context);
+    throw_runtime_error({ "post_data only valid for HTTP/HTTPS in ", context });
   }
 
   switch (info.scheme) {
@@ -65,7 +65,7 @@ fetch_request url_to_fetch_request(std::string const &url,
     case uri_scheme::GIT:
     case uri_scheme::GIT_HTTPS:
       if (!ref.has_value() || ref->empty()) {
-        throw std::runtime_error("Git URLs require 'ref' field in " + context);
+        throw_runtime_error({ "Git URLs require 'ref' field in ", context });
       }
       return fetch_request_git{ .source = info.canonical,
                                 .destination = dest,
@@ -79,14 +79,14 @@ namespace {
 
 // Helper to extract destination from fetch_request variant
 std::filesystem::path const &get_destination(fetch_request const &req) {
-  return std::visit(
+  return envy::visit(
       [](auto const &r) -> std::filesystem::path const & { return r.destination; },
       req);
 }
 
 // Helper to extract source from fetch_request variant
 std::string const &get_source(fetch_request const &req) {
-  return std::visit([](auto const &r) -> std::string const & { return r.source; }, req);
+  return envy::visit([](auto const &r) -> std::string const & { return r.source; }, req);
 }
 
 struct fetch_spec {
@@ -160,9 +160,11 @@ bool run_programmatic_fetch(sol::protected_function fetch_func,
       }
     }
   } else {
-    throw std::runtime_error("Fetch function for " + identity +
-                             " must return nil, string, or table (got " +
-                             sol::type_name(lua, return_value.get_type()) + ")");
+    throw_runtime_error({ "Fetch function for ",
+                          identity,
+                          " must return nil, string, or table (got ",
+                          sol::type_name(lua, return_value.get_type()),
+                          ")" });
   }
 
   // tmp_dir cleanup handled by lock destructor
@@ -173,16 +175,17 @@ table_entry parse_table_entry(sol::table const &tbl, std::string const &context)
   sol::optional<sol::object> source_obj = tbl["source"];
   if (!source_obj || !source_obj->valid() ||
       source_obj->get_type() == sol::type::lua_nil) {
-    throw std::runtime_error(context + ": FETCH table missing 'source' key; got " +
-                             sol_util_dump_table(tbl));
+    throw_runtime_error(
+        { context, ": FETCH table missing 'source' key; got ", sol_util_dump_table(tbl) });
   }
   if (!source_obj->is<std::string>()) {
-    throw std::runtime_error(context + ": FETCH table 'source' must be a string; got " +
-                             sol::type_name(tbl.lua_state(), source_obj->get_type()));
+    throw_runtime_error({ context,
+                          ": FETCH table 'source' must be a string; got ",
+                          sol::type_name(tbl.lua_state(), source_obj->get_type()) });
   }
   std::string url{ source_obj->as<std::string>() };
   if (url.empty()) {
-    throw std::runtime_error(context + ": FETCH table 'source' cannot be empty");
+    throw_runtime_error({ context, ": FETCH table 'source' cannot be empty" });
   }
 
   table_entry entry;
@@ -219,24 +222,25 @@ fetch_spec create_fetch_spec(std::string url,
   std::string basename;
   if (dest_name) {
     if (dest_name->empty()) {
-      throw std::runtime_error("Empty dest for URL: " + url + " in " + context);
+      throw_runtime_error({ "Empty dest for URL: ", url, " in ", context });
     }
     if (dest_name->find_first_of("/\\") != std::string::npos || *dest_name == ".." ||
         *dest_name == ".") {
-      throw std::runtime_error("dest must be a plain filename (no path separators): " +
-                               *dest_name + " in " + context);
+      throw_runtime_error({ "dest must be a plain filename (no path separators): ",
+                            *dest_name,
+                            " in ",
+                            context });
     }
     basename = std::move(*dest_name);
   } else {
     basename = uri_extract_filename(url);
     if (basename.empty()) {
-      throw std::runtime_error("Cannot extract filename from URL: " + url + " in " +
-                               context);
+      throw_runtime_error({ "Cannot extract filename from URL: ", url, " in ", context });
     }
   }
 
   if (basenames.contains(basename)) {
-    throw std::runtime_error("Fetch filename collision: " + basename + " in " + context);
+    throw_runtime_error({ "Fetch filename collision: ", basename, " in ", context });
   }
   basenames.insert(basename);
 
@@ -263,8 +267,7 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
       std::string const url{ fetch_obj.as<std::string>() };
       std::string basename{ uri_extract_filename(url) };
       if (basename.empty()) {
-        throw std::runtime_error("Cannot extract filename from URL: " + url + " in " +
-                                 key);
+        throw_runtime_error({ "Cannot extract filename from URL: ", url, " in ", key });
       }
       std::filesystem::path dest{ fetch_dir / basename };
 
@@ -302,8 +305,7 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
         for (size_t i = 1; i <= len; ++i) {
           sol::object elem{ tbl[i] };
           if (!elem.is<std::string>()) {
-            throw std::runtime_error("Array element " + std::to_string(i) +
-                                     " must be string in " + key);
+            throw_runtime_error({ "Array element ", i, " must be string in ", key });
           }
           std::string url{ elem.as<std::string>() };
 
@@ -322,16 +324,18 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
         for (size_t i = 1; i <= len; ++i) {
           sol::object elem_obj{ tbl[i] };
           if (!elem_obj.is<sol::table>()) {
-            throw std::runtime_error(
-                "FETCH for " + key + ": array element [" + std::to_string(i) +
-                "] must be a table (got " +
-                std::string(sol::type_name(tbl.lua_state(), elem_obj.get_type())) +
-                "); each element needs a 'source' key");
+            throw_runtime_error({ "FETCH for ",
+                                  key,
+                                  ": array element [",
+                                  i,
+                                  "] must be a table (got ",
+                                  sol::type_name(tbl.lua_state(), elem_obj.get_type()),
+                                  "); each element needs a 'source' key" });
           }
           process_table_entry(elem_obj.as<sol::table>());
         }
       } else {
-        throw std::runtime_error("Invalid fetch array element type in " + key);
+        throw_runtime_error({ "Invalid fetch array element type in ", key });
       }
 
       return specs;
@@ -409,7 +413,7 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
   for (size_t req_slot{ 0 }; req_slot < to_download_indices.size(); ++req_slot) {
     auto idx = to_download_indices[req_slot];
     fetch_request req{ specs[idx].request };
-    std::visit([&](auto &r) { r.progress = tracker.make_callback(req_slot); }, req);
+    envy::visit([&](auto &r) { r.progress = tracker.make_callback(req_slot); }, req);
     requests.push_back(std::move(req));
   }
 
@@ -432,7 +436,7 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
       if (!specs[spec_idx].sha256.empty()) {
         try {
           auto const *result{ std::get_if<fetch_result>(&results[i]) };
-          if (!result) { throw std::runtime_error("Unexpected result type"); }
+          if (!result) { throw_runtime_error({ "Unexpected result type" }); }
           sha256_verify(specs[spec_idx].sha256,
                         tui_actions::sha256_tracked(result->resolved_destination,
                                                     section,
@@ -461,7 +465,7 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
     std::ostringstream oss;
     oss << "Fetch failed for " << key << ":\n";
     for (auto const &err : errors) { oss << "  " << err << "\n"; }
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 }
 
@@ -474,9 +478,7 @@ bool run_declarative_fetch(sol::object const &fetch_obj,
   // Ensure stage_dir exists (needed for git repos that clone directly there)
   std::error_code ec;
   std::filesystem::create_directories(lock->stage_dir(), ec);
-  if (ec) {
-    throw std::runtime_error("Failed to create stage directory: " + ec.message());
-  }
+  if (ec) { throw_runtime_error({ "Failed to create stage directory: ", ec.message() }); }
 
   auto const fetch_specs{
     parse_fetch_field(fetch_obj, lock->fetch_dir(), lock->stage_dir(), identity)
@@ -536,8 +538,8 @@ void run_fetch_phase(pkg *p, engine &eng) {
   } else if (fetch_obj.is<std::string>() || fetch_obj.is<sol::table>()) {
     should_mark_complete = run_declarative_fetch(fetch_obj, lock, identity, p);
   } else {
-    throw std::runtime_error("Fetch field must be nil, string, table, or function in " +
-                             identity);
+    throw_runtime_error(
+        { "Fetch field must be nil, string, table, or function in ", identity });
   }
 
   if (should_mark_complete) { lock->mark_fetch_complete(); }

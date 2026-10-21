@@ -73,12 +73,16 @@ std::string fetch_sums_hex(std::string const &mirror, std::string const &version
     tui_actions::fetch_tracked({ fetch_request_from_url(url, dest) }, "use", labels)
   };
   if (results.empty()) {
-    throw std::runtime_error("use: failed to download " + url + ": unknown error");
+    throw_runtime_error({ "use: failed to download ", url, ": unknown error" });
   }
   if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
-    throw std::runtime_error("use: failed to download " + url + ": " + *err +
-                             "\n       envy " + version +
-                             " may not be published on that mirror.");
+    throw_runtime_error({ "use: failed to download ",
+                          url,
+                          ": ",
+                          *err,
+                          "\n       envy ",
+                          version,
+                          " may not be published on that mirror." });
   }
 
   auto const hash{ sha256(dest) };
@@ -117,8 +121,8 @@ std::string use_rewrite_header(std::string_view content,
                                std::optional<std::string> const &sums_hex) {
   auto const ver{ find_envy_directive(content, "version") };
   if (!ver) {
-    throw std::runtime_error(
-        "manifest header has no '@envy version' directive to retarget");
+    throw_runtime_error(
+        { "manifest header has no '@envy version' directive to retarget" });
   }
 
   auto edits{ [&, sums{ find_envy_directive(content, "sha256sums") }] {
@@ -141,7 +145,7 @@ std::string use_rewrite_header(std::string_view content,
 
   // Highest offset first, so an edit that shifts the bytes after it -- inserting or
   // deleting a whole line -- cannot invalidate an offset still waiting to be spliced.
-  std::ranges::sort(edits, std::ranges::greater{}, &splice::begin);
+  util_sort(edits, [](splice const &a, splice const &b) { return a.begin > b.begin; });
 
   std::string out{ content };
   for (auto const &e : edits) { out.replace(e.begin, e.end - e.begin, e.text); }
@@ -154,7 +158,7 @@ cmd_use::cmd_use(cmd_use::cfg cfg,
 
 void cmd_use::execute() {
   if (!envy_release_version_is_valid(cfg_.version)) {
-    throw std::runtime_error("use: invalid version string: " + cfg_.version);
+    throw_runtime_error({ "use: invalid version string: ", cfg_.version });
   }
   if (cfg_.mirror) { envy_release_validate_mirror(*cfg_.mirror, "use"); }
 
@@ -174,22 +178,26 @@ void cmd_use::execute() {
   // Not broken, just floating to latest. Nothing to retarget, and adding a directive would
   // silently convert the project to pinned, so leave that conversion to its author.
   if (!meta.version) {
-    throw std::runtime_error(
-        "use: " + path.string() +
-        " has no '@envy version' directive -- the project floats to the latest release.\n"
-        "       'envy use' retargets a pinned version. To start pinning, add\n"
-        "           -- @envy version \"" +
-        cfg_.version + "\"\n       to the manifest header.");
+    throw_runtime_error(
+        { "use: ",
+          path,
+          " has no '@envy version' directive -- the project floats to the latest "
+          "release.\n"
+          "       'envy use' retargets a pinned version. To start pinning, add\n"
+          "           -- @envy version \"",
+          cfg_.version,
+          "\"\n       to the manifest header." });
   }
 
   // The manifest keeps whatever it already chose: gaining or losing attestation is never a
   // side effect of changing versions.
   auto const pin{ cfg_.pin_sums || (!cfg_.no_pin_sums && meta.sha256sums.has_value()) };
   if (pin && cfg_.force) {
-    throw std::runtime_error(
-        "use: --force cannot be combined with a sums pin: the pin's value comes only from "
-        "the release's SHA256SUMS. Drop --force, or pass --no-pin-sums to stop "
-        "attesting.");
+    throw_runtime_error(
+        { "use: --force cannot be combined with a sums pin: the pin's value comes only "
+          "from "
+          "the release's SHA256SUMS. Drop --force, or pass --no-pin-sums to stop "
+          "attesting." });
   }
 
   auto const mirror{ [this, &meta]() -> std::string {

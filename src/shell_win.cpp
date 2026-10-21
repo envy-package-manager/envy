@@ -80,18 +80,18 @@ std::wstring utf8_to_wstring(std::string_view input) {
         DWORD const err2{ ::GetLastError() };
         // Distinguish Unicode errors from other failures (buffer size, etc.)
         if (err2 == ERROR_NO_UNICODE_TRANSLATION) {
-          throw std::system_error(
+          throw_system_error(
               err2,
               std::system_category(),
-              "MultiByteToWideChar (permissive): invalid Unicode translation");
+              { "MultiByteToWideChar (permissive): invalid Unicode translation" });
         } else {
-          throw std::system_error(err2,
-                                  std::system_category(),
-                                  "MultiByteToWideChar (permissive)");
+          throw_system_error(err2,
+                             std::system_category(),
+                             { "MultiByteToWideChar (permissive)" });
         }
       }
     } else {
-      throw std::system_error(err, std::system_category(), "MultiByteToWideChar");
+      throw_system_error(err, std::system_category(), { "MultiByteToWideChar" });
     }
   }
   std::wstring result;
@@ -103,9 +103,9 @@ std::wstring utf8_to_wstring(std::string_view input) {
                                              result.data(),
                                              required) };
   if (converted == 0) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "MultiByteToWideChar");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "MultiByteToWideChar" });
   }
   return result;
 }
@@ -127,7 +127,7 @@ std::string wstring_to_utf8(std::wstring_view input) {
     // Return empty string rather than crash - caller will get truncated output
     DWORD const err{ ::GetLastError() };
     if (err == ERROR_NO_UNICODE_TRANSLATION) { return {}; }
-    throw std::system_error(err, std::system_category(), "WideCharToMultiByte");
+    throw_system_error(err, std::system_category(), { "WideCharToMultiByte" });
   }
   std::string result;
   result.resize(static_cast<size_t>(required));
@@ -140,9 +140,9 @@ std::string wstring_to_utf8(std::wstring_view input) {
                                              nullptr,
                                              nullptr) };
   if (converted == 0) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "WideCharToMultiByte");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "WideCharToMultiByte" });
   }
   return result;
 }
@@ -295,9 +295,9 @@ std::filesystem::path create_temp_script(std::string_view script,
   wchar_t temp_dir[MAX_PATH + 1];
   DWORD const dir_len{ ::GetTempPathW(MAX_PATH, temp_dir) };
   if (dir_len == 0 || dir_len > MAX_PATH) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "GetTempPathW failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "GetTempPathW failed" });
   }
 
   // Generate unique filename directly without GetTempFileNameW to avoid zero-byte file
@@ -308,7 +308,7 @@ std::filesystem::path create_temp_script(std::string_view script,
   uint64_t const seq{ counter.fetch_add(1, std::memory_order_relaxed) };
 
   // Determine extension based on shell type
-  std::wstring ext{ std::visit(
+  std::wstring ext{ envy::visit(
       match{
           [](shell_choice const &shell_cfg) -> std::wstring {
             return shell_cfg == shell_choice::powershell ? L".ps1" : L".cmd";
@@ -343,13 +343,13 @@ std::filesystem::path create_temp_script(std::string_view script,
       ::Sleep(10);  // Brief wait before retry
       continue;
     }
-    throw std::system_error(err, std::system_category(), "CreateFileW failed");
+    throw_system_error(err, std::system_category(), { "CreateFileW failed" });
   }
   handle_closer file_guard{ file };
 
   DWORD written{ 0 };
 
-  std::visit(
+  envy::visit(
       match{
           [&](shell_choice const &shell_cfg) {
             if (shell_cfg == shell_choice::powershell) {
@@ -359,9 +359,9 @@ std::filesystem::path create_temp_script(std::string_view script,
               wchar_t const bom{ 0xFEFF };
               if (!::WriteFile(file_guard.get(), &bom, sizeof(bom), &written, nullptr) ||
                   written != sizeof(bom)) {
-                throw std::system_error(::GetLastError(),
-                                        std::system_category(),
-                                        "WriteFile failed");
+                throw_system_error(::GetLastError(),
+                                   std::system_category(),
+                                   { "WriteFile failed" });
               }
               if (!content.empty()) {
                 DWORD const byte_count{ static_cast<DWORD>(content.size() *
@@ -372,9 +372,9 @@ std::filesystem::path create_temp_script(std::string_view script,
                                  &written,
                                  nullptr) ||
                     written != byte_count) {
-                  throw std::system_error(::GetLastError(),
-                                          std::system_category(),
-                                          "WriteFile failed");
+                  throw_system_error(::GetLastError(),
+                                     std::system_category(),
+                                     { "WriteFile failed" });
                 }
               }
             } else {  // cmd
@@ -391,9 +391,9 @@ std::filesystem::path create_temp_script(std::string_view script,
                                  &written,
                                  nullptr) ||
                     written != byte_count) {
-                  throw std::system_error(::GetLastError(),
-                                          std::system_category(),
-                                          "WriteFile failed");
+                  throw_system_error(::GetLastError(),
+                                     std::system_category(),
+                                     { "WriteFile failed" });
                 }
               }
             }
@@ -409,9 +409,9 @@ std::filesystem::path create_temp_script(std::string_view script,
                                &written,
                                nullptr) ||
                   written != byte_count) {
-                throw std::system_error(::GetLastError(),
-                                        std::system_category(),
-                                        "WriteFile failed");
+                throw_system_error(::GetLastError(),
+                                   std::system_category(),
+                                   { "WriteFile failed" });
               }
             }
           },
@@ -426,9 +426,9 @@ std::filesystem::path create_temp_script(std::string_view script,
                                &written,
                                nullptr) ||
                   written != byte_count) {
-                throw std::system_error(::GetLastError(),
-                                        std::system_category(),
-                                        "WriteFile failed");
+                throw_system_error(::GetLastError(),
+                                   std::system_category(),
+                                   { "WriteFile failed" });
               }
             }
           },
@@ -436,9 +436,9 @@ std::filesystem::path create_temp_script(std::string_view script,
       inv.shell);
 
   if (!::FlushFileBuffers(file_guard.get())) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "FlushFileBuffers failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "FlushFileBuffers failed" });
   }
 
   return script_path;
@@ -533,7 +533,7 @@ bool read_available(pipe_state &pipe, shell_run_cfg const &cfg, bool &read_any) 
     if (!::PeekNamedPipe(pipe.handle, nullptr, 0, nullptr, &available, nullptr)) {
       DWORD const err{ ::GetLastError() };
       if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) { return false; }
-      throw std::system_error(err, std::system_category(), "PeekNamedPipe failed");
+      throw_system_error(err, std::system_category(), { "PeekNamedPipe failed" });
     }
     if (available == 0) { return true; }
 
@@ -543,7 +543,7 @@ bool read_available(pipe_state &pipe, shell_run_cfg const &cfg, bool &read_any) 
     if (!::ReadFile(pipe.handle, buffer.data(), want, &read_bytes, nullptr)) {
       DWORD const err{ ::GetLastError() };
       if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) { return false; }
-      throw std::system_error(err, std::system_category(), "ReadFile failed");
+      throw_system_error(err, std::system_category(), { "ReadFile failed" });
     }
     if (read_bytes == 0) { return false; }
 
@@ -593,9 +593,9 @@ void stream_pipes(std::array<pipe_state, 2> &pipes,
                                                    read_any ? 0 : kPipePollIntervalMs) };
     if (wait_result == WAIT_TIMEOUT) { continue; }
     if (wait_result != WAIT_OBJECT_0) {
-      throw std::system_error(::GetLastError(),
-                              std::system_category(),
-                              "WaitForSingleObject failed");
+      throw_system_error(::GetLastError(),
+                         std::system_category(),
+                         { "WaitForSingleObject failed" });
     }
 
     drain_after_exit(pipes, cfg);
@@ -606,9 +606,9 @@ void stream_pipes(std::array<pipe_state, 2> &pipes,
 shell_result child_result(HANDLE process) {
   DWORD exit_code{ 0 };
   if (!::GetExitCodeProcess(process, &exit_code)) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "GetExitCodeProcess failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "GetExitCodeProcess failed" });
   }
 
   return { .exit_code = static_cast<int>(exit_code), .signal = std::nullopt };
@@ -698,9 +698,9 @@ std::wstring build_command_line_custom(custom_shell_inline const &shell,
 void shell_init() {
   g_job_object = ::CreateJobObjectW(nullptr, nullptr);
   if (!g_job_object) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "Failed to create job object for child process management");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "Failed to create job object for child process management" });
   }
 
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
@@ -713,7 +713,7 @@ void shell_init() {
     DWORD const err{ ::GetLastError() };
     ::CloseHandle(g_job_object);
     g_job_object = NULL;
-    throw std::system_error(err, std::system_category(), "Failed to configure job object");
+    throw_system_error(err, std::system_category(), { "Failed to configure job object" });
   }
 }
 
@@ -753,29 +753,29 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   HANDLE stdout_read{ nullptr };
   HANDLE stdout_write{ nullptr };
   if (!::CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
-    throw std::system_error(::GetLastError(), std::system_category(), "CreatePipe failed");
+    throw_system_error(::GetLastError(), std::system_category(), { "CreatePipe failed" });
   }
 
   handle_closer stdout_read_end{ stdout_read };
   handle_closer stdout_write_end{ stdout_write };
   if (!::SetHandleInformation(stdout_read_end.get(), HANDLE_FLAG_INHERIT, 0)) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "SetHandleInformation failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "SetHandleInformation failed" });
   }
 
   HANDLE stderr_read{ nullptr };
   HANDLE stderr_write{ nullptr };
   if (!::CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
-    throw std::system_error(::GetLastError(), std::system_category(), "CreatePipe failed");
+    throw_system_error(::GetLastError(), std::system_category(), { "CreatePipe failed" });
   }
 
   handle_closer stderr_read_end{ stderr_read };
   handle_closer stderr_write_end{ stderr_write };
   if (!::SetHandleInformation(stderr_read_end.get(), HANDLE_FLAG_INHERIT, 0)) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "SetHandleInformation failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "SetHandleInformation failed" });
   }
 
   HANDLE const null_in{ ::CreateFileW(L"NUL",
@@ -786,17 +786,17 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
                                       FILE_ATTRIBUTE_NORMAL,
                                       nullptr) };
   if (null_in == INVALID_HANDLE_VALUE) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "CreateFileW NUL failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "CreateFileW NUL failed" });
   }
   handle_closer stdin_handle{ null_in };
   if (!::SetHandleInformation(stdin_handle.get(),
                               HANDLE_FLAG_INHERIT,
                               HANDLE_FLAG_INHERIT)) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "SetHandleInformation failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "SetHandleInformation failed" });
   }
 
   STARTUPINFOW si{};
@@ -808,7 +808,7 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
 
   PROCESS_INFORMATION pi{};
 
-  std::wstring const command_line{ std::visit(
+  std::wstring const command_line{ envy::visit(
       match{
           [&script_path](shell_choice const &shell_cfg) -> std::wstring {
             return build_command_line_builtin(shell_cfg, script_path);
@@ -842,9 +842,9 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
                                        &si,
                                        &pi) };
   if (!created) {
-    throw std::system_error(::GetLastError(),
-                            std::system_category(),
-                            "CreateProcessW failed");
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "CreateProcessW failed" });
   }
 
   // Add process to job object to ensure child dies when envy terminates
@@ -869,9 +869,9 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
   try {
     stream_pipes(pipes, process.get(), cfg);
     if (::WaitForSingleObject(process.get(), INFINITE) != WAIT_OBJECT_0) {
-      throw std::system_error(::GetLastError(),
-                              std::system_category(),
-                              "WaitForSingleObject failed");
+      throw_system_error(::GetLastError(),
+                         std::system_category(),
+                         { "WaitForSingleObject failed" });
     }
   } catch (...) {  // a throwing callback leaves the pipes undrained; do not wait on that
     ::TerminateProcess(process.get(), 1);

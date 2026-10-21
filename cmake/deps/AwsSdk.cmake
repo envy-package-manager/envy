@@ -161,6 +161,13 @@ set(_envy_aws_crt_targets
 )
 foreach(_envy_target IN LISTS _envy_aws_crt_targets)
     if(TARGET ${_envy_target})
+        # envy installs a discarding CRT logger (aws_util.cpp), so compile every AWS_LOGF_* out;
+        # locals and helpers that only fed a log line then go unused.
+        target_compile_definitions(${_envy_target} PRIVATE AWS_STATIC_LOG_LEVEL=0)
+        target_compile_options(${_envy_target} PRIVATE
+            $<$<C_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-unused-variable -Wno-unused-parameter -Wno-unused-but-set-variable -Wno-unused-function>
+            $<$<C_COMPILER_ID:MSVC>:/wd4100 /wd4189 /wd4505>
+        )
         # LTO is only disabled under sanitizers (the inlined lookup3 hash trips
         # ASAN/TSAN); Release keeps global LTO so cross-module DCE can shrink the
         # CRT — the largest non-LTO component on Linux.

@@ -57,15 +57,16 @@ class scoped_temp_dir : unmovable {
 // A destination is a local directory or an s3:// URI. Everything else -- git, ssh, http --
 // is rejected here rather than surfacing later as a confusing fetch error.
 void validate_dest(std::string_view dest) {
-  if (dest.empty()) { throw std::runtime_error("mirror-envy: destination is empty"); }
+  if (dest.empty()) { throw_runtime_error({ "mirror-envy: destination is empty" }); }
 
   // "s3:/bucket" has no "://", so uri_classify would call it a relative path and we would
   // silently stage into a local directory named "s3:".
   bool const looks_s3{ dest.size() >= 3 && (dest[0] == 's' || dest[0] == 'S') &&
                        dest[1] == '3' && dest[2] == ':' };
   if (looks_s3 && !(dest.size() >= 5 && dest.substr(3, 2) == "//")) {
-    throw std::runtime_error("mirror-envy: malformed S3 destination '" +
-                             std::string{ dest } + "' (expected s3://bucket/prefix)");
+    throw_runtime_error({ "mirror-envy: malformed S3 destination '",
+                          dest,
+                          "' (expected s3://bucket/prefix)" });
   }
 }
 
@@ -99,12 +100,11 @@ mirror_envy_plan mirror_envy_make_plan(std::string_view version,
                                        std::string_view dest,
                                        std::string_view from_mirror) {
   if (!envy_release_version_is_valid(version)) {
-    throw std::runtime_error("mirror-envy: invalid version string: " +
-                             std::string{ version });
+    throw_runtime_error({ "mirror-envy: invalid version string: ", version });
   }
 
   auto const from{ strip_trailing_slashes(from_mirror) };
-  if (from.empty()) { throw std::runtime_error("mirror-envy: source mirror is empty"); }
+  if (from.empty()) { throw_runtime_error({ "mirror-envy: source mirror is empty" }); }
 
   validate_dest(dest);
 
@@ -191,8 +191,7 @@ void cmd_mirror_envy::execute() {
   std::error_code ec;
   fs::create_directories(staging / ("v" + cfg_.version), ec);
   if (ec) {
-    throw std::runtime_error("mirror-envy: failed to create " + staging.string() + ": " +
-                             ec.message());
+    throw_runtime_error({ "mirror-envy: failed to create ", staging, ": ", ec.message() });
   }
   if (plan.dest_is_s3) {
     // Debug, not info: the tree is transient scratch that is removed before we return.
@@ -219,9 +218,11 @@ void cmd_mirror_envy::execute() {
                                                  progress_labels(item_relpaths)) };
 
   if (results.size() != plan.items.size()) {
-    throw std::runtime_error("mirror-envy: fetch returned " +
-                             std::to_string(results.size()) + " results for " +
-                             std::to_string(plan.items.size()) + " requests");
+    throw_runtime_error({ "mirror-envy: fetch returned ",
+                          results.size(),
+                          " results for ",
+                          plan.items.size(),
+                          " requests" });
   }
 
   size_t failed{ 0 };
@@ -234,9 +235,11 @@ void cmd_mirror_envy::execute() {
     }
   }
   if (failed > 0) {
-    throw std::runtime_error("mirror-envy: " + std::to_string(failed) + " of " +
-                             std::to_string(plan.items.size()) +
-                             " archives failed to download");
+    throw_runtime_error({ "mirror-envy: ",
+                          failed,
+                          " of ",
+                          plan.items.size(),
+                          " archives failed to download" });
   }
 
   // Attest every archive against the checksum manifest we just fetched from the same
@@ -335,8 +338,8 @@ void cmd_mirror_envy::execute() {
     ++upload_failures;
   }
   if (upload_failures > 0) {
-    throw std::runtime_error("mirror-envy: " + std::to_string(upload_failures) + " of " +
-                             std::to_string(relpaths.size()) + " uploads failed");
+    throw_runtime_error(
+        { "mirror-envy: ", upload_failures, " of ", relpaths.size(), " uploads failed" });
   }
 
   auto const root{ mirror_envy_s3_root(plan) };

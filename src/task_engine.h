@@ -109,7 +109,7 @@ class task_engine : unmovable {
   // Returns true if this call created the thread.
   bool start_task(std::string const &key,
                   int target,
-                  std::function<void()> const &before_spawn = {});
+                  function_ref<void()> before_spawn = {});
 
   // Ratchet a task's target watermark upward (no-op if already higher).
   // Targets clamp to step_count — beyond-done is unsatisfiable.
@@ -149,7 +149,7 @@ class task_engine : unmovable {
   // must not block or call back into this engine; the watchdog may evaluate it
   // on another waiting thread. Throws like wait_at if the watchdog fires.
   void notify_global();
-  void wait_global(std::function<bool()> const &pred);
+  void wait_global(function_ref<bool()> pred);
 
 #ifdef ENVY_UNIT_TEST
   // Test hooks: `spawn_failure_hook` throws in place of a failing std::thread
@@ -182,7 +182,7 @@ class task_engine : unmovable {
     int step{ -1 };
     std::string const *dep{ nullptr };  // null: wait_global's condition
     int watermark{ 0 };
-    std::function<bool()> const *pred{ nullptr };  // valid while in waits_
+    function_ref<bool()> const *pred{ nullptr };  // valid while in waits_
   };
 
   // What this thread is running inside this engine: set around on_start/step so
@@ -202,7 +202,7 @@ class task_engine : unmovable {
   void run_worker(task *t);
   void wait_on(task *t, int watermark, std::string const &key, task *waiter, int step);
   void wait_locked(std::unique_lock<std::mutex> &lock,
-                   std::function<bool()> const &pred,
+                   function_ref<bool()> const &pred,
                    wait_record &rec);
   bool any_wait_ready_locked() const;
   std::string deadlock_report_locked() const;

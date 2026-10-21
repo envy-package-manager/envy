@@ -1,5 +1,7 @@
 #include "deploy.h"
 
+#include "util.h"
+
 #include "bootstrap.h"
 #include "embedded_init_resources.h"
 #include "engine.h"
@@ -23,9 +25,9 @@ namespace {
 
 std::string get_product_script_template(platform_id platform) {
   switch (platform) {
-    case platform_id::POSIX: return util_inflate_resource(embedded::kProductScriptPosix);
+    case platform_id::POSIX: return util_unpack_resource(embedded::kProductScriptPosix);
     case platform_id::WINDOWS:
-      return util_inflate_resource(embedded::kProductScriptWindows);
+      return util_unpack_resource(embedded::kProductScriptWindows);
     default:
       throw std::logic_error("unhandled platform_id in get_product_script_template");
   }
@@ -119,13 +121,15 @@ void deploy_verify_bin_dir(fs::path const &bin_dir,
 
   // Resolving a *different* envy.lua is the dangerous case, and the only one a layout fix
   // addresses: the bin dir quietly hands out another project's tools.
-  throw std::runtime_error(
-      "deploy: " + mismatch +
-      ".\n"
-      "       A root manifest's bin directory has to sit under it: no '.git' between\n"
-      "       them, no '..' in '@envy bin', and a '--manifest' inside the bin dir's own\n"
-      "       tree. A nested tree that means to defer to its parent says so with\n"
-      "       '@envy root \"false\"'.");
+  throw_runtime_error(
+      { "deploy: ",
+        mismatch,
+        ".\n"
+        "       A root manifest's bin directory has to sit under it: no '.git' between\n"
+        "       them, no '..' in '@envy bin', and a '--manifest' inside the bin dir's "
+        "own\n"
+        "       tree. A nested tree that means to defer to its parent says so with\n"
+        "       '@envy root \"false\"'." });
 }
 
 void deploy_product_scripts(fs::path const &bin_dir,
@@ -159,9 +163,10 @@ void deploy_product_scripts(fs::path const &bin_dir,
 
       if (fs::exists(script_path) && !has_envy_marker(script_path)) {
         if (strict) {
-          throw std::runtime_error(
-              "deploy: file '" + script_path.string() +
-              "' exists but is not envy-managed. Remove manually or rename product.");
+          throw_runtime_error(
+              { "deploy: file '",
+                script_path,
+                "' exists but is not envy-managed. Remove manually or rename product." });
         }
         continue;
       }

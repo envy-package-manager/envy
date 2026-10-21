@@ -169,7 +169,7 @@ fetch_all_progress_tracker::fetch_all_progress_tracker(
 
 fetch_progress_cb_t fetch_all_progress_tracker::make_callback(std::size_t slot) {
   return [this, slot](fetch_progress_t const &prog) -> bool {
-    std::visit(
+    envy::visit(
         envy::match{ [&](fetch_transfer_progress const &p) { update_transfer(slot, p); },
                      [&](fetch_git_progress const &p) { update_git(slot, p); },
                      [&](fetch_retry_progress const &p) { update_retry(slot, p); } },
@@ -473,7 +473,7 @@ std::vector<fetch_result_t> fetch_tracked(std::vector<fetch_request> requests,
   fetch_all_progress_tracker tracker{ section, row_label, item_labels, "fetch" };
   for (std::size_t i{ 0 }; i < requests.size(); ++i) {
     auto cb{ tracker.make_callback(i) };
-    std::visit([&](auto &r) { r.progress = std::move(cb); }, requests[i]);
+    envy::visit([&](auto &r) { r.progress = std::move(cb); }, requests[i]);
   }
 
   auto results{ fetch(requests, std::move(trace_spec)) };
@@ -501,7 +501,7 @@ fetch_result_t fetch_on_row(fetch_request req,
                                       identity,
                                       { uri_extract_filename(url) },
                                       "fetch" };
-  std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
+  envy::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, req);
 
   auto results{ fetch({ std::move(req) }, identity) };
   if (results.empty()) { return std::string{ "no results" }; }
@@ -604,8 +604,7 @@ void run_phase_shell_script(std::string_view script,
     result.signal ? " (terminated by signal " + std::to_string(*result.signal) + ")"
                   : " (exit code " + std::to_string(result.exit_code) + ")"
   };
-  throw std::runtime_error(std::string{ phase_label } + " shell script failed for " +
-                           identity + suffix);
+  throw_runtime_error({ phase_label, " shell script failed for ", identity, suffix });
 }
 
 }  // namespace envy::tui_actions

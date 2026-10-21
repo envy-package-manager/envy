@@ -29,7 +29,7 @@ namespace envy {
 namespace {
 
 [[noreturn]] void throw_errno(char const *what, std::string const &path) {
-  throw std::system_error(errno, std::generic_category(), std::string(what) + ": " + path);
+  throw_system_error(errno, std::generic_category(), { what, ": ", path });
 }
 
 class scoped_dir : uncopyable {
@@ -133,8 +133,8 @@ void tree_scan_one(tree_scan_string const &dir, std::vector<tree_scan_entry> &ou
            static_cast<std::uint64_t>(st.st_size));
     } else {
       // Sockets, fifos and devices hold no payload a vendored copy could carry.
-      throw std::runtime_error("tree_hash: unsupported file type: " +
-                               tree_scan_join(dir, name));
+      throw_runtime_error(
+          { "tree_hash: unsupported file type: ", tree_scan_join(dir, name) });
     }
     errno = 0;
   }
@@ -155,7 +155,7 @@ std::string tree_scan_link_target(tree_scan_string const &path) {
       return buf;
     }
   }
-  throw std::runtime_error("tree_hash: symlink target too long: " + path);
+  throw_runtime_error({ "tree_hash: symlink target too long: ", path });
 }
 
 }  // namespace envy

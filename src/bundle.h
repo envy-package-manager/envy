@@ -2,11 +2,11 @@
 
 #include "fetch.h"
 #include "pkg_cfg.h"
+#include "util.h"
 
 #include "sol/forward.hpp"
 
 #include <filesystem>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -72,18 +72,18 @@ struct bundle {
 
 // One transfer of a bundle's payload. The caller owns progress; manifest scope has none.
 using bundle_fetcher =
-    std::function<void(fetch_request, std::string const &url, char const *what)>;
+    function_ref<void(fetch_request, std::string const &url, char const *what)>;
 
 // A bundle's custom fetch. Needs a phase context, so it stays with whoever has one.
-using bundle_custom_fetcher = std::function<void()>;
+using bundle_custom_fetcher = function_ref<void()>;
 
 // Put a bundle's payload in `install_dir`, whatever its source shape. Shared with the
 // BUNDLE_ONLY package's spec_fetch, so the two cannot drift.
 void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
                           std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &install_dir,
-                          bundle_fetcher const &fetch_one,
-                          bundle_custom_fetcher const &run_custom);
+                          bundle_fetcher fetch_one,
+                          bundle_custom_fetcher run_custom);
 
 // A bundle payload's cache entry key. `cfg` is read only for the custom-fetch shape,
 // which has no fingerprint of its own; a caller without one passes null.

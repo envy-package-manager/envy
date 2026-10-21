@@ -50,7 +50,7 @@ cmd_vendor::cmd_vendor(cfg cfg, std::optional<std::filesystem::path> const &cli_
 
 void cmd_vendor::execute() {
   if (cfg_.threads < 0) {
-    throw std::runtime_error("vendor: --threads cannot be negative");
+    throw_runtime_error({ "vendor: --threads cannot be negative" });
   }
 
   auto const [m, c]{ cmd_startup_load("vendor",
@@ -63,7 +63,7 @@ void cmd_vendor::execute() {
   // still an error here rather than a wipe that lands on top of another destination.
   auto plan{ m->resolve_vendor_plan() };
   if (plan.empty()) {
-    throw std::runtime_error("vendor: no package in this manifest asks to be vendored");
+    throw_runtime_error({ "vendor: no package in this manifest asks to be vendored" });
   }
 
   // One entry per package however it was reached: envy.import can splice two
@@ -83,9 +83,10 @@ void cmd_vendor::execute() {
         // --all is "every package that vendors", so one that does not is simply not a
         // target; one named outright is a mistake worth reporting.
         if (cfg_.all) { continue; }
-        throw std::runtime_error("vendor: '" + cfg->identity +
-                                 "' is not vendored; give its PACKAGES entry a "
-                                 "'vendor' field to copy it into the project");
+        throw_runtime_error({ "vendor: '",
+                              cfg->identity,
+                              "' is not vendored; give its PACKAGES entry a "
+                              "'vendor' field to copy it into the project" });
       }
       if (seen.insert(std::move(key)).second) { chosen.push_back(cfg); }
     }

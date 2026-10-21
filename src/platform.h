@@ -95,7 +95,7 @@ std::vector<dir_entry> dir_list(std::filesystem::path const &dir);
 
 // Running totals across every root, reported from a worker thread at most ~20x a second.
 // No end total until the walk finishes, so a caller draws a spinner, never a bar.
-using dir_scan_progress = std::function<void(dir_size const &running)>;
+using dir_scan_progress = function_ref<void(dir_size const &running)>;
 
 // Measure every root concurrently; results are index-aligned with `roots`.
 // Missing or unreadable roots yield zeroes. `threads == 0` uses hardware
@@ -105,18 +105,18 @@ using dir_scan_progress = std::function<void(dir_size const &running)>;
 // without re-walking shared prefixes.
 std::vector<dir_size> dir_sizes(std::vector<std::filesystem::path> const &roots,
                                 unsigned threads = 0,
-                                dir_scan_progress const &progress = {});
+                                dir_scan_progress progress = {});
 
 // Native path string: UTF-16 on Windows, bytes elsewhere. Traversal stays in
 // the OS encoding; conversion happens only at the public boundary.
 using dir_scan_string = std::filesystem::path::string_type;
-using dir_scan_push = std::function<void(dir_scan_string)>;
+using dir_scan_push = function_ref<void(dir_scan_string)>;
 
 // Per-platform traversal hooks driving dir_sizes(); not called directly.
 // dir_scan_root() adapts a path for native traversal; dir_scan_one() folds one
 // directory's files into `acc` and hands each child directory to `push`.
 dir_scan_string dir_scan_root(std::filesystem::path const &root);
-void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push const &push);
+void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push push);
 
 std::optional<std::filesystem::path> get_default_cache_root();
 char const *get_default_cache_root_env_vars();

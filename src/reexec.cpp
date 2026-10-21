@@ -7,6 +7,7 @@
 #include "platform.h"
 #include "tui.h"
 #include "tui_actions.h"
+#include "util.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -159,7 +160,7 @@ void reexec_if_needed(envy_meta const &meta,
   auto const &version{ *meta.version };
 
   if (!envy_release_version_is_valid(version)) {
-    throw std::runtime_error("reexec: invalid version string: " + version);
+    throw_runtime_error({ "reexec: invalid version string: ", version });
   }
 
   // An older envy silently ignores '@envy cache-local'/'cache-mode'/'state-dir' and would
@@ -172,13 +173,15 @@ void reexec_if_needed(envy_meta const &meta,
   if ((meta.cache_local || meta.declared_cache_mode || meta.state_dir ||
        resolved.tier == cache_root_tier::MARKER) &&
       version != "0.0.0" && envy_release_version_less(version, kEnvyMinDirectiveVersion)) {
-    throw std::runtime_error(
-        "manifest resolves a cache mode from '@envy cache-local'/'cache-mode'/'state-dir' "
-        "or an 'envy cache' marker, but pins '@envy version \"" +
-        version + "\"', which predates them (added in " +
-        std::string{ kEnvyMinDirectiveVersion } +
-        "). That envy would silently use the shared cache. Raise or remove the version "
-        "pin.");
+    throw_runtime_error(
+        { "manifest resolves a cache mode from '@envy "
+          "cache-local'/'cache-mode'/'state-dir' "
+          "or an 'envy cache' marker, but pins '@envy version \"",
+          version,
+          "\"', which predates them (added in ",
+          kEnvyMinDirectiveVersion,
+          "). That envy would silently use the shared cache. Raise or remove the version "
+          "pin." });
   }
 
   // Fast path: a local tree may borrow the user's own copy rather than re-download one.
@@ -235,20 +238,20 @@ void reexec_if_needed(envy_meta const &meta,
   labels.reserve(requests.size());
   for (auto const &req : requests) {
     labels.push_back(
-        std::visit([](auto const &r) { return r.destination.filename().string(); }, req));
+        envy::visit([](auto const &r) { return r.destination.filename().string(); }, req));
   }
 
   auto const results{
     tui_actions::fetch_tracked(std::move(requests), "envy " + version, labels)
   };
   if (results.size() != labels.size()) {
-    throw std::runtime_error("reexec: failed to download envy " + version + " from " +
-                             url + ": unknown error");
+    throw_runtime_error(
+        { "reexec: failed to download envy ", version, " from ", url, ": unknown error" });
   }
   for (size_t i{ 0 }; i < results.size(); ++i) {
     if (auto const *err{ std::get_if<std::string>(&results[i]) }) {
-      throw std::runtime_error("reexec: failed to download envy " + version + " from " +
-                               urls[i] + ": " + *err);
+      throw_runtime_error(
+          { "reexec: failed to download envy ", version, " from ", urls[i], ": ", *err });
     }
   }
 
@@ -284,8 +287,8 @@ void reexec_if_needed(envy_meta const &meta,
 
   auto const binary_path{ tmp_dir / platform::exe_name("envy") };
   if (!std::filesystem::exists(binary_path)) {
-    throw std::runtime_error("reexec: archive did not contain expected binary: " +
-                             binary_path.string());
+    throw_runtime_error(
+        { "reexec: archive did not contain expected binary: ", binary_path });
   }
 
   make_executable(binary_path);

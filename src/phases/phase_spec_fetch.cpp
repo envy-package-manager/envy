@@ -38,9 +38,10 @@ tree_filter parse_vendor_table(sol::state_view lua, std::string const &identity)
   sol::object obj{ lua["VENDOR"] };
   if (!obj.valid() || obj.get_type() == sol::type::lua_nil) { return {}; }
   if (obj.get_type() != sol::type::table) {
-    throw std::runtime_error(std::string{ "VENDOR must be a table of patterns (got " } +
-                             sol::type_name(lua.lua_state(), obj.get_type()) + ") for " +
-                             identity);
+    throw_runtime_error({ "VENDOR must be a table of patterns (got ",
+                          sol::type_name(lua.lua_state(), obj.get_type()),
+                          ") for ",
+                          identity });
   }
   return vendor_parse_selectors(
       sol_util_get_string_list(lua.globals(), "VENDOR", "spec '" + identity + "'"),
@@ -58,10 +59,12 @@ std::string resolve_display(pkg *p, sol::state_view lua) {
   std::string const text{ [&]() -> std::string {
     if (obj.get_type() == sol::type::string) { return obj.as<std::string>(); }
     if (!obj.is<sol::protected_function>()) {
-      throw std::runtime_error(
-          std::string{ "DISPLAY must be a string or a function returning a string "
-                       "(got " } +
-          sol::type_name(lua.lua_state(), obj.get_type()) + ") for " + identity);
+      throw_runtime_error(
+          { "DISPLAY must be a string or a function returning a string "
+            "(got ",
+            sol::type_name(lua.lua_state(), obj.get_type()),
+            ") for ",
+            identity });
     }
 
     sol::object ret{ call_lua_function_with_enriched_errors(p, "display", [&] {
@@ -70,9 +73,10 @@ std::string resolve_display(pkg *p, sol::state_view lua) {
     }) };
     if (ret.get_type() == sol::type::lua_nil) { return {}; }
     if (!ret.is<std::string>()) {
-      throw std::runtime_error(
-          std::string{ "DISPLAY function must return a string or nil (got " } +
-          sol::type_name(lua.lua_state(), ret.get_type()) + ") for " + identity);
+      throw_runtime_error({ "DISPLAY function must return a string or nil (got ",
+                            sol::type_name(lua.lua_state(), ret.get_type()),
+                            ") for ",
+                            identity });
     }
     return ret.as<std::string>();
   }() };
@@ -80,8 +84,8 @@ std::string resolve_display(pkg *p, sol::state_view lua) {
   // A row is one line whose width the live region counts so it can erase it again: a NUL
   // truncates that row at the %s that writes it, an ESC steers the cursor out of it.
   if (std::ranges::any_of(text, [](unsigned char c) { return c < 0x20 || c == 0x7f; })) {
-    throw std::runtime_error("DISPLAY must be a single line of printable text for " +
-                             identity);
+    throw_runtime_error(
+        { "DISPLAY must be a single line of printable text for ", identity });
   }
   return text;
 }
@@ -96,23 +100,26 @@ bool resolve_user_managed(sol::state_view lua, std::string const &identity) {
     if (sol::protected_function_result result{ obj.as<sol::protected_function>()() };
         !result.valid()) {
       sol::error err = result;
-      throw std::runtime_error("USER_MANAGED function failed for " + identity + ": " +
-                               std::string{ err.what() });
+      throw_runtime_error(
+          { "USER_MANAGED function failed for ", identity, ": ", err.what() });
     } else {
       sol::object ret{ result };
       if (ret.get_type() != sol::type::boolean) {
-        throw std::runtime_error(
-            std::string{ "USER_MANAGED function must return a boolean (got " } +
-            sol::type_name(lua.lua_state(), ret.get_type()) + ") for " + identity);
+        throw_runtime_error({ "USER_MANAGED function must return a boolean (got ",
+                              sol::type_name(lua.lua_state(), ret.get_type()),
+                              ") for ",
+                              identity });
       }
       return ret.as<bool>();
     }
   }
 
-  throw std::runtime_error(
-      std::string{ "USER_MANAGED must be a boolean or function returning a boolean "
-                   "(got " } +
-      sol::type_name(lua.lua_state(), obj.get_type()) + ") for " + identity);
+  throw_runtime_error(
+      { "USER_MANAGED must be a boolean or function returning a boolean "
+        "(got ",
+        sol::type_name(lua.lua_state(), obj.get_type()),
+        ") for ",
+        identity });
 }
 
 void validate_phases(sol::state_view lua,
@@ -126,16 +133,17 @@ void validate_phases(sol::state_view lua,
 
   if (sol::object check_obj{ lua["CHECK"] };
       check_obj.valid() && check_obj.get_type() != sol::type::lua_nil) {
-    throw std::runtime_error("Spec " + identity +
-                             " defines top-level CHECK; CHECK/INSTALL pairs belong in "
-                             "SETUP entries (SETUP = { name = { CHECK=..., "
-                             "INSTALL=... } })");
+    throw_runtime_error({ "Spec ",
+                          identity,
+                          " defines top-level CHECK; CHECK/INSTALL pairs belong in "
+                          "SETUP entries (SETUP = { name = { CHECK=..., "
+                          "INSTALL=... } })" });
   }
 
   if (user_managed) {
     if (!has_setup) {
-      throw std::runtime_error("User-managed spec must define at least one SETUP pair: " +
-                               identity);
+      throw_runtime_error(
+          { "User-managed spec must define at least one SETUP pair: ", identity });
     }
     std::pair<char const *, bool> const forbidden[]{
       { "FETCH", has_fetch },
@@ -148,15 +156,17 @@ void validate_phases(sol::state_view lua,
     };
     for (auto const &[verb, present] : forbidden) {
       if (present) {
-        throw std::runtime_error(
-            "Spec " + identity + " is user-managed (USER_MANAGED=true) but declares " +
-            verb +
-            ". User-managed packages define only SETUP pairs; remove the phase verb "
-            "or set USER_MANAGED=false.");
+        throw_runtime_error(
+            { "Spec ",
+              identity,
+              " is user-managed (USER_MANAGED=true) but declares ",
+              verb,
+              ". User-managed packages define only SETUP pairs; remove the phase verb "
+              "or set USER_MANAGED=false." });
       }
     }
   } else {
-    if (!has_fetch) { throw std::runtime_error("Spec must define 'FETCH': " + identity); }
+    if (!has_fetch) { throw_runtime_error({ "Spec must define 'FETCH': ", identity }); }
   }
 }
 
@@ -172,7 +182,7 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
   sol::object setup_obj{ lua["SETUP"] };
   if (!setup_obj.valid() || setup_obj.get_type() == sol::type::lua_nil) { return pairs; }
   if (setup_obj.get_type() != sol::type::table) {
-    throw std::runtime_error("SETUP must be a table in spec '" + identity + "'");
+    throw_runtime_error({ "SETUP must be a table in spec '", identity, "'" });
   }
 
   auto const is_verb{ [](sol::object const &o) {
@@ -184,16 +194,25 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
       std::vector<std::string> values;
       if (!obj.valid() || obj.get_type() == sol::type::lua_nil) { return values; }
       if (obj.get_type() != sol::type::table) {
-        throw std::runtime_error("SETUP entry '" + name + "' " + field +
-                                 " must be a table in spec '" + identity + "'");
+        throw_runtime_error({ "SETUP entry '",
+                              name,
+                              "' ",
+                              field,
+                              " must be a table in spec '",
+                              identity,
+                              "'" });
       }
       sol::table t{ obj.as<sol::table>() };
       for (size_t i{ 1 }; i <= t.size(); ++i) {
         sol::object elem{ t[i] };
         if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
-          throw std::runtime_error("SETUP entry '" + name + "' " + field +
-                                   " entries must be non-empty strings in spec '" +
-                                   identity + "'");
+          throw_runtime_error({ "SETUP entry '",
+                                name,
+                                "' ",
+                                field,
+                                " entries must be non-empty strings in spec '",
+                                identity,
+                                "'" });
         }
         values.push_back(elem.as<std::string>());
       }
@@ -207,8 +226,8 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
     sol::object const val_obj(value);
 
     if (!key_obj.is<std::string>() || key_obj.as<std::string>().empty()) {
-      throw std::runtime_error("SETUP keys must be non-empty strings in spec '" +
-                               identity + "'");
+      throw_runtime_error(
+          { "SETUP keys must be non-empty strings in spec '", identity, "'" });
     }
     std::string const name{ key_obj.as<std::string>() };
 
@@ -217,14 +236,17 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
     if (name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                                "abcdefghijklmnopqrstuvwxyz0123456789_.-") !=
         std::string::npos) {
-      throw std::runtime_error("SETUP pair name '" + name + "' in spec '" + identity +
-                               "' has invalid characters (allowed: alphanumerics, "
-                               "'_', '.', '-')");
+      throw_runtime_error({ "SETUP pair name '",
+                            name,
+                            "' in spec '",
+                            identity,
+                            "' has invalid characters (allowed: alphanumerics, "
+                            "'_', '.', '-')" });
     }
 
     if (!val_obj.is<sol::table>()) {
-      throw std::runtime_error("SETUP entry '" + name + "' must be a table in spec '" +
-                               identity + "'");
+      throw_runtime_error(
+          { "SETUP entry '", name, "' must be a table in spec '", identity, "'" });
     }
     sol::table pair{ val_obj.as<sol::table>() };
 
@@ -233,21 +255,29 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
       std::string const k{ pair_key_obj.is<std::string>() ? pair_key_obj.as<std::string>()
                                                           : std::string{} };
       if (k != "CHECK" && k != "INSTALL" && k != "PLATFORMS" && k != "DEPENDS") {
-        throw std::runtime_error("SETUP entry '" + name + "' has unknown field '" + k +
-                                 "' in spec '" + identity +
-                                 "' (valid: CHECK, INSTALL, PLATFORMS, DEPENDS)");
+        throw_runtime_error({ "SETUP entry '",
+                              name,
+                              "' has unknown field '",
+                              k,
+                              "' in spec '",
+                              identity,
+                              "' (valid: CHECK, INSTALL, PLATFORMS, DEPENDS)" });
       }
     }
 
     if (!is_verb(pair["CHECK"])) {
-      throw std::runtime_error("SETUP entry '" + name +
-                               "' must define CHECK (function or string) in spec '" +
-                               identity + "'");
+      throw_runtime_error({ "SETUP entry '",
+                            name,
+                            "' must define CHECK (function or string) in spec '",
+                            identity,
+                            "'" });
     }
     if (!is_verb(pair["INSTALL"])) {
-      throw std::runtime_error("SETUP entry '" + name +
-                               "' must define INSTALL (function or string) in spec '" +
-                               identity + "'");
+      throw_runtime_error({ "SETUP entry '",
+                            name,
+                            "' must define INSTALL (function or string) in spec '",
+                            identity,
+                            "'" });
     }
 
     pairs.emplace(
@@ -260,8 +290,13 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
   for (auto const &[name, decl] : pairs) {  // DEPENDS targets must exist
     for (auto const &dep : decl.depends) {
       if (!pairs.contains(dep)) {
-        throw std::runtime_error("SETUP entry '" + name + "' DEPENDS on unknown pair '" +
-                                 dep + "' in spec '" + identity + "'");
+        throw_runtime_error({ "SETUP entry '",
+                              name,
+                              "' DEPENDS on unknown pair '",
+                              dep,
+                              "' in spec '",
+                              identity,
+                              "'" });
       }
     }
   }
@@ -291,7 +326,7 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
             oss << frame << " -> ";
           }
           oss << next;
-          throw std::runtime_error(oss.str());
+          throw_runtime_error({ oss.str() });
         }
         if (color[next] == 0) {
           color[next] = 1;
@@ -321,7 +356,7 @@ sol::object deserialize_options(sol::state_view lua,
 
   if (!opts_result.valid()) {
     sol::error err = opts_result;
-    throw std::runtime_error("Failed to deserialize options: " + std::string(err.what()));
+    throw_runtime_error({ "Failed to deserialize options: ", err.what() });
   }
 
   return opts_result.get<sol::object>();
@@ -342,7 +377,7 @@ int load_spec_script(sol::state &lua,
   };
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error("Failed to load spec: " + identity + ": " + err.what());
+    throw_runtime_error({ "Failed to load spec: ", identity, ": ", err.what() });
   }
 
   return meta.schema;
@@ -360,7 +395,7 @@ void fetch_with_progress(fetch_request req,
     tui_actions::fetch_on_row(std::move(req), p->tui_section, p->cfg->identity, url)
   };
   if (auto const *err{ std::get_if<std::string>(&result) }) {
-    throw std::runtime_error(std::string{ "Failed to fetch " } + what + ": " + *err);
+    throw_runtime_error({ "Failed to fetch ", what, ": ", *err });
   }
 }
 
@@ -436,15 +471,17 @@ spec_fetch_result resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) {
 
   bundle *b{ eng.find_bundle(bundle_id) };
   if (!b) {
-    throw std::runtime_error("Bundle '" + bundle_id +
-                             "' was not materialized before spec '" + cfg.identity +
-                             "' (missing bundle source dependency)");
+    throw_runtime_error({ "Bundle '",
+                          bundle_id,
+                          "' was not materialized before spec '",
+                          cfg.identity,
+                          "' (missing bundle source dependency)" });
   }
 
   std::filesystem::path spec_path{ b->resolve_spec_path(cfg.identity) };
   if (spec_path.empty()) {
-    throw std::runtime_error("Spec '" + cfg.identity + "' not found in bundle '" +
-                             bundle_id + "'");
+    throw_runtime_error(
+        { "Spec '", cfg.identity, "' not found in bundle '", bundle_id, "'" });
   }
 
   return { std::move(spec_path), nullptr };  // the bundle owns the cache entry
@@ -452,13 +489,12 @@ spec_fetch_result resolve_spec_from_bundle(pkg_cfg const &cfg, engine &eng) {
 
 spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng) {
   if (!cfg.parent) {
-    throw std::runtime_error("Custom fetch function spec has no parent: " + cfg.identity);
+    throw_runtime_error({ "Custom fetch function spec has no parent: ", cfg.identity });
   }
 
   pkg *parent{ eng.find_exact(pkg_key(*cfg.parent)) };
   if (!parent) {
-    throw std::runtime_error("Custom fetch function spec parent not found: " +
-                             cfg.identity);
+    throw_runtime_error({ "Custom fetch function spec parent not found: ", cfg.identity });
   }
 
   auto cache_result{ p->cache_ptr->ensure_spec(
@@ -478,8 +514,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
     auto const parent_acc{ parent->lua.lock() };
 
     if (!parent_acc) {
-      throw std::runtime_error("Custom fetch function spec has no parent Lua state: " +
-                               cfg.identity);
+      throw_runtime_error(
+          { "Custom fetch function spec has no parent Lua state: ", cfg.identity });
     }
 
     {
@@ -491,8 +527,7 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
             .identity = cfg.identity,
             .serialized_options = cfg.serialized_options }) };
       if (!fetch_func_opt) {
-        throw std::runtime_error("Failed to lookup fetch function for: " +
-                                 cfg.format_key());
+        throw_runtime_error({ "Failed to lookup fetch function for: ", cfg.format_key() });
       }
 
       // The child's own options, built in the parent's state but never stored there:
@@ -513,8 +548,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 
       if (!fetch_result.valid()) {
         sol::error err = fetch_result;
-        throw std::runtime_error("Fetch function failed for " + cfg.identity + ": " +
-                                 err.what());
+        throw_runtime_error(
+            { "Fetch function failed for ", cfg.identity, ": ", err.what() });
       }
     }
 
@@ -525,8 +560,7 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
     std::filesystem::path const spec_dst{ install_dir / "spec.lua" };
 
     if (!std::filesystem::exists(fetch_dir / "spec.lua")) {
-      throw std::runtime_error("Custom fetch did not create spec.lua for: " +
-                               cfg.identity);
+      throw_runtime_error({ "Custom fetch did not create spec.lua for: ", cfg.identity });
     }
 
     for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
@@ -539,7 +573,7 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
   // Cache was already complete - spec.lua should exist in pkg_path
   std::filesystem::path spec_path{ cache_result.pkg_path / "spec.lua" };
   if (!std::filesystem::exists(spec_path)) {
-    throw std::runtime_error("Custom fetch did not create spec.lua for: " + cfg.identity);
+    throw_runtime_error({ "Custom fetch did not create spec.lua for: ", cfg.identity });
   }
 
   return { std::move(spec_path), nullptr };
@@ -565,8 +599,8 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     auto opts_result{ lua.safe_script(opts_str, sol::script_pass_on_error) };
     if (!opts_result.valid()) {
       sol::error err = opts_result;
-      throw std::runtime_error("Failed to deserialize options for PRODUCTS function: " +
-                               std::string(err.what()));
+      throw_runtime_error(
+          { "Failed to deserialize options for PRODUCTS function: ", err.what() });
     }
     sol::object options{ opts_result.get<sol::object>() };
 
@@ -578,13 +612,13 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
 
     sol::object result_obj{ result };
     if (result_obj.get_type() != sol::type::table) {
-      throw std::runtime_error("PRODUCTS function must return table in spec '" + id + "'");
+      throw_runtime_error({ "PRODUCTS function must return table in spec '", id, "'" });
     }
     products_table = result_obj.as<sol::table>();
   } else if (products_obj.get_type() == sol::type::table) {
     products_table = products_obj.as<sol::table>();
   } else {
-    throw std::runtime_error("PRODUCTS must be table or function in spec '" + id + "'");
+    throw_runtime_error({ "PRODUCTS must be table or function in spec '", id, "'" });
   }
   // User-managed product values name host state (not cache paths); skip path safety.
   bool const user_managed{ p->type == pkg_type::USER_MANAGED };
@@ -594,7 +628,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     sol::object val_obj(value);
 
     if (!key_obj.is<std::string>()) {
-      throw std::runtime_error("PRODUCTS key must be string in spec '" + id + "'");
+      throw_runtime_error({ "PRODUCTS key must be string in spec '", id, "'" });
     }
 
     std::string key_str{ key_obj.as<std::string>() };
@@ -608,8 +642,11 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       sol::table t{ val_obj.as<sol::table>() };
       sol::object val_field{ t["value"] };
       if (!val_field.is<std::string>()) {
-        throw std::runtime_error("PRODUCTS table entry '" + key_str +
-                                 "' must have string 'value' field in spec '" + id + "'");
+        throw_runtime_error({ "PRODUCTS table entry '",
+                              key_str,
+                              "' must have string 'value' field in spec '",
+                              id,
+                              "'" });
       }
       val_str = val_field.as<std::string>();
       sol::object script_field{ t["script"] };
@@ -619,61 +656,75 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       sol::object platforms_field{ t["platforms"] };
       if (platforms_field.valid() && platforms_field.get_type() != sol::type::lua_nil) {
         if (platforms_field.get_type() != sol::type::table) {
-          throw std::runtime_error("PRODUCTS entry '" + key_str +
-                                   "' platforms must be a table in spec '" + id + "'");
+          throw_runtime_error({ "PRODUCTS entry '",
+                                key_str,
+                                "' platforms must be a table in spec '",
+                                id,
+                                "'" });
         }
         sol::table plat_table{ platforms_field.as<sol::table>() };
         for (size_t i{ 1 }; i <= plat_table.size(); ++i) {
           sol::object elem{ plat_table[i] };
           if (!elem.is<std::string>()) {
-            throw std::runtime_error("PRODUCTS entry '" + key_str +
-                                     "' platforms entries must be strings in spec '" + id +
-                                     "'");
+            throw_runtime_error({ "PRODUCTS entry '",
+                                  key_str,
+                                  "' platforms entries must be strings in spec '",
+                                  id,
+                                  "'" });
           }
           std::string plat_str{ elem.as<std::string>() };
           if (plat_str.empty()) {
-            throw std::runtime_error("PRODUCTS entry '" + key_str +
-                                     "' platforms entry cannot be empty in spec '" + id +
-                                     "'");
+            throw_runtime_error({ "PRODUCTS entry '",
+                                  key_str,
+                                  "' platforms entry cannot be empty in spec '",
+                                  id,
+                                  "'" });
           }
           entry_platforms.push_back(std::move(plat_str));
         }
       }
     } else {
-      throw std::runtime_error("PRODUCTS value must be string or table in spec '" + id +
-                               "'");
+      throw_runtime_error({ "PRODUCTS value must be string or table in spec '", id, "'" });
     }
 
     if (key_str.empty()) {
-      throw std::runtime_error("PRODUCTS key cannot be empty in spec '" + id + "'");
+      throw_runtime_error({ "PRODUCTS key cannot be empty in spec '", id, "'" });
     }
 
     for (char c : key_str) {
       bool const dangerous{ c < 0x21 || c > 0x7e || c == '"' || c == '\'' || c == '$' ||
                             c == '`' || c == '%' || c == '\\' || c == '!' };
       if (dangerous) {
-        throw std::runtime_error("PRODUCTS key '" + key_str +
-                                 "' contains shell-unsafe character in spec '" + id + "'");
+        throw_runtime_error({ "PRODUCTS key '",
+                              key_str,
+                              "' contains shell-unsafe character in spec '",
+                              id,
+                              "'" });
       }
     }
 
     if (val_str.empty()) {
-      throw std::runtime_error("PRODUCTS value cannot be empty in spec '" + id + "'");
+      throw_runtime_error({ "PRODUCTS value cannot be empty in spec '", id, "'" });
     }
 
     if (!user_managed) {  // Validate path safety for cached packages
       std::filesystem::path product_path{ val_str };
 
       if (product_path.is_absolute() || (!val_str.empty() && val_str[0] == '/')) {
-        throw std::runtime_error("PRODUCTS value '" + val_str +
-                                 "' cannot be absolute path in spec '" + id + "'");
+        throw_runtime_error({ "PRODUCTS value '",
+                              val_str,
+                              "' cannot be absolute path in spec '",
+                              id,
+                              "'" });
       }
 
       for (auto const &component : product_path) {  // Check for path traversal components
         if (component == "..") {
-          throw std::runtime_error("PRODUCTS value '" + val_str +
-                                   "' cannot contain path traversal (..) in spec '" + id +
-                                   "'");
+          throw_runtime_error({ "PRODUCTS value '",
+                                val_str,
+                                "' cannot contain path traversal (..) in spec '",
+                                id,
+                                "'" });
         }
       }
     }
@@ -717,15 +768,16 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
 
   // bundle field must be string (the bundle identity)
   if (!bundle_obj.is<std::string>()) {
-    throw std::runtime_error(
-        "Pure bundle dependency 'bundle' field must be string (identity)");
+    throw_runtime_error(
+        { "Pure bundle dependency 'bundle' field must be string (identity)" });
   }
   std::string bundle_identity{ bundle_obj.as<std::string>() };
   if (!util_is_safe_path_component(bundle_identity)) {
-    throw std::runtime_error(
-        "Pure bundle dependency 'bundle' field is not a valid "
-        "identity: '" +
-        bundle_identity + "'");
+    throw_runtime_error(
+        { "Pure bundle dependency 'bundle' field is not a valid "
+          "identity: '",
+          bundle_identity,
+          "'" });
   }
 
   // Parse source: string (URL/path) or table { fetch = function, dependencies = {} }
@@ -733,7 +785,7 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
     sol::table source_table{ source_obj.as<sol::table>() };
     sol::object fetch_obj{ source_table["fetch"] };
     if (!fetch_obj.valid() || !fetch_obj.is<sol::function>()) {
-      throw std::runtime_error("Bundle source table requires 'fetch' function");
+      throw_runtime_error({ "Bundle source table requires 'fetch' function" });
     }
 
     pkg_cfg::custom_fetch_source custom;
@@ -741,7 +793,7 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
     sol::object deps_obj{ source_table["dependencies"] };
     if (deps_obj.valid() && deps_obj.get_type() != sol::type::lua_nil) {
       if (!deps_obj.is<sol::table>()) {
-        throw std::runtime_error("Bundle source.dependencies must be array (table)");
+        throw_runtime_error({ "Bundle source.dependencies must be array (table)" });
       }
       sol::table deps_table{ deps_obj.as<sol::table>() };
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
@@ -755,8 +807,8 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
   }
 
   if (!source_obj.is<std::string>()) {
-    throw std::runtime_error(
-        "Pure bundle dependency 'source' field must be string or table");
+    throw_runtime_error(
+        { "Pure bundle dependency 'source' field must be string or table" });
   }
   std::string const source_uri{ source_obj.as<std::string>() };
   auto const info{ uri_classify(source_uri) };
@@ -764,7 +816,7 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
   if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
     auto ref_opt{ sol_util_get_optional<std::string>(table, "ref", "Bundle dependency") };
     if (!ref_opt.has_value() || ref_opt->empty()) {
-      throw std::runtime_error("Bundle dependency with git source requires 'ref' field");
+      throw_runtime_error({ "Bundle dependency with git source requires 'ref' field" });
     }
     return pkg_cfg::bundle_source{ .bundle_identity = std::move(bundle_identity),
                                    .fetch_source =
@@ -809,8 +861,8 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
   std::string const spec_identity{ [&] {
     auto opt{ sol_util_get_optional<std::string>(table, "spec", "Dependency") };
     if (!opt.has_value() || opt->empty()) {
-      throw std::runtime_error(
-          "Dependency with 'bundle' field (without 'source') requires 'spec' field");
+      throw_runtime_error(
+          { "Dependency with 'bundle' field (without 'source') requires 'spec' field" });
     }
     return std::move(*opt);
   }() };
@@ -830,17 +882,19 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
         return it->second;
       }
 
-      throw std::runtime_error(
-          "Bundle reference '" + ref +
-          "' not found in BUNDLES table or prior DEPENDENCIES for spec '" + spec_identity +
-          "'");
+      throw_runtime_error(
+          { "Bundle reference '",
+            ref,
+            "' not found in BUNDLES table or prior DEPENDENCIES for spec '",
+            spec_identity,
+            "'" });
     }
 
     if (bundle_obj.is<sol::table>()) {
       return bundle::parse_inline(bundle_obj.as<sol::table>(), spec_path);
     }
 
-    throw std::runtime_error("Dependency 'bundle' field must be string or table");
+    throw_runtime_error({ "Dependency 'bundle' field must be string or table" });
   }() };
 
   // Parse optional fields
@@ -912,9 +966,11 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
         pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
         if (!cfg.identity.starts_with("local.") &&
             dep_cfg->identity.starts_with("local.")) {
-          throw std::runtime_error("non-local spec '" + cfg.identity +
-                                   "' cannot depend on local spec '" + dep_cfg->identity +
-                                   "'");
+          throw_runtime_error({ "non-local spec '",
+                                cfg.identity,
+                                "' cannot depend on local spec '",
+                                dep_cfg->identity,
+                                "'" });
         }
         parsed_deps.push_back(dep_cfg);
         continue;
@@ -930,20 +986,22 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
           return std::nullopt;
         }
         if (setup_obj.get_type() != sol::type::table) {
-          throw std::runtime_error(
-              "Dependency 'setup' field must be a table of pair "
-              "names (spec '" +
-              cfg.identity + "')");
+          throw_runtime_error(
+              { "Dependency 'setup' field must be a table of pair "
+                "names (spec '",
+                cfg.identity,
+                "')" });
         }
         std::vector<std::string> names;
         sol::table t{ setup_obj.as<sol::table>() };
         for (size_t j{ 1 }; j <= t.size(); ++j) {
           sol::object elem{ t[j] };
           if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
-            throw std::runtime_error(
-                "Dependency 'setup' entries must be non-empty "
-                "strings (spec '" +
-                cfg.identity + "')");
+            throw_runtime_error(
+                { "Dependency 'setup' entries must be non-empty "
+                  "strings (spec '",
+                  cfg.identity,
+                  "')" });
           }
           names.push_back(elem.as<std::string>());
         }
@@ -953,10 +1011,11 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       // Check for pure bundle dependency: {bundle = "id", source = "..."}
       if (auto pure_bundle{ try_parse_pure_bundle_dep(table, spec_path) }) {
         if (dep_setup.has_value()) {
-          throw std::runtime_error(
-              "Bundle dependencies cannot select 'setup' pairs "
-              "(spec '" +
-              cfg.identity + "')");
+          throw_runtime_error(
+              { "Bundle dependencies cannot select 'setup' pairs "
+                "(spec '",
+                cfg.identity,
+                "')" });
         }
         std::string const bundle_id{ pure_bundle->bundle_identity };
 
@@ -1004,9 +1063,11 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
 
         if (!cfg.identity.starts_with("local.") &&
             dep_cfg->identity.starts_with("local.")) {
-          throw std::runtime_error("non-local spec '" + cfg.identity +
-                                   "' cannot depend on local spec '" + dep_cfg->identity +
-                                   "'");
+          throw_runtime_error({ "non-local spec '",
+                                cfg.identity,
+                                "' cannot depend on local spec '",
+                                dep_cfg->identity,
+                                "'" });
         }
         apply_dep_setup(dep_cfg);
         parsed_deps.push_back(dep_cfg);
@@ -1016,15 +1077,17 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       // Standard dependency (no bundle field)
       pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
       if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
-        throw std::runtime_error("non-local spec '" + cfg.identity +
-                                 "' cannot depend on local spec '" + dep_cfg->identity +
-                                 "'");
+        throw_runtime_error({ "non-local spec '",
+                              cfg.identity,
+                              "' cannot depend on local spec '",
+                              dep_cfg->identity,
+                              "'" });
       }
       apply_dep_setup(dep_cfg);
       parsed_deps.push_back(dep_cfg);
     } catch (std::exception const &e) {
-      throw std::runtime_error("spec '" + cfg.identity + "': DEPENDENCIES[" +
-                               std::to_string(i) + "]: " + e.what());
+      throw_runtime_error(
+          { "spec '", cfg.identity, "': DEPENDENCIES[", i, "]: ", e.what() });
     }
   }
 
@@ -1065,7 +1128,7 @@ void run_options(pkg *p, sol::state &lua) {
       case sol::type::lua_nil: return;
       case sol::type::boolean:
         if (ret_obj.as<bool>()) { return; }
-        throw std::runtime_error(failure_prefix() + " (returned false)");
+        throw_runtime_error({ failure_prefix(), " (returned false)" });
       case sol::type::string:
         throw std::runtime_error(failure_prefix() + ": " + ret_obj.as<std::string>());
       default:
@@ -1074,9 +1137,10 @@ void run_options(pkg *p, sol::state &lua) {
                                  p->cfg->format_key());
     }
   } else {
-    throw std::runtime_error("OPTIONS must be a table or function (got " +
-                             std::string(sol::type_name(lua, options_type)) + ") for " +
-                             p->cfg->format_key());
+    throw_runtime_error({ "OPTIONS must be a table or function (got ",
+                          sol::type_name(lua, options_type),
+                          ") for ",
+                          p->cfg->format_key() });
   }
 }
 
@@ -1112,8 +1176,11 @@ void wire_dependency_graph(pkg *p, engine &eng) {
                        .second;
       }
       if (!inserted) {
-        throw std::runtime_error("Duplicate product dependency '" + product_name +
-                                 "' in spec '" + p->cfg->identity + "'");
+        throw_runtime_error({ "Duplicate product dependency '",
+                              product_name,
+                              "' in spec '",
+                              p->cfg->identity,
+                              "'" });
       }
     }
 
@@ -1129,9 +1196,12 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       std::lock_guard const deps_lock(p->deps_mutex);
       for (auto const kind : kAllClosures) {
         if (p->in_closure(kind)) {
-          throw std::runtime_error(
-              std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
-              query + "' in spec '" + p->cfg->identity + "' is a weak reference");
+          throw_runtime_error({ pkg_closure_name(kind),
+                                " must use strong dependencies: '",
+                                query,
+                                "' in spec '",
+                                p->cfg->identity,
+                                "' is a weak reference" });
         }
       }
       p->weak_references.push_back(pkg::weak_reference{
@@ -1225,15 +1295,15 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
             // Bundle declared in a spec's DEPENDENCIES - use parent's Lua state
             pkg *parent{ eng.find_exact(pkg_key(*cfg.parent)) };
             if (!parent) {
-              throw std::runtime_error(
-                  "Bundle custom fetch: parent spec Lua state unavailable for " +
-                  bundle_id);
+              throw_runtime_error(
+                  { "Bundle custom fetch: parent spec Lua state unavailable for ",
+                    bundle_id });
             }
             auto const parent_acc{ parent->lua.lock() };
             if (!parent_acc) {
-              throw std::runtime_error(
-                  "Bundle custom fetch: parent spec Lua state unavailable for " +
-                  bundle_id);
+              throw_runtime_error(
+                  { "Bundle custom fetch: parent spec Lua state unavailable for ",
+                    bundle_id });
             }
             sol::state_view parent_lua{ *parent_acc };
 
@@ -1241,9 +1311,9 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
                 parent_lua,
                 { .what = fetch_fn_query::kind::BUNDLE, .identity = bundle_id }) };
             if (!fetch_func_opt) {
-              throw std::runtime_error(
-                  "Bundle custom fetch function not found in parent spec for: " +
-                  bundle_id);
+              throw_runtime_error(
+                  { "Bundle custom fetch function not found in parent spec for: ",
+                    bundle_id });
             }
 
             // Same split as a spec's custom fetch: the bundle package owns the
@@ -1260,15 +1330,17 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
             if (!result.valid()) {
               sol::error err = result;
-              throw std::runtime_error("Bundle custom fetch function failed for " +
-                                       bundle_id + ": " + err.what());
+              throw_runtime_error({ "Bundle custom fetch function failed for ",
+                                    bundle_id,
+                                    ": ",
+                                    err.what() });
             }
           } else {
             // Bundle declared in manifest's BUNDLES table
             manifest const *m{ eng.get_manifest() };
             if (!m) {
-              throw std::runtime_error("Bundle custom fetch requires manifest: " +
-                                       bundle_id);
+              throw_runtime_error(
+                  { "Bundle custom fetch requires manifest: ", bundle_id });
             }
 
             // The manifest Lua lock is held for this whole call, so envy.run
@@ -1282,8 +1354,8 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
 
             auto err{ m->run_bundle_fetch(bundle_id, &ctx, tmp_dir) };
             if (err) {
-              throw std::runtime_error("Bundle custom fetch function failed for " +
-                                       bundle_id + ": " + *err);
+              throw_runtime_error(
+                  { "Bundle custom fetch function failed for ", bundle_id, ": ", *err });
             }
           }
         });
@@ -1346,15 +1418,15 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     } else if (std::holds_alternative<pkg_cfg::bundle_source>(cfg.source)) {
       return resolve_spec_from_bundle(cfg, eng);
     } else {
-      throw std::runtime_error("Unsupported source type: " + cfg.identity);
+      throw_runtime_error({ "Unsupported source type: ", cfg.identity });
     }
   }() };
 
   std::filesystem::path const &spec_path{ fetched.spec_path };
 
   if (!std::filesystem::exists(spec_path)) {
-    throw std::runtime_error("Spec source not found: " + spec_path.string() +
-                             " (for spec '" + cfg.identity + "')");
+    throw_runtime_error(
+        { "Spec source not found: ", spec_path, " (for spec '", cfg.identity, "')" });
   }
 
   // Load and validate spec script
@@ -1376,17 +1448,20 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     try {
       sol::object identity_obj{ (*lua)["IDENTITY"] };
       if (!identity_obj.valid() || identity_obj.get_type() != sol::type::string) {
-        throw std::runtime_error("Spec must define 'IDENTITY' global as a string");
+        throw_runtime_error({ "Spec must define 'IDENTITY' global as a string" });
       }
       return identity_obj.as<std::string>();
     } catch (std::runtime_error const &e) {
-      throw std::runtime_error(std::string(e.what()) + " (in spec: " + cfg.identity + ")");
+      throw_runtime_error({ e.what(), " (in spec: ", cfg.identity, ")" });
     }
   }() };
 
   if (declared_identity != cfg.identity) {
-    throw std::runtime_error("Identity mismatch: expected '" + cfg.identity +
-                             "' but spec declares '" + declared_identity + "'");
+    throw_runtime_error({ "Identity mismatch: expected '",
+                          cfg.identity,
+                          "' but spec declares '",
+                          declared_identity,
+                          "'" });
   }
 
   // The fetched file is a spec for this identity: the entry is now worth keeping.
@@ -1414,10 +1489,11 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     // copy. First moment this is knowable, and still before pkg_check.
     if (user_managed) {
       if (auto const *plan{ eng.vendor() }; plan && plan->find(p->key)) {
-        throw std::runtime_error(
-            "package '" + cfg.identity +
-            "' is declared USER_MANAGED, which has no cached payload to vendor; remove "
-            "its 'vendor' entry from the manifest");
+        throw_runtime_error(
+            { "package '",
+              cfg.identity,
+              "' is declared USER_MANAGED, which has no cached payload to vendor; remove "
+              "its 'vendor' entry from the manifest" });
       }
     }
   }
@@ -1434,15 +1510,14 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     sol::object platforms_obj{ (*lua)["PLATFORMS"] };
     if (platforms_obj.valid() && platforms_obj.get_type() != sol::type::lua_nil) {
       if (platforms_obj.get_type() != sol::type::table) {
-        throw std::runtime_error("PLATFORMS must be a table in spec '" + cfg.identity +
-                                 "'");
+        throw_runtime_error({ "PLATFORMS must be a table in spec '", cfg.identity, "'" });
       }
       sol::table plat_table{ platforms_obj.as<sol::table>() };
       for (size_t i{ 1 }; i <= plat_table.size(); ++i) {
         sol::object elem{ plat_table[i] };
         if (!elem.is<std::string>()) {
-          throw std::runtime_error("PLATFORMS entries must be strings in spec '" +
-                                   cfg.identity + "'");
+          throw_runtime_error(
+              { "PLATFORMS entries must be strings in spec '", cfg.identity, "'" });
         }
         spec_platforms.push_back(elem.as<std::string>());
       }
@@ -1464,7 +1539,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   try {  // Store options in Lua registry
     lua->registry()[ENVY_OPTIONS_RIDX] = deserialize_options(*lua, cfg.serialized_options);
   } catch (std::runtime_error const &e) {
-    throw std::runtime_error(e.what() + std::string(" for ") + cfg.identity);
+    throw_runtime_error({ e.what(), " for ", cfg.identity });
   }
 
   run_options(p, *lua);

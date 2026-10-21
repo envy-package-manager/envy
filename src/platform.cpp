@@ -39,7 +39,7 @@ class scan_pool : unmovable {
  public:
   scan_pool(std::vector<std::filesystem::path> const &roots,
             unsigned threads,
-            dir_scan_progress const &progress)
+            dir_scan_progress progress)
       : totals_(roots.size()), progress_{ progress } {
     queue_.reserve(roots.size());
     for (std::size_t i{ 0 }; i < roots.size(); ++i) {
@@ -137,7 +137,7 @@ class scan_pool : unmovable {
 
 std::vector<dir_size> dir_sizes(std::vector<std::filesystem::path> const &roots,
                                 unsigned threads,
-                                dir_scan_progress const &progress) {
+                                dir_scan_progress progress) {
   return scan_pool{ roots, threads, progress }.results();
 }
 

@@ -3,6 +3,7 @@
 #include "manifest.h"
 #include "platform.h"
 #include "reexec.h"
+#include "util.h"
 
 #include "cli_parse.h"
 
@@ -36,7 +37,7 @@ cmd_run::cmd_run(cmd_run::cfg cfg, std::optional<fs::path> const &cli_cache_root
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_run::execute() {
-  if (cfg_.command.empty()) { throw std::runtime_error("run: no command specified"); }
+  if (cfg_.command.empty()) { throw_runtime_error({ "run: no command specified" }); }
 
   // Determine start_dir for manifest discovery and build the exec command.
   // If `--` is present, the next arg is the script path used to anchor discovery.
@@ -48,15 +49,14 @@ void cmd_run::execute() {
     auto const sentinel_pos{ static_cast<size_t>(
         std::distance(cfg_.command.begin(), sentinel)) };
     if (sentinel_pos + 1 >= cfg_.command.size()) {
-      throw std::runtime_error("run: '--' must be followed by a script path");
+      throw_runtime_error({ "run: '--' must be followed by a script path" });
     }
     auto const script_path{ fs::absolute(cfg_.command[sentinel_pos + 1]) };
     if (!fs::exists(script_path)) {
-      throw std::runtime_error("run: script not found: " + script_path.string());
+      throw_runtime_error({ "run: script not found: ", script_path });
     }
     if (!fs::is_regular_file(script_path)) {
-      throw std::runtime_error("run: script is not a regular file: " +
-                               script_path.string());
+      throw_runtime_error({ "run: script is not a regular file: ", script_path });
     }
     start_dir = script_path.parent_path();
     // Strip sentinel only; keep script path and everything else
@@ -86,7 +86,7 @@ void cmd_run::execute() {
     if (!cfg_.project_dir && exec_command.size() > 1) {
       msg += "\nhint: use '--' to specify script location for manifest discovery";
     }
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
   auto const &manifest_path{ discovered->path };
   auto const &meta{ discovered->meta };  // discovery parsed the directives already
@@ -101,13 +101,12 @@ void cmd_run::execute() {
       manifest_path.parent_path());
 
   if (!meta.bin) {
-    throw std::runtime_error("run: manifest has no @envy bin directive: " +
-                             manifest_path.string());
+    throw_runtime_error({ "run: manifest has no @envy bin directive: ", manifest_path });
   }
 
   auto const bin_dir_raw{ manifest_path.parent_path() / *meta.bin };
   if (!fs::exists(bin_dir_raw) || !fs::is_directory(bin_dir_raw)) {
-    throw std::runtime_error("run: bin directory does not exist: " + bin_dir_raw.string());
+    throw_runtime_error({ "run: bin directory does not exist: ", bin_dir_raw });
   }
   auto const bin_dir{ fs::canonical(bin_dir_raw) };
 
@@ -142,13 +141,11 @@ void cmd_run::execute() {
 #ifdef _WIN32
   // Windows has no true execvp; spawn the child, wait, propagate its exit code.
   intptr_t const rc{ _spawnvp(_P_WAIT, argv[0], argv.data()) };
-  if (rc == -1) {
-    throw std::runtime_error(std::string{ "run: spawn failed: " } + std::strerror(errno));
-  }
+  if (rc == -1) { throw_runtime_error({ "run: spawn failed: ", std::strerror(errno) }); }
   throw subprocess_exit{ static_cast<int>(rc) };
 #else
   execvp(argv[0], argv.data());
-  throw std::runtime_error(std::string{ "run: exec failed: " } + std::strerror(errno));
+  throw_runtime_error({ "run: exec failed: ", std::strerror(errno) });
 #endif
 }
 

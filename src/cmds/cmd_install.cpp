@@ -51,8 +51,8 @@ void cmd_install::execute() {
             if (!util_platform_matches(pkg->platforms,
                                        platform::os_name(),
                                        platform::arch_name())) {
-              throw std::runtime_error("install: '" + query +
-                                       "' is not available on this platform");
+              throw_runtime_error(
+                  { "install: '", query, "' is not available on this platform" });
             }
             t.push_back(pkg);
             found = true;
@@ -60,7 +60,7 @@ void cmd_install::execute() {
           }
         }
         if (!found) {
-          throw std::runtime_error("install: query '" + query + "' not found in manifest");
+          throw_runtime_error({ "install: query '", query, "' not found in manifest" });
         }
       }
     }

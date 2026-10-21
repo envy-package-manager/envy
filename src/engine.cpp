@@ -85,7 +85,7 @@ constexpr char kDefaultShellConsumerIdentity[]{ "envy.DEFAULT_SHELL@v1" };
 
 // Machine-stable kind for the trace: which built-in, or which custom form.
 constexpr std::string_view shell_kind_name(resolved_shell const &shell) {
-  return std::visit(
+  return envy::visit(
       match{ [](shell_choice c) -> std::string_view {
               switch (c) {
                 case shell_choice::bash: return "bash";
@@ -205,15 +205,28 @@ void validate_source_redeclaration(pkg_cfg const *winner, pkg_cfg const *other) 
 
     case pkg_source_match::DIFFERENT:
       if (bundles && a->bundle_identity != b->bundle_identity) {
-        throw std::runtime_error(
-            "spec '" + winner->identity + "' is requested from two different bundles: '" +
-            a->bundle_identity + "' (" + where(winner) + ") and '" + b->bundle_identity +
-            "' (" + where(other) + "); one declaration must be corrected");
+        throw_runtime_error({ "spec '",
+                              winner->identity,
+                              "' is requested from two different bundles: '",
+                              a->bundle_identity,
+                              "' (",
+                              where(winner),
+                              ") and '",
+                              b->bundle_identity,
+                              "' (",
+                              where(other),
+                              "); one declaration must be corrected" });
       }
-      throw std::runtime_error(what + " '" + subject +
-                               "' is declared with conflicting sources in " +
-                               where(winner) + " and " + where(other) + "; a " + what +
-                               " identity must name one payload");
+      throw_runtime_error({ what,
+                            " '",
+                            subject,
+                            "' is declared with conflicting sources in ",
+                            where(winner),
+                            " and ",
+                            where(other),
+                            "; a ",
+                            what,
+                            " identity must name one payload" });
   }
 }
 
@@ -235,7 +248,7 @@ void merge_setup_selection(pkg *dep,
     }
     for (auto const kind : kAllClosures) {
       if (!late.empty() && dep->in_closure(kind)) {
-        throw std::runtime_error(late_setup_selection_error(*dep, kind, late));
+        throw_runtime_error({ late_setup_selection_error(*dep, kind, late) });
       }
     }
     dep->spec_setup_selections.insert(late.begin(), late.end());
@@ -246,9 +259,10 @@ void merge_setup_selection(pkg *dep,
   size_t const before{ dep->setup_selected.size() };
   dep->setup_selected.insert(names.begin(), names.end());
   if (dep->setup_selection_consumed && dep->setup_selected.size() != before) {
-    throw std::runtime_error("SETUP selection for " + dep->cfg->identity +
-                             " arrived after its setup phase ran; select pairs from "
-                             "entries that resolve before the package executes");
+    throw_runtime_error({ "SETUP selection for ",
+                          dep->cfg->identity,
+                          " arrived after its setup phase ran; select pairs from "
+                          "entries that resolve before the package executes" });
   }
 }
 
@@ -317,7 +331,9 @@ void resolve_identity_ref(pkg *p,
   if (matches.size() > 1) {
     // find_matches walks an unordered map; sort so one graph always reports one
     // message.
-    std::ranges::sort(matches, {}, [](pkg const *m) { return m->key.canonical(); });
+    util_sort(matches, [](pkg const *a, pkg const *b) {
+      return a->key.canonical() < b->key.canonical();
+    });
     std::ostringstream oss;
     oss << "Reference '" << wr->query << "' in spec '" << p->cfg->identity
         << "' is ambiguous: ";
@@ -354,9 +370,15 @@ void resolve_product_ref(pkg *p,
 
     if (!wr->constraint_identity.empty() &&
         dep->cfg->identity != wr->constraint_identity) {
-      throw std::runtime_error("Product '" + wr->query + "' in spec '" + p->cfg->identity +
-                               "' must come from '" + wr->constraint_identity +
-                               "', but provider is '" + dep->cfg->identity + "'");
+      throw_runtime_error({ "Product '",
+                            wr->query,
+                            "' in spec '",
+                            p->cfg->identity,
+                            "' must come from '",
+                            wr->constraint_identity,
+                            "', but provider is '",
+                            dep->cfg->identity,
+                            "'" });
     }
 
     eng.wire_dependency(p, dep, wr->needed_by);
@@ -414,7 +436,7 @@ void engine::wire_dependency(pkg *parent,
     if (auto const path{ dependency_path(dep, parent) }; !path.empty()) {
       std::string msg{ std::string{ kind } + " cycle detected: " + parent->cfg->identity };
       for (pkg const *node : path) { msg += " -> " + node->cfg->identity; }
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     std::lock_guard const deps_lock(parent->deps_mutex);
@@ -426,10 +448,15 @@ void engine::wire_dependency(pkg *parent,
     // variants of one identity, so the second one is an error rather than a
     // silent overwrite.
     if (!inserted && it->second.p != dep) {
-      throw std::runtime_error("spec '" + parent->cfg->identity + "' depends on '" +
-                               dep->cfg->identity + "' twice with different options: '" +
-                               it->second.p->key.canonical() + "' and '" +
-                               dep->key.canonical() + "'");
+      throw_runtime_error({ "spec '",
+                            parent->cfg->identity,
+                            "' depends on '",
+                            dep->cfg->identity,
+                            "' twice with different options: '",
+                            it->second.p->key.canonical(),
+                            "' and '",
+                            dep->key.canonical(),
+                            "'" });
     }
 
     bool const tightened{ !inserted && needed_by < it->second.needed_by };
@@ -619,8 +646,8 @@ pkg *engine::ensure_pkg(pkg_cfg const *cfg) {
       // A fresh package key must never collide with an existing task (e.g. a
       // pathological identity matching a pair-task key). Fail loudly now
       // instead of hanging later on a task with someone else's config.
-      throw std::runtime_error("Package task key collides with existing task: " +
-                               key.canonical());
+      throw_runtime_error(
+          { "Package task key collides with existing task: ", key.canonical() });
     }
   }
 
@@ -686,7 +713,9 @@ std::vector<product_info> engine::collect_all_products() const {
     }
   }
 
-  std::ranges::sort(infos, {}, &product_info::product_name);
+  util_sort(infos, [](product_info const &a, product_info const &b) {
+    return a.product_name < b.product_name;
+  });
 
   return infos;
 }
@@ -753,7 +782,7 @@ void engine::run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pa
     };
 
     if (!core_.ensure_task(std::move(cfg))) {
-      throw std::runtime_error("SETUP pair task key collides with existing task: " + key);
+      throw_runtime_error({ "SETUP pair task key collides with existing task: ", key });
     }
   }
 
@@ -770,7 +799,7 @@ void engine::run_setup_pairs_for(pkg *parent, std::vector<std::string> const &pa
       if (first_error.empty()) { first_error = e.what(); }
     }
   }
-  if (!first_error.empty()) { throw std::runtime_error(first_error); }
+  if (!first_error.empty()) { throw_runtime_error({ first_error }); }
 }
 
 void engine::extend_dependencies_to_completion(pkg *p) {
@@ -857,7 +886,7 @@ package_depot_index const *engine::depot_index_for(pkg *p) {
              .result = bootstrap ? "bootstrap" : (failed ? "failed" : "ready"));
 
   if (bootstrap) { return nullptr; }
-  if (failed) { throw std::runtime_error(depot_error_); }
+  if (failed) { throw_runtime_error({ depot_error_ }); }
   return depot_index_ ? &*depot_index_ : nullptr;
 }
 
@@ -871,7 +900,7 @@ void engine::ensure_depot_task_started() {
         depot_edge_deps_ = spawn_depot_dependencies();
       } catch (std::exception const &e) {
         depot_error_ = std::string{ "package depot: " } + e.what();
-        throw std::runtime_error(depot_error_);  // task and waiters store one message
+        throw_runtime_error({ depot_error_ });  // task and waiters store one message
       }
     };
     cfg.edges = [this](int) {
@@ -891,7 +920,7 @@ void engine::ensure_depot_task_started() {
         // Throw what the waiters get: a bare rethrow would store the unprefixed
         // message here and defeat aggregated_failures' dedup.
         depot_error_ = std::string{ "package depot: " } + e.what();
-        throw std::runtime_error(depot_error_);
+        throw_runtime_error({ depot_error_ });
       }
       return false;
     };
@@ -901,7 +930,7 @@ void engine::ensure_depot_task_started() {
     };
 
     if (!core_.ensure_task(std::move(cfg))) {
-      throw std::runtime_error("depot task key collides with existing task");
+      throw_runtime_error({ "depot task key collides with existing task" });
     }
     core_.start_task(kDepotTaskKey, 1);
   });
@@ -1022,15 +1051,17 @@ void engine::mark_closure(pkg *p, pkg_closure kind, std::string reason) {
           member->weak_references,
           [](auto const &wr) { return !wr.resolved; }) };
       if (unresolved != member->weak_references.end()) {
-        throw std::runtime_error(
-            std::string{ pkg_closure_name(kind) } + " must use strong dependencies: '" +
-            member->cfg->identity + "' holds a weak reference to '" + unresolved->query +
-            "' but runs outside the window where weak references "
-            "resolve");
+        throw_runtime_error({ pkg_closure_name(kind),
+                              " must use strong dependencies: '",
+                              member->cfg->identity,
+                              "' holds a weak reference to '",
+                              unresolved->query,
+                              "' but runs outside the window where weak references "
+                              "resolve" });
       }
       if (!member->spec_setup_selections.empty()) {
-        throw std::runtime_error(
-            late_setup_selection_error(*member, kind, member->spec_setup_selections));
+        throw_runtime_error(
+            { late_setup_selection_error(*member, kind, member->spec_setup_selections) });
       }
 
       std::string const via{ "a dependency of '" + member->cfg->identity + "', " +
@@ -1146,7 +1177,7 @@ resolved_shell engine::default_shell(pkg *p) {
 
   if (builtin_shell_only(p)) { return shell_resolve_default(nullptr); }
   if (default_shell_state_ == task_state::FAILED) {
-    throw std::runtime_error(default_shell_error_);
+    throw_runtime_error({ default_shell_error_ });
   }
   return shell_resolve_default(&default_shell_);
 }
@@ -1188,7 +1219,7 @@ void engine::ensure_default_shell_task_started() {
         }
       } catch (std::exception const &e) {
         default_shell_error_ = std::string{ "DEFAULT_SHELL: " } + e.what();
-        throw std::runtime_error(default_shell_error_);  // one message, task and waiters
+        throw_runtime_error({ default_shell_error_ });  // one message, task and waiters
       }
     };
     cfg.edges = [this](int) {
@@ -1207,7 +1238,7 @@ void engine::ensure_default_shell_task_started() {
       } catch (std::exception const &e) {
         // Throw what the waiters get, so task and waiter store one string (see #depot).
         default_shell_error_ = std::string{ "DEFAULT_SHELL: " } + e.what();
-        throw std::runtime_error(default_shell_error_);
+        throw_runtime_error({ default_shell_error_ });
       }
       return false;
     };
@@ -1219,7 +1250,7 @@ void engine::ensure_default_shell_task_started() {
     };
 
     if (!core_.ensure_task(std::move(cfg))) {
-      throw std::runtime_error("DEFAULT_SHELL task key collides with existing task");
+      throw_runtime_error({ "DEFAULT_SHELL task key collides with existing task" });
     }
     core_.start_task(kDefaultShellTaskKey, 1);
   });
@@ -1290,9 +1321,11 @@ void engine::process_fetch_dependencies(pkg *p) {
     // entry here has a source. Programmatic construction bypasses that parse, so
     // assert it rather than fall through to ensure_pkg with no source.
     if (fetch_dep_cfg->is_weak_reference()) {
-      throw std::runtime_error("source.dependencies entry '" + fetch_dep_cfg->identity +
-                               "' in spec '" + p->cfg->identity +
-                               "' must be a strong reference");
+      throw_runtime_error({ "source.dependencies entry '",
+                            fetch_dep_cfg->identity,
+                            "' in spec '",
+                            p->cfg->identity,
+                            "' must be a strong reference" });
     }
 
     pkg *fetch_dep{ ensure_pkg(fetch_dep_cfg) };
@@ -1319,9 +1352,11 @@ void engine::process_fetch_dependencies(pkg *p) {
                                    .provider = fetch_dep,
                                    .constraint_identity = fetch_dep_cfg->identity }) };
       if (!inserted && it->second.provider != fetch_dep) {
-        throw std::runtime_error("Duplicate product dependency '" +
-                                 *fetch_dep_cfg->product + "' in spec '" +
-                                 p->cfg->identity + "'");
+        throw_runtime_error({ "Duplicate product dependency '",
+                              *fetch_dep_cfg->product,
+                              "' in spec '",
+                              p->cfg->identity,
+                              "'" });
       }
     }
 
@@ -1361,7 +1396,7 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
     }
 
     if (matches.empty()) {
-      throw std::runtime_error(cmd_name + ": query '" + query + "' not found in manifest");
+      throw_runtime_error({ cmd_name, ": query '", query, "' not found in manifest" });
     }
 
     // First-wins would pick whichever entry the manifest happened to list first;
@@ -1373,15 +1408,15 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
         if (it != matches.begin()) { oss << ", "; }
         oss << it->first;
       }
-      throw std::runtime_error(oss.str());
+      throw_runtime_error({ oss.str() });
     }
 
     pkg_cfg const *const target{ matches.begin()->second };
     if (!util_platform_matches(target->platforms,
                                platform::os_name(),
                                platform::arch_name())) {
-      throw std::runtime_error(cmd_name + ": '" + query +
-                               "' is not available on this platform");
+      throw_runtime_error(
+          { cmd_name, ": '", query, "' is not available on this platform" });
     }
     targets.push_back(target);
   }
@@ -1394,7 +1429,7 @@ std::string engine::aggregated_failures() const {
   for (auto const &[key, msg] : core_.collect_failures()) {
     msgs.push_back(msg.empty() ? "Package failed: " + key : msg);
   }
-  std::ranges::sort(msgs);
+  util_sort(msgs);
   msgs.erase(std::ranges::unique(msgs).begin(), msgs.end());
 
   std::string out;
@@ -1420,7 +1455,7 @@ void engine::run_full(std::vector<pkg_cfg const *> const &roots) {
   core_.join_all();            // Tolerates pair tasks spawned while joining
 
   if (auto const failures{ aggregated_failures() }; !failures.empty()) {
-    throw std::runtime_error(failures);
+    throw_runtime_error({ failures });
   }
 }
 
@@ -1434,7 +1469,7 @@ void engine::register_products(pkg *p) {
     std::lock_guard const deps_lock(p->deps_mutex);
     n.reserve(p->products.size());
     for (auto const &[product_name, _] : p->products) { n.push_back(product_name); }
-    std::ranges::sort(n);
+    util_sort(n);
     return n;
   }() };
 
@@ -1449,9 +1484,10 @@ void engine::register_products(pkg *p) {
     // sorted order so the message is reproducible.
     auto const &a{ it->second->cfg->identity };
     auto const &b{ p->cfg->identity };
-    throw std::runtime_error(
-        "Product '" + product_name +
-        "' provided by multiple specs: " + (a < b ? a + ", " + b : b + ", " + a));
+    throw_runtime_error({ "Product '",
+                          product_name,
+                          "' provided by multiple specs: ",
+                          (a < b ? a + ", " + b : b + ", " + a) });
   }
 }
 
@@ -1488,7 +1524,7 @@ void engine::validate_product_fallbacks() {
       if (i) { oss << "\n"; }
       oss << errors[i];
     }
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 }
 
@@ -1548,7 +1584,7 @@ void engine::validate_setup_selections() {
       if (i) { oss << "\n"; }
       oss << errors[i];
     }
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 }
 
@@ -1599,7 +1635,7 @@ engine::weak_resolution_result engine::resolve_weak_references() {
       if (i) { oss << "\n"; }
       oss << ambiguity_messages[i];
     }
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 
   return result;
@@ -1629,7 +1665,7 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
 
     if (auto const errors{ aggregated_failures() }; !errors.empty()) {
       core_.fail_all();
-      throw std::runtime_error(errors);
+      throw_runtime_error({ errors });
     }
 
     // No registry sweep here: register_products publishes at each package's own
@@ -1647,7 +1683,7 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
     for (auto const &msg : resolution.missing_without_fallback) { oss << msg << "\n"; }
     oss << "Dependency resolution made no progress at iteration " << iteration << " with "
         << resolution.unresolved << " unresolved references";
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 
   validate_product_fallbacks();

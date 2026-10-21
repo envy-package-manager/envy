@@ -16,7 +16,6 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -53,8 +52,8 @@ bool run_pair_check_command(pkg *p,
     try {
       return shell_run(cmd, cfg);
     } catch (std::exception const &e) {
-      throw std::runtime_error(context + " command failed for " + p->cfg->identity + ": " +
-                               e.what());
+      throw_runtime_error(
+          { context, " command failed for ", p->cfg->identity, ": ", e.what() });
     }
   }() };
 
@@ -95,8 +94,8 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
     if (verb.is<std::string>()) {
       cmd = verb.as<std::string>();
     } else if (!verb.is<sol::protected_function>()) {
-      throw std::runtime_error(context + " must be a function or string for " +
-                               p->cfg->identity);
+      throw_runtime_error(
+          { context, " must be a function or string for ", p->cfg->identity });
     } else {
       phase_context_guard ctx_guard{ &eng, p, lua.lua_state(), project_root };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
@@ -110,9 +109,11 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
       } else if (result_obj.is<std::string>()) {
         cmd = result_obj.as<std::string>();
       } else {
-        throw std::runtime_error(context + " for " + p->cfg->identity +
-                                 " must return boolean or string, got " +
-                                 sol::type_name(lua.lua_state(), result_obj.get_type()));
+        throw_runtime_error({ context,
+                              " for ",
+                              p->cfg->identity,
+                              " must return boolean or string, got ",
+                              sol::type_name(lua.lua_state(), result_obj.get_type()) });
       }
     }
   }
@@ -141,8 +142,8 @@ void run_pair_install(pkg *p,
     if (verb.is<std::string>()) {
       script = verb.as<std::string>();
     } else if (!verb.is<sol::protected_function>()) {
-      throw std::runtime_error(context + " must be a function or string for " +
-                               p->cfg->identity);
+      throw_runtime_error(
+          { context, " must be a function or string for ", p->cfg->identity });
     } else {
       phase_context_guard ctx_guard{ &eng, p, lua.lua_state(), project_root };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
@@ -154,9 +155,11 @@ void run_pair_install(pkg *p,
       sol::type const result_type{ result_obj.get_type() };
       if (result_type != sol::type::none && result_type != sol::type::lua_nil) {
         if (!result_obj.is<std::string>()) {
-          throw std::runtime_error(context + " for " + p->cfg->identity +
-                                   " must return nil or string, got " +
-                                   sol::type_name(lua.lua_state(), result_type));
+          throw_runtime_error({ context,
+                                " for ",
+                                p->cfg->identity,
+                                " must return nil or string, got ",
+                                sol::type_name(lua.lua_state(), result_type) });
         }
         script = result_obj.as<std::string>();
       }
@@ -191,11 +194,14 @@ std::vector<std::string> compute_selected_pairs(pkg *p) {
 
   for (auto const &name : selected) {
     if (!p->setup_pairs.contains(name)) {
-      throw std::runtime_error(
-          "Unknown setup pair '" + name + "' selected for " + p->cfg->identity +
-          " (spec defines " +
-          (p->setup_pairs.empty() ? "no SETUP pairs" : "different SETUP pair names") +
-          ")");
+      throw_runtime_error(
+          { "Unknown setup pair '",
+            name,
+            "' selected for ",
+            p->cfg->identity,
+            " (spec defines ",
+            (p->setup_pairs.empty() ? "no SETUP pairs" : "different SETUP pair names"),
+            ")" });
     }
   }
 
@@ -210,7 +216,7 @@ std::vector<std::string> compute_selected_pairs(pkg *p) {
   }
 
   std::vector<std::string> sorted{ selected.begin(), selected.end() };
-  std::ranges::sort(sorted);
+  util_sort(sorted);
   return sorted;
 }
 

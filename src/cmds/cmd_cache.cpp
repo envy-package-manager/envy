@@ -36,7 +36,9 @@ std::vector<platform::dir_entry> child_dirs(std::filesystem::path const &dir) {
   auto entries{ platform::dir_list(dir) };
   std::erase_if(entries,
                 [](platform::dir_entry const &e) { return !e.is_dir || e.is_symlink; });
-  std::ranges::sort(entries, {}, &platform::dir_entry::name);
+  util_sort(entries, [](platform::dir_entry const &a, platform::dir_entry const &b) {
+    return a.name < b.name;
+  });
   return entries;
 }
 
@@ -103,8 +105,8 @@ void cmd_cache::set_mode(envy_meta const &meta,
                          std::filesystem::path const &manifest_dir,
                          cache_mode requested) {
   if (manifest_dir.empty()) {
-    throw std::runtime_error(
-        "cache: no envy.lua found, so there is no project to record a cache mode for");
+    throw_runtime_error(
+        { "cache: no envy.lua found, so there is no project to record a cache mode for" });
   }
 
   auto const state{ resolve_state_dir(meta.state_dir, manifest_dir) };
@@ -172,9 +174,9 @@ void cmd_cache::execute() {
   if (cfg_.act == cfg::action::PRINT_USER_WIDE_ROOT) {
     auto const user_wide{ resolve_user_wide_cache_root(cli_cache_root_) };
     if (!user_wide) {
-      throw std::runtime_error(
-          std::string{ "cache: cannot determine a user-wide cache root: " } +
-          platform::get_default_cache_root_env_vars() + " not set");
+      throw_runtime_error({ "cache: cannot determine a user-wide cache root: ",
+                            platform::get_default_cache_root_env_vars(),
+                            " not set" });
     }
     tui::print_stdout("%s\n", user_wide->string().c_str());
     return;
@@ -271,7 +273,7 @@ void cmd_cache::execute() {
       size_width = std::max(size_width, r.size_text.size());
     }
     // Biggest first: the point of the command is finding what to reclaim.
-    std::ranges::sort(*rows, [](row const &a, row const &b) {
+    util_sort(*rows, [](row const &a, row const &b) {
       return (a.size.bytes != b.size.bytes) ? (a.size.bytes > b.size.bytes)
                                             : (a.label < b.label);
     });

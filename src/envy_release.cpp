@@ -51,7 +51,7 @@ void envy_release_validate_mirror(std::string_view mirror, std::string_view op) 
     msg << op << ": mirror contains " << what
         << ", which cannot be represented in a manifest directive or bootstrap script: '"
         << mirror << "'";
-    throw std::runtime_error(msg.str());
+    throw_runtime_error({ msg.str() });
   } };
 
   if (mirror.empty()) { reject("nothing (empty value)"); }
@@ -153,7 +153,7 @@ std::string envy_release_load_sums(std::filesystem::path const &sums_file,
           << ", got " << actual_hex
           << ". The mirror is serving a different release manifest than the one this "
              "project pinned -- update the pin deliberately, do not remove it.";
-      throw std::runtime_error(msg.str());
+      throw_runtime_error({ msg.str() });
     }
   }
 
@@ -169,7 +169,7 @@ void envy_release_verify_artifact(std::filesystem::path const &artifact,
   if (!expected) {
     std::ostringstream msg;
     msg << op << ": " << kEnvyReleaseSumsFile << " lists no entry for " << artifact_name;
-    throw std::runtime_error(msg.str());
+    throw_runtime_error({ msg.str() });
   }
 
   auto const actual{ sha256(artifact, progress) };
@@ -178,7 +178,7 @@ void envy_release_verify_artifact(std::filesystem::path const &artifact,
     std::ostringstream msg;
     msg << op << ": " << artifact_name << " failed attestation: " << kEnvyReleaseSumsFile
         << " says " << *expected << ", downloaded bytes hash to " << actual_hex;
-    throw std::runtime_error(msg.str());
+    throw_runtime_error({ msg.str() });
   }
 }
 

@@ -3,6 +3,7 @@
 #include "extract.h"
 #include "tui.h"
 #include "tui_actions.h"
+#include "util.h"
 
 #include "cli_parse.h"
 
@@ -36,24 +37,23 @@ void cmd_extract::execute() {
 
   std::error_code ec;
   if (!std::filesystem::exists(cfg_.archive_path, ec)) {
-    throw std::runtime_error("extract: archive not found: " + cfg_.archive_path.string());
+    throw_runtime_error({ "extract: archive not found: ", cfg_.archive_path });
   }
 
   if (!std::filesystem::is_regular_file(cfg_.archive_path, ec)) {
-    throw std::runtime_error("extract: not a regular file: " + cfg_.archive_path.string());
+    throw_runtime_error({ "extract: not a regular file: ", cfg_.archive_path });
   }
 
   if (!std::filesystem::exists(destination, ec)) {
     std::filesystem::create_directories(destination, ec);
     if (ec) {
-      throw std::runtime_error("extract: failed to create destination directory: " +
-                               ec.message());
+      throw_runtime_error(
+          { "extract: failed to create destination directory: ", ec.message() });
     }
   }
 
   if (!std::filesystem::is_directory(destination, ec)) {
-    throw std::runtime_error("extract: destination is not a directory: " +
-                             destination.string());
+    throw_runtime_error({ "extract: destination is not a directory: ", destination });
   }
 
   tui::info("Extracting %s to %s",

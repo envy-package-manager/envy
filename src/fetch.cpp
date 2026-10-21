@@ -40,8 +40,8 @@ std::filesystem::path prepare_destination(std::filesystem::path destination) {
     std::error_code ec;
     std::filesystem::create_directories(parent, ec);
     if (ec) {
-      throw std::runtime_error("fetch: failed to create destination parent: " +
-                               parent.string() + ": " + ec.message());
+      throw_runtime_error(
+          { "fetch: failed to create destination parent: ", parent, ": ", ec.message() });
     }
   }
 
@@ -65,19 +65,18 @@ fetch_result fetch_local_file(std::string const &canonical_path,
   // Validate source exists
   std::error_code ec;
   if (!std::filesystem::exists(source, ec)) {
-    throw std::runtime_error("fetch: source file does not exist: " + source.string());
+    throw_runtime_error({ "fetch: source file does not exist: ", source });
   }
   if (ec) {
-    throw std::runtime_error("fetch: failed to check source: " + source.string() + ": " +
-                             ec.message());
+    throw_runtime_error({ "fetch: failed to check source: ", source, ": ", ec.message() });
   }
 
   auto const dest{ prepare_destination(destination) };
 
   bool const is_directory{ std::filesystem::is_directory(source, ec) };
   if (ec) {
-    throw std::runtime_error("fetch: failed to check if source is directory: " +
-                             source.string() + ": " + ec.message());
+    throw_runtime_error(
+        { "fetch: failed to check if source is directory: ", source, ": ", ec.message() });
   }
 
   if (is_directory) {
@@ -87,8 +86,12 @@ fetch_result fetch_local_file(std::string const &canonical_path,
                               std::filesystem::copy_options::overwrite_existing,
                           ec);
     if (ec) {
-      throw std::runtime_error("fetch: failed to copy directory: " + source.string() +
-                               " -> " + dest.string() + ": " + ec.message());
+      throw_runtime_error({ "fetch: failed to copy directory: ",
+                            source,
+                            " -> ",
+                            dest,
+                            ": ",
+                            ec.message() });
     }
   } else {
     std::filesystem::copy_file(source,
@@ -96,8 +99,8 @@ fetch_result fetch_local_file(std::string const &canonical_path,
                                std::filesystem::copy_options::overwrite_existing,
                                ec);
     if (ec) {
-      throw std::runtime_error("fetch: failed to copy file: " + source.string() + " -> " +
-                               dest.string() + ": " + ec.message());
+      throw_runtime_error(
+          { "fetch: failed to copy file: ", source, " -> ", dest, ": ", ec.message() });
     }
   }
 
@@ -238,7 +241,7 @@ fetch_result fetch_git_repo(std::string const &url,
     git_error const *git_err{ git_error_last() };
     std::string msg{ "fetch_git: checkout failed: " };
     if (git_err) { msg += git_err->message; }
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
 
   // Update HEAD to point to the target (detached HEAD state)
@@ -247,7 +250,7 @@ fetch_result fetch_git_repo(std::string const &url,
     git_error const *git_err{ git_error_last() };
     std::string msg{ "fetch_git: failed to update HEAD: " };
     if (git_err) { msg += git_err->message; }
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
 
   return fetch_result{ .scheme = scheme,
@@ -288,7 +291,7 @@ fetch_result fetch_single(fetch_request const &request) {
     };
   } };
 
-  return std::visit(
+  return envy::visit(
       match{
           [&](fetch_request_http const &req) { return fetch_http(req); },
           [&](fetch_request_https const &req) { return fetch_http(req); },
@@ -434,7 +437,7 @@ fetch_result fetch_with_retry(fetch_request const &request,
                               std::string const &trace_spec,
                               std::string const &url) {
   auto const &policy{ fetch_retry_policy() };
-  auto const &progress{ std::visit(
+  auto const &progress{ envy::visit(
       [](auto const &r) -> fetch_progress_cb_t const & { return r.progress; },
       request) };
 
@@ -504,16 +507,16 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
 
       // The source URL names the retry target, so it is always needed; the rest is
       // trace-only work gated on trace_enabled so a disabled stream costs nothing here.
-      std::string const source{ std::visit([](auto const &r) { return r.source; },
-                                           requests[i]) };
+      std::string const source{ envy::visit([](auto const &r) { return r.source; },
+                                            requests[i]) };
       bool const tracing{ tui::trace_enabled() };
       if (tracing) {
-        ENVY_TRACE(
-            download_start,
-            trace_spec,
-            .url = source,
-            .destination = std::visit([](auto const &r) { return r.destination.string(); },
-                                      requests[i]));
+        ENVY_TRACE(download_start,
+                   trace_spec,
+                   .url = source,
+                   .destination =
+                       envy::visit([](auto const &r) { return r.destination.string(); },
+                                   requests[i]));
       }
       auto const start{ std::chrono::steady_clock::now() };
 

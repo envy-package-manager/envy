@@ -32,7 +32,7 @@ std::string narrow(std::wstring_view w) {
                                      0,
                                      nullptr,
                                      nullptr) };
-  if (n <= 0) { throw std::runtime_error("tree_hash: undecodable path name"); }
+  if (n <= 0) { throw_runtime_error({ "tree_hash: undecodable path name" }); }
   std::string out(static_cast<std::size_t>(n), '\0');
   ::WideCharToMultiByte(CP_UTF8,
                         0,
@@ -46,8 +46,8 @@ std::string narrow(std::wstring_view w) {
 }
 
 [[noreturn]] void throw_last_error(char const *what, tree_scan_string const &path) {
-  throw std::runtime_error(std::string(what) + ": " + narrow(path) + " (error " +
-                           std::to_string(::GetLastError()) + ")");
+  DWORD const err{ ::GetLastError() };  // before narrow() can overwrite it
+  throw_runtime_error({ what, ": ", narrow(path), " (error ", err, ")" });
 }
 
 struct find_closer {
@@ -142,8 +142,8 @@ std::string tree_scan_link_target(tree_scan_string const &path) {
   std::error_code ec;
   auto const target{ std::filesystem::read_symlink(std::filesystem::path{ path }, ec) };
   if (ec) {
-    throw std::runtime_error("tree_hash: cannot read symlink: " + narrow(path) + ": " +
-                             ec.message());
+    throw_runtime_error(
+        { "tree_hash: cannot read symlink: ", narrow(path), ": ", ec.message() });
   }
   return narrow(target.wstring());
 }

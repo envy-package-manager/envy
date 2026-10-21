@@ -1,5 +1,7 @@
 #include "sol_util.h"
 
+#include "util.h"
+
 #include <algorithm>
 #include <span>
 #include <stdexcept>
@@ -49,13 +51,11 @@ end
 void sol_util_throw_wrong_type(std::string_view context,
                                std::string_view key,
                                std::string_view expected) {
-  throw std::runtime_error(std::string(context) + ": " + std::string(key) + " must be a " +
-                           std::string(expected));
+  throw_runtime_error({ context, ": ", key, " must be a ", expected });
 }
 
 void sol_util_throw_missing(std::string_view context, std::string_view key) {
-  throw std::runtime_error(std::string(context) + ": " + std::string(key) +
-                           " is required");
+  throw_runtime_error({ context, ": ", key, " is required" });
 }
 
 std::string sol_util_dump_table(sol::table const &tbl) {
@@ -99,8 +99,7 @@ std::vector<std::string> sol_util_get_string_list(sol::table const &table,
   for (std::size_t i{ 1 }; i <= list->size(); ++i) {
     sol::object const elem{ (*list)[i] };
     if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
-      throw std::runtime_error(std::string(context) + ": " + std::string(key) + "[" +
-                               std::to_string(i) + "] must be a non-empty string");
+      throw_runtime_error({ context, ": ", key, "[", i, "] must be a non-empty string" });
     }
     values.push_back(elem.as<std::string>());
   }
@@ -120,8 +119,8 @@ void sol_util_reject_unknown_keys(sol::table const &table,
       if (!list.empty()) { list += ", "; }
       list += a;
     }
-    throw std::runtime_error(std::string{ context } + ": unknown key '" + name +
-                             "'; allowed keys are " + list);
+    throw_runtime_error(
+        { context, ": unknown key '", name, "'; allowed keys are ", list });
   }
 }
 

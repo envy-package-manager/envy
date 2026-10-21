@@ -88,7 +88,7 @@ phase_trace_scope::~phase_trace_scope() {
 }
 
 std::string_view trace_event_name(trace_event_t const &event) {
-  return std::visit([](auto const &e) { return trace_event_name_of(e); }, event);
+  return envy::visit([](auto const &e) { return trace_event_name_of(e); }, event);
 }
 
 std::string trace_record_to_string(trace_record const &rec) {
@@ -100,7 +100,7 @@ std::string trace_record_to_string(trace_record const &rec) {
     out.append(rec.spec);
   }
 
-  std::visit(
+  envy::visit(
       [&](auto const &e) {
         trace_event_for_each_field(e, [&](std::string_view key, auto const &value) {
           out.push_back(' ');
@@ -138,7 +138,7 @@ std::string trace_record_to_json(trace_record const &rec) {
   out.push_back('"');
   if (!rec.spec.empty()) { append_json_kv(out, "spec", rec.spec); }
 
-  std::visit(
+  envy::visit(
       [&](auto const &e) {
         trace_event_for_each_field(e, [&](std::string_view key, auto const &value) {
           using T = std::remove_cvref_t<decltype(value)>;

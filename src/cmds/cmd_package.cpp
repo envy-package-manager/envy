@@ -47,15 +47,15 @@ void cmd_package::execute() {
       if (!util_platform_matches(pkg->platforms,
                                  platform::os_name(),
                                  platform::arch_name())) {
-        throw std::runtime_error("package: '" + cfg_.identity +
-                                 "' is not available on this platform");
+        throw_runtime_error(
+            { "package: '", cfg_.identity, "' is not available on this platform" });
       }
       matches.push_back(pkg);
     }
   }
 
   if (matches.empty()) {
-    throw std::runtime_error("package: no package matching '" + cfg_.identity + "'");
+    throw_runtime_error({ "package: no package matching '", cfg_.identity, "'" });
   }
 
   // Check for ambiguous matches (different identities)
@@ -68,7 +68,7 @@ void cmd_package::execute() {
   if (unique_identities.size() > 1) {
     std::string msg{ "package: '" + cfg_.identity + "' is ambiguous, matches:\n" };
     for (auto const &id : unique_identities) { msg += "  " + id + "\n"; }
-    throw std::runtime_error(msg);
+    throw_runtime_error({ msg });
   }
 
   // All matches have the same identity; verify they have the same options
@@ -79,8 +79,9 @@ void cmd_package::execute() {
       std::string key{ pkg_cfg::format_key(matches[i]->identity,
                                            matches[i]->serialized_options) };
       if (key != first_key) {
-        throw std::runtime_error("package: '" + cfg_.identity +
-                                 "' appears multiple times with different options");
+        throw_runtime_error({ "package: '",
+                              cfg_.identity,
+                              "' appears multiple times with different options" });
       }
     }
   }
@@ -92,12 +93,12 @@ void cmd_package::execute() {
 
   pkg_key const target_key{ *matches[0] };
   pkg *p{ eng.find_exact(target_key) };
-  if (!p) { throw std::runtime_error("package: spec not found in graph"); }
+  if (!p) { throw_runtime_error({ "package: spec not found in graph" }); }
 
   eng.wait_for_completion(p->key);
 
   if (p->type != pkg_type::CACHE_MANAGED) {
-    throw std::runtime_error("package: package is not cache-managed");
+    throw_runtime_error({ "package: package is not cache-managed" });
   }
 
   tui::print_stdout("%s\n", p->pkg_path.string().c_str());

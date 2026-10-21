@@ -2,6 +2,7 @@
 
 #include "lua_envy.h"
 #include "sol_util.h"
+#include "util.h"
 
 #include "cli_parse.h"
 #include "sol/sol.hpp"
@@ -28,7 +29,7 @@ void cmd_lua::execute() {
       lua->safe_script_file(cfg_.script_path.string(), sol::script_pass_on_error);
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error(err.what());
+    throw_runtime_error({ err.what() });
   }
 }
 

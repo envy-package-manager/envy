@@ -5,7 +5,6 @@
 #include "glob.h"
 #include "util.h"
 
-#include <algorithm>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -43,8 +42,8 @@ std::string derive_leaf(pkg_key const &key, int level) {
 
 void reject_bad_path(std::string_view value, std::string const &what) {
   if (auto const problem{ validate_project_relative_path(value) }) {
-    throw std::runtime_error(what + " must be a path inside the project: " + *problem +
-                             " (\"" + std::string{ value } + "\")");
+    throw_runtime_error(
+        { what, " must be a path inside the project: ", *problem, " (\"", value, "\")" });
   }
 }
 
@@ -68,8 +67,8 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
   // Canonical order: two runs of one manifest escalate the same names and name the same
   // pair in a collision message.
   auto sorted{ requests };
-  std::ranges::sort(sorted, {}, [](vendor_request const &r) -> std::string const & {
-    return r.key.canonical();
+  util_sort(sorted, [](vendor_request const &a, vendor_request const &b) {
+    return a.key.canonical() < b.key.canonical();
   });
 
   std::optional<fs::path> root_dir;
@@ -85,10 +84,12 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
     auto const &req{ sorted[i] };
     if (!req.path_override) {
       if (!root_dir) {
-        throw std::runtime_error(
-            "package '" + std::string{ req.key.identity() } +
-            "' asks to be vendored, but the manifest sets no VENDOR_ROOT; add "
-            "VENDOR_ROOT = \"<dir>\" or give this entry an explicit vendor = \"<dir>\"");
+        throw_runtime_error(
+            { "package '",
+              req.key.identity(),
+              "' asks to be vendored, but the manifest sets no VENDOR_ROOT; add "
+              "VENDOR_ROOT = \"<dir>\" or give this entry an explicit vendor = "
+              "\"<dir>\"" });
       }
       continue;
     }
@@ -133,16 +134,24 @@ vendor_plan vendor_resolve(std::vector<vendor_request> const &requests,
       auto const &a{ sorted[i].key };
       auto const &b{ sorted[j].key };
       if (dest[i] == dest[j]) {
-        throw std::runtime_error(
-            "vendor destination collision: '" + std::string{ a.identity() } + "' and '" +
-            std::string{ b.identity() } + "' both vendor to " + shown(dest[i]));
+        throw_runtime_error({ "vendor destination collision: '",
+                              a.identity(),
+                              "' and '",
+                              b.identity(),
+                              "' both vendor to ",
+                              shown(dest[i]) });
       }
       // Vendoring wipes before copying, so an outer package would delete an inner one.
       if (contains_path(dest[i], dest[j]) || contains_path(dest[j], dest[i])) {
-        throw std::runtime_error(
-            "nested vendor destinations: '" + std::string{ a.identity() } +
-            "' vendors to " + shown(dest[i]) + " and '" + std::string{ b.identity() } +
-            "' vendors to " + shown(dest[j]) + "; one would be erased by the other");
+        throw_runtime_error({ "nested vendor destinations: '",
+                              a.identity(),
+                              "' vendors to ",
+                              shown(dest[i]),
+                              " and '",
+                              b.identity(),
+                              "' vendors to ",
+                              shown(dest[j]),
+                              "; one would be erased by the other" });
       }
     }
   }
@@ -165,21 +174,21 @@ void vendor_validate_destination(fs::path const &dest,
   // lexically_normal cannot see a symlinked component, and the next step is remove_all.
   std::error_code ec;
   auto const real_dest{ fs::weakly_canonical(dest, ec) };
-  if (ec) {
-    throw std::runtime_error("vendor: cannot resolve " + dest.string() + ": " +
-                             ec.message());
-  }
+  if (ec) { throw_runtime_error({ "vendor: cannot resolve ", dest, ": ", ec.message() }); }
   auto const real_root{ fs::weakly_canonical(project_root, ec) };
   if (ec) {
-    throw std::runtime_error("vendor: cannot resolve project root " +
-                             project_root.string() + ": " + ec.message());
+    throw_runtime_error(
+        { "vendor: cannot resolve project root ", project_root, ": ", ec.message() });
   }
   if (!contains_path(real_root, real_dest)) {
-    throw std::runtime_error("vendor: '" + std::string{ identity } + "' resolves to " +
-                             real_dest.string() + ", outside the project at " +
-                             real_root.string() +
-                             "; a symlinked path component would "
-                             "put a wipe-and-recopy somewhere it does not belong");
+    throw_runtime_error({ "vendor: '",
+                          identity,
+                          "' resolves to ",
+                          real_dest,
+                          ", outside the project at ",
+                          real_root,
+                          "; a symlinked path component would "
+                          "put a wipe-and-recopy somewhere it does not belong" });
   }
 }
 

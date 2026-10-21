@@ -51,8 +51,8 @@ void cmd_sync::execute() {
                                    subproject_anchor(cfg_.subproject, cfg_.project_dir)) };
 
   if (!m->meta.bin) {
-    throw std::runtime_error(
-        "sync: manifest missing '@envy bin' directive (required for sync)");
+    throw_runtime_error(
+        { "sync: manifest missing '@envy bin' directive (required for sync)" });
   }
 
   auto const platforms{ util_parse_platform_flag(cfg_.platform_flag) };
@@ -66,8 +66,8 @@ void cmd_sync::execute() {
     std::error_code ec;
     fs::create_directories(bin_dir, ec);
     if (ec) {
-      throw std::runtime_error("sync: failed to create bin directory " + bin_dir.string() +
-                               ": " + ec.message());
+      throw_runtime_error(
+          { "sync: failed to create bin directory ", bin_dir, ": ", ec.message() });
     }
   }
 

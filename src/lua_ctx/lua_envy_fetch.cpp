@@ -9,6 +9,7 @@
 #include "tui.h"
 #include "tui_actions.h"
 #include "uri.h"
+#include "util.h"
 
 #include <filesystem>
 #include <optional>
@@ -55,7 +56,7 @@ std::pair<std::vector<fetch_item>, bool> parse_fetch_args(sol::object const &arg
 
       for (auto const &[key, value] : tbl) {
         if (!value.is<std::string>()) {
-          throw std::runtime_error("envy.fetch: array elements must be strings");
+          throw_runtime_error({ "envy.fetch: array elements must be strings" });
         }
 
         items.push_back(
@@ -65,7 +66,7 @@ std::pair<std::vector<fetch_item>, bool> parse_fetch_args(sol::object const &arg
       is_array = true;
       for (auto const &[key, value] : tbl) {
         if (!value.is<sol::table>()) {
-          throw std::runtime_error("envy.fetch: array elements must be tables");
+          throw_runtime_error({ "envy.fetch: array elements must be tables" });
         }
 
         sol::table item_tbl{ value.as<sol::table>() };
@@ -85,10 +86,10 @@ std::pair<std::vector<fetch_item>, bool> parse_fetch_args(sol::object const &arg
         items.push_back({ source, sha256, ref, post_data, dest });
       }
     } else {
-      throw std::runtime_error("envy.fetch: invalid array element type");
+      throw_runtime_error({ "envy.fetch: invalid array element type" });
     }
   } else {
-    throw std::runtime_error("envy.fetch: argument must be string or table");
+    throw_runtime_error({ "envy.fetch: argument must be string or table" });
   }
 
   return { std::move(items), is_array };
@@ -122,7 +123,7 @@ std::vector<commit_entry> parse_commit_fetch_args(sol::object const &arg) {
       // Array of strings: {"file1", "file2"}
       for (auto const &[key, value] : tbl) {
         if (!value.is<std::string>()) {
-          throw std::runtime_error("envy.commit_fetch: array elements must be strings");
+          throw_runtime_error({ "envy.commit_fetch: array elements must be strings" });
         }
         entries.push_back({ value.as<std::string>(), "" });
       }
@@ -130,7 +131,7 @@ std::vector<commit_entry> parse_commit_fetch_args(sol::object const &arg) {
       // Array of tables: {{filename="...", sha256="..."}, {...}}
       for (auto const &[key, value] : tbl) {
         if (!value.is<sol::table>()) {
-          throw std::runtime_error("envy.commit_fetch: array elements must be tables");
+          throw_runtime_error({ "envy.commit_fetch: array elements must be tables" });
         }
         sol::table item_tbl{ value.as<sol::table>() };
         std::string filename{ sol_util_get_required<std::string>(
@@ -143,10 +144,10 @@ std::vector<commit_entry> parse_commit_fetch_args(sol::object const &arg) {
         entries.push_back({ filename, sha256.value_or("") });
       }
     } else {
-      throw std::runtime_error("envy.commit_fetch: invalid array element type");
+      throw_runtime_error({ "envy.commit_fetch: invalid array element type" });
     }
   } else {
-    throw std::runtime_error("envy.commit_fetch: argument must be string or table");
+    throw_runtime_error({ "envy.commit_fetch: argument must be string or table" });
   }
 
   return entries;
@@ -188,7 +189,7 @@ void commit_files(std::vector<commit_entry> const &entries,
     std::ostringstream oss;
     oss << "envy.commit_fetch failed:\n";
     for (auto const &err : errors) { oss << "  " << err << "\n"; }
-    throw std::runtime_error(oss.str());
+    throw_runtime_error({ oss.str() });
   }
 }
 
@@ -219,21 +220,21 @@ void lua_envy_fetch_install(sol::table &envy_table) {
       std::string basename;
       if (item.dest) {
         if (item.dest->empty()) {
-          throw std::runtime_error("envy.fetch: dest cannot be empty for source: " +
-                                   item.source);
+          throw_runtime_error(
+              { "envy.fetch: dest cannot be empty for source: ", item.source });
         }
         if (item.dest->find_first_of("/\\") != std::string::npos || *item.dest == ".." ||
             *item.dest == ".") {
-          throw std::runtime_error(
-              "envy.fetch: dest must be a plain filename (no path separators): " +
-              *item.dest);
+          throw_runtime_error(
+              { "envy.fetch: dest must be a plain filename (no path separators): ",
+                *item.dest });
         }
         basename = *item.dest;
       } else {
         basename = uri_extract_filename(item.source);
         if (basename.empty()) {
-          throw std::runtime_error("envy.fetch: cannot extract filename from source: " +
-                                   item.source);
+          throw_runtime_error(
+              { "envy.fetch: cannot extract filename from source: ", item.source });
         }
       }
 
@@ -273,7 +274,7 @@ void lua_envy_fetch_install(sol::table &envy_table) {
       tracker.emplace(p->tui_section, p->cfg->identity, basenames, "fetch");
       for (size_t i{ 0 }; i < requests.size(); ++i) {
         auto cb{ tracker->make_callback(i) };
-        std::visit([&](auto &rq) { rq.progress = std::move(cb); }, requests[i]);
+        envy::visit([&](auto &rq) { rq.progress = std::move(cb); }, requests[i]);
       }
     }
 
@@ -307,7 +308,7 @@ void lua_envy_fetch_install(sol::table &envy_table) {
       std::ostringstream oss;
       oss << "envy.fetch failed:\n";
       for (auto const &err : errors) { oss << "  " << err << "\n"; }
-      throw std::runtime_error(oss.str());
+      throw_runtime_error({ oss.str() });
     }
 
     // Return basename(s) to Lua
@@ -324,8 +325,9 @@ void lua_envy_fetch_install(sol::table &envy_table) {
   envy_table["commit_fetch"] = [](sol::object arg, sol::this_state L) {
     phase_context const *ctx{ lua_phase_context_get(L) };
     if (!ctx || !ctx->lock) {
-      throw std::runtime_error(
-          "envy.commit_fetch: can only be called from FETCH phase with cache lock active");
+      throw_runtime_error(
+          { "envy.commit_fetch: can only be called from FETCH phase with cache lock "
+            "active" });
     }
     commit_files(parse_commit_fetch_args(arg),
                  ctx->lock->tmp_dir(),
@@ -338,7 +340,7 @@ void lua_envy_fetch_install(sol::table &envy_table) {
     std::filesystem::path const file_path{ file_path_str };
 
     if (!std::filesystem::exists(file_path)) {
-      throw std::runtime_error("envy.verify_hash: file not found: " + file_path.string());
+      throw_runtime_error({ "envy.verify_hash: file not found: ", file_path });
     }
 
     try {

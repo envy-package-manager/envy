@@ -1,5 +1,7 @@
 #include "aws_util.h"
 
+#include "util.h"
+
 #include "aws/core/Aws.h"
 #include "aws/core/auth/AWSCredentialsProvider.h"
 #include "aws/core/auth/AWSCredentialsProviderChain.h"
@@ -21,7 +23,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -306,7 +307,7 @@ bool istarts_with(std::string_view value, std::string_view prefix) {
            " expired mid-run, run 'aws sso login' and retry.";
   }
 
-  throw std::runtime_error(msg.str());
+  throw_runtime_error({ msg.str() });
 }
 
 std::filesystem::path absolute_normalized(std::filesystem::path const &p) {
@@ -324,12 +325,11 @@ char const *content_type_for(std::filesystem::path const &p) {
 // Drives a TransferManager operation to completion: registers progress under the local
 // file path, waits, honors cancellation, maps failure, reports 100%. Shared by both
 // directions so the lifecycle exists once.
-void run_transfer(
-    std::string const &local_path,
-    fetch_progress_cb_t const &progress,
-    std::string_view op,
-    bool writing,
-    std::function<std::shared_ptr<Aws::Transfer::TransferHandle>()> const &start) {
+void run_transfer(std::string const &local_path,
+                  fetch_progress_cb_t const &progress,
+                  std::string_view op,
+                  bool writing,
+                  function_ref<std::shared_ptr<Aws::Transfer::TransferHandle>()> start) {
   aws_init();
 
   if (progress) {  // Must be registered before the transfer starts.
@@ -349,8 +349,7 @@ void run_transfer(
         return c;
       }() }) {
     handle->Cancel();
-    throw std::runtime_error(std::string{ op } +
-                             ": transfer cancelled by progress callback");
+    throw_runtime_error({ op, ": transfer cancelled by progress callback" });
   }
 
   switch (handle->GetStatus()) {
@@ -449,8 +448,8 @@ std::filesystem::path aws_s3_download(s3_download_request const &request) {
     std::error_code ec;
     std::filesystem::create_directories(parent, ec);
     if (ec) {
-      throw std::runtime_error(
-          "aws_s3_download: failed to create destination directories: " + ec.message());
+      throw_runtime_error(
+          { "aws_s3_download: failed to create destination directories: ", ec.message() });
     }
   }
 
@@ -478,7 +477,7 @@ void aws_credentials_require(std::optional<std::string> const &region,
   for (auto const &line : capture_take()) { msg << "\n  " << line; }
   msg << "\n  Hint: run 'aws sso login' (honoring AWS_PROFILE), or set"
          " AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.";
-  throw std::runtime_error(msg.str());
+  throw_runtime_error({ msg.str() });
 }
 
 void aws_s3_upload(s3_upload_request const &request) {
@@ -490,8 +489,7 @@ void aws_s3_upload(s3_upload_request const &request) {
 
   auto const local{ absolute_normalized(request.source) };
   if (!std::filesystem::is_regular_file(local)) {
-    throw std::runtime_error("aws_s3_upload: source is not a regular file: " +
-                             local.string());
+    throw_runtime_error({ "aws_s3_upload: source is not a regular file: ", local });
   }
 
   auto const parts{ aws_s3_parse_uri(request.uri, kOp) };
