@@ -1,16 +1,17 @@
 #pragma once
 
+#include "util.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 
 namespace envy {
 
 // The one path that reads a file's bytes for hashing. Both `sha256` and `tree_hash` go
 // through it, so read sizing, readahead and short-read handling are decided once.
 
-using file_chunk_sink = std::function<void(void const *, std::size_t)>;
+using file_chunk_sink = function_ref<void(void const *, std::size_t)>;
 
 // The OS's own encoding: UTF-16 on Windows, bytes elsewhere. A tree walk stays in this
 // form from readdir to open.
@@ -23,10 +24,9 @@ file_native_string file_native_path(std::filesystem::path const &path);
 // Throws naming `path` on a read error or a file shorter than `size`.
 void file_read_chunks(file_native_string const &path,
                       std::uint64_t size,
-                      file_chunk_sink const &sink);
+                      file_chunk_sink sink);
 
 // Same, for a caller holding a path but no size. Returns the bytes read.
-std::uint64_t file_read_chunks(std::filesystem::path const &path,
-                               file_chunk_sink const &sink);
+std::uint64_t file_read_chunks(std::filesystem::path const &path, file_chunk_sink sink);
 
 }  // namespace envy

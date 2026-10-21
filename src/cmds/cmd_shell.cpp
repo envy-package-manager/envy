@@ -1,6 +1,7 @@
 #include "cmd_shell.h"
 
 #include "manifest.h"
+#include "util.h"
 
 #include "cache.h"
 #include "cmd_init.h"
@@ -77,18 +78,19 @@ cmd_shell::cmd_shell(cmd_shell::cfg cfg, std::optional<fs::path> const &cli_cach
 void cmd_shell::execute() {
   auto const *si{ find_shell(cfg_.shell) };
   if (!si) {
-    throw std::runtime_error("shell: unsupported shell '" + cfg_.shell +
-                             "'. Use: bash, zsh, fish, powershell");
+    throw_runtime_error({ "shell: unsupported shell '",
+                          cfg_.shell,
+                          "'. Use: bash, zsh, fish, powershell" });
   }
 
   // A profile sources one path for every directory the shell visits, so no project tier
   // moves the hook root -- and a local-cache project never populates it at all.
   auto const hook_root{ resolve_user_wide_cache_root(cli_cache_root_) };
   if (!hook_root) {
-    throw std::runtime_error(
-        std::string{ "shell: cannot determine a user-wide cache root (" } +
-        platform::get_default_cache_root_env_vars() +
-        " not set), so there is nowhere for shell hooks to live. Set ENVY_CACHE_ROOT.");
+    throw_runtime_error({ "shell: cannot determine a user-wide cache root (",
+                          platform::get_default_cache_root_env_vars(),
+                          " not set), so there is nowhere for shell hooks to live. Set "
+                          "ENVY_CACHE_ROOT." });
   }
 
   auto const project{ project_cache_best_effort(cli_cache_root_, cfg_.project_dir) };
@@ -107,13 +109,16 @@ void cmd_shell::execute() {
   fs::path const hook_path{ *hook_root / "shell" / ("hook." + std::string{ si->ext }) };
   if (!fs::exists(hook_path)) {
     // "Run any envy command" is advice a local-cache-only user cannot act on.
-    throw std::runtime_error(
-        "shell: hook file not found at " + hook_path.string() + ". " +
-        (project_is_local
-             ? "This project uses its own cache tree, which never populates shell hooks. "
-               "Run an envy command in a project on the user-wide cache, or set "
-               "ENVY_CACHE_ROOT."
-             : "Run any envy command to trigger self-deploy."));
+    throw_runtime_error(
+        { "shell: hook file not found at ",
+          hook_path,
+          ". ",
+          (project_is_local
+               ? "This project uses its own cache tree, which never populates shell "
+                 "hooks. "
+                 "Run an envy command in a project on the user-wide cache, or set "
+                 "ENVY_CACHE_ROOT."
+               : "Run any envy command to trigger self-deploy.") });
   }
 
   std::string const portable{ make_portable_path(hook_path) };

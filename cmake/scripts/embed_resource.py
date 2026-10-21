@@ -9,34 +9,31 @@ Outputs a header with:
   inline constexpr unsigned char kVarName[] = { 0x00, ... };
   inline constexpr size_t kVarNameSize = 123;
 
-With --compress, each resource is gzipped instead and paired with its original size:
-  inline constexpr unsigned char kVarNameGz[] = { 0x1f, ... };
-  inline constexpr gz_resource kVarName{ kVarNameGz, 45, 123 };
-Compressed headers pull in envy's util.h for gz_resource and util_inflate_resource.
+With --compress, every resource lands in one xz stream (shared context compresses far
+better than per-file streams), and each resource names its slice of the unpacked bytes:
+  inline constexpr unsigned char kOutputStemXz[] = { 0xfd, ... };
+  inline constexpr packed_resource kVarName{ kOutputStemXz, sizeof(kOutputStemXz), 0, 123 };
+Decoding stops at a resource's end, so list hot resources first. Compressed headers pull
+in envy's util.h for packed_resource and util_unpack_resource.
 """
 
 import argparse
 import hashlib
-import struct
+import lzma
 import sys
-import zlib
 from pathlib import Path
 
 # Replaced per resource with a short digest of that resource's own source text, so a stamp
 # written into a file changes exactly when the resource does -- no hand-maintained version.
 HASH_TOKEN = b"@@ENVY_RESOURCE_HASH@@"
 
-# Fixed 10-byte gzip header: deflate, no flags, mtime 0, max compression, unknown OS. Built
-# by hand rather than via gzip.compress so output is byte-identical on every build host.
-GZIP_HEADER = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
 
-
-def gzip_bytes(data: bytes) -> bytes:
-    """Deterministically wrap raw deflate output in a gzip container."""
-    deflate = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
-    body = deflate.compress(data) + deflate.flush()
-    trailer = struct.pack("<II", zlib.crc32(data) & 0xFFFFFFFF, len(data) & 0xFFFFFFFF)
-    return GZIP_HEADER + body + trailer
+def xz_bytes(data: bytes) -> bytes:
+    """xz with no integrity check (the bytes live in the binary) and a dictionary just big
+    enough for the input, so the decoder allocates only what the payload needs."""
+    dict_size = max(4096, 1 << max(0, len(data) - 1).bit_length())
+    lzma2 = {"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "dict_size": dict_size}
+    return lzma.compress(data, format=lzma.FORMAT_XZ, check=lzma.CHECK_NONE, filters=[lzma2])
 
 
 def to_pascal_case(name: str) -> str:
@@ -62,23 +59,31 @@ def format_bytes(data: bytes) -> str:
     return "\n    ".join(lines)
 
 
-def generate_resource(varname: str, data: bytes, compress: bool) -> str:
+def generate_resource(varname: str, data: bytes) -> str:
     pascal = to_pascal_case(varname)
-    if not compress:
-        return f"""inline constexpr unsigned char k{pascal}[] = {{
+    return f"""inline constexpr unsigned char k{pascal}[] = {{
     {format_bytes(data)}
 }};
 inline constexpr size_t k{pascal}Size = {len(data)};
 """
 
-    gz = gzip_bytes(data)
-    if zlib.decompress(gz, 16 + zlib.MAX_WBITS) != data:
-        raise RuntimeError(f"gzip round-trip mismatch for '{varname}'")
-    return f"""inline constexpr unsigned char k{pascal}Gz[] = {{
-    {format_bytes(gz)}
+
+def generate_pack(pack_name: str, resources: list[tuple[str, bytes]]) -> str:
+    """One xz stream holding every resource, plus a packed_resource slice per resource."""
+    raw = b"".join(data for _, data in resources)
+    xz = xz_bytes(raw)
+    if lzma.decompress(xz) != raw:
+        raise RuntimeError(f"xz round-trip mismatch for '{pack_name}'")
+    parts = [f"""inline constexpr unsigned char {pack_name}[] = {{
+    {format_bytes(xz)}
 }};
-inline constexpr gz_resource k{pascal}{{ k{pascal}Gz, {len(gz)}, {len(data)} }};
-"""
+"""]
+    offset = 0
+    for varname, data in resources:
+        parts.append(f"inline constexpr packed_resource k{to_pascal_case(varname)}{{ "
+                     f"{pack_name}, sizeof({pack_name}), {offset}, {len(data)} }};")
+        offset += len(data)
+    return "\n".join(parts) + "\n"
 
 
 def main() -> int:
@@ -93,7 +98,7 @@ def main() -> int:
     parser.add_argument(
         "--compress",
         action="store_true",
-        help="Gzip each resource; emit a gz_resource instead of a raw byte array",
+        help="Pack all resources into one xz stream; emit packed_resource slices",
     )
     parser.add_argument(
         "--normalize-eol",
@@ -144,6 +149,7 @@ def main() -> int:
         "",
     ]
 
+    payloads: list[tuple[str, bytes]] = []
     for varname, filepath in resources:
         if not filepath.exists():
             print(f"Error: file not found: {filepath}", file=sys.stderr)
@@ -156,8 +162,13 @@ def main() -> int:
         digest = hashlib.sha256(data).hexdigest()[:12]
         for pattern, replacement in substitutions.items():
             data = data.replace(pattern, replacement)
-        data = data.replace(HASH_TOKEN, digest.encode())
-        header_parts.append(generate_resource(varname, data, args.compress))
+        payloads.append((varname, data.replace(HASH_TOKEN, digest.encode())))
+
+    if args.compress:
+        stem = to_pascal_case(output_path.stem)
+        header_parts.append(generate_pack(f"k{stem}Xz", payloads))
+    else:
+        header_parts.extend(generate_resource(v, d) for v, d in payloads)
 
     header_parts.append("}  // namespace envy::embedded")
     header_parts.append("")

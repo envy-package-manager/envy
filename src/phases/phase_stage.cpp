@@ -140,8 +140,8 @@ void run_stage_phase(pkg *p, engine &eng) {
         identity,
         p->tui_section);
   } else {
-    throw std::runtime_error("STAGE field must be nil, string, table, or function for " +
-                             identity);
+    throw_runtime_error(
+        { "STAGE field must be nil, string, table, or function for ", identity });
   }
 }
 

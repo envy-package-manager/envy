@@ -104,8 +104,9 @@ void cmd_product::execute() {
 
   pkg *provider{ eng.find_product_provider(cfg_.product_name) };
   if (!provider) {
-    throw std::runtime_error("product: '" + cfg_.product_name +
-                             "' has no provider in resolved dependency graph");
+    throw_runtime_error({ "product: '",
+                          cfg_.product_name,
+                          "' has no provider in resolved dependency graph" });
   }
 
   eng.extend_dependencies_to_completion(provider);

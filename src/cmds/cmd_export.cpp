@@ -55,8 +55,8 @@ void cmd_export::execute() {
             if (!util_platform_matches(pkg->platforms,
                                        platform::os_name(),
                                        platform::arch_name())) {
-              throw std::runtime_error("export: '" + query +
-                                       "' is not available on this platform");
+              throw_runtime_error(
+                  { "export: '", query, "' is not available on this platform" });
             }
             t.push_back(pkg);
             found = true;
@@ -64,7 +64,7 @@ void cmd_export::execute() {
           }
         }
         if (!found) {
-          throw std::runtime_error("export: no package matching '" + query + "'");
+          throw_runtime_error({ "export: no package matching '", query, "'" });
         }
       }
     }
@@ -91,8 +91,10 @@ void cmd_export::execute() {
     std::error_code ec;
     std::filesystem::create_directories(output_dir, ec);
     if (ec) {
-      throw std::runtime_error("export: failed to create output directory " +
-                               output_dir.string() + ": " + ec.message());
+      throw_runtime_error({ "export: failed to create output directory ",
+                            output_dir,
+                            ": ",
+                            ec.message() });
     }
   }
 

@@ -1,6 +1,7 @@
 #include "cli.h"
 #include "cli_parse.h"
 #include "tui.h"
+#include "util.h"
 
 #include <concepts>
 #include <cstddef>
@@ -42,7 +43,7 @@ constexpr int cfg_index() {
 // the reader below and the writer in cli_parse: a command that never loads a manifest
 // does not derive from it and is skipped.
 void with_project_anchor(auto &&cfg, auto &&fn) {
-  std::visit(
+  envy::visit(
       [&fn](auto &&c) {
         if constexpr (std::derived_from<std::decay_t<decltype(c)>, cmd_project_anchor>) {
           fn(c);

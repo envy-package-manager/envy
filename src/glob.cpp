@@ -196,13 +196,15 @@ std::vector<std::string> glob_normalize_selectors(
   for (auto const &raw : selectors) {
     std::string canonical{ glob_canonical_path(raw) };
     if (canonical.empty() || !glob_is_safe_relative_path(canonical.c_str())) {
-      throw std::runtime_error(std::string(context) + ": " + std::string(what) +
-                               " must be a non-empty relative path without '..': \"" +
-                               raw + "\"");
+      throw_runtime_error({ context,
+                            ": ",
+                            what,
+                            " must be a non-empty relative path without '..': \"",
+                            raw,
+                            "\"" });
     }
     if (auto const problem{ selector_problem(canonical) }; problem) {
-      throw std::runtime_error(std::string(context) + ": " + std::string(what) + " \"" +
-                               raw + "\" " + std::string(*problem));
+      throw_runtime_error({ context, ": ", what, " \"", raw, "\" ", *problem });
     }
     normalized.push_back(std::move(canonical));
   }
@@ -247,8 +249,8 @@ glob_filter glob_parse_filter(std::vector<std::string> const &selectors,
   std::vector<std::string> include, exclude;
   for (auto const &entry : selectors) {
     if (entry == "!") {
-      throw std::runtime_error(std::string{ context } + ": " + std::string{ what } +
-                               " \"!\" excludes nothing; give it a pattern");
+      throw_runtime_error(
+          { context, ": ", what, " \"!\" excludes nothing; give it a pattern" });
     }
     bool const negated{ entry.starts_with('!') };
     (negated ? exclude : include).push_back(negated ? entry.substr(1) : entry);

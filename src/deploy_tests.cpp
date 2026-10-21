@@ -28,11 +28,11 @@ fs::path manifest_fixture_root() {
 }
 
 std::string embedded_posix_template() {
-  return envy::util_inflate_resource(envy::embedded::kProductScriptPosix);
+  return envy::util_unpack_resource(envy::embedded::kProductScriptPosix);
 }
 
 std::string embedded_windows_template() {
-  return envy::util_inflate_resource(envy::embedded::kProductScriptWindows);
+  return envy::util_unpack_resource(envy::embedded::kProductScriptWindows);
 }
 
 }  // namespace

@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -98,9 +97,7 @@ void materialize(fs::path const &src_root, fs::path const &dest, tree_entry cons
     }
   }
 
-  if (ec) {
-    throw std::runtime_error("vendor: cannot write " + to.string() + ": " + ec.message());
-  }
+  if (ec) { throw_runtime_error({ "vendor: cannot write ", to, ": ", ec.message() }); }
 }
 
 // Copy `entries` into `dest` with `threads` workers, reporting progress as files land.
@@ -114,7 +111,7 @@ std::uint64_t copy_entries(fs::path const &src_root,
                            fs::path const &dest,
                            std::vector<tree_entry> const &entries,
                            unsigned threads,
-                           std::function<void(std::uint64_t)> const &on_file) {
+                           function_ref<void(std::uint64_t)> on_file) {
   // Symlinks are work items too, but they are not what the row counts: the caller's
   // denominator is the file count, and a numerator that also ticked for links would
   // walk the bar past 100%.
@@ -182,8 +179,8 @@ void run_vendor_phase(pkg *p, engine &eng) {
   // spec_fetch rejects user-managed, and a bundle entry cannot carry `vendor`, so this
   // only fires if a new package type appeared.
   if (p->type != pkg_type::CACHE_MANAGED) {
-    throw std::runtime_error("vendor: " + p->cfg->identity +
-                             " has no cached payload to vendor");
+    throw_runtime_error(
+        { "vendor: ", p->cfg->identity, " has no cached payload to vendor" });
   }
 
   auto const start{ std::chrono::steady_clock::now() };
@@ -270,15 +267,13 @@ void run_vendor_phase(pkg *p, engine &eng) {
         // outright: tree_remove unlinks a link rather than following it, exactly as the
         // retrying remove_all behind it would.
         if (auto const ec{ tree_remove_insisting(dest) }) {
-          throw std::runtime_error("vendor: cannot clear " + dest.string() + ": " +
-                                   ec.message());
+          throw_runtime_error({ "vendor: cannot clear ", dest, ": ", ec.message() });
         }
       }
       std::error_code mk;
       fs::create_directories(dest, mk);
       if (mk) {
-        throw std::runtime_error("vendor: cannot create " + dest.string() + ": " +
-                                 mk.message());
+        throw_runtime_error({ "vendor: cannot create ", dest, ": ", mk.message() });
       }
       wipe_ms = elapsed_ms(wipe_start);
     }

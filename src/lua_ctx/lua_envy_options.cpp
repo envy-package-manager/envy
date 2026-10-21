@@ -1,6 +1,7 @@
 #include "lua_envy_options.h"
 
 #include "lua_envy.h"
+#include "util.h"
 
 #include "semver.hpp"
 
@@ -45,8 +46,7 @@ std::vector<range_constraint> parse_numeric_range(std::string_view range_str) {
       comparison = range_constraint::op::eq;
       sv.remove_prefix(2);
     } else {
-      throw std::runtime_error("invalid numeric range token near '" + std::string(sv) +
-                               "'");
+      throw_runtime_error({ "invalid numeric range token near '", sv, "'" });
     }
 
     while (!sv.empty() && sv.front() == ' ') { sv.remove_prefix(1); }
@@ -63,15 +63,14 @@ std::vector<range_constraint> parse_numeric_range(std::string_view range_str) {
 
     std::string_view num_str{ sv.data(), static_cast<size_t>(end - sv.begin()) };
     if (num_str.empty()) {
-      throw std::runtime_error("invalid numeric range token near '" + std::string(sv) +
-                               "'");
+      throw_runtime_error({ "invalid numeric range token near '", sv, "'" });
     }
 
     std::string const num_s{ num_str };
     char *end_ptr{ nullptr };
     double const val{ std::strtod(num_s.c_str(), &end_ptr) };
     if (end_ptr != num_s.c_str() + num_s.size()) {
-      throw std::runtime_error("invalid numeric range token '" + num_s + "'");
+      throw_runtime_error({ "invalid numeric range token '", num_s, "'" });
     }
 
     constraints.push_back({ comparison, val });
@@ -115,18 +114,27 @@ void validate_type_constraint(std::string const &ctx,
 
   if (type_str == "string") {
     if (actual != sol::type::string) {
-      throw std::runtime_error(ctx + " must be type 'string', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'string', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
   } else if (type_str == "boolean") {
     if (actual != sol::type::boolean) {
-      throw std::runtime_error(ctx + " must be type 'boolean', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'boolean', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
   } else if (type_str == "int") {
     if (actual != sol::type::number) {
-      throw std::runtime_error(ctx + " must be type 'int', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'int', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
     lua_State *L{ value.lua_state() };
     int const stack_before{ lua_gettop(L) };
@@ -134,22 +142,31 @@ void validate_type_constraint(std::string const &ctx,
     bool const is_int{ lua_isinteger(L, -1) != 0 };
     lua_settop(L, stack_before);
     if (!is_int) {
-      throw std::runtime_error(ctx + " must be type 'int', got float for " + identity);
+      throw_runtime_error({ ctx, " must be type 'int', got float for ", identity });
     }
   } else if (type_str == "float") {
     if (actual != sol::type::number) {
-      throw std::runtime_error(ctx + " must be type 'float', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'float', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
   } else if (type_str == "table") {
     if (actual != sol::type::table) {
-      throw std::runtime_error(ctx + " must be type 'table', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'table', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
   } else if (type_str == "list") {
     if (actual != sol::type::table) {
-      throw std::runtime_error(ctx + " must be type 'list' (sequential array), got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'list' (sequential array), got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
     sol::table const tbl{ value.as<sol::table>() };
     lua_State *L{ value.lua_state() };
@@ -163,23 +180,26 @@ void validate_type_constraint(std::string const &ctx,
       ++count;
     }
     if (count != raw_len) {
-      throw std::runtime_error(
-          ctx + " must be type 'list' (sequential array), got non-sequential table for " +
-          identity);
+      throw_runtime_error(
+          { ctx,
+            " must be type 'list' (sequential array), got non-sequential table for ",
+            identity });
     }
   } else if (type_str == "semver") {
     if (actual != sol::type::string) {
-      throw std::runtime_error(ctx + " must be type 'semver', got " +
-                               sol_type_display_name(actual) + " for " + identity);
+      throw_runtime_error({ ctx,
+                            " must be type 'semver', got ",
+                            sol_type_display_name(actual),
+                            " for ",
+                            identity });
     }
     std::string const val_str{ value.as<std::string>() };
     semver::version<> ver;
     if (!semver::parse(val_str, ver)) {
-      throw std::runtime_error(ctx + " '" + val_str + "' is not valid semver for " +
-                               identity);
+      throw_runtime_error({ ctx, " '", val_str, "' is not valid semver for ", identity });
     }
   } else {
-    throw std::runtime_error(ctx + " has unknown type '" + type_str + "' for " + identity);
+    throw_runtime_error({ ctx, " has unknown type '", type_str, "' for ", identity });
   }
 }
 
@@ -214,8 +234,13 @@ void validate_choices_constraint(std::string const &ctx,
     for (auto const &[k, choice] : choices) {
       if (val == choice) { return; }
     }
-    throw std::runtime_error(element_ctx + " value '" + val_display + "' not in " +
-                             choices_str + " for " + identity);
+    throw_runtime_error({ element_ctx,
+                          " value '",
+                          val_display,
+                          "' not in ",
+                          choices_str,
+                          " for ",
+                          identity });
   };
 
   if (is_list) {
@@ -244,9 +269,15 @@ void validate_choices_constraint(std::string const &ctx,
         }
       }
       if (!found) {
-        throw std::runtime_error(ctx + " element '" + elem_display + "' at index " +
-                                 std::to_string(idx) + " not in " + choices_str + " for " +
-                                 identity);
+        throw_runtime_error({ ctx,
+                              " element '",
+                              elem_display,
+                              "' at index ",
+                              idx,
+                              " not in ",
+                              choices_str,
+                              " for ",
+                              identity });
       }
     }
   } else {
@@ -276,7 +307,7 @@ void validate_single_option(std::string const &key,
   sol::object type_obj{ constraint["type"] };
   if (type_obj.valid() && type_obj.get_type() != sol::type::lua_nil &&
       type_obj.get_type() != sol::type::string) {
-    throw std::runtime_error(ctx + " schema 'type' must be a string for " + identity);
+    throw_runtime_error({ ctx, " schema 'type' must be a string for ", identity });
   }
   bool const has_type{ type_obj.valid() && type_obj.get_type() == sol::type::string };
   std::string type_str;
@@ -293,16 +324,21 @@ void validate_single_option(std::string const &key,
       // semver range
       semver::range_set<> rs;
       if (!semver::parse(range_str, rs)) {
-        throw std::runtime_error(ctx + " has invalid range '" + range_str + "' for " +
-                                 identity);
+        throw_runtime_error(
+            { ctx, " has invalid range '", range_str, "' for ", identity });
       }
       // re-parse the already-validated semver value
       std::string const val_str{ value.as<std::string>() };
       semver::version<> ver;
       semver::parse(val_str, ver);
       if (!rs.contains(ver, semver::version_compare_option::include_prerelease)) {
-        throw std::runtime_error(ctx + " '" + val_str + "' does not satisfy range '" +
-                                 range_str + "' for " + identity);
+        throw_runtime_error({ ctx,
+                              " '",
+                              val_str,
+                              "' does not satisfy range '",
+                              range_str,
+                              "' for ",
+                              identity });
       }
     } else {
       // numeric range
@@ -316,11 +352,11 @@ void validate_single_option(std::string const &key,
         char *end_ptr{ nullptr };
         num_val = std::strtod(val_str.c_str(), &end_ptr);
         if (end_ptr != val_str.c_str() + val_str.size()) {
-          throw std::runtime_error(ctx + " value '" + val_str + "' is not numeric for " +
-                                   identity);
+          throw_runtime_error(
+              { ctx, " value '", val_str, "' is not numeric for ", identity });
         }
       } else {
-        throw std::runtime_error(ctx + " value is not numeric for " + identity);
+        throw_runtime_error({ ctx, " value is not numeric for ", identity });
       }
 
       for (auto const &c : constraints) {
@@ -328,7 +364,7 @@ void validate_single_option(std::string const &key,
           std::ostringstream oss;
           oss << ctx << " value " << num_val << " does not satisfy range '" << range_str
               << "' for " << identity;
-          throw std::runtime_error(oss.str());
+          throw_runtime_error({ oss.str() });
         }
       }
     }
@@ -338,7 +374,7 @@ void validate_single_option(std::string const &key,
   sol::object choices_obj{ constraint["choices"] };
   if (choices_obj.valid() && choices_obj.get_type() != sol::type::lua_nil) {
     if (choices_obj.get_type() != sol::type::table) {
-      throw std::runtime_error(ctx + " schema 'choices' must be a table for " + identity);
+      throw_runtime_error({ ctx, " schema 'choices' must be a table for ", identity });
     }
     bool const is_list{ has_type && type_str == "list" };
     validate_choices_constraint(ctx,
@@ -355,8 +391,7 @@ void validate_single_option(std::string const &key,
     sol::protected_function_result result{ validate_fn(value) };
     if (!result.valid()) {
       sol::error err = result;
-      throw std::runtime_error(ctx + " validation failed: " + std::string(err.what()) +
-                               " for " + identity);
+      throw_runtime_error({ ctx, " validation failed: ", err.what(), " for ", identity });
     }
     sol::object ret{ result };
     sol::type const ret_type{ ret.get_type() };
@@ -364,7 +399,7 @@ void validate_single_option(std::string const &key,
       case sol::type::lua_nil: break;
       case sol::type::boolean:
         if (!ret.as<bool>()) {
-          throw std::runtime_error(ctx + " validation failed for " + identity);
+          throw_runtime_error({ ctx, " validation failed for ", identity });
         }
         break;
       case sol::type::string:
@@ -393,8 +428,8 @@ void validate_options_schema(sol::table const &schema,
     std::string const key{ key_obj.as<std::string>() };
 
     if (constraint_obj.get_type() != sol::type::table) {
-      throw std::runtime_error("OPTIONS schema entry for '" + key +
-                               "' must be a table for " + identity);
+      throw_runtime_error(
+          { "OPTIONS schema entry for '", key, "' must be a table for ", identity });
     }
     sol::table const constraint{ constraint_obj.as<sol::table>() };
 
@@ -407,7 +442,7 @@ void validate_options_schema(sol::table const &schema,
     bool const present{ value.valid() && value.get_type() != sol::type::lua_nil };
 
     if (required && !present) {
-      throw std::runtime_error("option '" + key + "' is required for " + identity);
+      throw_runtime_error({ "option '", key, "' is required for ", identity });
     }
 
     if (present) { validate_single_option(key, constraint, value, identity); }
@@ -426,7 +461,7 @@ void validate_options_schema(sol::table const &schema,
         for (auto const &[sk, sv] : schema) {
           if (sk.get_type() == sol::type::string) { oss << " " << sk.as<std::string>(); }
         }
-        throw std::runtime_error(oss.str());
+        throw_runtime_error({ oss.str() });
       }
     }
   }

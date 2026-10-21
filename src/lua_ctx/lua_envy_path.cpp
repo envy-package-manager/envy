@@ -16,7 +16,7 @@ void lua_envy_path_install(sol::table &envy_table) {
     std::filesystem::path result;
     for (auto const &arg : va) {
       if (!arg.is<std::string>()) {
-        throw std::runtime_error("envy.path.join: all arguments must be strings");
+        throw_runtime_error({ "envy.path.join: all arguments must be strings" });
       }
       std::string const part{ arg.as<std::string>() };
       if (result.empty()) {

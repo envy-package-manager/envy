@@ -1,13 +1,19 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -31,6 +37,136 @@ struct match : Ts... {
 
 template <typename... Ts>
 match(Ts...) -> match<Ts...>;
+
+// One piece of an exception message: viewed in place where it is thrown, joined out of
+// line, so a throw site builds no strings and needs no cleanup for them.
+class err_part {
+ public:
+  err_part(char const *s) noexcept : kind_{ kind::CSTR }, cstr_{ s } {}
+  err_part(std::string const &s) noexcept : kind_{ kind::STR }, str_{ &s } {}
+  err_part(std::string_view s) noexcept : kind_{ kind::VIEW }, view_{ s } {}
+  err_part(std::filesystem::path const &p) noexcept : kind_{ kind::PATH }, path_{ &p } {}
+  template <std::integral T>
+    requires(!std::is_same_v<T, bool> && !std::is_same_v<T, char>)
+  err_part(T v) noexcept
+      : kind_{ std::is_signed_v<T> ? kind::INT : kind::UINT },
+        uint_{ static_cast<unsigned long long>(v) } {}
+
+  void append_to(std::string &out) const;
+
+ private:
+  enum class kind : unsigned char { CSTR, STR, VIEW, PATH, INT, UINT };
+  kind kind_;
+  union {
+    char const *cstr_;
+    std::string const *str_;
+    std::string_view view_;
+    std::filesystem::path const *path_;
+    unsigned long long uint_;  // INT reads it back as signed
+  };
+};
+
+// throw std::runtime_error(a + b + ...) as throw_runtime_error({ a, b, ... }): the
+// concatenation happens once, out of line, instead of inline at every throw site.
+[[noreturn]] void throw_runtime_error(std::initializer_list<err_part> parts);
+[[noreturn]] void throw_system_error(int ev,
+                                     std::error_category const &cat,
+                                     std::initializer_list<err_part> parts);
+
+[[noreturn]] void util_throw_bad_variant_access();
+
+// std::visit's exhaustiveness without its dispatch table: an index chain inlined into the
+// caller, so a visit costs what its handlers cost. Call qualified; ADL also finds std's.
+template <std::size_t I = 0, typename F, typename V>
+constexpr decltype(auto) visit(F &&f, V &&v) {
+  auto *const alt{ std::get_if<I>(&v) };
+  if constexpr (I + 1 < std::variant_size_v<std::remove_cvref_t<V>>) {
+    if (!alt) { return envy::visit<I + 1>(std::forward<F>(f), std::forward<V>(v)); }
+  } else if (!alt) {
+    util_throw_bad_variant_access();  // valueless_by_exception
+  }
+  if constexpr (std::is_lvalue_reference_v<V>) {
+    return std::forward<F>(f)(*alt);
+  } else {
+    return std::forward<F>(f)(std::move(*alt));
+  }
+}
+
+#if defined(__has_cpp_attribute)
+#if __has_cpp_attribute(clang::lifetimebound)
+#define ENVY_LIFETIMEBOUND [[clang::lifetimebound]]
+#endif
+#endif
+#ifndef ENVY_LIFETIMEBOUND
+#define ENVY_LIFETIMEBOUND
+#endif
+
+// Non-owning callable reference: two words, no allocation, no RTTI. Takes a callable that
+// outlives the call (a lambda argument), never one stored past it.
+template <typename Sig>
+class function_ref;
+
+template <typename R, typename... Args>
+class function_ref<R(Args...)> {
+ public:
+  function_ref() = default;
+
+  template <typename F>
+    requires(!std::is_same_v<std::remove_cvref_t<F>, function_ref> &&
+             !std::is_function_v<std::remove_reference_t<F>> &&
+             std::is_invocable_r_v<R, F &, Args...>)
+  function_ref(F &&f ENVY_LIFETIMEBOUND) noexcept {  // NOLINT(google-explicit-constructor)
+    if constexpr (std::is_constructible_v<bool, F &>) {
+      if (!static_cast<bool>(f)) { return; }  // an empty std::function stays empty
+    }
+    obj_ = const_cast<void *>(static_cast<void const *>(std::addressof(f)));
+    call_ = [](void *obj, Args... args) -> R {
+      auto &fn{ *static_cast<std::remove_reference_t<F> *>(obj) };
+      if constexpr (std::is_void_v<R>) {
+        fn(std::forward<Args>(args)...);  // a void signature discards any result
+      } else {
+        return fn(std::forward<Args>(args)...);
+      }
+    };
+  }
+
+  R operator()(Args... args) const { return call_(obj_, std::forward<Args>(args)...); }
+  explicit operator bool() const { return call_ != nullptr; }
+
+ private:
+  void *obj_{ nullptr };
+  R (*call_)(void *, Args...){ nullptr };
+};
+
+// Index order[0..n) sorted by `less`, ties by index: stable, and one std::sort for all.
+void util_sort_order(std::vector<std::size_t> &order,
+                     function_ref<bool(std::size_t, std::size_t)> less);
+
+// Stable sort through util_sort_order: a call site costs a comparator thunk and a
+// permutation loop, not a whole std::sort instantiation.
+template <typename T, typename Less>
+void util_sort(std::vector<T> &v, Less const &less) {
+  std::vector<std::size_t> order(v.size());
+  util_sort_order(order, [&](std::size_t a, std::size_t b) { return less(v[a], v[b]); });
+  for (std::size_t i{ 0 }; i < order.size();
+       ++i) {  // apply the permutation cycle by cycle
+    if (order[i] == i) { continue; }
+    T held{ std::move(v[i]) };
+    std::size_t j{ i };
+    for (std::size_t k{ order[j] }; k != i; k = order[j]) {
+      v[j] = std::move(v[k]);
+      order[j] = j;
+      j = k;
+    }
+    v[j] = std::move(held);
+    order[j] = j;
+  }
+}
+
+template <typename T>
+void util_sort(std::vector<T> &v) {
+  util_sort(v, [](T const &a, T const &b) { return a < b; });
+}
 
 // Convert bytes to lowercase hex string
 std::string util_bytes_to_hex(void const *data, size_t length);
@@ -80,14 +216,16 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
 
 // A gzip stream plus the byte count it inflates to; instances are emitted by
 // cmake/scripts/embed_resource.py --compress.
-struct gz_resource {
-  unsigned char const *data;
+// One embedded resource: bytes [offset, offset + size) of the xz stream `pack`.
+struct packed_resource {
+  unsigned char const *pack;
+  size_t pack_size;
+  size_t offset;
   size_t size;
-  size_t inflated_size;
 };
 
-// Inflate an embedded resource. Throws std::runtime_error on a malformed stream.
-std::string util_inflate_resource(gz_resource const &res);
+// Unpack an embedded resource. Throws std::runtime_error on a malformed stream.
+std::string util_unpack_resource(packed_resource const &res);
 
 // Human-readable byte formatter (B, KB, MB, GB, TB). B uses integer form, higher
 // units use one decimal place with rounding (e.g., 1536 -> "1.5KB").

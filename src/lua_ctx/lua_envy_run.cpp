@@ -53,7 +53,7 @@ std::string join_script_array(sol::table const &tbl) {
   bool first{ true };
   for (auto const &[key, value] : tbl) {
     if (!value.is<std::string>()) {
-      throw std::runtime_error("envy.run: script array elements must be strings");
+      throw_runtime_error({ "envy.run: script array elements must be strings" });
     }
     if (!first) { oss << '\n'; }
     oss << value.as<std::string>();
@@ -75,15 +75,15 @@ void lua_envy_run_install(sol::table &envy_table) {
     } else if (script_obj.is<sol::table>()) {
       script = join_script_array(script_obj.as<sol::table>());
     } else {
-      throw std::runtime_error(
-          "envy.run: first argument must be a string or array of strings");
+      throw_runtime_error(
+          { "envy.run: first argument must be a string or array of strings" });
     }
     std::string_view const script_view{ script };
 
     // Validate options argument if provided
     if (opts_obj && opts_obj->valid() && opts_obj->get_type() != sol::type::lua_nil &&
         !opts_obj->is<sol::table>()) {
-      throw std::runtime_error("envy.run: second argument must be a table (options)");
+      throw_runtime_error({ "envy.run: second argument must be a table (options)" });
     }
 
     sol::optional<sol::table> opts_table;
@@ -195,7 +195,7 @@ void lua_envy_run_install(sol::table &envy_table) {
                                        stdout_str,
                                        stderr_str) };
       tui::error("%s", err.c_str());
-      throw std::runtime_error(err);
+      throw_runtime_error({ err });
     }
 
     if (check && result.exit_code != 0) {
@@ -205,7 +205,7 @@ void lua_envy_run_install(sol::table &envy_table) {
                                        stdout_str,
                                        stderr_str) };
       tui::error("%s", err.c_str());
-      throw std::runtime_error(err);
+      throw_runtime_error({ err });
     }
 
     sol::state_view lua_view{ L };

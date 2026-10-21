@@ -85,7 +85,7 @@ void run_import_phase(pkg *p, engine &eng) {
                                                        p->cfg->identity,
                                                        { location->url },
                                                        "fetch" };
-      std::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, requests[0]);
+      envy::visit([&](auto &r) { r.progress = tracker.make_callback(0); }, requests[0]);
 
       auto const results{ fetch(requests, p->cfg->identity) };
       if (results.empty() || !std::holds_alternative<fetch_result>(results[0])) {

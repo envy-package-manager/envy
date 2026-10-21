@@ -18,7 +18,7 @@ namespace {
 
 struct hook_resource {
   char const *ext;
-  gz_resource res;
+  packed_resource res;
 };
 
 constexpr hook_resource kHooks[] = {
@@ -86,7 +86,7 @@ int ensure(std::filesystem::path const &cache_root) {
   for (auto const &h : kHooks) {
     fs::path const hook_path{ shell_dir / ("hook." + std::string{ h.ext }) };
     try {
-      std::string const want{ util_inflate_resource(h.res) };
+      std::string const want{ util_unpack_resource(h.res) };
       std::string const have{ read_text(hook_path) };
       if (have == want) { continue; }
 

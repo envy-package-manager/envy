@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "tui_actions.h"
 #include "uri.h"
+#include "util.h"
 
 #include "cli_parse.h"
 
@@ -78,9 +79,7 @@ std::unordered_set<std::string> parse_retain_lines(std::istream &in) {
 
 std::vector<depot_manifest_entry> parse_depot_manifest(std::filesystem::path const &file) {
   std::ifstream in{ file };
-  if (!in) {
-    throw std::runtime_error("merge-depot: cannot open depot manifest: " + file.string());
-  }
+  if (!in) { throw_runtime_error({ "merge-depot: cannot open depot manifest: ", file }); }
   return parse_manifest_lines(in);
 }
 
@@ -184,8 +183,8 @@ void cmd_merge_depot::execute() {
         info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
       std::filesystem::path p{ info.canonical };
       if (!std::filesystem::exists(p)) {
-        throw std::runtime_error("merge-depot: --existing file not found: " +
-                                 *cfg_.existing_path);
+        throw_runtime_error(
+            { "merge-depot: --existing file not found: ", *cfg_.existing_path });
       }
       existing_entries = parse_depot_manifest(p);
     } else {
@@ -198,14 +197,14 @@ void cmd_merge_depot::execute() {
           "merge-depot",
           { *cfg_.existing_path }) };
       if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
-        throw std::runtime_error("merge-depot: failed to fetch --existing: " + *err);
+        throw_runtime_error({ "merge-depot: failed to fetch --existing: ", *err });
       }
 
       auto const content{ [&] {
         std::ifstream in{ tmp_guard.path() };
         if (!in) {
-          throw std::runtime_error(
-              "merge-depot: failed to read fetched --existing manifest");
+          throw_runtime_error(
+              { "merge-depot: failed to read fetched --existing manifest" });
         }
         return std::string{ std::istreambuf_iterator<char>{ in },
                             std::istreambuf_iterator<char>{} };
@@ -231,16 +230,21 @@ void cmd_merge_depot::execute() {
       if (auto it{ merged.find(e.path) }; it != merged.end() && it->second != e.hash) {
         if (new_paths.count(e.path) > 0) {
           // Path already modified by a prior new manifest — cross-input conflict
-          throw std::runtime_error("merge-depot: conflicting hashes for " + e.path +
-                                   " across input depot manifests");
+          throw_runtime_error({ "merge-depot: conflicting hashes for ",
+                                e.path,
+                                " across input depot manifests" });
         }
 
         // Hash changed vs existing depot manifest
         if (cfg_.strict) {
           auto ex_it{ existing_hashes.find(e.path) };
-          throw std::runtime_error("merge-depot: hash changed for " + e.path +
-                                   " (existing: " + ex_it->second + ", new: " + e.hash +
-                                   ")");
+          throw_runtime_error({ "merge-depot: hash changed for ",
+                                e.path,
+                                " (existing: ",
+                                ex_it->second,
+                                ", new: ",
+                                e.hash,
+                                ")" });
         }
         tui::warn("merge-depot: hash changed for %s", e.path.c_str());
       }
@@ -251,8 +255,8 @@ void cmd_merge_depot::execute() {
   }
 
   if (cfg_.retain_prefix && !cfg_.retain) {
-    throw std::runtime_error(
-        "merge-depot: --retain-prefix requires --retain or --retain-s3-ls");
+    throw_runtime_error(
+        { "merge-depot: --retain-prefix requires --retain or --retain-s3-ls" });
   }
 
   if (cfg_.retain) {
@@ -267,13 +271,13 @@ void cmd_merge_depot::execute() {
           info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
         std::filesystem::path const p{ info.canonical };
         if (!std::filesystem::exists(p)) {
-          throw std::runtime_error(std::string("merge-depot: ") + flag_name +
-                                   " file not found: " + source_path);
+          throw_runtime_error(
+              { "merge-depot: ", flag_name, " file not found: ", source_path });
         }
         std::ifstream in{ p };
         if (!in) {
-          throw std::runtime_error(std::string("merge-depot: cannot open ") + flag_name +
-                                   " file: " + source_path);
+          throw_runtime_error(
+              { "merge-depot: cannot open ", flag_name, " file: ", source_path });
         }
         set = is_s3_ls ? parse_s3_ls_lines(in) : parse_retain_lines(in);
       } else {
@@ -285,15 +289,14 @@ void cmd_merge_depot::execute() {
             "merge-depot",
             { source_path }) };
         if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
-          throw std::runtime_error(std::string("merge-depot: failed to fetch ") +
-                                   flag_name + ": " + *err);
+          throw_runtime_error({ "merge-depot: failed to fetch ", flag_name, ": ", *err });
         }
 
         auto const content{ [&] {
           std::ifstream in{ tmp_guard.path() };
           if (!in) {
-            throw std::runtime_error(std::string("merge-depot: failed to read fetched ") +
-                                     flag_name + " list");
+            throw_runtime_error(
+                { "merge-depot: failed to read fetched ", flag_name, " list" });
           }
           return std::string{ std::istreambuf_iterator<char>{ in },
                               std::istreambuf_iterator<char>{} };

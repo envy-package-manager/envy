@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pkg.h"
+#include "util.h"
 
 #include "sol/forward.hpp"
 
@@ -34,7 +35,7 @@ auto call_lua_function_with_enriched_errors(pkg const *r,
   if (!result.valid()) {
     sol::error err = result;
     lua_error_context ctx{ .lua_error_message = err.what(), .r = r, .phase = phase };
-    throw std::runtime_error(format_lua_error(ctx));
+    throw_runtime_error({ format_lua_error(ctx) });
   }
 
   return result;

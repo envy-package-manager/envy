@@ -50,9 +50,11 @@ void run_export_phase(pkg *p, engine &eng) {
     std::error_code ec;
     std::filesystem::directory_iterator it{ source_dir, ec };
     if (ec || it == std::filesystem::directory_iterator{}) {
-      throw std::runtime_error(
-          "export: " + prefix + "/ directory is empty or missing for " +
-          std::string(p->key.identity()) + " (package may predate export support)");
+      throw_runtime_error({ "export: ",
+                            prefix,
+                            "/ directory is empty or missing for ",
+                            p->key.identity(),
+                            " (package may predate export support)" });
     }
   }
 

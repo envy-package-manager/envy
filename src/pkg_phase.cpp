@@ -1,5 +1,7 @@
 #include "pkg_phase.h"
 
+#include "util.h"
+
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -54,10 +56,11 @@ pkg_phase pkg_phase_parse_needed_by(std::string_view name, std::string_view cont
       p && *p >= pkg_phase::pkg_check && *p <= pkg_phase::pkg_install) {
     return *p;
   }
-  throw std::runtime_error(std::string{ context } +
-                           " 'needed_by' must be one of: check, import, fetch, stage, "
-                           "build, install (got: " +
-                           std::string{ name } + ")");
+  throw_runtime_error({ context,
+                        " 'needed_by' must be one of: check, import, fetch, stage, "
+                        "build, install (got: ",
+                        name,
+                        ")" });
 }
 
 }  // namespace envy

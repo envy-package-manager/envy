@@ -56,7 +56,7 @@ cli_cmd &cmd_init::register_cli(cli_cmd &app, cfg &c) {
 namespace {
 
 std::string get_manifest_template() {
-  return util_inflate_resource(embedded::kManifestTemplate);
+  return util_unpack_resource(embedded::kManifestTemplate);
 }
 
 void replace_all(std::string &s, std::string_view from, std::string_view to) {
@@ -87,11 +87,11 @@ std::string fetch_sums_pin(std::optional<std::string> const &mirror) {
     tui_actions::fetch_tracked({ fetch_request_from_url(url, dest) }, "init", labels)
   };
   if (results.empty()) {
-    throw std::runtime_error("init: --pin-sums: failed to download " + url +
-                             ": unknown error");
+    throw_runtime_error(
+        { "init: --pin-sums: failed to download ", url, ": unknown error" });
   }
   if (auto const *err{ std::get_if<std::string>(&results[0]) }) {
-    throw std::runtime_error("init: --pin-sums: failed to download " + url + ": " + *err);
+    throw_runtime_error({ "init: --pin-sums: failed to download ", url, ": ", *err });
   }
 
   auto const hash{ sha256(dest) };
@@ -283,7 +283,7 @@ void cmd_init::execute() {
   // the whole init to that binary rather than by stamping a number this one is not.
   if (cfg_.envy_version) {
     if (!envy_release_version_is_valid(*cfg_.envy_version)) {
-      throw std::runtime_error("init: invalid version string: " + *cfg_.envy_version);
+      throw_runtime_error({ "init: invalid version string: ", *cfg_.envy_version });
     }
     // The child inherits this process's argv, so the flag itself must not travel: it is a
     // parent-side instruction, and every release predating it rejects the unknown option.
@@ -307,11 +307,13 @@ void cmd_init::execute() {
   // Before anything is created: with no hop to stamp there is no manifest worth writing,
   // and '@envy bin ""' is a project no later command can load.
   if (relative_bin.empty()) {
-    throw std::runtime_error(
-        "init: no path leads from the project " + cfg_.project_dir.string() +
-        " to the bin directory " + bin_dir.string() +
-        "; they sit on different roots, so there is no '@envy bin' to write. Put the "
-        "bin directory on the project's own drive.");
+    throw_runtime_error(
+        { "init: no path leads from the project ",
+          cfg_.project_dir,
+          " to the bin directory ",
+          bin_dir,
+          "; they sit on different roots, so there is no '@envy bin' to write. Put the "
+          "bin directory on the project's own drive." });
   }
 
   // Deploy owns the verdict -- it walks up from the bin dir and only refuses when that
@@ -339,16 +341,18 @@ void cmd_init::execute() {
   if (!fs::exists(cfg_.project_dir)) {
     fs::create_directories(cfg_.project_dir, ec);
     if (ec) {
-      throw std::runtime_error("init: failed to create project directory " +
-                               cfg_.project_dir.string() + ": " + ec.message());
+      throw_runtime_error({ "init: failed to create project directory ",
+                            cfg_.project_dir,
+                            ": ",
+                            ec.message() });
     }
   }
 
   if (!fs::exists(bin_dir)) {
     fs::create_directories(bin_dir, ec);
     if (ec) {
-      throw std::runtime_error("init: failed to create bin directory " + bin_dir.string() +
-                               ": " + ec.message());
+      throw_runtime_error(
+          { "init: failed to create bin directory ", bin_dir, ": ", ec.message() });
     }
   }
 

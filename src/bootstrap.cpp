@@ -27,8 +27,8 @@ constexpr std::string_view kEnvyManagedMarker{ "envy-managed" };
 
 std::string get_bootstrap_template(platform_id platform) {
   switch (platform) {
-    case platform_id::POSIX: return util_inflate_resource(embedded::kBootstrapPosix);
-    case platform_id::WINDOWS: return util_inflate_resource(embedded::kBootstrapWindows);
+    case platform_id::POSIX: return util_unpack_resource(embedded::kBootstrapPosix);
+    case platform_id::WINDOWS: return util_unpack_resource(embedded::kBootstrapWindows);
     default: throw std::logic_error("unhandled platform_id in get_bootstrap_template");
   }
 }
@@ -79,9 +79,10 @@ bool bootstrap_write_script(fs::path const &bin_dir, platform_id platform) {
 
   // Check if existing file is envy-managed
   if (fs::exists(script_path) && !bootstrap_is_envy_managed(script_path)) {
-    throw std::runtime_error(
-        "bootstrap: file '" + script_path.string() +
-        "' exists but is not envy-managed. Remove manually to allow envy to manage it.");
+    throw_runtime_error({ "bootstrap: file '",
+                          script_path,
+                          "' exists but is not envy-managed. Remove manually to allow "
+                          "envy to manage it." });
   }
 
   return util_write_script(script_path, stamp_bootstrap(platform), platform) !=

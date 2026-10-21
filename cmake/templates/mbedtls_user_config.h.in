@@ -39,3 +39,6 @@
 #endif
 #endif
 #endif
+
+/* envy only ever dials out; drop the TLS server state machines (~35 KB). */
+#undef MBEDTLS_SSL_SRV_C

@@ -80,9 +80,12 @@ void check_version_agreement(std::optional<std::string> const &root_version,
                              fs::path const &resolved) {
   if (!root_version || !imported.version || *imported.version == *root_version) { return; }
   if (envy_release_version_less(*root_version, *imported.version)) {
-    throw std::runtime_error("envy.import: " + resolved.string() + " requires envy " +
-                             *imported.version + ", but the root manifest pins " +
-                             *root_version);
+    throw_runtime_error({ "envy.import: ",
+                          resolved,
+                          " requires envy ",
+                          *imported.version,
+                          ", but the root manifest pins ",
+                          *root_version });
   }
   tui::warn("envy.import: %s pins envy %s; the root manifest pins %s",
             resolved.string().c_str(),
@@ -118,8 +121,8 @@ void lua_envy_import_install(sol::state &lua,
                           : (importer.parent_path() / arg_path).lexically_normal() };
           if (fs::is_directory(r)) { r /= "envy.lua"; }
           if (!fs::exists(r)) {
-            throw std::runtime_error("envy.import: '" + arg + "' not found (resolved to " +
-                                     r.string() + ")");
+            throw_runtime_error(
+                { "envy.import: '", arg, "' not found (resolved to ", r, ")" });
           }
           return util_canonical_path(r);
         }() };
@@ -127,8 +130,7 @@ void lua_envy_import_install(sol::state &lua,
         if (auto const it{ std::ranges::find(*chain, resolved) }; it != chain->end()) {
           std::string cycle;
           for (auto i{ it }; i != chain->end(); ++i) { cycle += i->string() + " -> "; }
-          throw std::runtime_error("envy.import: import cycle: " + cycle +
-                                   resolved.string());
+          throw_runtime_error({ "envy.import: import cycle: ", cycle, resolved });
         }
 
         auto const content{ util_load_file(resolved) };
@@ -149,14 +151,16 @@ void lua_envy_import_install(sol::state &lua,
         sol::protected_function_result load_res{ loadfile(resolved.string(), "t", env) };
         if (!load_res.valid()) {
           sol::error const err = load_res;
-          throw std::runtime_error("envy.import: " + std::string{ err.what() });
+          throw_runtime_error({ "envy.import: ", err.what() });
         }
         sol::object const chunk{ load_res.get<sol::object>(0) };
         if (!chunk.is<sol::protected_function>()) {
-          throw std::runtime_error("envy.import: cannot load " + resolved.string() + ": " +
-                                   (load_res.return_count() > 1
-                                        ? load_res.get<std::string>(1)
-                                        : std::string{ "unknown error" }));
+          throw_runtime_error(
+              { "envy.import: cannot load ",
+                resolved,
+                ": ",
+                (load_res.return_count() > 1 ? load_res.get<std::string>(1)
+                                             : std::string{ "unknown error" }) });
         }
 
         chain->push_back(resolved);
@@ -169,8 +173,7 @@ void lua_envy_import_install(sol::state &lua,
                 chunk.as<sol::protected_function>()() };
             !run.valid()) {
           sol::error const err = run;
-          throw std::runtime_error("envy.import: " + resolved.string() + ": " +
-                                   std::string{ err.what() });
+          throw_runtime_error({ "envy.import: ", resolved, ": ", err.what() });
         }
 
         // Every import is remembered, so the root-only globals it declared can be
@@ -212,11 +215,16 @@ void lua_envy_import_validate_root_globals(sol::state_view lua) {
       // Adopted: the root spliced the very value the import declared. Anything else
       // -- unset, or a different value -- means nothing will ever read this one.
       if (declared == sol::object{ lua.globals()[name] }) { continue; }
-      throw std::runtime_error(
-          "envy.import: " + entry.get<std::string>("path") + " sets " +
-          std::string{ name } +
-          ", which is read only from the root manifest; assign it there (e.g. " +
-          std::string{ name } + " = envy.import(...)." + std::string{ name } + ")");
+      throw_runtime_error(
+          { "envy.import: ",
+            entry.get<std::string>("path"),
+            " sets ",
+            name,
+            ", which is read only from the root manifest; assign it there (e.g. ",
+            name,
+            " = envy.import(...).",
+            name,
+            ")" });
     }
   }
 }

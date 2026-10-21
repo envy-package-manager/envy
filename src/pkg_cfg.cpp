@@ -112,7 +112,7 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
           out_dependencies,
           "source.dependencies in " + origin.declaring_file.string());
     } else {
-      throw std::runtime_error("source.dependencies must be array (table)");
+      throw_runtime_error({ "source.dependencies must be array (table)" });
     }
   }
 
@@ -120,19 +120,19 @@ pkg_cfg::source_t parse_source_table(sol::table const &source_table,
     sol::object fetch_obj{ source_table["fetch"] };
     if (!fetch_obj.valid()) { return false; }
     if (!fetch_obj.is<sol::function>()) {
-      throw std::runtime_error("source.fetch must be a function");
+      throw_runtime_error({ "source.fetch must be a function" });
     }
     return true;
   }() };
 
   if (has_dependencies && !has_fetch) {  // deps require fetch, fetch can exist alone
-    throw std::runtime_error("source.dependencies requires source.fetch function");
+    throw_runtime_error({ "source.dependencies requires source.fetch function" });
   }
 
   if (!has_dependencies && !has_fetch) {
-    throw std::runtime_error(
-        "source table must declare a 'fetch' function (with optional 'dependencies'); "
-        "a URL or path is written as a plain string");
+    throw_runtime_error(
+        { "source table must declare a 'fetch' function (with optional 'dependencies'); "
+          "a URL or path is written as a plain string" });
   }
 
   return pkg_cfg::fetch_function{};  // Custom source fetch - no URL-based source
@@ -148,7 +148,7 @@ pkg_cfg::source_t parse_source_string(std::string const &source_uri,
     std::string const ref_str{
       sol_util_get_required<std::string>(table, "ref", "Spec with git source")
     };
-    if (ref_str.empty()) { throw std::runtime_error("Spec 'ref' field cannot be empty"); }
+    if (ref_str.empty()) { throw_runtime_error({ "Spec 'ref' field cannot be empty" }); }
 
     return pkg_cfg::git_source{ .url = info.canonical, .ref = ref_str };
   }
@@ -228,7 +228,7 @@ std::string serialize_option_value(sol::object const &val, std::string const &pa
                                      val.as<lua_Number>(),
                                      std::chars_format::general);
       if (ec != std::errc{}) {
-        throw std::runtime_error("Failed to serialize double value");
+        throw_runtime_error({ "Failed to serialize double value" });
       }
       return std::string{ buf, ptr };
     }
@@ -248,14 +248,15 @@ std::string serialize_option_value(sol::object const &val, std::string const &pa
     }) };
 
     if (all_integer_keys) {  // Array {v1,v2,v3}, in numeric order
-      std::ranges::sort(entries, {}, [](auto const &e) {
-        return e.first.template as<lua_Integer>();
+      util_sort(entries, [](auto const &a, auto const &b) {
+        return a.first.template as<lua_Integer>() < b.first.template as<lua_Integer>();
       });
       for (size_t i{ 0 }; i < entries.size(); ++i) {
         if (entries[i].first.as<lua_Integer>() != static_cast<lua_Integer>(i + 1)) {
-          throw std::runtime_error(
-              "option '" + path +
-              "': integer-keyed table must be a contiguous 1..n sequence");
+          throw_runtime_error(
+              { "option '",
+                path,
+                "': integer-keyed table must be a contiguous 1..n sequence" });
         }
       }
 
@@ -274,16 +275,18 @@ std::string serialize_option_value(sol::object const &val, std::string const &pa
     sorted.reserve(entries.size());
     for (auto const &[key, value] : entries) {
       if (!key.is<std::string>()) {
-        throw std::runtime_error(
-            "option '" + path + "': table keys must be all strings or a contiguous " +
-            "1..n sequence, got a " +
-            std::string{ sol::type_name(key.lua_state(), key.get_type()) } + " key");
+        throw_runtime_error({ "option '",
+                              path,
+                              "': table keys must be all strings or a contiguous ",
+                              "1..n sequence, got a ",
+                              sol::type_name(key.lua_state(), key.get_type()),
+                              " key" });
       }
       std::string name{ key.as<std::string>() };
       std::string serialized{ serialize_option_value(value, path + "." + name) };
       sorted.emplace_back(std::move(name), std::move(serialized));
     }
-    std::ranges::sort(sorted);
+    util_sort(sorted);
 
     std::string out{ "{" };
     for (size_t i{ 0 }; i < sorted.size(); ++i) {
@@ -293,7 +296,7 @@ std::string serialize_option_value(sol::object const &val, std::string const &pa
     return out + "}";
   }
 
-  throw std::runtime_error("Unsupported Lua type in option '" + path + "'");
+  throw_runtime_error({ "Unsupported Lua type in option '", path, "'" });
 }
 
 }  // namespace
@@ -327,13 +330,13 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
                         pkg_entry_shape const shape) {
   //  "namespace.name@version" shorthand requires url or file
   if (lua_val.is<std::string>()) {
-    throw std::runtime_error(
-        "Spec shorthand string syntax requires table with 'url' or 'file': " +
-        lua_val.as<std::string>());
+    throw_runtime_error(
+        { "Spec shorthand string syntax requires table with 'url' or 'file': ",
+          lua_val.as<std::string>() });
   }
 
   if (!lua_val.is<sol::table>()) {
-    throw std::runtime_error("Spec entry must be string or table");
+    throw_runtime_error({ "Spec entry must be string or table" });
   }
 
   sol::table table{ lua_val.as<sol::table>() };
@@ -346,15 +349,15 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
   } else if (has_value(table, "weak")) {
     // A manifest entry must carry a source, and source + weak is refused below, so
     // the key is unusable here however it is written.
-    throw std::runtime_error(
-        "manifest PACKAGES entries cannot be weak; declare weak references in a "
-        "spec's DEPENDENCIES");
+    throw_runtime_error(
+        { "manifest PACKAGES entries cannot be weak; declare weak references in a "
+          "spec's DEPENDENCIES" });
   }
   if (!rules.needed_by_allowed && has_value(table, "needed_by")) {
-    throw std::runtime_error(
-        "source.dependencies entry cannot specify 'needed_by': a fetch prerequisite "
-        "always blocks the parent's spec_fetch. Declare it in the spec's DEPENDENCIES "
-        "to couple it to a later phase.");
+    throw_runtime_error(
+        { "source.dependencies entry cannot specify 'needed_by': a fetch prerequisite "
+          "always blocks the parent's spec_fetch. Declare it in the spec's DEPENDENCIES "
+          "to couple it to a later phase." });
   }
   sol_util_reject_unknown_keys(table, rules.keys, rules.context);
 
@@ -367,7 +370,7 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
     sol_util_get_optional<std::string>(table, "product", "Spec")
   };
   if (product.has_value() && product->empty()) {
-    throw std::runtime_error("Spec 'product' field cannot be empty");
+    throw_runtime_error({ "Spec 'product' field cannot be empty" });
   }
 
   std::optional<std::string> identity_opt{
@@ -378,13 +381,11 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
     if (rules.source_optional && product.has_value()) {
       identity = "";
     } else {
-      throw std::runtime_error("Spec table missing required 'spec' field");
+      throw_runtime_error({ "Spec table missing required 'spec' field" });
     }
   } else {
     identity = *identity_opt;
-    if (identity.empty()) {
-      throw std::runtime_error("Spec 'spec' field cannot be empty");
-    }
+    if (identity.empty()) { throw_runtime_error({ "Spec 'spec' field cannot be empty" }); }
   }
 
   sol::object weak_obj{ table["weak"] };
@@ -394,13 +395,13 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
   bool const has_source{ source_obj.valid() };
 
   if (has_source && has_weak) {
-    throw std::runtime_error("Spec cannot specify both 'source' and 'weak' fields");
+    throw_runtime_error({ "Spec cannot specify both 'source' and 'weak' fields" });
   }
 
   bool const allow_missing_source{ rules.source_optional && !has_source };
 
   if (!allow_missing_source && !identity.empty() && !identity_is_valid(identity)) {
-    throw std::runtime_error("Invalid spec identity format: " + identity);
+    throw_runtime_error({ "Invalid spec identity format: ", identity });
   }
 
   source_t source;
@@ -408,11 +409,11 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
   if (has_source) {
     if (source_obj.is<sol::table>()) {
       if (!rules.fetch_function_runs) {
-        throw std::runtime_error(
-            std::string{ rules.context } +
-            " 'source' cannot be a { fetch = ... } table: nothing can ever call that "
-            "function from here. Declare the spec in another spec's DEPENDENCIES, or "
-            "the bundle in a BUNDLES table.");
+        throw_runtime_error(
+            { rules.context,
+              " 'source' cannot be a { fetch = ... } table: nothing can ever call that "
+              "function from here. Declare the spec in another spec's DEPENDENCIES, or "
+              "the bundle in a BUNDLES table." });
       }
       sol::table source_table{ source_obj.as<sol::table>() };
       source = parse_source_table(source_table, origin, source_dependencies);
@@ -420,11 +421,11 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
       std::string source_uri{ source_obj.as<std::string>() };
       source = parse_source_string(source_uri, table, origin.anchor);
     } else {
-      throw std::runtime_error("Spec 'source' field must be string or table");
+      throw_runtime_error({ "Spec 'source' field must be string or table" });
     }
   } else {
     if (!rules.source_optional) {
-      throw std::runtime_error("Spec must specify 'source' field");
+      throw_runtime_error({ "Spec must specify 'source' field" });
     }
     source = pkg_cfg::weak_ref{};
   }
@@ -434,12 +435,12 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
   if (options_obj.valid() && options_obj.get_type() == sol::type::table) {
     // Validate options don't contain functions
     if (contains_function(options_obj)) {
-      throw std::runtime_error("Unsupported Lua type: function");
+      throw_runtime_error({ "Unsupported Lua type: function" });
     }
     // Serialize to Lua table literal
     serialized_options = serialize_option_table(options_obj);
   } else if (options_obj.valid() && options_obj.get_type() != sol::type::lua_nil) {
-    throw std::runtime_error("Spec 'options' field must be table");
+    throw_runtime_error({ "Spec 'options' field must be table" });
   }
 
   auto needed_by_str{ sol_util_get_optional<std::string>(table, "needed_by", "Spec") };
@@ -449,12 +450,12 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
 
   if (has_weak) {
     if (!weak_obj.is<sol::table>()) {
-      throw std::runtime_error("Spec 'weak' field must be table");
+      throw_runtime_error({ "Spec 'weak' field must be table" });
     }
     // Weak fallback must be a strong cfg; do not allow nested weak-without-source here
     pkg_cfg *weak_cfg{ pkg_cfg::parse(weak_obj, origin, pkg_entry_shape::WEAK_FALLBACK) };
     if (weak_cfg->needed_by.has_value()) {
-      throw std::runtime_error("weak fallback must not specify 'needed_by'");
+      throw_runtime_error({ "weak fallback must not specify 'needed_by'" });
     }
     weak = weak_cfg;
   }
@@ -510,18 +511,18 @@ pkg_cfg *pkg_cfg::parse_fetch_dependency(sol::object const &entry,
     // a resolution barrier — which waits for every spec_fetch, including that of
     // the consumer whose fetch function is waiting on this entry. Nothing can
     // satisfy it in time, so refuse rather than order it silently wrong.
-    throw std::runtime_error(
-        "source.dependencies entry '" +
-        (cfg->product.has_value() ? "product " + *cfg->product : cfg->identity) +
-        "' must be a strong reference: give the entry a 'spec' and a 'source'");
+    throw_runtime_error(
+        { "source.dependencies entry '",
+          (cfg->product.has_value() ? "product " + *cfg->product : cfg->identity),
+          "' must be a strong reference: give the entry a 'spec' and a 'source'" });
   }
   if (cfg->identity.empty()) {
     // parse(..., true) allows a bare product entry to omit 'spec'. With a source
     // present that is not a weak reference, so it would otherwise reach pkg_key and
     // fail there as an invalid identity rather than as a non-strong prerequisite.
-    throw std::runtime_error("source.dependencies product '" +
-                             cfg->product.value_or(std::string{}) +
-                             "' must name a 'spec'");
+    throw_runtime_error({ "source.dependencies product '",
+                          cfg->product.value_or(std::string{}),
+                          "' must name a 'spec'" });
   }
   return cfg;
 }
@@ -655,10 +656,10 @@ bool operator==(pkg_cfg::git_source const &lhs, pkg_cfg::git_source const &rhs) 
 
 void pkg_cfg_reject_platforms(sol::table const &table, std::string_view context) {
   if (!has_value(table, "platforms")) { return; }
-  throw std::runtime_error(std::string{ context } +
-                           " cannot specify 'platforms': platform filtering is a "
-                           "manifest PACKAGES field. A dependency exists because "
-                           "something on this platform asked for it.");
+  throw_runtime_error({ context,
+                        " cannot specify 'platforms': platform filtering is a "
+                        "manifest PACKAGES field. A dependency exists because "
+                        "something on this platform asked for it." });
 }
 
 void pkg_cfg_reject_option_variants(std::vector<pkg_cfg *> const &deps,
@@ -670,9 +671,13 @@ void pkg_cfg_reject_option_variants(std::vector<pkg_cfg *> const &deps,
     if (inserted || it->second->serialized_options == dep->serialized_options) {
       continue;
     }
-    throw std::runtime_error(
-        context + " names '" + dep->identity + "' twice with different options: " +
-        it->second->serialized_options + " and " + dep->serialized_options);
+    throw_runtime_error({ context,
+                          " names '",
+                          dep->identity,
+                          "' twice with different options: ",
+                          it->second->serialized_options,
+                          " and ",
+                          dep->serialized_options });
   }
 }
 
@@ -732,7 +737,7 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
     return equal ? pkg_source_match::SAME : pkg_source_match::DIFFERENT;
   } };
 
-  return std::visit(
+  return envy::visit(
       match{
           [&](pkg_cfg::remote_source const &a) {
             return same(a == std::get<pkg_cfg::remote_source>(rhs));

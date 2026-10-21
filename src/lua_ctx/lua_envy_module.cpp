@@ -93,8 +93,8 @@ fs::path lua_module_path_under(fs::path const &root,
   fs::path const full{ (base / (subpath + ".lua")).lexically_normal() };
   if (auto const rel{ full.lexically_relative(base) };
       rel.empty() || *rel.begin() == "..") {
-    throw std::runtime_error(prefix(fn) + "module '" + module_path +
-                             "' resolves outside " + scope + ": " + full.string());
+    throw_runtime_error(
+        { prefix(fn), "module '", module_path, "' resolves outside ", scope, ": ", full });
   }
   return full;
 }
@@ -110,7 +110,7 @@ sol::table lua_module_load(sol::state_view lua,
                            sol::table const &caller_scope,
                            lua_module_bundle const *from) {
   if (!fs::exists(full_path)) {
-    throw std::runtime_error(prefix(fn) + "file not found: " + full_path.string());
+    throw_runtime_error({ prefix(fn), "file not found: ", full_path });
   }
 
   auto const bytes{ util_load_file(full_path) };
@@ -119,7 +119,7 @@ sol::table lua_module_load(sol::state_view lua,
   sol::load_result chunk{ lua.load(content, full_path.string()) };
   if (!chunk.valid()) {
     sol::error const err = chunk;
-    throw std::runtime_error(prefix(fn) + "load error: " + err.what());
+    throw_runtime_error({ prefix(fn), "load error: ", err.what() });
   }
 
   // Assigned globals land here, not in the caller's; the caller's show through.
@@ -130,15 +130,19 @@ sol::table lua_module_load(sol::state_view lua,
   sol::protected_function_result const result{ fnc() };
   if (!result.valid()) {
     sol::error const err = result;
-    throw std::runtime_error(prefix(fn) + "exec error: " + err.what());
+    throw_runtime_error({ prefix(fn), "exec error: ", err.what() });
   }
 
   sol::object const ret{ result.return_count() ? result.get<sol::object>(0)
                                                : sol::object{} };
   if (!ret.valid() || ret.get_type() == sol::type::lua_nil) { return env; }
   if (!ret.is<sol::table>()) {
-    throw std::runtime_error(prefix(fn) + "module '" + module_path + "' returned a " +
-                             lua_type_name(ret) + "; a module returns a table or nothing");
+    throw_runtime_error({ prefix(fn),
+                          "module '",
+                          module_path,
+                          "' returned a ",
+                          lua_type_name(ret),
+                          "; a module returns a table or nothing" });
   }
   return ret.as<sol::table>();
 }
@@ -149,7 +153,7 @@ fs::path lua_module_caller_file(lua_State *L, std::string_view fn, caller_path h
   sol::table const info = lua["debug"]["getinfo"](2, "S");  // 2 = caller of this C fn
   sol::optional<std::string> const source = info["source"];
   if (!source) {
-    throw std::runtime_error(prefix(fn) + "cannot determine caller's source file");
+    throw_runtime_error({ prefix(fn), "cannot determine caller's source file" });
   }
 
   std::string_view s{ *source };
@@ -164,7 +168,7 @@ void lua_envy_loadenv_install(sol::table &envy_table) {
                              sol::this_state L) -> sol::table {
     constexpr std::string_view kFn{ "envy.loadenv" };
     if (module_path.empty()) {
-      throw std::runtime_error(std::string{ kFn } + ": path must be a non-empty string");
+      throw_runtime_error({ kFn, ": path must be a non-empty string" });
     }
 
     // Looser than its siblings: anchored on the caller's own file, and a separator here

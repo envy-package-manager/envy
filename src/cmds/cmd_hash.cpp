@@ -161,21 +161,21 @@ void cmd_hash::execute() {
   namespace fs = std::filesystem;
 
   if (cfg_.paths.empty()) {
-    throw std::runtime_error("hash: at least one path is required");
+    throw_runtime_error({ "hash: at least one path is required" });
   }
   if (!cfg_.tree && (!cfg_.only.empty() || cfg_.threads || cfg_.json || cfg_.stats)) {
-    throw std::runtime_error(
-        "hash: --only, --threads, --json and --stats apply to --tree; per-file hashing "
-        "takes neither selectors nor a thread count");
+    throw_runtime_error(
+        { "hash: --only, --threads, --json and --stats apply to --tree; per-file hashing "
+          "takes neither selectors nor a thread count" });
   }
-  if (cfg_.threads < 0) { throw std::runtime_error("hash: --threads cannot be negative"); }
+  if (cfg_.threads < 0) { throw_runtime_error({ "hash: --threads cannot be negative" }); }
 
   if (cfg_.tree) {
     auto const filter{ vendor_parse_selectors(cfg_.only, "hash --only") };
     for (size_t i{ 0 }; i < cfg_.paths.size(); ++i) {
       auto const &path{ cfg_.paths[i] };
       if (!fs::is_directory(path)) {
-        throw std::runtime_error("hash: --tree needs a directory: " + path.string());
+        throw_runtime_error({ "hash: --tree needs a directory: ", path });
       }
       hash_one_tree(path, filter, cfg_, i == 0);
     }
@@ -185,7 +185,7 @@ void cmd_hash::execute() {
 
   for (auto const &path : cfg_.paths) {
     if (!fs::exists(path)) {
-      throw std::runtime_error("hash: path does not exist: " + path.string());
+      throw_runtime_error({ "hash: path does not exist: ", path });
     }
 
     if (fs::is_directory(path)) {

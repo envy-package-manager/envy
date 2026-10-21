@@ -1,5 +1,7 @@
 #include "lua_shell.h"
 
+#include "util.h"
+
 #include "sol/sol.hpp"
 
 #include <stdexcept>
@@ -19,19 +21,18 @@ resolved_shell parse_shell_config_from_lua(sol::object const &obj, char const *c
                              choice == shell_choice::powershell };
 
     if (!valid_choice) {
-      throw std::runtime_error(std::string{ context } + ": invalid ENVY_SHELL constant");
+      throw_runtime_error({ context, ": invalid ENVY_SHELL constant" });
     }
 
     // Platform-specific shell validation
 #if defined(_WIN32)
     if (choice == shell_choice::bash || choice == shell_choice::sh) {
-      throw std::runtime_error(std::string{ context } +
-                               ": BASH/SH shells are only available on Unix");
+      throw_runtime_error({ context, ": BASH/SH shells are only available on Unix" });
     }
 #else
     if (choice == shell_choice::cmd || choice == shell_choice::powershell) {
-      throw std::runtime_error(std::string{ context } +
-                               ": CMD/POWERSHELL shells are only available on Windows");
+      throw_runtime_error(
+          { context, ": CMD/POWERSHELL shells are only available on Windows" });
     }
 #endif
 
@@ -46,17 +47,15 @@ resolved_shell parse_shell_config_from_lua(sol::object const &obj, char const *c
 
       // Unpack custom_shell variant (variant<file, inline>) into return variant
       resolved_shell result;
-      std::visit([&result](auto &&custom_cfg) { result = custom_cfg; }, custom);
+      envy::visit([&result](auto &&custom_cfg) { result = custom_cfg; }, custom);
       return result;
-    } catch (std::exception const &e) {
-      throw std::runtime_error(std::string{ context } + ": " + e.what());
-    }
+    } catch (std::exception const &e) { throw_runtime_error({ context, ": ", e.what() }); }
   }
 
   // Unsupported type
-  throw std::runtime_error(std::string{ context } +
-                           ": shell must be ENVY_SHELL constant or table {file=..., "
-                           "ext=...} or {inline=...}");
+  throw_runtime_error({ context,
+                        ": shell must be ENVY_SHELL constant or table {file=..., "
+                        "ext=...} or {inline=...}" });
 }
 
 }  // namespace envy

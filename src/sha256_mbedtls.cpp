@@ -17,7 +17,7 @@ namespace envy {
 sha256_t sha256(std::filesystem::path const &file_path,
                 byte_progress_cb_t const &progress) {
   if (!std::filesystem::exists(file_path)) {
-    throw std::runtime_error("sha256: file does not exist: " + file_path.string());
+    throw_runtime_error({ "sha256: file does not exist: ", file_path });
   }
 
   // A length is what makes this a bar rather than a spinner, so it is read before a byte
@@ -25,8 +25,7 @@ sha256_t sha256(std::filesystem::path const &file_path,
   std::error_code size_ec;
   auto const total{ std::filesystem::file_size(file_path, size_ec) };
   if (size_ec) {
-    throw std::runtime_error("sha256: cannot size " + file_path.string() + ": " +
-                             size_ec.message());
+    throw_runtime_error({ "sha256: cannot size ", file_path, ": ", size_ec.message() });
   }
 
   mbedtls_sha256_context ctx;
@@ -37,7 +36,7 @@ sha256_t sha256(std::filesystem::path const &file_path,
       &mbedtls_sha256_free);
 
   if (mbedtls_sha256_starts(&ctx, 0)) {
-    throw std::runtime_error("sha256: mbedtls_sha256_starts failed");
+    throw_runtime_error({ "sha256: mbedtls_sha256_starts failed" });
   }
 
   // One file-reading path in the process: the same platform-native reader the subtree
@@ -48,7 +47,7 @@ sha256_t sha256(std::filesystem::path const &file_path,
       total,
       [&](void const *data, std::size_t n) {
         if (mbedtls_sha256_update(&ctx, static_cast<unsigned char const *>(data), n)) {
-          throw std::runtime_error("sha256: mbedtls_sha256_update failed");
+          throw_runtime_error({ "sha256: mbedtls_sha256_update failed" });
         }
         hashed += n;
         if (progress) { progress(hashed, total); }
@@ -59,7 +58,7 @@ sha256_t sha256(std::filesystem::path const &file_path,
 
   sha256_t digest{};
   if (mbedtls_sha256_finish(&ctx, digest.data())) {
-    throw std::runtime_error("sha256: mbedtls_sha256_finish failed");
+    throw_runtime_error({ "sha256: mbedtls_sha256_finish failed" });
   }
 
   return digest;
@@ -67,20 +66,21 @@ sha256_t sha256(std::filesystem::path const &file_path,
 
 void sha256_verify(std::string const &expected_hex, sha256_t const &actual_hash) {
   if (expected_hex.size() != 64) {
-    throw std::runtime_error(
-        "sha256_verify: expected hex string must be 64 characters, got " +
-        std::to_string(expected_hex.size()));
+    throw_runtime_error({ "sha256_verify: expected hex string must be 64 characters, got ",
+                          expected_hex.size() });
   }
 
   auto const expected_bytes{ util_hex_to_bytes(expected_hex) };
   if (expected_bytes.size() != 32) {
-    throw std::runtime_error("sha256_verify: hex conversion produced wrong size: " +
-                             std::to_string(expected_bytes.size()));
+    throw_runtime_error(
+        { "sha256_verify: hex conversion produced wrong size: ", expected_bytes.size() });
   }
 
   if (std::memcmp(expected_bytes.data(), actual_hash.data(), 32) != 0) {
-    throw std::runtime_error("SHA256 mismatch: expected " + expected_hex + " but got " +
-                             util_bytes_to_hex(actual_hash.data(), actual_hash.size()));
+    throw_runtime_error({ "SHA256 mismatch: expected ",
+                          expected_hex,
+                          " but got ",
+                          util_bytes_to_hex(actual_hash.data(), actual_hash.size()) });
   }
 }
 

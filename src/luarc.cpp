@@ -188,11 +188,11 @@ fs::path extract_lua_ls_types(fs::path const &cache_root) {
   std::error_code ec;
   fs::create_directories(types_dir, ec);
   if (ec) {
-    throw std::runtime_error("init: failed to create types directory " +
-                             types_dir.string() + ": " + ec.message());
+    throw_runtime_error(
+        { "init: failed to create types directory ", types_dir, ": ", ec.message() });
   }
 
-  auto const types{ stamp_placeholders(util_inflate_resource(embedded::kTypeDefinitions),
+  auto const types{ stamp_placeholders(util_unpack_resource(embedded::kTypeDefinitions),
                                        kEnvyReleaseDownloadUrl) };
   util_write_file(types_path, types);
 
@@ -220,7 +220,7 @@ void write_luarc(fs::path const &project_dir, envy_meta const &meta) {
     entries += "\"" + canonical[i] + "\"";
   }
 
-  std::string content{ util_inflate_resource(embedded::kLuarcTemplate) };
+  std::string content{ util_unpack_resource(embedded::kLuarcTemplate) };
   replace_all(content, "@@LUA_VERSION@@", LUA_VERSION);
   replace_all(content, "\"@@TYPES_DIR@@\"", entries);
 

@@ -52,7 +52,7 @@ bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_tab
                                                     pkg_decl_origin const &origin) {
   sol::object fetch_obj{ source_table["fetch"] };
   if (!fetch_obj.valid() || !fetch_obj.is<sol::function>()) {
-    throw std::runtime_error("Bundle source table requires 'fetch' function");
+    throw_runtime_error({ "Bundle source table requires 'fetch' function" });
   }
 
   bundle_decl::custom_fetch_source result;
@@ -60,7 +60,7 @@ bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_tab
   sol::object deps_obj{ source_table["dependencies"] };
   if (deps_obj.valid() && deps_obj.get_type() != sol::type::lua_nil) {
     if (!deps_obj.is<sol::table>()) {
-      throw std::runtime_error("Bundle source.dependencies must be array (table)");
+      throw_runtime_error({ "Bundle source.dependencies must be array (table)" });
     }
     sol::table deps_table{ deps_obj.as<sol::table>() };
     for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
@@ -96,14 +96,14 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
   // Required: identity
   auto identity_opt{ sol_util_get_optional<std::string>(table, "identity", "Bundle") };
   if (!identity_opt.has_value() || identity_opt->empty()) {
-    throw std::runtime_error("Bundle declaration missing required 'identity' field");
+    throw_runtime_error({ "Bundle declaration missing required 'identity' field" });
   }
   decl.identity = std::move(*identity_opt);
 
   // Required: source (string or table)
   sol::object source_obj{ table["source"] };
   if (!source_obj.valid() || source_obj.get_type() == sol::type::lua_nil) {
-    throw std::runtime_error("Bundle declaration missing required 'source' field");
+    throw_runtime_error({ "Bundle declaration missing required 'source' field" });
   }
 
   // Handle source as table (custom fetch with dependencies)
@@ -114,12 +114,12 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
 
   // Handle source as string (URL/path)
   if (!source_obj.is<std::string>()) {
-    throw std::runtime_error("Bundle 'source' must be string (URL/path) or table");
+    throw_runtime_error({ "Bundle 'source' must be string (URL/path) or table" });
   }
 
   std::string const source_uri{ source_obj.as<std::string>() };
   if (source_uri.empty()) {
-    throw std::runtime_error("Bundle 'source' string cannot be empty");
+    throw_runtime_error({ "Bundle 'source' string cannot be empty" });
   }
 
   auto const info{ uri_classify(source_uri) };
@@ -127,7 +127,7 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
   if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
     auto ref_opt{ sol_util_get_optional<std::string>(table, "ref", "Bundle") };
     if (!ref_opt.has_value() || ref_opt->empty()) {
-      throw std::runtime_error("Bundle with git source requires 'ref' field");
+      throw_runtime_error({ "Bundle with git source requires 'ref' field" });
     }
     decl.source =
         bundle_decl::git_source{ .url = info.canonical, .ref = std::move(*ref_opt) };
@@ -149,7 +149,7 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
 
 // Convert internal bundle_decl to public pkg_cfg::bundle_source
 pkg_cfg::bundle_source decl_to_source(bundle_decl const &decl) {
-  return std::visit(
+  return envy::visit(
       match{
           [&](bundle_decl::remote_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity,
@@ -187,7 +187,7 @@ bundle bundle::from_path(std::filesystem::path const &cache_path) {
   std::filesystem::path const manifest_path{ cache_path / "envy-bundle.lua" };
 
   if (!std::filesystem::exists(manifest_path)) {
-    throw std::runtime_error("Bundle manifest not found: " + manifest_path.string());
+    throw_runtime_error({ "Bundle manifest not found: ", manifest_path });
   }
 
   auto const content{ util_load_file(manifest_path) };
@@ -204,8 +204,8 @@ bundle bundle::from_path(std::filesystem::path const &cache_path) {
 
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error("Failed to parse bundle manifest " + manifest_path.string() +
-                             ": " + err.what());
+    throw_runtime_error(
+        { "Failed to parse bundle manifest ", manifest_path, ": ", err.what() });
   }
 
   bundle b;
@@ -215,57 +215,58 @@ bundle bundle::from_path(std::filesystem::path const &cache_path) {
   // Required: BUNDLE identity
   sol::object bundle_obj{ (*lua)["BUNDLE"] };
   if (!bundle_obj.valid() || !bundle_obj.is<std::string>()) {
-    throw std::runtime_error("Bundle manifest missing required 'BUNDLE' field: " +
-                             manifest_path.string());
+    throw_runtime_error(
+        { "Bundle manifest missing required 'BUNDLE' field: ", manifest_path });
   }
   b.identity = bundle_obj.as<std::string>();
   if (b.identity.empty()) {
-    throw std::runtime_error("Bundle manifest 'BUNDLE' field cannot be empty: " +
-                             manifest_path.string());
+    throw_runtime_error(
+        { "Bundle manifest 'BUNDLE' field cannot be empty: ", manifest_path });
   }
 
   // Required: SPECS table
   sol::object specs_obj{ (*lua)["SPECS"] };
   if (!specs_obj.valid() || !specs_obj.is<sol::table>()) {
-    throw std::runtime_error("Bundle manifest missing required 'SPECS' table: " +
-                             manifest_path.string());
+    throw_runtime_error(
+        { "Bundle manifest missing required 'SPECS' table: ", manifest_path });
   }
 
   sol::table specs_table{ specs_obj.as<sol::table>() };
   for (auto const &[key, value] : specs_table) {
     if (!key.is<std::string>()) {
-      throw std::runtime_error("SPECS key must be string in bundle: " +
-                               manifest_path.string());
+      throw_runtime_error({ "SPECS key must be string in bundle: ", manifest_path });
     }
     if (!value.is<std::string>()) {
-      throw std::runtime_error("SPECS value must be string (relative path) in bundle: " +
-                               manifest_path.string());
+      throw_runtime_error(
+          { "SPECS value must be string (relative path) in bundle: ", manifest_path });
     }
 
     std::string spec_identity{ key.as<std::string>() };
     std::string relative_path{ value.as<std::string>() };
 
     if (spec_identity.empty()) {
-      throw std::runtime_error("SPECS key cannot be empty in bundle: " +
-                               manifest_path.string());
+      throw_runtime_error({ "SPECS key cannot be empty in bundle: ", manifest_path });
     }
     if (relative_path.empty()) {
-      throw std::runtime_error("SPECS path cannot be empty for '" + spec_identity +
-                               "' in bundle: " + manifest_path.string());
+      throw_runtime_error({ "SPECS path cannot be empty for '",
+                            spec_identity,
+                            "' in bundle: ",
+                            manifest_path });
     }
 
     std::filesystem::path p{ relative_path };
     if (p.is_absolute()) {
-      throw std::runtime_error("SPECS path must be relative, got absolute path for '" +
-                               spec_identity + "' in bundle: " + manifest_path.string());
+      throw_runtime_error({ "SPECS path must be relative, got absolute path for '",
+                            spec_identity,
+                            "' in bundle: ",
+                            manifest_path });
     }
 
     b.specs.emplace(std::move(spec_identity), std::move(relative_path));
   }
 
   if (b.specs.empty()) {
-    throw std::runtime_error("Bundle SPECS table cannot be empty: " +
-                             manifest_path.string());
+    throw_runtime_error({ "Bundle SPECS table cannot be empty: ", manifest_path });
   }
 
   return b;
@@ -315,8 +316,8 @@ void bundle::validate() const {
 
   for (auto const &r : results) {
     if (r.error) {
-      throw std::runtime_error("bundle '" + identity + "' spec '" + r.spec_key +
-                               "': " + *r.error);
+      throw_runtime_error(
+          { "bundle '", identity, "' spec '", r.spec_key, "': ", *r.error });
     }
   }
 }
@@ -331,17 +332,17 @@ std::unordered_map<std::string, pkg_cfg::bundle_source> bundle::parse_aliases(
   }
 
   if (!bundles_obj.is<sol::table>()) {
-    throw std::runtime_error("BUNDLES must be a table");
+    throw_runtime_error({ "BUNDLES must be a table" });
   }
 
   sol::table bundles_lua{ bundles_obj.as<sol::table>() };
 
   for (auto const &[key, value] : bundles_lua) {
-    if (!key.is<std::string>()) { throw std::runtime_error("BUNDLES key must be string"); }
+    if (!key.is<std::string>()) { throw_runtime_error({ "BUNDLES key must be string" }); }
     std::string alias{ key.as<std::string>() };
 
     if (!value.is<sol::table>()) {
-      throw std::runtime_error("BUNDLES['" + alias + "'] must be a table");
+      throw_runtime_error({ "BUNDLES['", alias, "'] must be a table" });
     }
 
     bundle_decl decl{ parse_decl(value.as<sol::table>(), origin) };
@@ -423,9 +424,9 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
 void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
                           std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &install_dir,
-                          bundle_fetcher const &fetch_one,
-                          bundle_custom_fetcher const &run_custom) {
-  std::visit(
+                          bundle_fetcher fetch_one,
+                          bundle_custom_fetcher run_custom) {
+  envy::visit(
       match{
           [&](pkg_cfg::remote_source const &remote) {
             std::filesystem::path const dest{ fetch_dir /
@@ -457,10 +458,10 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
             run_custom();  // commits into fetch_dir via envy.commit_fetch
 
             if (!std::filesystem::exists(fetch_dir / "envy-bundle.lua")) {
-              throw std::runtime_error(
-                  "Bundle custom fetch did not create "
-                  "envy-bundle.lua: " +
-                  src.bundle_identity);
+              throw_runtime_error(
+                  { "Bundle custom fetch did not create "
+                    "envy-bundle.lua: ",
+                    src.bundle_identity });
             }
             for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
               std::filesystem::rename(entry.path(), install_dir / entry.path().filename());
@@ -471,15 +472,16 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
 }
 
 std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg) {
-  return std::visit(
+  return envy::visit(
       match{
           [](pkg_cfg::remote_source const &r) { return source_key(r); },
           [](pkg_cfg::git_source const &g) { return source_key(g); },
           [](pkg_cfg::local_source const &l) { return source_key(l); },
           [&](pkg_cfg::custom_fetch_source const &) {
             if (!cfg) {
-              throw std::runtime_error("bundle '" + src.bundle_identity +
-                                       "': a custom fetch keys on its declaration");
+              throw_runtime_error({ "bundle '",
+                                    src.bundle_identity,
+                                    "': a custom fetch keys on its declaration" });
             }
             return custom_fetch_source_key(*cfg);
           },
@@ -490,8 +492,11 @@ std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *
 bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id) {
   bundle parsed{ bundle::from_path(root) };
   if (parsed.identity != expected_id) {
-    throw std::runtime_error("Bundle identity mismatch: expected '" + expected_id +
-                             "' but manifest declares '" + parsed.identity + "'");
+    throw_runtime_error({ "Bundle identity mismatch: expected '",
+                          expected_id,
+                          "' but manifest declares '",
+                          parsed.identity,
+                          "'" });
   }
   parsed.validate();
   return parsed;

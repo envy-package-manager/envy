@@ -6,6 +6,7 @@
 #include "shell.h"
 #include "termination.h"
 #include "tui.h"
+#include "util.h"
 
 #include <clocale>
 #include <cstdlib>
@@ -38,7 +39,7 @@ int main(int argc, char *argv[]) {
     auto const target{ envy::deploy_target(args) };
     envy::self_deploy::ensure(target.root, target.mode);
 
-    auto cmd{ std::visit(
+    auto cmd{ envy::visit(
         [&args](auto const &cfg) { return envy::cmd::create(cfg, args.cache_root); },
         *args.cmd_cfg) };
 

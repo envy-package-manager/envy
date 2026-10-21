@@ -15,3 +15,19 @@
 **Purpose:** Header-only C++/Lua bindings—type-safe stack manipulation, STL interop
 **Integration:** Amalgamation generated via `single.py` during CMake configure
 **Rationale:** Eliminates error-prone manual stack manipulation; enables idiomatic C++ patterns for Lua integration
+
+## Mbed TLS
+
+**Version:** 3.6.7
+**License:** Apache-2.0
+**Purpose:** Crypto (SHA-256) and the TLS client behind libgit2, libssh2, and Linux libcurl
+**Integration:** `cmake/templates/mbedtls_user_config.h.in` layers TLS 1.3 and threading atop the stock config and `#undef`s `MBEDTLS_SSL_SRV_C`; every consumer compiles against the same file, so struct layouts agree
+**Rationale:** envy only dials out; the TLS server state machines cost ~35 KB
+
+## AWS SDK for C++
+
+**Version:** 1.11.850 (CRT 0.42.1)
+**License:** Apache-2.0
+**Purpose:** S3 transfers and the credential provider chain
+**Integration:** `BUILD_ONLY=s3;transfer;sso;sso-oidc`; patches in `cmake/DependencyPatches.cmake` (curl, runtime, S3 endpoint ruleset deflated); CRT targets build with `AWS_STATIC_LOG_LEVEL=0`
+**Rationale:** envy installs a discarding CRT logger, so the CRT's ~700 log sites compile out (~140 KB); the SDK's own C++ logging stays, since credential failures explain themselves there

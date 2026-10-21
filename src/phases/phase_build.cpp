@@ -126,8 +126,8 @@ void run_build_phase(pkg *p, engine &eng) {
                            eng,
                            p);
   } else {
-    throw std::runtime_error("BUILD field must be nil, string, or function for " +
-                             p->cfg->identity);
+    throw_runtime_error(
+        { "BUILD field must be nil, string, or function for ", p->cfg->identity });
   }
 }
 

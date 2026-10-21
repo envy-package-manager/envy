@@ -26,7 +26,7 @@ namespace {
 constexpr std::size_t kReadChunk{ 1u << 20 };
 
 [[noreturn]] void throw_errno(char const *what, std::string const &path) {
-  throw std::system_error(errno, std::generic_category(), std::string(what) + ": " + path);
+  throw_system_error(errno, std::generic_category(), { what, ": ", path });
 }
 
 class scoped_fd : uncopyable {
@@ -50,7 +50,7 @@ file_native_string file_native_path(std::filesystem::path const &path) {
 
 void file_read_chunks(file_native_string const &path,
                       std::uint64_t size,
-                      file_chunk_sink const &sink) {
+                      file_chunk_sink sink) {
   scoped_fd const fd{ ::open(path.c_str(), O_RDONLY | O_CLOEXEC) };
   if (!fd) { throw_errno("file_read: cannot open", path); }
 
@@ -83,7 +83,7 @@ void file_read_chunks(file_native_string const &path,
     }
     if (got == 0) {
       // The file shrank mid-read. The caller stamps this digest as truth, so fail.
-      throw std::runtime_error("file_read: file shrank while reading: " + path);
+      throw_runtime_error({ "file_read: file shrank while reading: ", path });
     }
     sink(buf.data(), static_cast<std::size_t>(got));
     offset += static_cast<std::uint64_t>(got);

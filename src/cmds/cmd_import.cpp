@@ -82,14 +82,14 @@ import_result import_one_archive(cache &c,
   if (stem.size() > 8 && stem.substr(stem.size() - 8) == ".tar.zst") {
     stem = stem.substr(0, stem.size() - 8);
   } else {
-    throw std::runtime_error("import: archive must have .tar.zst extension");
+    throw_runtime_error({ "import: archive must have .tar.zst extension" });
   }
 
   auto const parsed{ util_parse_archive_filename(stem) };
   if (!parsed) {
-    throw std::runtime_error(
-        "import: invalid archive filename, expected "
-        "<identity>@<revision>-<platform>-<arch>-blake3-<hash_prefix>.tar.zst");
+    throw_runtime_error(
+        { "import: invalid archive filename, expected "
+          "<identity>@<revision>-<platform>-<arch>-blake3-<hash_prefix>.tar.zst" });
   }
 
   std::string const label{ "[" + parsed->identity + "]" };
@@ -145,7 +145,7 @@ import_result import_one_archive(cache &c,
     return { parsed->identity, result.entry_path, false, true };
   }
 
-  throw std::runtime_error("import: archive did not populate pkg/ or fetch/ directories");
+  throw_runtime_error({ "import: archive did not populate pkg/ or fetch/ directories" });
 }
 
 // Parse a checksums file (<64hex>  <path-or-url> per line).
@@ -154,9 +154,7 @@ std::vector<depot_entry> parse_checksums_file(std::filesystem::path const &path)
   std::vector<depot_entry> entries;
 
   std::ifstream in{ path };
-  if (!in) {
-    throw std::runtime_error("import: cannot open checksums file: " + path.string());
-  }
+  if (!in) { throw_runtime_error({ "import: cannot open checksums file: ", path }); }
 
   std::string line;
   while (std::getline(in, line)) {
@@ -282,9 +280,10 @@ void cmd_import::execute() {
       return;
     }
 
-    throw std::runtime_error(
-        "import: unrecognized file extension '" + ext +
-        "' (expected .tar.zst for archives or .txt for depot manifests)");
+    throw_runtime_error(
+        { "import: unrecognized file extension '",
+          ext,
+          "' (expected .tar.zst for archives or .txt for depot manifests)" });
   }
 
   // Directory import — build depot index from directory, let engine handle everything

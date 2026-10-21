@@ -215,13 +215,13 @@ package_depot_index package_depot_index::build_from_entries(
 
   for (auto const &entry : entries) {
     if (entry.url.empty()) {
-      throw std::runtime_error("depot entry requires a non-empty 'url'");
+      throw_runtime_error({ "depot entry requires a non-empty 'url'" });
     }
 
     std::optional<std::string> sha256_hash;
     if (entry.sha256) {
       if (!is_valid_sha256_hex(*entry.sha256)) {
-        throw std::runtime_error("depot entry has malformed sha256 for url: " + entry.url);
+        throw_runtime_error({ "depot entry has malformed sha256 for url: ", entry.url });
       }
       sha256_hash = lowercase_hex(*entry.sha256);
     }

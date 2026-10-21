@@ -4,6 +4,7 @@
 #include "cache.h"
 #include "lua_envy_module.h"
 #include "trace.h"
+#include "util.h"
 
 #include <filesystem>
 #include <optional>
@@ -56,10 +57,13 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
     }() };
 
     if (!src) {
-      throw std::runtime_error(std::string{ kFn } + ": no bundle alias '" + alias +
-                               "' in the BUNDLES table of " + caller.string() +
-                               "; declare it above the call, since a manifest is read "
-                               "top to bottom");
+      throw_runtime_error({ kFn,
+                            ": no bundle alias '",
+                            alias,
+                            "' in the BUNDLES table of ",
+                            caller,
+                            "; declare it above the call, since a manifest is read "
+                            "top to bottom" });
     }
 
     std::filesystem::path const bundle_root{ bundle_materialize_bare(*src, c, kFn) };
@@ -81,10 +85,10 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
 
 void lua_envy_loadenv_bundle_install_refusal(sol::table &envy_table) {
   envy_table["loadenv_bundle"] = [](sol::variadic_args) -> sol::table {
-    throw std::runtime_error(
-        std::string{ kFn } +
-        ": manifest scope only; a spec reaches a bundle it declared with "
-        "envy.loadenv_spec(identity, module)");
+    throw_runtime_error(
+        { kFn,
+          ": manifest scope only; a spec reaches a bundle it declared with "
+          "envy.loadenv_spec(identity, module)" });
   };
 }
 

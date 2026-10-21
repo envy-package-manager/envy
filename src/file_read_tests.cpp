@@ -30,7 +30,7 @@ struct capture {
   std::vector<unsigned char> bytes;
   std::vector<std::size_t> chunks;
 
-  envy::file_chunk_sink sink() {
+  auto sink() {  // the lambda itself: a file_chunk_sink only borrows it
     return [this](void const *data, std::size_t n) {
       auto const *p{ static_cast<unsigned char const *>(data) };
       bytes.insert(bytes.end(), p, p + n);

@@ -34,7 +34,7 @@ std::string narrow(std::wstring_view w) {
                                      0,
                                      nullptr,
                                      nullptr) };
-  if (n <= 0) { throw std::runtime_error("file_read: undecodable path name"); }
+  if (n <= 0) { throw_runtime_error({ "file_read: undecodable path name" }); }
   std::string out(static_cast<std::size_t>(n), '\0');
   ::WideCharToMultiByte(CP_UTF8,
                         0,
@@ -48,8 +48,8 @@ std::string narrow(std::wstring_view w) {
 }
 
 [[noreturn]] void throw_last_error(char const *what, file_native_string const &path) {
-  throw std::runtime_error(std::string(what) + ": " + narrow(path) + " (error " +
-                           std::to_string(::GetLastError()) + ")");
+  DWORD const err{ ::GetLastError() };  // before narrow() can overwrite it
+  throw_runtime_error({ what, ": ", narrow(path), " (error ", err, ")" });
 }
 
 struct handle_closer {
@@ -75,7 +75,7 @@ file_native_string file_native_path(std::filesystem::path const &path) {
 
 void file_read_chunks(file_native_string const &path,
                       std::uint64_t size,
-                      file_chunk_sink const &sink) {
+                      file_chunk_sink sink) {
   scoped_handle const h{ ::CreateFileW(
       path.c_str(),
       GENERIC_READ,
@@ -169,7 +169,7 @@ void file_read_chunks(file_native_string const &path,
       throw_last_error("file_read: cannot read", path);
     }
     if (!ok || got != s.want) {
-      throw std::runtime_error("file_read: file shrank while reading: " + narrow(path));
+      throw_runtime_error({ "file_read: file shrank while reading: ", narrow(path) });
     }
     sink(s.buf.data(), got);
     consumed += got;

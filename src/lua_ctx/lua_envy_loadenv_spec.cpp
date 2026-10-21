@@ -8,6 +8,7 @@
 #include "pkg.h"
 #include "pkg_phase.h"
 #include "trace.h"
+#include "util.h"
 
 #include <filesystem>
 #include <optional>
@@ -33,13 +34,13 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *consumer{ ctx ? ctx->p : nullptr };
     if (!consumer) {
-      throw std::runtime_error(
-          "envy.loadenv_spec: can only be called within phase functions, not at global "
-          "scope");
+      throw_runtime_error(
+          { "envy.loadenv_spec: can only be called within phase functions, not at global "
+            "scope" });
     }
 
     engine *eng{ ctx->eng };
-    if (!eng) { throw std::runtime_error("envy.loadenv_spec: missing engine context"); }
+    if (!eng) { throw_runtime_error({ "envy.loadenv_spec: missing engine context" }); }
 
     pkg_phase const current_phase{ consumer->current_phase.load() };
 
@@ -59,7 +60,7 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       std::string const msg{ "envy.loadenv_spec: pkg '" + consumer->cfg->identity +
                              "' has no dependency on '" + identity + "'" };
       emit_access(false, pkg_phase::none, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     pkg_phase const first_needed_by{ edge->needed_by };
@@ -70,7 +71,7 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
                              "' but accessed during '" +
                              std::string(pkg_phase_name(current_phase)) + "'" };
       emit_access(false, first_needed_by, msg);
-      throw std::runtime_error(msg);
+      throw_runtime_error({ msg });
     }
 
     std::string const &canonical_id{ edge->identity };
@@ -83,16 +84,19 @@ void lua_envy_loadenv_spec_install(sol::table &envy_table) {
       bool const whole_bundle{ dep->type == pkg_type::BUNDLE_ONLY };
       if (!whole_bundle && !dep->cfg->bundle_identity) {
         if (!dep->spec_file_path.has_value() || dep->spec_file_path->empty()) {
-          throw std::runtime_error("envy.loadenv_spec: spec '" + identity +
-                                   "' has no spec_file_path");
+          throw_runtime_error(
+              { "envy.loadenv_spec: spec '", identity, "' has no spec_file_path" });
         }
         return { dep->spec_file_path->parent_path(), std::string{} };
       }
       std::string id{ whole_bundle ? canonical_id : *dep->cfg->bundle_identity };
       bundle const *b{ eng->find_bundle(id) };
       if (!b) {
-        throw std::runtime_error("envy.loadenv_spec: bundle '" + id +
-                                 "' not found in registry for '" + identity + "'");
+        throw_runtime_error({ "envy.loadenv_spec: bundle '",
+                              id,
+                              "' not found in registry for '",
+                              identity,
+                              "'" });
       }
       return { b->cache_path, std::move(id) };
     }() };

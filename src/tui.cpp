@@ -439,7 +439,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
 
   // One overload per alternative, so a new content type is a compile error here rather
   // than the silently-empty row an if-constexpr cascade's trailing return would give.
-  return std::visit(
+  return envy::visit(
       envy::match{ [&](envy::tui::progress_data const &data) {
                     std::ostringstream oss;
                     oss << prefix << data.status << ": " << std::fixed
@@ -501,7 +501,7 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
     return output;
   }
 
-  return std::visit(
+  return envy::visit(
       envy::match{
           [&](envy::tui::progress_data const &data) {
             return render_progress_bar(data, frame.label, frame.display, widths, width);
@@ -1040,7 +1040,7 @@ void configure_trace_outputs(std::vector<trace_output_spec> outputs) {
       // util_open_file uses _wfopen on Windows so non-ASCII trace paths work.
       s_tui.trace_file = util_open_file(*spec.file_path, "w").release();
       if (!s_tui.trace_file) {
-        throw std::runtime_error("Failed to open trace file: " + spec.file_path->string());
+        throw_runtime_error({ "Failed to open trace file: ", spec.file_path->string() });
       }
     }
   }

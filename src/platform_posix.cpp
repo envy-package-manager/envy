@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "util.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -101,16 +102,16 @@ std::filesystem::path get_exe_path() {
   _NSGetExecutablePath(nullptr, &size);
   std::vector<char> buf(size);
   if (_NSGetExecutablePath(buf.data(), &size) != 0) {
-    throw std::runtime_error("_NSGetExecutablePath failed");
+    throw_runtime_error({ "_NSGetExecutablePath failed" });
   }
   return std::filesystem::canonical(buf.data());
 #else
   std::vector<char> buf(4096);
   ssize_t const len{ ::readlink("/proc/self/exe", buf.data(), buf.size() - 1) };
   if (len == -1) {
-    throw std::system_error(errno,
-                            std::system_category(),
-                            "readlink /proc/self/exe failed");
+    throw_system_error(errno,
+                       std::system_category(),
+                       { "readlink /proc/self/exe failed" });
   }
   buf[static_cast<size_t>(len)] = '\0';
   return std::filesystem::path{ buf.data() };
@@ -123,7 +124,7 @@ void env_var_set(char const *name, char const *value) {
   }
 
   if (::setenv(name, value, 1) != 0) {
-    throw std::runtime_error(std::string("env_var_set: failed to set ") + name);
+    throw_runtime_error({ "env_var_set: failed to set ", name });
   }
 }
 
@@ -152,9 +153,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
   for (;;) {
     fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
     if (fd == -1) {
-      throw std::system_error(errno,
-                              std::system_category(),
-                              "Failed to open lock file: " + path.string());
+      throw_system_error(errno,
+                         std::system_category(),
+                         { "Failed to open lock file: ", path });
     }
 
     // Assign fields rather than use a designated initializer: struct flock's field
@@ -179,9 +180,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
           continue;
         }
         ::close(fd);
-        throw std::system_error(err,
-                                std::system_category(),
-                                "Failed to acquire exclusive lock: " + path.string());
+        throw_system_error(err,
+                           std::system_category(),
+                           { "Failed to acquire exclusive lock: ", path });
       }
     }
 
@@ -204,9 +205,9 @@ file_lock::file_lock(std::filesystem::path const &path, contended_cb_t on_conten
 
 void atomic_rename(std::filesystem::path const &from, std::filesystem::path const &to) {
   if (::rename(from.c_str(), to.c_str()) != 0) {
-    throw std::system_error(errno,
-                            std::system_category(),
-                            "Failed to rename " + from.string() + " to " + to.string());
+    throw_system_error(errno,
+                       std::system_category(),
+                       { "Failed to rename ", from, " to ", to });
   }
 }
 
@@ -217,7 +218,7 @@ std::filesystem::path create_unique_temp_file(std::string_view prefix) {
   buf.push_back('\0');
   int const fd{ ::mkstemp(buf.data()) };
   if (fd == -1) {
-    throw std::system_error(errno, std::generic_category(), "mkstemp failed");
+    throw_system_error(errno, std::generic_category(), { "mkstemp failed" });
   }
   ::close(fd);
   return std::filesystem::path{ buf.data() };
@@ -230,7 +231,7 @@ std::filesystem::path create_unique_temp_dir(std::string_view prefix) {
   buf.push_back('\0');
   // mkdtemp creates with mode 0700 and fails if the name exists, so the claim is atomic.
   if (::mkdtemp(buf.data()) == nullptr) {
-    throw std::system_error(errno, std::generic_category(), "mkdtemp failed");
+    throw_system_error(errno, std::generic_category(), { "mkdtemp failed" });
   }
   return std::filesystem::path{ buf.data() };
 }
@@ -238,9 +239,7 @@ std::filesystem::path create_unique_temp_dir(std::string_view prefix) {
 void touch_file(std::filesystem::path const &path) {
   int const fd{ ::open(path.c_str(), O_CREAT | O_WRONLY, 0644) };
   if (fd == -1) {
-    throw std::system_error(errno,
-                            std::system_category(),
-                            "Failed to touch file: " + path.string());
+    throw_system_error(errno, std::system_category(), { "Failed to touch file: ", path });
   }
   ::close(fd);
 }
@@ -299,7 +298,7 @@ class scoped_dir : unmovable {
 
 dir_scan_string dir_scan_root(std::filesystem::path const &root) { return root.native(); }
 
-void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push const &push) {
+void dir_scan_one(dir_scan_string const &dir, dir_size &acc, dir_scan_push push) {
   // Resolve the directory once, then stat children against its descriptor:
   // fstatat walks a single name instead of the whole path per file, which is
   // where a path-at-a-time walker burns most of its kernel time on deep trees.
@@ -474,8 +473,7 @@ int exec_process(std::filesystem::path const &binary,
   envp.push_back(nullptr);
 
   execve(binary.c_str(), argv, envp.data());
-  throw std::runtime_error(std::string{ "exec_process: execve failed: " } +
-                           std::strerror(errno));
+  throw_runtime_error({ "exec_process: execve failed: ", std::strerror(errno) });
 }
 
 std::string_view exe_suffix() { return ""; }

@@ -12,10 +12,10 @@ namespace envy {
 
 resolved_shell shell_resolve_default(default_shell_cfg_t const *cfg) {
   if (cfg && *cfg) {
-    return std::visit(
+    return envy::visit(
         match{ [](shell_choice choice) { return resolved_shell{ choice }; },
                [](custom_shell const &custom) {
-                 return std::visit(
+                 return envy::visit(
                      [](auto const &custom_cfg) { return resolved_shell{ custom_cfg }; },
                      custom);
                } },
@@ -48,7 +48,7 @@ namespace {
 template <typename T>
 void validate_shell_config(T const &shell_cfg) {
   if (shell_cfg.argv.empty()) {
-    throw std::runtime_error("Custom shell argv must be non-empty");
+    throw_runtime_error({ "Custom shell argv must be non-empty" });
   }
 
   auto const shell_path{ std::filesystem::path{ shell_cfg.argv[0] } };
@@ -56,13 +56,12 @@ void validate_shell_config(T const &shell_cfg) {
   // Check if shell executable exists
   std::error_code ec;
   if (!std::filesystem::exists(shell_path, ec)) {
-    throw std::runtime_error("Custom shell executable not found: " + shell_path.string());
+    throw_runtime_error({ "Custom shell executable not found: ", shell_path });
   }
 
   // Check if it's a regular file (not a directory)
   if (!std::filesystem::is_regular_file(shell_path, ec)) {
-    throw std::runtime_error("Custom shell path is not a regular file: " +
-                             shell_path.string());
+    throw_runtime_error({ "Custom shell path is not a regular file: ", shell_path });
   }
 
   // Note: We don't check executable permission on Windows (no reliable portable way)
@@ -73,7 +72,7 @@ void validate_shell_config(T const &shell_cfg) {
 }  // namespace
 
 void shell_validate_custom(custom_shell const &cfg) {
-  std::visit([](auto const &shell_cfg) { validate_shell_config(shell_cfg); }, cfg);
+  envy::visit([](auto const &shell_cfg) { validate_shell_config(shell_cfg); }, cfg);
 }
 
 custom_shell shell_parse_custom_from_lua(sol::table const &tbl) {
@@ -86,11 +85,11 @@ custom_shell shell_parse_custom_from_lua(sol::table const &tbl) {
                          inline_obj.get_type() != sol::type::lua_nil };
 
   if (has_file && has_inline) {
-    throw std::runtime_error(
-        "custom shell table cannot have both 'file' and 'inline' keys");
+    throw_runtime_error(
+        { "custom shell table cannot have both 'file' and 'inline' keys" });
   }
   if (!has_file && !has_inline) {
-    throw std::runtime_error("custom shell table must have either 'file' or 'inline' key");
+    throw_runtime_error({ "custom shell table must have either 'file' or 'inline' key" });
   }
 
   if (has_file) {
@@ -103,24 +102,24 @@ custom_shell shell_parse_custom_from_lua(sol::table const &tbl) {
       sol::table arr{ file_obj.as<sol::table>() };
       size_t const len{ arr.size() };
       if (len == 0) {
-        throw std::runtime_error(
-            "file mode argv must be non-empty (at least shell executable path)");
+        throw_runtime_error(
+            { "file mode argv must be non-empty (at least shell executable path)" });
       }
       for (size_t i{ 1 }; i <= len; ++i) {
         sol::object elem{ arr[i] };
         if (!elem.is<std::string>()) {
-          throw std::runtime_error("file mode argv must contain only strings");
+          throw_runtime_error({ "file mode argv must contain only strings" });
         }
         argv.push_back(elem.as<std::string>());
       }
     } else {
-      throw std::runtime_error("'file' key must be a string (path) or array of strings");
+      throw_runtime_error({ "'file' key must be a string (path) or array of strings" });
     }
 
     // Get 'ext' field (required for file mode)
     sol::object ext_obj{ tbl["ext"] };
     if (!ext_obj.is<std::string>()) {
-      throw std::runtime_error("file mode requires 'ext' field (e.g., \".sh\", \".tcl\")");
+      throw_runtime_error({ "file mode requires 'ext' field (e.g., \".sh\", \".tcl\")" });
     }
     std::string ext{ ext_obj.as<std::string>() };
 
@@ -133,18 +132,18 @@ custom_shell shell_parse_custom_from_lua(sol::table const &tbl) {
       sol::table arr{ inline_obj.as<sol::table>() };
       size_t const len{ arr.size() };
       if (len == 0) {
-        throw std::runtime_error(
-            "inline mode argv must be non-empty (at least shell executable path)");
+        throw_runtime_error(
+            { "inline mode argv must be non-empty (at least shell executable path)" });
       }
       for (size_t i{ 1 }; i <= len; ++i) {
         sol::object elem{ arr[i] };
         if (!elem.is<std::string>()) {
-          throw std::runtime_error("inline mode argv must contain only strings");
+          throw_runtime_error({ "inline mode argv must contain only strings" });
         }
         argv.push_back(elem.as<std::string>());
       }
     } else {
-      throw std::runtime_error("'inline' key must be an array of strings");
+      throw_runtime_error({ "'inline' key must be an array of strings" });
     }
 
     return custom_shell_inline{ std::move(argv) };

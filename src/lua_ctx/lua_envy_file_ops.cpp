@@ -3,6 +3,7 @@
 #include "lua_phase_context.h"
 #include "pkg.h"
 #include "tree_hash.h"
+#include "util.h"
 
 #include <filesystem>
 #include <stdexcept>
@@ -31,7 +32,7 @@ void lua_envy_file_ops_install(sol::table &envy_table) {
         std::filesystem::path dst{ resolve_relative(dst_str, L) };
 
         if (!std::filesystem::exists(src)) {
-          throw std::runtime_error("envy.copy: source not found: " + src.string());
+          throw_runtime_error({ "envy.copy: source not found: ", src });
         }
 
         // If copying file to directory, append filename
@@ -64,7 +65,7 @@ void lua_envy_file_ops_install(sol::table &envy_table) {
         std::filesystem::path dst{ resolve_relative(dst_str, L) };
 
         if (!std::filesystem::exists(src)) {
-          throw std::runtime_error("envy.move: source not found: " + src.string());
+          throw_runtime_error({ "envy.move: source not found: ", src });
         }
 
         // If moving file to directory, append filename

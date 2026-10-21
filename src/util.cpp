@@ -3,8 +3,9 @@
 #include "platform.h"
 #include "tui.h"
 
-#include "zlib_compat.h"
+#include "lzma.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -12,11 +13,12 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <limits>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #if defined(_WIN32)
 #include <string>
@@ -87,8 +89,8 @@ int util_hex_char_to_int(char c) {
 
 std::vector<unsigned char> util_hex_to_bytes(std::string const &hex) {
   if (hex.size() % 2 != 0) {
-    throw std::runtime_error("util_hex_to_bytes: hex string must have even length, got " +
-                             std::to_string(hex.size()));
+    throw_runtime_error(
+        { "util_hex_to_bytes: hex string must have even length, got ", hex.size() });
   }
 
   std::vector<unsigned char> result;
@@ -99,14 +101,10 @@ std::vector<unsigned char> util_hex_to_bytes(std::string const &hex) {
     int const lo{ util_hex_char_to_int(hex[i + 1]) };
 
     if (hi < 0) {
-      throw std::runtime_error(
-          std::string("util_hex_to_bytes: invalid character at position ") +
-          std::to_string(i));
+      throw_runtime_error({ "util_hex_to_bytes: invalid character at position ", i });
     }
     if (lo < 0) {
-      throw std::runtime_error(
-          std::string("util_hex_to_bytes: invalid character at position ") +
-          std::to_string(i + 1));
+      throw_runtime_error({ "util_hex_to_bytes: invalid character at position ", i + 1 });
     }
 
     result.push_back(static_cast<unsigned char>((hi << 4) | lo));
@@ -135,22 +133,20 @@ file_ptr_t util_open_file(std::filesystem::path const &path, char const *mode) {
 
 std::vector<unsigned char> util_load_file(std::filesystem::path const &path) {
   auto file{ util_open_file(path, "rb") };
-  if (!file) {
-    throw std::runtime_error("util_load_file: failed to open file: " + path.string());
-  }
+  if (!file) { throw_runtime_error({ "util_load_file: failed to open file: ", path }); }
 
   // Get file size
   if (std::fseek(file.get(), 0, SEEK_END) != 0) {
-    throw std::runtime_error("util_load_file: failed to seek to end: " + path.string());
+    throw_runtime_error({ "util_load_file: failed to seek to end: ", path });
   }
 
   long const file_size{ std::ftell(file.get()) };
   if (file_size < 0) {
-    throw std::runtime_error("util_load_file: failed to get file size: " + path.string());
+    throw_runtime_error({ "util_load_file: failed to get file size: ", path });
   }
 
   if (std::fseek(file.get(), 0, SEEK_SET) != 0) {
-    throw std::runtime_error("util_load_file: failed to seek to start: " + path.string());
+    throw_runtime_error({ "util_load_file: failed to seek to start: ", path });
   }
 
   // Read entire file
@@ -158,8 +154,7 @@ std::vector<unsigned char> util_load_file(std::filesystem::path const &path) {
   if (file_size > 0) {
     size_t const bytes_read{ std::fread(buffer.data(), 1, buffer.size(), file.get()) };
     if (bytes_read != buffer.size()) {
-      throw std::runtime_error("util_load_file: failed to read entire file: " +
-                               path.string());
+      throw_runtime_error({ "util_load_file: failed to read entire file: ", path });
     }
   }
 
@@ -177,12 +172,10 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
 
   {
     std::ofstream out{ temp_path, std::ios::binary };
-    if (!out) {
-      throw std::runtime_error("util_write_file: failed to create " + temp_path.string());
-    }
+    if (!out) { throw_runtime_error({ "util_write_file: failed to create ", temp_path }); }
     out.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!out.good()) {
-      throw std::runtime_error("util_write_file: failed to write " + temp_path.string());
+      throw_runtime_error({ "util_write_file: failed to write ", temp_path });
     }
   }
 
@@ -190,62 +183,73 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
   fs::rename(temp_path, path, ec);
   if (ec) {
     fs::remove(temp_path, ec);
-    throw std::runtime_error("util_write_file: failed to rename " + temp_path.string() +
-                             " to " + path.string() + ": " + ec.message());
+    throw_runtime_error({ "util_write_file: failed to rename ",
+                          temp_path,
+                          " to ",
+                          path,
+                          ": ",
+                          ec.message() });
   }
 }
 
-std::string util_inflate_resource(gz_resource const &res) {
-  // zlib counts in 32-bit uInt. Every caller passes a build-time constant far below that,
-  // so exceeding it means the generator is broken, not that the input is legitimately big.
-  constexpr size_t kZlibMax{ std::numeric_limits<uInt>::max() };
-  if (res.size > kZlibMax || res.inflated_size > kZlibMax) {
-    throw std::runtime_error(
-        "util_inflate_resource: resource exceeds zlib's 32-bit "
-        "limit");
+void err_part::append_to(std::string &out) const {
+  switch (kind_) {
+    case kind::CSTR: out += cstr_; break;
+    case kind::STR: out += *str_; break;
+    case kind::VIEW: out += view_; break;
+    case kind::PATH: out += path_->string(); break;
+    case kind::INT: out += std::to_string(static_cast<long long>(uint_)); break;
+    case kind::UINT: out += std::to_string(uint_); break;
   }
+}
 
-  z_stream strm{};
-  strm.next_in = const_cast<Bytef *>(res.data);
-  strm.avail_in = static_cast<uInt>(res.size);
-  if (inflateInit2(&strm, 16 + MAX_WBITS) != Z_OK) {  // 16 + MAX_WBITS: gzip header
-    throw std::runtime_error("util_inflate_resource: inflateInit2 failed");
-  }
+namespace {
 
+std::string join_parts(std::initializer_list<err_part> parts) {
   std::string out;
-  out.resize(res.inflated_size ? res.inflated_size : 64 * 1024);
-  strm.next_out = reinterpret_cast<Bytef *>(out.data());
-  strm.avail_out = static_cast<uInt>(out.size());
+  for (auto const &p : parts) { p.append_to(out); }
+  return out;
+}
 
-  int ret{ Z_OK };
-  while (ret != Z_STREAM_END) {
-    ret = inflate(&strm, Z_NO_FLUSH);
-    // Z_BUF_ERROR with no room left means "grow me"; with room left it means the stream
-    // ended early, which is corruption and falls through to the throw below.
-    if (ret == Z_BUF_ERROR && strm.avail_out == 0) {
-      size_t const grown{ out.size() };
-      if (grown > kZlibMax / 2) {
-        inflateEnd(&strm);
-        throw std::runtime_error(
-            "util_inflate_resource: inflated size exceeds zlib's "
-            "32-bit limit");
-      }
-      out.resize(grown * 2);
-      strm.next_out = reinterpret_cast<Bytef *>(out.data()) + grown;
-      strm.avail_out = static_cast<uInt>(grown);
-    } else if (ret != Z_OK && ret != Z_STREAM_END) {
-      inflateEnd(&strm);
-      throw std::runtime_error("util_inflate_resource: corrupt gzip stream");
-    }
-  }
+}  // namespace
 
-  inflateEnd(&strm);
-  // A declared size that disagrees with the stream means the two halves of the embedding
-  // disagree; surface that rather than silently handing back a truncated resource.
-  if (res.inflated_size && strm.total_out != res.inflated_size) {
-    throw std::runtime_error("util_inflate_resource: inflated size mismatch");
+void throw_runtime_error(std::initializer_list<err_part> parts) {
+  throw std::runtime_error(join_parts(parts));
+}
+
+void throw_system_error(int ev,
+                        std::error_category const &cat,
+                        std::initializer_list<err_part> parts) {
+  throw std::system_error(ev, cat, join_parts(parts));
+}
+
+void util_throw_bad_variant_access() { throw std::bad_variant_access{}; }
+
+void util_sort_order(std::vector<std::size_t> &order,
+                     function_ref<bool(std::size_t, std::size_t)> less) {
+  std::iota(order.begin(), order.end(), std::size_t{ 0 });
+  std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+    return less(a, b) || (!less(b, a) && a < b);
+  });
+}
+
+std::string util_unpack_resource(packed_resource const &res) {
+  if (!res.size) { return {}; }
+  std::string out(res.offset + res.size, '\0');
+  lzma_stream strm{};
+  if (lzma_stream_decoder(&strm, UINT64_MAX, 0) != LZMA_OK) {
+    throw_runtime_error({ "util_unpack_resource: decoder init failed" });
   }
-  out.resize(strm.total_out);
+  strm.next_in = res.pack;
+  strm.avail_in = res.pack_size;
+  strm.next_out = reinterpret_cast<std::uint8_t *>(out.data());
+  strm.avail_out = out.size();
+  lzma_ret ret{ LZMA_OK };
+  while (strm.avail_out && ret == LZMA_OK) { ret = lzma_code(&strm, LZMA_FINISH); }
+  lzma_end(&strm);
+  // Decoding stops at this resource's end; running dry or failing first means corruption.
+  if (strm.avail_out) { throw_runtime_error({ "util_unpack_resource: corrupt pack" }); }
+  out.erase(0, res.offset);
   return out;
 }
 
@@ -287,12 +291,10 @@ std::string util_path_with_separator(std::filesystem::path const &path) {
 std::filesystem::path util_absolute_path(std::filesystem::path const &relative,
                                          std::filesystem::path const &anchor) {
   if (relative.is_absolute()) {
-    throw std::runtime_error("util_absolute_path: path must be relative, got: " +
-                             relative.string());
+    throw_runtime_error({ "util_absolute_path: path must be relative, got: ", relative });
   }
   if (!anchor.is_absolute()) {
-    throw std::runtime_error("util_absolute_path: anchor must be absolute, got: " +
-                             anchor.string());
+    throw_runtime_error({ "util_absolute_path: anchor must be absolute, got: ", anchor });
   }
   return (anchor / relative).lexically_normal();
 }
@@ -576,8 +578,8 @@ std::vector<platform_id> util_parse_platform_flag(std::string const &value) {
   if (value == "posix") { return { platform_id::POSIX }; }
   if (value == "windows") { return { platform_id::WINDOWS }; }
   if (value == "all") { return { platform_id::POSIX, platform_id::WINDOWS }; }
-  throw std::runtime_error("invalid --platform value '" + value +
-                           "': expected posix, windows, or all");
+  throw_runtime_error(
+      { "invalid --platform value '", value, "': expected posix, windows, or all" });
 }
 
 void util_apply_script_eol(std::string &script, platform_id plat) {

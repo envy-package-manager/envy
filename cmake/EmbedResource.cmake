@@ -12,7 +12,7 @@
 # containing all resources as constexpr byte arrays. Re-generates when sources change.
 # DEFINES replaces @@KEY@@ with VALUE in resource content at embed time.
 # NORMALIZE_EOL converts CR/CRLF to LF in all resources (use for text resources only).
-# COMPRESS gzips each resource, emitting a gz_resource instead of a raw byte array.
+# COMPRESS packs all resources into one xz stream, emitting packed_resource slices of it.
 
 function(embed_resources CUSTOM_TARGET)
     cmake_parse_arguments(PARSE_ARGV 1 ARG "NORMALIZE_EOL;COMPRESS" "OUTPUT" "RESOURCES;DEFINES")

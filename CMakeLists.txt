@@ -167,7 +167,8 @@ string(REGEX MATCH "[0-9]+" ENVY_PRODUCT_SCRIPT_VERSION "${_prod_script_ver_line
 # leaves an incremental build's resource stamped with the old number.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/deploy.h)
 
-# Generate embedded resource header (all platform variants unconditionally)
+# Generate embedded resource header (all platform variants unconditionally). Shell hooks go
+# first: every run unpacks them, and unpacking stops at the requested resource's end.
 embed_resources(envy_embedded_resources
     OUTPUT embedded_init_resources.h
     NORMALIZE_EOL
@@ -176,6 +177,10 @@ embed_resources(envy_embedded_resources
         ENVY_HOOK_WRITER=${PROJECT_VERSION}
         ENVY_PRODUCT_SCRIPT_VERSION=${ENVY_PRODUCT_SCRIPT_VERSION}
     RESOURCES
+        shell_hook_bash=src/resources/shell_hook.bash
+        shell_hook_zsh=src/resources/shell_hook.zsh
+        shell_hook_fish=src/resources/shell_hook.fish
+        shell_hook_ps1=src/resources/shell_hook.ps1
         bootstrap_posix=src/resources/envy
         bootstrap_windows=src/resources/envy.bat
         manifest_template=src/resources/manifest_template.lua
@@ -183,10 +188,6 @@ embed_resources(envy_embedded_resources
         luarc_template=src/resources/luarc_template.json
         product_script_posix=src/resources/product_script
         product_script_windows=src/resources/product_script.bat
-        shell_hook_bash=src/resources/shell_hook.bash
-        shell_hook_zsh=src/resources/shell_hook.zsh
-        shell_hook_fish=src/resources/shell_hook.fish
-        shell_hook_ps1=src/resources/shell_hook.ps1
 )
 
 # Discover and compress third-party licenses for embedding
@@ -366,6 +367,10 @@ set(ENVY_COMMON_COMPILE_OPTIONS
     # configured elsewhere and are not ours to reinterpret.
     $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
     $<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>
+    # envy never asks a type its name; RTTI only paid for std::function::target() and
+    # typeinfo strings. Exceptions still match by type: compilers emit EH typeinfo anyway.
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fno-rtti>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/GR->
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-ffunction-sections>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fdata-sections>
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-ffunction-sections>

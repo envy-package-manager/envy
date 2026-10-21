@@ -14,7 +14,6 @@
 #include "tui.h"
 #include "util.h"
 
-#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string_view>
@@ -186,7 +185,7 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
   sol::object setup_obj{ table["setup"] };
   if (!setup_obj.valid() || setup_obj.get_type() == sol::type::lua_nil) { return; }
   if (setup_obj.get_type() != sol::type::table) {
-    throw std::runtime_error("Package 'setup' field must be a table of pair names");
+    throw_runtime_error({ "Package 'setup' field must be a table of pair names" });
   }
 
   std::vector<std::string> names;
@@ -194,7 +193,7 @@ void parse_setup_field(sol::table const &table, pkg_cfg *cfg) {
   for (size_t i{ 1 }; i <= t.size(); ++i) {
     sol::object elem{ t[i] };
     if (!elem.is<std::string>() || elem.as<std::string>().empty()) {
-      throw std::runtime_error("Package 'setup' entries must be non-empty strings");
+      throw_runtime_error({ "Package 'setup' entries must be non-empty strings" });
     }
     names.push_back(elem.as<std::string>());
   }
@@ -212,8 +211,8 @@ void parse_vendor_table(sol::table const &spec, pkg_cfg *cfg) {
 
   auto path{ sol_util_get_optional<std::string>(spec, "path", "Package 'vendor'") };
   if (path && path->empty()) {
-    throw std::runtime_error(
-        "Package 'vendor' path cannot be empty; omit it to derive one");
+    throw_runtime_error(
+        { "Package 'vendor' path cannot be empty; omit it to derive one" });
   }
   cfg->vendor = path ? std::move(*path) : std::string{};
   cfg->vendor_auto_sync =
@@ -231,8 +230,8 @@ void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
   if (vendor_obj.is<std::string>()) {
     std::string path{ vendor_obj.as<std::string>() };
     if (path.empty()) {
-      throw std::runtime_error(
-          "Package 'vendor' path cannot be empty; use vendor = true to derive one");
+      throw_runtime_error(
+          { "Package 'vendor' path cannot be empty; use vendor = true to derive one" });
     }
     cfg->vendor = std::move(path);
     return;
@@ -241,9 +240,9 @@ void parse_vendor_field(sol::table const &table, pkg_cfg *cfg) {
     parse_vendor_table(vendor_obj.as<sol::table>(), cfg);
     return;
   }
-  throw std::runtime_error(
-      "Package 'vendor' must be a boolean, a project-relative path, "
-      "or a table of { path, auto_sync }");
+  throw_runtime_error(
+      { "Package 'vendor' must be a boolean, a project-relative path, "
+        "or a table of { path, auto_sync }" });
 }
 
 // Keys a manifest PACKAGES entry that names a bundle may carry. The non-bundle shape's
@@ -271,13 +270,13 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
     sol::object platforms_obj{ table["platforms"] };
     if (platforms_obj.valid() && platforms_obj.get_type() != sol::type::lua_nil) {
       if (platforms_obj.get_type() != sol::type::table) {
-        throw std::runtime_error("platforms must be a table");
+        throw_runtime_error({ "platforms must be a table" });
       }
       sol::table plat_table{ platforms_obj.as<sol::table>() };
       for (size_t j{ 1 }; j <= plat_table.size(); ++j) {
         auto elem{ plat_table[j] };
         if (!elem.template is<std::string>()) {
-          throw std::runtime_error("platforms entries must be strings");
+          throw_runtime_error({ "platforms entries must be strings" });
         }
         cfg->platforms.push_back(elem.template get<std::string>());
       }
@@ -291,7 +290,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
   std::string const spec_identity{ [&] {
     auto opt{ sol_util_get_optional<std::string>(table, "spec", "Package") };
     if (!opt.has_value() || opt->empty()) {
-      throw std::runtime_error("Package with 'bundle' field requires 'spec' field");
+      throw_runtime_error({ "Package with 'bundle' field requires 'spec' field" });
     }
     return std::move(*opt);
   }() };
@@ -299,7 +298,7 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
   // Check for source field - can't have both source and bundle
   if (sol::object source_obj{ table["source"] };
       source_obj.valid() && source_obj.get_type() != sol::type::lua_nil) {
-    throw std::runtime_error("Package cannot specify both 'source' and 'bundle' fields");
+    throw_runtime_error({ "Package cannot specify both 'source' and 'bundle' fields" });
   }
   sol_util_reject_unknown_keys(table, kBundlePackageKeys, "Package with 'bundle'");
 
@@ -308,18 +307,20 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
       std::string const &alias{ bundle_obj.as<std::string>() };
       auto const *src{ ctx.find_alias(table, alias, origin) };
       if (!src) {
-        throw std::runtime_error(
-            "Bundle alias '" + alias +
-            "' not found in the BUNDLES table of this manifest or of the manifest that "
-            "declared it, for spec '" +
-            spec_identity + "'");
+        throw_runtime_error(
+            { "Bundle alias '",
+              alias,
+              "' not found in the BUNDLES table of this manifest or of the manifest that "
+              "declared it, for spec '",
+              spec_identity,
+              "'" });
       }
       return *src;
     }
     if (bundle_obj.is<sol::table>()) {
       return bundle::parse_inline(bundle_obj.as<sol::table>(), origin);
     }
-    throw std::runtime_error("Package 'bundle' field must be string (alias) or table");
+    throw_runtime_error({ "Package 'bundle' field must be string (alias) or table" });
   }() };
 
   // Parse optional fields
@@ -365,13 +366,13 @@ pkg_cfg *parse_package_entry(sol::object const &entry, manifest_parse_ctx &ctx) 
   sol::object platforms_obj{ table["platforms"] };
   if (platforms_obj.valid() && platforms_obj.get_type() != sol::type::lua_nil) {
     if (platforms_obj.get_type() != sol::type::table) {
-      throw std::runtime_error("platforms must be a table");
+      throw_runtime_error({ "platforms must be a table" });
     }
     sol::table plat_table{ platforms_obj.as<sol::table>() };
     for (size_t j{ 1 }; j <= plat_table.size(); ++j) {
       auto elem{ plat_table[j] };
       if (!elem.template is<std::string>()) {
-        throw std::runtime_error("platforms entries must be strings");
+        throw_runtime_error({ "platforms entries must be strings" });
       }
       cfg->platforms.push_back(elem.template get<std::string>());
     }
@@ -391,8 +392,8 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
     return depots;
   }
   if (depots_obj.get_type() != sol::type::table) {
-    throw std::runtime_error(
-        "PACKAGE_DEPOTS must be a table of URI strings or {DEPENDS, FETCH} tables");
+    throw_runtime_error(
+        { "PACKAGE_DEPOTS must be a table of URI strings or {DEPENDS, FETCH} tables" });
   }
 
   sol::table t{ depots_obj.as<sol::table>() };
@@ -403,34 +404,33 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
     if (entry.is<std::string>()) {
       std::string url{ entry.as<std::string>() };
       if (url.empty()) {
-        throw std::runtime_error(label + " must be a non-empty URI string");
+        throw_runtime_error({ label, " must be a non-empty URI string" });
       }
       depots.push_back(manifest::depot_uri{ std::move(url) });
       continue;
     }
 
     if (entry.get_type() != sol::type::table) {
-      throw std::runtime_error(label +
-                               " must be a URI string or a {DEPENDS, FETCH} table");
+      throw_runtime_error({ label, " must be a URI string or a {DEPENDS, FETCH} table" });
     }
 
     sol::table et{ entry.as<sol::table>() };
     if (sol::object fetch_obj{ et["FETCH"] };
         !fetch_obj.valid() || fetch_obj.get_type() != sol::type::function) {
-      throw std::runtime_error(label + " requires a FETCH function");
+      throw_runtime_error({ label, " requires a FETCH function" });
     }
 
     manifest::depot_fetch_fn fn{ .depends = {}, .lua_index = i };
     if (sol::object dep_obj{ et["DEPENDS"] };
         dep_obj.valid() && dep_obj.get_type() != sol::type::lua_nil) {
       if (dep_obj.get_type() != sol::type::table) {
-        throw std::runtime_error(label + " DEPENDS must be a table of package identities");
+        throw_runtime_error({ label, " DEPENDS must be a table of package identities" });
       }
       sol::table dt{ dep_obj.as<sol::table>() };
       for (size_t j{ 1 }; j <= dt.size(); ++j) {
         sol::object d{ dt[j] };
         if (!d.is<std::string>() || d.as<std::string>().empty()) {
-          throw std::runtime_error(label + " DEPENDS entries must be non-empty strings");
+          throw_runtime_error({ label, " DEPENDS entries must be non-empty strings" });
         }
         fn.depends.push_back(d.as<std::string>());
       }
@@ -444,14 +444,14 @@ std::vector<manifest::depot_source> parse_package_depots(sol::object const &depo
 // parse_shell_config_from_lua returns the flat variant; DEFAULT_SHELL stores the
 // nested one, where the two custom forms share a `custom_shell` arm.
 default_shell_value default_shell_from_lua(sol::object const &obj, char const *context) {
-  return std::visit(match{ [](shell_choice c) -> default_shell_value { return c; },
-                           [](custom_shell_file const &f) -> default_shell_value {
-                             return custom_shell{ f };
-                           },
-                           [](custom_shell_inline const &i) -> default_shell_value {
-                             return custom_shell{ i };
-                           } },
-                    parse_shell_config_from_lua(obj, context));
+  return envy::visit(match{ [](shell_choice c) -> default_shell_value { return c; },
+                            [](custom_shell_file const &f) -> default_shell_value {
+                              return custom_shell{ f };
+                            },
+                            [](custom_shell_inline const &i) -> default_shell_value {
+                              return custom_shell{ i };
+                            } },
+                     parse_shell_config_from_lua(obj, context));
 }
 
 }  // namespace
@@ -481,12 +481,12 @@ envy_meta parse_envy_meta(std::string_view content) {
           result.version = value;
         } else if (key == "cache-local") {
           if (auto const bad{ validate_project_relative_path(value) }) {
-            throw std::runtime_error("'@envy cache-local' " + *bad + ": '" + value + "'");
+            throw_runtime_error({ "'@envy cache-local' ", *bad, ": '", value, "'" });
           }
           result.cache_local = value;
         } else if (key == "state-dir") {
           if (auto const bad{ validate_project_relative_path(value) }) {
-            throw std::runtime_error("'@envy state-dir' " + *bad + ": '" + value + "'");
+            throw_runtime_error({ "'@envy state-dir' ", *bad, ": '", value, "'" });
           }
           result.state_dir = value;
         } else if (key == "cache-mode") {
@@ -495,34 +495,36 @@ envy_meta parse_envy_meta(std::string_view content) {
           } else if (value == "shared") {
             result.declared_cache_mode = cache_mode::SHARED;
           } else {
-            throw std::runtime_error(
-                "'@envy cache-mode' must be \"local\" or \"shared\", "
-                "got: '" +
-                value + "'");
+            throw_runtime_error(
+                { "'@envy cache-mode' must be \"local\" or \"shared\", "
+                  "got: '",
+                  value,
+                  "'" });
           }
         } else if (key == "cache-posix" || key == "cache-win") {
           // Removed, not merely renamed. Unknown keys fall off this chain silently, so a
           // bare rename would drop the directive and hand the project the shared cache
           // without a word -- worse than the divergence this change exists to fix.
-          throw std::runtime_error(
-              "'@envy " + std::string{ key } +
-              "' directive removed; use '@envy cache-local' with a path relative to the "
-              "manifest, which makes a project-local cache the default. For an absolute "
-              "cache root, set ENVY_CACHE_ROOT instead.");
+          throw_runtime_error(
+              { "'@envy ",
+                key,
+                "' directive removed; use '@envy cache-local' with a path relative to the "
+                "manifest, which makes a project-local cache the default. For an absolute "
+                "cache root, set ENVY_CACHE_ROOT instead." });
         } else if (key == "mirror") {
           result.mirror = value;
         } else if (key == "sha256sums") {
           if (!envy_release_sha256_hex_is_valid(value)) {
-            throw std::runtime_error(
-                "'@envy sha256sums' must be exactly 64 hex digits (the sha256 "
-                "of the release's SHA256SUMS file), got: '" +
-                value + "'");
+            throw_runtime_error(
+                { "'@envy sha256sums' must be exactly 64 hex digits (the sha256 "
+                  "of the release's SHA256SUMS file), got: '",
+                  value,
+                  "'" });
           }
           result.sha256sums = value;
         } else if (key == "bin" || key == "bin-dir") {
           if (auto const bad{ validate_unrooted_path(value) }) {
-            throw std::runtime_error("'@envy " + std::string{ key } + "' " + *bad + ": '" +
-                                     value + "'");
+            throw_runtime_error({ "'@envy ", key, "' ", *bad, ": '", value, "'" });
           }
           result.bin = value;
         } else if (key == "schema") {
@@ -534,11 +536,12 @@ envy_meta parse_envy_meta(std::string_view content) {
         } else if (key == "root") {
           result.root = parse_bool_value(value);
         } else if (key == "package-depot") {
-          throw std::runtime_error(
-              "'@envy package-depot' directive removed; declare a "
-              "PACKAGE_DEPOTS global in the manifest instead, e.g.: "
-              "PACKAGE_DEPOTS = { \"" +
-              value + "\" }");
+          throw_runtime_error(
+              { "'@envy package-depot' directive removed; declare a "
+                "PACKAGE_DEPOTS global in the manifest instead, e.g.: "
+                "PACKAGE_DEPOTS = { \"",
+                value,
+                "\" }" });
         }
       });
 
@@ -548,9 +551,10 @@ envy_meta parse_envy_meta(std::string_view content) {
   // describe a different release than the one being downloaded. Fail closed rather than
   // silently skip verification -- a pin that quietly stops verifying is worse than none.
   if (result.sha256sums && !result.version) {
-    throw std::runtime_error(
-        "'@envy sha256sums' requires '@envy version': a sums pin identifies one release, "
-        "so the version cannot be left to dynamic resolution");
+    throw_runtime_error(
+        { "'@envy sha256sums' requires '@envy version': a sums pin identifies one "
+          "release, "
+          "so the version cannot be left to dynamic resolution" });
   }
 
   // Deliberately no envy_release_validate_mirror here. That check belongs to the write
@@ -655,7 +659,7 @@ std::filesystem::path manifest::find_manifest_path(
   if (explicit_path) {
     auto const path{ std::filesystem::absolute(*explicit_path) };
     if (!std::filesystem::exists(path)) {
-      throw std::runtime_error("manifest not found: " + path.string());
+      throw_runtime_error({ "manifest not found: ", path });
     }
     trace_resolved(path, {}, "explicit", nearest);
     return path;
@@ -665,7 +669,7 @@ std::filesystem::path manifest::find_manifest_path(
       trace_resolved(discovered->path, start, project_dir ? "project" : "cwd", nearest);
       return discovered->path;
     }
-    throw std::runtime_error("manifest not found (discovery from " + start.string() + ")");
+    throw_runtime_error({ "manifest not found (discovery from ", start, ")" });
   }
 }
 
@@ -680,7 +684,7 @@ manifest::discovery manifest::find_and_discover(
   auto const start{ discovery_start_dir(project_dir) };
   auto found{ discover(nearest, start) };
   if (!found) {
-    throw std::runtime_error("manifest not found (discovery from " + start.string() + ")");
+    throw_runtime_error({ "manifest not found (discovery from ", start, ")" });
   }
 
   trace_resolved(found->path, start, project_dir ? "project" : "cwd", nearest);
@@ -704,9 +708,9 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   auto meta{ parse_envy_meta(script) };
 
   if (!meta.bin) {
-    throw std::runtime_error(
-        "Manifest missing required '@envy bin' directive.\n"
-        "Add to manifest header, e.g.: -- @envy bin \"tools\"");
+    throw_runtime_error(
+        { "Manifest missing required '@envy bin' directive.\n"
+          "Add to manifest header, e.g.: -- @envy bin \"tools\"" });
   }
 
   auto state{ sol_util_make_lua_state() };
@@ -721,8 +725,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
           state->safe_script(script, sol::script_pass_on_error, chunk_name) };
       !result.valid()) {
     sol::error err = result;
-    throw std::runtime_error(std::string("Failed to execute manifest script: ") +
-                             err.what());
+    throw_runtime_error({ "Failed to execute manifest script: ", err.what() });
   }
 
   lua_envy_import_validate_root_globals(*state);
@@ -745,7 +748,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
       custom_fetch_aliases.push_back(alias);
     }
   }
-  std::ranges::sort(custom_fetch_aliases);  // BUNDLES hashes; root order must not
+  util_sort(custom_fetch_aliases);  // BUNDLES hashes; root order must not
   for (auto const &alias : custom_fetch_aliases) {
     m->packages.push_back(
         bundle::ensure_pkg_cfg(bundles.at(alias), manifest_path, nullptr, bundle_pkgs));
@@ -753,7 +756,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 
   sol::object packages_obj = (*m->lua_)["PACKAGES"];
   if (!packages_obj.valid() || packages_obj.get_type() != sol::type::table) {
-    throw std::runtime_error("Manifest must define 'PACKAGES' global as a table");
+    throw_runtime_error({ "Manifest must define 'PACKAGES' global as a table" });
   }
 
   sol::table packages_table = packages_obj.as<sol::table>();
@@ -767,8 +770,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
     try {
       m->packages.push_back(parse_package_entry(packages_table[i], parse_ctx));
     } catch (std::exception const &e) {
-      throw std::runtime_error(manifest_path.string() + ": PACKAGES[" + std::to_string(i) +
-                               "]: " + e.what());
+      throw_runtime_error({ manifest_path, ": PACKAGES[", i, "]: ", e.what() });
     }
   }
 
@@ -777,8 +779,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   if (sol::object vendor_root_obj{ (*m->lua_)["VENDOR_ROOT"] };
       vendor_root_obj.valid() && vendor_root_obj.get_type() != sol::type::lua_nil) {
     if (!vendor_root_obj.is<std::string>()) {
-      throw std::runtime_error(manifest_path.string() +
-                               ": VENDOR_ROOT must be a project-relative path string");
+      throw_runtime_error(
+          { manifest_path, ": VENDOR_ROOT must be a project-relative path string" });
     }
     m->vendor_root = vendor_root_obj.as<std::string>();
   }
@@ -840,15 +842,15 @@ default_shell_decl manifest::get_default_shell() const {
     if (sol::object dep_obj{ wrapper["DEPENDS"] };
         dep_obj.valid() && dep_obj.get_type() != sol::type::lua_nil) {
       if (!dep_obj.is<sol::table>()) {
-        throw std::runtime_error(
-            "DEFAULT_SHELL DEPENDS must be a table of package identities");
+        throw_runtime_error(
+            { "DEFAULT_SHELL DEPENDS must be a table of package identities" });
       }
       sol::table dt{ dep_obj.as<sol::table>() };
       for (size_t i{ 1 }; i <= dt.size(); ++i) {
         sol::object d{ dt[i] };
         if (!d.is<std::string>() || d.as<std::string>().empty()) {
-          throw std::runtime_error(
-              "DEFAULT_SHELL DEPENDS entries must be non-empty strings");
+          throw_runtime_error(
+              { "DEFAULT_SHELL DEPENDS entries must be non-empty strings" });
         }
         decl.depends.push_back(d.as<std::string>());
       }
@@ -859,7 +861,7 @@ default_shell_decl manifest::get_default_shell() const {
     // SHELL branch: a DEPENDS table missing SHELL used to fall through to the value
     // form below, which read the wrapper's own keys as a shell and dropped DEPENDS.
     if (!decl.depends.empty() && !decl.is_function) {
-      throw std::runtime_error("DEFAULT_SHELL DEPENDS requires SHELL to be a function");
+      throw_runtime_error({ "DEFAULT_SHELL DEPENDS requires SHELL to be a function" });
     }
     if (has_shell) {
       if (!decl.is_function) {
@@ -875,7 +877,7 @@ default_shell_decl manifest::get_default_shell() const {
 default_shell_value manifest::run_default_shell_fn(void *phase_ctx) const {
   std::lock_guard const lock(lua_mutex_);
 
-  if (!lua_) { throw std::runtime_error("DEFAULT_SHELL: manifest Lua state unavailable"); }
+  if (!lua_) { throw_runtime_error({ "DEFAULT_SHELL: manifest Lua state unavailable" }); }
 
   sol::state_view lua_view{ *lua_ };
 
@@ -888,7 +890,7 @@ default_shell_value manifest::run_default_shell_fn(void *phase_ctx) const {
         return nested.as<sol::protected_function>();
       }
     }
-    throw std::runtime_error("DEFAULT_SHELL: function not found");
+    throw_runtime_error({ "DEFAULT_SHELL: function not found" });
   }() };
 
   // RAII guard to clear registry on scope exit (including exceptions)
@@ -902,8 +904,7 @@ default_shell_value manifest::run_default_shell_fn(void *phase_ctx) const {
   sol::protected_function_result result{ shell_func() };
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error("DEFAULT_SHELL function failed: " +
-                             std::string{ err.what() });
+    throw_runtime_error({ "DEFAULT_SHELL function failed: ", err.what() });
   }
 
   return default_shell_from_lua(result.get<sol::object>(), "DEFAULT_SHELL function");
@@ -949,22 +950,22 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
 
   std::string const label{ "PACKAGE_DEPOTS[" + std::to_string(lua_index) + "]" };
 
-  if (!lua_) { throw std::runtime_error(label + ": manifest Lua state unavailable"); }
+  if (!lua_) { throw_runtime_error({ label, ": manifest Lua state unavailable" }); }
 
   sol::state_view lua_view{ *lua_ };
 
   sol::protected_function const fetch_func{ [&] {
     sol::object depots_obj{ lua_view["PACKAGE_DEPOTS"] };
     if (!depots_obj.valid() || !depots_obj.is<sol::table>()) {
-      throw std::runtime_error(label + ": PACKAGE_DEPOTS global not found");
+      throw_runtime_error({ label, ": PACKAGE_DEPOTS global not found" });
     }
     sol::object entry{ depots_obj.as<sol::table>()[lua_index] };
     if (!entry.valid() || !entry.is<sol::table>()) {
-      throw std::runtime_error(label + ": entry is not a table");
+      throw_runtime_error({ label, ": entry is not a table" });
     }
     sol::object fetch_obj{ entry.as<sol::table>()["FETCH"] };
     if (!fetch_obj.valid() || !fetch_obj.is<sol::function>()) {
-      throw std::runtime_error(label + ": FETCH function not found");
+      throw_runtime_error({ label, ": FETCH function not found" });
     }
     return fetch_obj.as<sol::protected_function>();
   }() };
@@ -990,7 +991,7 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
   sol::protected_function_result result{ fetch_func(ctx) };
   if (!result.valid()) {
     sol::error err = result;
-    throw std::runtime_error(label + " FETCH failed: " + std::string(err.what()));
+    throw_runtime_error({ label, " FETCH failed: ", err.what() });
   }
 
   sol::object ret{ result.get<sol::object>() };
@@ -1002,19 +1003,18 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
     for (size_t i{ 1 }; i <= rt.size(); ++i) {
       sol::object e{ rt[i] };
       if (e.get_type() != sol::type::table) {
-        throw std::runtime_error(label + " FETCH entries must be tables");
+        throw_runtime_error({ label, " FETCH entries must be tables" });
       }
       sol::table et{ e.as<sol::table>() };
       sol::object url_obj{ et["url"] };
       if (!url_obj.is<std::string>() || url_obj.as<std::string>().empty()) {
-        throw std::runtime_error(label +
-                                 " FETCH entries require a non-empty 'url' string");
+        throw_runtime_error({ label, " FETCH entries require a non-empty 'url' string" });
       }
       depot_entry de{ url_obj.as<std::string>(), std::nullopt };
       if (sol::object sha_obj{ et["sha256"] };
           sha_obj.valid() && sha_obj.get_type() != sol::type::lua_nil) {
         if (!sha_obj.is<std::string>()) {
-          throw std::runtime_error(label + " FETCH entry 'sha256' must be a string");
+          throw_runtime_error({ label, " FETCH entry 'sha256' must be a string" });
         }
         de.sha256 = sha_obj.as<std::string>();
       }
@@ -1023,8 +1023,9 @@ manifest::depot_fetch_result manifest::run_depot_fetch(
     return entries;
   }
 
-  throw std::runtime_error(
-      label + " FETCH must return depot manifest text, a path to it, or an entries table");
+  throw_runtime_error(
+      { label,
+        " FETCH must return depot manifest text, a path to it, or an entries table" });
 }
 
 }  // namespace envy

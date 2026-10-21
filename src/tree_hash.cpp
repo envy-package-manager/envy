@@ -111,8 +111,8 @@ class walker : unmovable {
 
     if (error_) { std::rethrow_exception(error_); }
     add_missing_ancestors();
-    std::ranges::sort(entries_, {}, [](walk_entry const &w) -> std::string const & {
-      return w.e.relpath;
+    util_sort(entries_, [](walk_entry const &a, walk_entry const &b) {
+      return a.e.relpath < b.e.relpath;
     });
   }
 
@@ -312,7 +312,7 @@ class walker : unmovable {
 void require_directory(std::filesystem::path const &root, char const *who) {
   std::error_code ec;
   if (!std::filesystem::is_directory(root, ec) || ec) {
-    throw std::runtime_error(std::string(who) + ": not a directory: " + root.string());
+    throw_runtime_error({ who, ": not a directory: ", root });
   }
 }
 
