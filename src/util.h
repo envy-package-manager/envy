@@ -78,7 +78,7 @@ class err_part {
 // std::visit's exhaustiveness without its dispatch table: an index chain inlined into the
 // caller, so a visit costs what its handlers cost. Call qualified; ADL also finds std's.
 template <std::size_t I = 0, typename F, typename V>
-decltype(auto) visit(F &&f, V &&v) {
+constexpr decltype(auto) visit(F &&f, V &&v) {
   auto *const alt{ std::get_if<I>(&v) };
   if constexpr (I + 1 < std::variant_size_v<std::remove_cvref_t<V>>) {
     if (!alt) { return envy::visit<I + 1>(std::forward<F>(f), std::forward<V>(v)); }

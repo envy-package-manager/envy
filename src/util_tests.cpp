@@ -264,6 +264,11 @@ TEST_CASE("envy::visit dispatches on the held alternative") {
   CHECK(envy::visit(describe, v) == 'i');
 }
 
+constexpr std::variant<int, double> kConstexprVariant{ 2.5 };  // visits at compile time
+static_assert(envy::visit(envy::match{ [](int) { return 'i'; },
+                                       [](double) { return 'd'; } },
+                          kConstexprVariant) == 'd');
+
 TEST_CASE("envy::visit returns references and moves from rvalue variants") {
   std::variant<int, std::string> v{ std::string{ "keep" } };
   std::string &ref{ envy::visit(
