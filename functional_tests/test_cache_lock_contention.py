@@ -4,7 +4,6 @@ The test plays a second envy by taking the same fcntl locks; lock paths come fro
 discovery run's trace, and marker files sequence the two sides.
 """
 
-import fcntl
 import hashlib
 import io
 import os
@@ -19,6 +18,9 @@ from pathlib import Path
 from . import test_config
 from .env import EnvyTestCase
 from .trace_parser import TraceParser
+
+if sys.platform != "win32":
+    import fcntl
 
 USER_MANAGED = (  # no payload, so a spec lock is its only lock; the pair never runs
     "USER_MANAGED = true\n"
