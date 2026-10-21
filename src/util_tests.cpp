@@ -346,6 +346,14 @@ TEST_CASE("function_ref is empty by default and when bound to an empty std::func
   CHECK(ref() == 42);
 }
 
+TEST_CASE("function_ref with a void signature discards a callable's result") {
+  int calls{ 0 };
+  auto const counted{ [&calls] { return ++calls; } };
+  envy::function_ref<void()> const ref{ counted };
+  ref();
+  CHECK(calls == 1);
+}
+
 // xz (no check, LZMA2) of "helloworld", as embed_resource.py --compress emits.
 constexpr unsigned char kHelloWorldXz[]{
   0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x00, 0xff, 0x12, 0xd9, 0x41, 0x02, 0x00, 0x21,

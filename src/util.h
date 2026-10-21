@@ -121,8 +121,12 @@ class function_ref<R(Args...)> {
     }
     obj_ = const_cast<void *>(static_cast<void const *>(std::addressof(f)));
     call_ = [](void *obj, Args... args) -> R {
-      return (*static_cast<std::remove_reference_t<F> *>(obj))(
-          std::forward<Args>(args)...);
+      auto &fn{ *static_cast<std::remove_reference_t<F> *>(obj) };
+      if constexpr (std::is_void_v<R>) {
+        fn(std::forward<Args>(args)...);  // a void signature discards any result
+      } else {
+        return fn(std::forward<Args>(args)...);
+      }
     };
   }
 
