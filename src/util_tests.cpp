@@ -346,6 +346,23 @@ TEST_CASE("function_ref is empty by default and when bound to an empty std::func
   CHECK(ref() == 42);
 }
 
+namespace {
+int forty_two() { return 42; }
+}  // namespace
+
+TEST_CASE("function_ref binds function pointers, null or not, and captureless lambdas") {
+  int (*const null_fn)(){ nullptr };
+  CHECK_FALSE(envy::function_ref<int()>{ null_fn });
+  int (*const fn)(){ &forty_two };
+  envy::function_ref<int()> const from_fn{ fn };
+  REQUIRE(from_fn);
+  CHECK(from_fn() == 42);
+  auto const captureless{ [] { return 7; } };  // converts to bool only via a fn pointer
+  envy::function_ref<int()> const from_lambda{ captureless };
+  REQUIRE(from_lambda);
+  CHECK(from_lambda() == 7);
+}
+
 TEST_CASE("function_ref with a void signature discards a callable's result") {
   int calls{ 0 };
   auto const counted{ [&calls] { return ++calls; } };

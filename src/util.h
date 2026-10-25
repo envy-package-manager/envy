@@ -116,8 +116,13 @@ class function_ref<R(Args...)> {
              !std::is_function_v<std::remove_reference_t<F>> &&
              std::is_invocable_r_v<R, F &, Args...>)
   function_ref(F &&f ENVY_LIFETIMEBOUND) noexcept {  // NOLINT(google-explicit-constructor)
-    if constexpr (std::is_constructible_v<bool, F &>) {
-      if (!static_cast<bool>(f)) { return; }  // an empty std::function stays empty
+    // A null function pointer or an empty std::function stays empty. Not a captureless
+    // lambda: it converts to bool only through its function pointer (MSVC C4305).
+    if constexpr (std::is_pointer_v<std::remove_cvref_t<F>>) {
+      if (f == nullptr) { return; }
+    } else if constexpr (std::is_constructible_v<bool, F &> &&
+                         !std::is_convertible_v<F &, bool>) {
+      if (!static_cast<bool>(f)) { return; }
     }
     obj_ = const_cast<void *>(static_cast<void const *>(std::addressof(f)));
     call_ = [](void *obj, Args... args) -> R {
