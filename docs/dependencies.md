@@ -29,8 +29,8 @@
 **Version:** 1.11.850 (CRT 0.42.1)
 **License:** Apache-2.0
 **Purpose:** S3 transfers and the credential provider chain
-**Integration:** `BUILD_ONLY=s3;transfer;sso;sso-oidc`; patches in `cmake/DependencyPatches.cmake` (curl, runtime, S3 endpoint ruleset deflated); CRT targets build with `AWS_STATIC_LOG_LEVEL=0`
-**Rationale:** envy installs a discarding CRT logger, so the CRT's ~700 log sites compile out (~140 KB); the SDK's own C++ logging stays, since credential failures explain themselves there
+**Integration:** `BUILD_ONLY=s3;transfer;sso;sso-oidc`; patches in `cmake/DependencyPatches.cmake` (curl, runtime, S3 endpoint ruleset deflated); CRT targets build with `AWS_STATIC_LOG_LEVEL=0`; `ENABLE_RTTI=OFF` and `-fno-rtti` on `aws-crt-cpp`, matching envy
+**Rationale:** envy installs a discarding CRT logger, so the CRT's ~700 log sites compile out (~140 KB); the SDK's own C++ logging stays, since credential failures explain themselves there; mixed RTTI gave GCC LTO -Wodr vtable mismatches, and the SDK's and CRT's typeinfo was ~138 KB
 
 ## nanosemver
 
