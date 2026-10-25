@@ -293,9 +293,9 @@ TEST_CASE("OPTIONS: semver range syntax errors") {
       { "   ", "1.0.0", kInvalid },
       { "=", "1.0.0", kInvalid },
       { "!1.0.0", "1.0.0", kInvalid },
-      { "==1.2", "1.2.0", kInvalid },   // == takes only a whole version
-      { "~>1.2", "1.2.0", kInvalid },   // so do ~> and ~=
-      { "!=1.2", "1.3.0", kInvalid },   // != takes a partial only with a wildcard
+      { "==1.2", "1.2.0", kInvalid },  // == takes only a whole version
+      { "~>1.2", "1.2.0", kInvalid },  // so do ~> and ~=
+      { "!=1.2", "1.3.0", kInvalid },  // != takes a partial only with a wildcard
       { ">=4294967296.0.0", "1.0.0", kInvalid },  // beyond uint32
   });
 }

@@ -102,7 +102,9 @@ TEST_CASE("version_is_newer: CRLF in current") {
 // Semver sets no length limit: a git hash in build metadata must not read as unparseable,
 // which for current would mean "anything is newer" and allow a downgrade.
 TEST_CASE("version_is_newer: long pre-release and build metadata") {
-  constexpr char const kLong[]{ "2.0.0-rc.1+sha.0123456789abcdef0123456789abcdef01234567" };
+  constexpr char const kLong[]{
+    "2.0.0-rc.1+sha.0123456789abcdef0123456789abcdef01234567"
+  };
   CHECK_FALSE(version_is_newer("1.0.0", kLong));
   CHECK(version_is_newer(kLong, "1.0.0"));
 }

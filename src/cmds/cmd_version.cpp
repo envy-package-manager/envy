@@ -119,7 +119,10 @@ void cmd_version::execute() {
             static_cast<unsigned>(crt_version.patch));
 
   nsv_semver_t const nsv_version = NSV_VERSION_LIT;
-  tui::info("  nanosemver: %u.%u.%u", nsv_version.major, nsv_version.minor, nsv_version.patch);
+  tui::info("  nanosemver: %u.%u.%u",
+            nsv_version.major,
+            nsv_version.minor,
+            nsv_version.patch);
   tui::info("  picojson: %s", ENVY_PICOJSON_VERSION);
 
   if (cfg_.show_licenses) {
