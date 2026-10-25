@@ -1,6 +1,7 @@
 # Linux CI image. Tracks whatever the newest g++-N in the archive is rather than
 # pinning, so a weekly rebuild picks up new majors on its own.
-# No cmake/ninja: tools/build.py fetches pinned copies into out/cache.
+# No cmake/ninja: tools/build.py fetches pinned copies into out/cache. make is for GCC's
+# lto-wrapper, which runs LTRANS jobs in parallel through it and serially without it.
 FROM ubuntu:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,6 +14,7 @@ RUN apt-get update \
         fish \
         gh \
         git \
+        make \
         python3 \
         valgrind \
         zsh \
