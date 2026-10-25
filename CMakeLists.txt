@@ -206,8 +206,8 @@ set(ENVY_LICENSE_SOURCES
     "libssh2=${libssh2_SOURCE_DIR}"
     "libzstd=${envy_libzstd_SOURCE_DIR}"
     "Lua=${lua_SOURCE_DIR}"
+    "nanosemver=${NANOSEMVER_CACHE_DIR}"
     "picojson=${PICOJSON_CACHE_DIR}"
-    "Semver=${SEMVER_CACHE_DIR}"
     "Sol2=${sol2_SOURCE_DIR}"
     "zlib=${envy_zlib_SOURCE_DIR}"
 )
@@ -332,6 +332,7 @@ set(ENVY_BASE_SOURCES
     $<$<PLATFORM_ID:Windows>:src/platform_win.cpp>
     $<$<NOT:$<PLATFORM_ID:Windows>>:src/platform_posix.cpp>
     src/termination.cpp
+    src/semver.cpp
     src/shell.cpp
     src/shell_hooks.cpp
     $<$<PLATFORM_ID:Windows>:src/shell_win.cpp>
@@ -390,6 +391,11 @@ function(configure_envy_executable TARGET_NAME)
     )
     add_dependencies(${TARGET_NAME} envy_embedded_resources envy_embedded_licenses)
     target_compile_options(${TARGET_NAME} PRIVATE ${ENVY_COMMON_COMPILE_OPTIONS})
+    # Warnings are errors in envy's code and at its link, where GCC's LTO checks (-Wodr) run
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        COMPILE_WARNING_AS_ERROR ON
+        LINK_WARNING_AS_ERROR ON
+    )
     target_link_options(${TARGET_NAME} PRIVATE
         $<$<PLATFORM_ID:Darwin>:-Wl,-dead_strip>
         $<$<PLATFORM_ID:Linux>:-Wl,--gc-sections>
@@ -547,6 +553,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/platform_tests.cpp
     src/product_util_tests.cpp
     src/reexec_tests.cpp
+    src/semver_tests.cpp
     src/sha256_tests.cpp
     src/sol_util_tests.cpp
     src/shell_hooks_tests.cpp

@@ -1,9 +1,8 @@
 #include "lua_envy_options.h"
 
 #include "lua_envy.h"
+#include "semver.h"
 #include "util.h"
-
-#include "semver.hpp"
 
 #include <cstdlib>
 #include <sstream>
@@ -194,9 +193,11 @@ void validate_type_constraint(std::string const &ctx,
                             identity });
     }
     std::string const val_str{ value.as<std::string>() };
-    semver::version<> ver;
-    if (!semver::parse(val_str, ver)) {
-      throw_runtime_error({ ctx, " '", val_str, "' is not valid semver for ", identity });
+    nsv_semver_t ver{};
+    std::string why;
+    if (semver_parse(ver, val_str, &why) != NSV_RET_OK) {
+      throw_runtime_error(
+          { ctx, " '", val_str, "' is not valid semver for ", identity, why });
     }
   } else {
     throw_runtime_error({ ctx, " has unknown type '", type_str, "' for ", identity });
@@ -321,17 +322,18 @@ void validate_single_option(std::string const &key,
   if (range_obj.valid() && range_obj.get_type() == sol::type::string) {
     std::string const range_str{ range_obj.as<std::string>() };
     if (has_type && type_str == "semver") {
-      // semver range
-      semver::range_set<> rs;
-      if (!semver::parse(range_str, rs)) {
-        throw_runtime_error(
-            { ctx, " has invalid range '", range_str, "' for ", identity });
-      }
-      // re-parse the already-validated semver value
+      // The type check already rejected an unparseable value; should one get here, it
+      // misses rather than comparing as the zero-initialized 0.0.0.
       std::string const val_str{ value.as<std::string>() };
-      semver::version<> ver;
-      semver::parse(val_str, ver);
-      if (!rs.contains(ver, semver::version_compare_option::include_prerelease)) {
+      nsv_semver_t ver{};
+      bool const parsed{ semver_parse(ver, val_str) == NSV_RET_OK };
+      std::string why;
+      int const match{ semver_range_match(range_str, ver, &why) };
+      if (match < 0) {
+        throw_runtime_error(
+            { ctx, " has invalid range '", range_str, "' for ", identity, why });
+      }
+      if (!parsed || match == 0) {
         throw_runtime_error({ ctx,
                               " '",
                               val_str,

@@ -1,9 +1,8 @@
 #include "envy_release.h"
 
+#include "semver.h"
 #include "sha256.h"
 #include "util.h"
-
-#include "semver.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -40,9 +39,9 @@ bool envy_release_version_is_valid(std::string_view version) {
 }
 
 bool envy_release_version_less(std::string_view a, std::string_view b) {
-  semver::version<> va, vb;
-  if (!semver::parse(a, va) || !semver::parse(b, vb)) { return false; }
-  return va < vb;
+  nsv_semver_t va{}, vb{};
+  return semver_parse(va, a) == NSV_RET_OK && semver_parse(vb, b) == NSV_RET_OK &&
+         nsv_cmp(&va, &vb) == NSV_CMP_LT;
 }
 
 void envy_release_validate_mirror(std::string_view mirror, std::string_view op) {

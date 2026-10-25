@@ -5,6 +5,8 @@ set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(AWS_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(AWS_SDK_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(AWS_SDK_CPP_CUSTOM_MEMORY_MANAGEMENT OFF CACHE BOOL "" FORCE)
+# envy builds with -fno-rtti; an SDK with RTTI emits vtables that differ (GCC LTO -Wodr)
+set(ENABLE_RTTI OFF CACHE BOOL "" FORCE)
 set(BUILD_ONLY "s3;transfer;sso;sso-oidc" CACHE STRING "" FORCE)
 set(AWS_BUILD_ONLY "s3;transfer;sso;sso-oidc" CACHE STRING "" FORCE)
 set(AWS_SDK_CPP_BUILD_ONLY "s3;transfer;sso;sso-oidc" CACHE STRING "" FORCE)
@@ -183,3 +185,11 @@ foreach(_envy_target IN LISTS _envy_aws_crt_targets)
 endforeach()
 unset(_envy_aws_crt_targets)
 unset(_envy_target)
+
+# The CRT's one C++ library is outside ENABLE_RTTI; its vtables must match the SDK's and envy's
+if(TARGET aws-crt-cpp)
+    target_compile_options(aws-crt-cpp PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fno-rtti>
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/GR->
+    )
+endif()

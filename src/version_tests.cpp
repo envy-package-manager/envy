@@ -99,6 +99,16 @@ TEST_CASE("version_is_newer: CRLF in current") {
   CHECK(version_is_newer("2.0.0", "1.0.0\r\n"));
 }
 
+// Semver sets no length limit: a git hash in build metadata must not read as unparseable,
+// which for current would mean "anything is newer" and allow a downgrade.
+TEST_CASE("version_is_newer: long pre-release and build metadata") {
+  constexpr char const kLong[]{
+    "2.0.0-rc.1+sha.0123456789abcdef0123456789abcdef01234567"
+  };
+  CHECK_FALSE(version_is_newer("1.0.0", kLong));
+  CHECK(version_is_newer(kLong, "1.0.0"));
+}
+
 // The stamp itself, not the comparator. Nothing in-process can tell 0.0.0 from a release
 // -- that is the tag check in functional_tests/test_version_stamp.py -- but a stamp that
 // never made it through the build system is a shape, and shapes are checkable here.

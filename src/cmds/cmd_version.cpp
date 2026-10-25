@@ -18,7 +18,7 @@
 #include "mbedtls/version.h"
 #endif
 #include "libssh2.h"
-#include "semver.hpp"
+#include "nanosemver.h"
 #include "sol/sol.hpp"
 #include "tui.h"
 #include "util.h"
@@ -118,10 +118,11 @@ void cmd_version::execute() {
             static_cast<unsigned>(crt_version.minor),
             static_cast<unsigned>(crt_version.patch));
 
-  tui::info("  Semver: %d.%d.%d",
-            SEMVER_VERSION_MAJOR,
-            SEMVER_VERSION_MINOR,
-            SEMVER_VERSION_PATCH);
+  nsv_semver_t const nsv_version = NSV_VERSION_LIT;
+  tui::info("  nanosemver: %u.%u.%u",
+            nsv_version.major,
+            nsv_version.minor,
+            nsv_version.patch);
   tui::info("  picojson: %s", ENVY_PICOJSON_VERSION);
 
   if (cfg_.show_licenses) {
