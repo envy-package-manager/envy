@@ -88,11 +88,12 @@ set(ENVY_LIBZSTD_ARCHIVE "zstd-${ENVY_LIBZSTD_VERSION}.tar.gz")
 set(ENVY_LIBZSTD_URL "https://github.com/facebook/zstd/archive/refs/tags/v${ENVY_LIBZSTD_VERSION}.tar.gz")
 set(ENVY_LIBZSTD_SHA256 37d7284556b20954e56e1ca85b80226768902e2edabd3b649e9e72c0c9012ee3)
 
-set(ENVY_SEMVER_VERSION "1.0.0-rc")
-set(ENVY_SEMVER_URL "https://raw.githubusercontent.com/Neargye/semver/v${ENVY_SEMVER_VERSION}/include/semver.hpp")
-set(ENVY_SEMVER_SHA256 af2c0c53124dc7f52c58a7205e458ad3efbac2f61ce55addf9c8f94338a04182)
-set(ENVY_SEMVER_LICENSE_URL "https://raw.githubusercontent.com/Neargye/semver/v${ENVY_SEMVER_VERSION}/LICENSE")
-set(ENVY_SEMVER_LICENSE_SHA256 9cc0e3435da3c8bdff3bb984929759a6018b5f3eae666c9424be90fe27cffa5a)
+set(ENVY_NANOSEMVER_VERSION "0.4.0")
+set(ENVY_NANOSEMVER_URL "https://github.com/charlesnicholson/nanosemver/releases/download/v${ENVY_NANOSEMVER_VERSION}")
+set(ENVY_NANOSEMVER_H_SHA256 4d468ae6c52e7e52f50783d7fb392cd2404c44323d460218ea7680c9718ebfef)
+set(ENVY_NANOSEMVER_C_SHA256 f4173d7e1be9110e958d94516fcab819596e55b1e48eae8aae02666d45340781)
+set(ENVY_NANOSEMVER_LICENSE_URL "https://raw.githubusercontent.com/charlesnicholson/nanosemver/v${ENVY_NANOSEMVER_VERSION}/LICENSE")
+set(ENVY_NANOSEMVER_LICENSE_SHA256 9018b7787e30335f5f84d0d66abf5ae8862f04a05a7d42cede16faa5509de23e)
 
 set(ENVY_PICOJSON_VERSION "1.3.0")
 set(ENVY_PICOJSON_URL "https://raw.githubusercontent.com/kazuho/picojson/v${ENVY_PICOJSON_VERSION}/picojson.h")
@@ -137,7 +138,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/deps/Libarchive.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Blake3.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Lua.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Sol2.cmake")
-include("${CMAKE_CURRENT_LIST_DIR}/deps/Semver.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/deps/Nanosemver.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Picojson.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Doctest.cmake")
 
@@ -161,7 +162,7 @@ target_link_libraries(envy_thirdparty
         lua::lua
         sol2::sol2
         blake3::blake3
-        semver::semver
+        nanosemver::nanosemver
         picojson::picojson
         AWS::aws-cpp-sdk-s3
         AWS::aws-cpp-sdk-transfer

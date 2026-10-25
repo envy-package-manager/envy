@@ -1,6 +1,6 @@
 #include "version.h"
 
-#include "semver.hpp"
+#include "nanosemver.h"
 
 #include <string_view>
 
@@ -20,13 +20,13 @@ bool version_is_newer(std::string_view candidate, std::string_view current) {
   candidate = trim(candidate);
   current = trim(current);
 
-  semver::version<> cand;
-  if (!semver::parse(candidate, cand)) { return false; }
+  nsv_semver_t cand{};
+  if (nsv_parse(&cand, candidate.data(), candidate.size()) != NSV_RET_OK) { return false; }
 
-  semver::version<> cur;
-  if (!semver::parse(current, cur)) { return true; }
+  nsv_semver_t cur{};
+  if (nsv_parse(&cur, current.data(), current.size()) != NSV_RET_OK) { return true; }
 
-  return cand > cur;
+  return nsv_cmp(&cand, &cur) == NSV_CMP_GT;
 }
 
 }  // namespace envy

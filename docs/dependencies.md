@@ -31,3 +31,11 @@
 **Purpose:** S3 transfers and the credential provider chain
 **Integration:** `BUILD_ONLY=s3;transfer;sso;sso-oidc`; patches in `cmake/DependencyPatches.cmake` (curl, runtime, S3 endpoint ruleset deflated); CRT targets build with `AWS_STATIC_LOG_LEVEL=0`
 **Rationale:** envy installs a discarding CRT logger, so the CRT's ~700 log sites compile out (~140 KB); the SDK's own C++ logging stays, since credential failures explain themselves there
+
+## nanosemver
+
+**Version:** 0.4.0
+**License:** Unlicense OR 0BSD
+**Purpose:** Semver 2.0.0 parse, precedence, ranges—OPTIONS `semver` type and `range`, self-update ordering, `.luarc.json` envy paths
+**Integration:** Release-asset `nanosemver.h`/`.c` (stamped; the tag's raw header is not) as a static library; `nanosemver.hpp` unused
+**Rationale:** Replaces Neargye/semver—no templates or allocation; strict npm range grammar (no hyphens, plus `!=`) with no flags, so pre-releases rank below their release

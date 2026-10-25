@@ -206,8 +206,8 @@ set(ENVY_LICENSE_SOURCES
     "libssh2=${libssh2_SOURCE_DIR}"
     "libzstd=${envy_libzstd_SOURCE_DIR}"
     "Lua=${lua_SOURCE_DIR}"
+    "nanosemver=${NANOSEMVER_CACHE_DIR}"
     "picojson=${PICOJSON_CACHE_DIR}"
-    "Semver=${SEMVER_CACHE_DIR}"
     "Sol2=${sol2_SOURCE_DIR}"
     "zlib=${envy_zlib_SOURCE_DIR}"
 )

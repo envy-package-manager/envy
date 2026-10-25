@@ -3,7 +3,7 @@
 #include "lua_envy.h"
 #include "util.h"
 
-#include "semver.hpp"
+#include "nanosemver.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -194,8 +194,8 @@ void validate_type_constraint(std::string const &ctx,
                             identity });
     }
     std::string const val_str{ value.as<std::string>() };
-    semver::version<> ver;
-    if (!semver::parse(val_str, ver)) {
+    nsv_semver_t ver{};
+    if (nsv_parse(&ver, val_str.data(), val_str.size()) != NSV_RET_OK) {
       throw_runtime_error({ ctx, " '", val_str, "' is not valid semver for ", identity });
     }
   } else {
@@ -321,17 +321,18 @@ void validate_single_option(std::string const &key,
   if (range_obj.valid() && range_obj.get_type() == sol::type::string) {
     std::string const range_str{ range_obj.as<std::string>() };
     if (has_type && type_str == "semver") {
-      // semver range
-      semver::range_set<> rs;
-      if (!semver::parse(range_str, rs)) {
+      // The type check already rejected an unparseable value; should one get here, it
+      // misses rather than comparing as the zero-initialized 0.0.0.
+      std::string const val_str{ value.as<std::string>() };
+      nsv_semver_t ver{};
+      bool const parsed{ nsv_parse(&ver, val_str.data(), val_str.size()) == NSV_RET_OK };
+      // No flags: a pre-release is a version below its release, npm's includePrerelease
+      int const match{ nsv_range_match(range_str.data(), range_str.size(), &ver, 0) };
+      if (match < 0) {
         throw_runtime_error(
             { ctx, " has invalid range '", range_str, "' for ", identity });
       }
-      // re-parse the already-validated semver value
-      std::string const val_str{ value.as<std::string>() };
-      semver::version<> ver;
-      semver::parse(val_str, ver);
-      if (!rs.contains(ver, semver::version_compare_option::include_prerelease)) {
+      if (!parsed || match == 0) {
         throw_runtime_error({ ctx,
                               " '",
                               val_str,

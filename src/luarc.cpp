@@ -8,8 +8,8 @@
 #include "util.h"
 
 #include "lua.h"
+#include "nanosemver.h"
 #include "picojson.h"
-#include "semver.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -90,8 +90,8 @@ bool is_envy_semver_path(std::string_view s) {
   }
   if (ver_str.empty()) { return false; }
 
-  semver::version<> v;
-  return semver::parse(ver_str, v);
+  nsv_semver_t v{};
+  return nsv_parse(&v, ver_str.data(), ver_str.size()) == NSV_RET_OK;
 }
 
 }  // namespace

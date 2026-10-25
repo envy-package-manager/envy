@@ -4,6 +4,9 @@
 
 #include "doctest.h"
 
+#include <initializer_list>
+#include <string>
+
 namespace envy {
 namespace {
 
@@ -248,6 +251,116 @@ TEST_CASE("OPTIONS: semver range with equal mismatch") {
   sol::object opts{ f.make_opts("{ version = \"1.5.1\" }") };
   CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
                     doctest::Contains("does not satisfy range"));
+}
+
+constexpr char const kOk[]{ "" };
+constexpr char const kInvalid[]{ "has invalid range" };
+constexpr char const kMiss[]{ "does not satisfy range" };
+
+struct semver_range_row {
+  char const *range, *value, *expect;  // expect: kOk, or an error substring
+};
+
+void check_semver_ranges(std::initializer_list<semver_range_row> rows) {
+  for (semver_range_row const &r : rows) {
+    std::string const row_desc{ std::string{ r.range } + " / " + r.value };
+    INFO(row_desc);
+    lua_fixture f;
+    sol::table constraint{ f.lua.create_table() };
+    constraint["type"] = "semver";
+    constraint["range"] = r.range;
+    f.schema["version"] = constraint;
+    sol::object opts{ f.make_opts(std::string{ "{ version = \"" } + r.value + "\" }") };
+    if (*r.expect) {
+      CHECK_THROWS_WITH(validate_options_schema(f.schema, opts, "test@v1"),
+                        doctest::Contains(r.expect));
+    } else {
+      CHECK_NOTHROW(validate_options_schema(f.schema, opts, "test@v1"));
+    }
+  }
+}
+
+TEST_CASE("OPTIONS: semver range syntax errors") {
+  check_semver_ranges({
+      { ">=1.0.0 garbage", "2.0.0", kInvalid },  // whole range must parse
+      { "1.0.0 - 2.0.0", "1.0.0", kInvalid },    // no hyphen ranges
+      { "1.2.3-", "1.2.3", kInvalid },
+      { ">=1.0.0 ||", "1.0.0", kInvalid },
+      { "|| >=1.0.0", "1.0.0", kInvalid },
+      { ">=1.0.0 | <2.0.0", "1.0.0", kInvalid },
+      { "1.0.0,", "1.0.0", kInvalid },
+      { "", "1.0.0", kInvalid },
+      { "   ", "1.0.0", kInvalid },
+      { "=", "1.0.0", kInvalid },
+      { "!1.0.0", "1.0.0", kInvalid },
+      { "==1.2", "1.2.0", kInvalid },   // == takes only a whole version
+      { "~>1.2", "1.2.0", kInvalid },   // so do ~> and ~=
+      { "!=1.2", "1.3.0", kInvalid },   // != takes a partial only with a wildcard
+      { ">=4294967296.0.0", "1.0.0", kInvalid },  // beyond uint32
+  });
+}
+
+TEST_CASE("OPTIONS: semver range operators and separators") {
+  check_semver_ranges({
+      { "1.5.0", "1.5.0", kOk },
+      { "=1.5.0", "1.5.1", kMiss },
+      { "==1.5.0", "1.5.0", kOk },
+      { "!=1.5.0", "1.5.0", kMiss },
+      { "!=1.5.0", "1.5.1", kOk },
+      { ">1.5.0", "1.5.0", kMiss },
+      { "<=1.5.0", "1.5.0", kOk },
+      { ">= 1.0.0", "1.0.0", kOk },  // spaces after an operator
+      { ">=v1.2.0", "1.5.0", kOk },  // npm's v prefix
+      { ">=1.0.0<2.0.0", "1.5.0", kOk },
+      { ">=1.0.0\t<2.0.0", "2.0.0", kMiss },
+      { ">=1.0.0, <2.0.0", "2.0.0", kMiss },
+      { "<1.0.0 || >=2.0.0", "2.5.0", kOk },
+      { "<1.0.0||>=2.0.0", "1.5.0", kMiss },
+      { "=1.2.3+a", "1.2.3+b", kOk },  // build metadata never matters
+      { ">=1.2.3+build", "1.2.3", kOk },
+      { ">=0.9.0", "1.0.0-rc.1+sha.0123456789abcdef0123456789abcdef01234567", kOk },
+  });
+}
+
+TEST_CASE("OPTIONS: semver range caret, tilde, partials") {
+  check_semver_ranges({
+      { "^1.2.3", "1.9.9", kOk },
+      { "^1.2.3", "1.2.2", kMiss },
+      { "^1.2.3", "2.0.0", kMiss },
+      { "^0.2.3", "0.2.9", kOk },
+      { "^0.2.3", "0.3.0", kMiss },
+      { "^0.0.3", "0.0.4", kMiss },
+      { "~1.2.3", "1.2.9", kOk },
+      { "~1.2.3", "1.3.0", kMiss },
+      { "~1", "1.9.0", kOk },
+      { "~=1.2.3", "1.2.5", kOk },
+      { "~>1.2.3", "1.3.0", kMiss },
+      { "^1.0.0 || ^3.0.0", "3.1.0", kOk },
+      { "^1.0.0 || ^3.0.0", "2.0.0", kMiss },
+      { "1.2", "1.2.7", kOk },
+      { "1.2", "1.3.0", kMiss },
+      { "1.x", "1.9.0", kOk },
+      { "1.2.*", "1.2.0", kOk },
+      { "*", "0.0.0", kOk },
+      { ">1.2", "1.2.9", kMiss },
+      { ">1.2", "1.3.0", kOk },
+      { "<=1.2", "1.2.9", kOk },
+      { "<1.2", "1.2.0", kMiss },
+      { "!=1.4.x", "1.4.2", kMiss },
+      { "!=1.4.x", "1.5.0", kOk },
+  });
+}
+
+TEST_CASE("OPTIONS: semver range pre-releases rank below their release") {
+  check_semver_ranges({
+      { ">=1.0.0 <2.0.0", "1.5.0-beta", kOk },  // no npm pre-release exclusion
+      { "<2.0.0", "2.0.0-rc.1", kOk },
+      { "<2.0.0-0", "2.0.0-rc.1", kMiss },
+      { "^1.2.3", "2.0.0-rc.1", kMiss },  // ^ and ~ stop below the next line's -0
+      { ">=1.0.0-alpha", "1.0.0-alpha.1", kOk },
+      { ">1.0.0-beta", "1.0.0-alpha", kMiss },
+      { "1.2", "1.2.0-beta", kOk },  // a partial covers its line, pre-releases and all
+  });
 }
 
 // -- Table form: numeric range --
