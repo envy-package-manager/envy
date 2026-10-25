@@ -1,9 +1,8 @@
 #include "envy_release.h"
 
+#include "semver.h"
 #include "sha256.h"
 #include "util.h"
-
-#include "nanosemver.h"
 
 #include <sstream>
 #include <stdexcept>
@@ -41,8 +40,7 @@ bool envy_release_version_is_valid(std::string_view version) {
 
 bool envy_release_version_less(std::string_view a, std::string_view b) {
   nsv_semver_t va{}, vb{};
-  return nsv_parse(&va, a.data(), a.size()) == NSV_RET_OK &&
-         nsv_parse(&vb, b.data(), b.size()) == NSV_RET_OK &&
+  return semver_parse(va, a) == NSV_RET_OK && semver_parse(vb, b) == NSV_RET_OK &&
          nsv_cmp(&va, &vb) == NSV_CMP_LT;
 }
 

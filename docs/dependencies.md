@@ -34,8 +34,8 @@
 
 ## nanosemver
 
-**Version:** 0.4.0
+**Version:** 0.5.0
 **License:** Unlicense OR 0BSD
 **Purpose:** Semver 2.0.0 parse, precedence, ranges—OPTIONS `semver` type and `range`, self-update ordering, `.luarc.json` envy paths
-**Integration:** Release-asset `nanosemver.h`/`.c` (stamped; the tag's raw header is not) as a static library; `nanosemver.hpp` unused
+**Integration:** Release-asset `nanosemver.h`/`.c` (stamped; the tag's raw header is not) as a static library, `NSV_DIAG=1`; `src/semver.h` routes every parse through one process-wide print hook into a per-thread string, so a failure that throws says where and why
 **Rationale:** Replaces Neargye/semver—no templates or allocation; strict npm range grammar (no hyphens, plus `!=`) with no flags, so pre-releases rank below their release

@@ -1,9 +1,8 @@
 #include "lua_envy_options.h"
 
 #include "lua_envy.h"
+#include "semver.h"
 #include "util.h"
-
-#include "nanosemver.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -195,8 +194,10 @@ void validate_type_constraint(std::string const &ctx,
     }
     std::string const val_str{ value.as<std::string>() };
     nsv_semver_t ver{};
-    if (nsv_parse(&ver, val_str.data(), val_str.size()) != NSV_RET_OK) {
-      throw_runtime_error({ ctx, " '", val_str, "' is not valid semver for ", identity });
+    std::string why;
+    if (semver_parse(ver, val_str, &why) != NSV_RET_OK) {
+      throw_runtime_error(
+          { ctx, " '", val_str, "' is not valid semver for ", identity, why });
     }
   } else {
     throw_runtime_error({ ctx, " has unknown type '", type_str, "' for ", identity });
@@ -325,12 +326,12 @@ void validate_single_option(std::string const &key,
       // misses rather than comparing as the zero-initialized 0.0.0.
       std::string const val_str{ value.as<std::string>() };
       nsv_semver_t ver{};
-      bool const parsed{ nsv_parse(&ver, val_str.data(), val_str.size()) == NSV_RET_OK };
-      // No flags: a pre-release is a version below its release, npm's includePrerelease
-      int const match{ nsv_range_match(range_str.data(), range_str.size(), &ver, 0) };
+      bool const parsed{ semver_parse(ver, val_str) == NSV_RET_OK };
+      std::string why;
+      int const match{ semver_range_match(range_str, ver, &why) };
       if (match < 0) {
         throw_runtime_error(
-            { ctx, " has invalid range '", range_str, "' for ", identity });
+            { ctx, " has invalid range '", range_str, "' for ", identity, why });
       }
       if (!parsed || match == 0) {
         throw_runtime_error({ ctx,

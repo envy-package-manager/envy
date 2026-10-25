@@ -4,11 +4,11 @@
 
 #include "embedded_init_resources.h"
 #include "envy_release.h"
+#include "semver.h"
 #include "tui.h"
 #include "util.h"
 
 #include "lua.h"
-#include "nanosemver.h"
 #include "picojson.h"
 
 #include <algorithm>
@@ -91,7 +91,7 @@ bool is_envy_semver_path(std::string_view s) {
   if (ver_str.empty()) { return false; }
 
   nsv_semver_t v{};
-  return nsv_parse(&v, ver_str.data(), ver_str.size()) == NSV_RET_OK;
+  return semver_parse(v, ver_str) == NSV_RET_OK;
 }
 
 }  // namespace

@@ -280,6 +280,33 @@ void check_semver_ranges(std::initializer_list<semver_range_row> rows) {
   }
 }
 
+TEST_CASE("OPTIONS: semver errors carry nanosemver's where and why") {
+  auto const what{ [](char const *range, char const *value) -> std::string {
+    lua_fixture f;
+    sol::table constraint{ f.lua.create_table() };
+    constraint["type"] = "semver";
+    constraint["range"] = range;
+    f.schema["version"] = constraint;
+    sol::object opts{ f.make_opts(std::string{ "{ version = \"" } + value + "\" }") };
+    try {
+      validate_options_schema(f.schema, opts, "test@v1");
+    } catch (std::exception const &e) { return e.what(); }
+    return "";
+  } };
+  CHECK(what(">=1.0.0 garbage", "2.0.0") ==
+        "option 'version' has invalid range '>=1.0.0 garbage' for test@v1\n"
+        "bad range at column 9: expected a version\n"
+        "  >=1.0.0 garbage\n"
+        "          ^");
+  CHECK(what("*", "1.02.0") ==
+        "option 'version' '1.02.0' is not valid semver for test@v1\n"
+        "bad version at column 3: leading zero\n"
+        "  1.02.0\n"
+        "    ^");
+  CHECK(what(">=2.0.0", "1.0.0") ==  // a miss is not a parse failure: nothing to explain
+        "option 'version' '1.0.0' does not satisfy range '>=2.0.0' for test@v1");
+}
+
 TEST_CASE("OPTIONS: semver range syntax errors") {
   check_semver_ranges({
       { ">=1.0.0 garbage", "2.0.0", kInvalid },  // whole range must parse

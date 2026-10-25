@@ -332,6 +332,7 @@ set(ENVY_BASE_SOURCES
     $<$<PLATFORM_ID:Windows>:src/platform_win.cpp>
     $<$<NOT:$<PLATFORM_ID:Windows>>:src/platform_posix.cpp>
     src/termination.cpp
+    src/semver.cpp
     src/shell.cpp
     src/shell_hooks.cpp
     $<$<PLATFORM_ID:Windows>:src/shell_win.cpp>
@@ -547,6 +548,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/platform_tests.cpp
     src/product_util_tests.cpp
     src/reexec_tests.cpp
+    src/semver_tests.cpp
     src/sha256_tests.cpp
     src/sol_util_tests.cpp
     src/shell_hooks_tests.cpp

@@ -4,7 +4,7 @@
 set(NANOSEMVER_CACHE_DIR "${ENVY_CACHE_DIR}/nanosemver-src")
 file(MAKE_DIRECTORY "${NANOSEMVER_CACHE_DIR}")
 
-# Release assets, not the tag's raw files: only the assets carry the version-stamped header.
+# Prefer release assets to the tag's raw files: only the assets carry the stamped header.
 envy_fetch_verified_file(
   PATH "${NANOSEMVER_CACHE_DIR}/nanosemver.h"
   URL "${ENVY_NANOSEMVER_URL}/nanosemver.h"
@@ -27,5 +27,6 @@ if(NOT TARGET nanosemver::nanosemver)
   add_library(nanosemver STATIC "${NANOSEMVER_CACHE_DIR}/nanosemver.c")
   target_include_directories(nanosemver PUBLIC "${NANOSEMVER_CACHE_DIR}")
   target_compile_features(nanosemver PUBLIC c_std_99)
+  target_compile_definitions(nanosemver PUBLIC NSV_DIAG=1)  # library and callers must agree
   add_library(nanosemver::nanosemver ALIAS nanosemver)
 endif()
