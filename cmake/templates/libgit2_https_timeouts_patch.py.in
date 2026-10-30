@@ -1,0 +1,59 @@
+import pathlib
+
+# libgit2's https transports against the server timeouts libgit2_scope sets
+# (GIT_OPT_SET_SERVER_CONNECT_TIMEOUT, _SERVER_TIMEOUT):
+#
+# WinHTTP, Windows: hardcodes a 60s connect and no send or receive timeout, ignoring
+# them, so a server that accepts and then goes quiet holds a fetch forever. Take them
+# when set, as the socket stream behind git://, ssh, and mbedTLS does.
+#
+# mbedTLS, elsewhere: the socket stream's GIT_TIMEOUT comes back through mbedTLS as if
+# it were mbedTLS's own error code, and ssl_set_error then replaces "could not read from
+# socket: timed out" with "SSL error: 0xffffffdb - ...", which envy cannot tell from a
+# fatal TLS failure. Let the socket stream's error stand.
+
+PATCHES = {
+    "transports/winhttp.c": (
+        ("#define DEFAULT_CONNECT_TIMEOUT 60000\n",
+         "#define DEFAULT_CONNECT_TIMEOUT 60000\n"
+         "\n"
+         "extern int git_socket_stream__connect_timeout;\n"
+         "extern int git_socket_stream__timeout;\n",
+         1),
+        ("\tint default_timeout = TIMEOUT_INFINITE;\n"
+         "\tint default_connect_timeout = DEFAULT_CONNECT_TIMEOUT;\n",
+         "\tint default_timeout = git_socket_stream__timeout > 0 ?\n"
+         "\t\tgit_socket_stream__timeout : TIMEOUT_INFINITE;\n"
+         "\tint default_connect_timeout = git_socket_stream__connect_timeout > 0 ?\n"
+         "\t\tgit_socket_stream__connect_timeout : DEFAULT_CONNECT_TIMEOUT;\n",
+         2),  # the session's timeouts, and each request's
+    ),
+    "streams/mbedtls.c": (
+        ("\tint ret = -1;\n"
+         "\n"
+         "\tGIT_ASSERT(error != MBEDTLS_ERR_SSL_WANT_READ);\n",
+         "\tint ret = -1;\n"
+         "\n"
+         "\t/* bio_read/bio_write pass the socket stream's timeout through; its error stands */\n"
+         "\tif (error == GIT_TIMEOUT)\n"
+         "\t\treturn GIT_TIMEOUT;\n"
+         "\n"
+         "\tGIT_ASSERT(error != MBEDTLS_ERR_SSL_WANT_READ);\n",
+         1),
+    ),
+}
+
+src = pathlib.Path(r"@LIBGIT2_SRC_DIR@")
+for name, edits in PATCHES.items():
+    path = src / name
+    text = path.read_text(encoding="utf-8")
+    patched = text
+    for old, new, count in edits:
+        if new in patched:
+            continue
+        if patched.count(old) != count:
+            raise SystemExit(f"libgit2 https timeouts patch: expected {count} of "
+                             f"'{old.strip()}' in {path}")
+        patched = patched.replace(old, new)
+    if patched != text:
+        path.write_text(patched, encoding="utf-8")

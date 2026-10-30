@@ -586,21 +586,23 @@ function(envy_patch_libgit2_longpaths source_dir binary_dir)
     unset(LIBGIT2_UTIL_DIR)
 endfunction()
 
-# Bound libgit2's WinHTTP transport (Windows https) by the server timeouts libgit2_scope
-# sets, which it otherwise ignores for a 60s connect and no read timeout at all.
-function(envy_patch_libgit2_winhttp_timeouts source_dir binary_dir)
-    set(_stamp "${binary_dir}/envy_libgit2_winhttp_timeouts_patch.stamp")
+# Make libgit2's https transports honor and report the server timeouts libgit2_scope
+# sets: WinHTTP (Windows) ignores them; mbedTLS (elsewhere) masks their "timed out".
+function(envy_patch_libgit2_https_timeouts source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_https_timeouts_patch.stamp")
     if(EXISTS "${_stamp}")
         return()
     endif()
 
-    set(_script "${binary_dir}/envy_patch_libgit2_winhttp_timeouts.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_winhttp_timeouts_patch.py.in")
+    set(_script "${binary_dir}/envy_patch_libgit2_https_timeouts.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_https_timeouts_patch.py.in")
 
-    set(LIBGIT2_WINHTTP_C "${source_dir}/src/libgit2/transports/winhttp.c")
-    if(NOT EXISTS "${LIBGIT2_WINHTTP_C}")
-        message(FATAL_ERROR "libgit2 winhttp timeouts patch: ${LIBGIT2_WINHTTP_C} not found")
-    endif()
+    set(LIBGIT2_SRC_DIR "${source_dir}/src/libgit2")
+    foreach(_file IN ITEMS transports/winhttp.c streams/mbedtls.c)
+        if(NOT EXISTS "${LIBGIT2_SRC_DIR}/${_file}")
+            message(FATAL_ERROR "libgit2 https timeouts patch: ${LIBGIT2_SRC_DIR}/${_file} not found")
+        endif()
+    endforeach()
 
     configure_file("${_template}" "${_script}" @ONLY)
 
@@ -612,7 +614,8 @@ function(envy_patch_libgit2_winhttp_timeouts source_dir binary_dir)
     unset(_stamp)
     unset(_script)
     unset(_template)
-    unset(LIBGIT2_WINHTTP_C)
+    unset(_file)
+    unset(LIBGIT2_SRC_DIR)
 endfunction()
 
 # Strip libgit2 install()/export() calls for the same reason—keep it scoped

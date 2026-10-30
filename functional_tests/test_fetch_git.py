@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path
 import unittest
 
@@ -211,15 +210,13 @@ class TestFetchGit(EnvyTestCase):
         self.assertIn("timed out", run.stderr)
 
     def test_stalled_https_server_times_out_instead_of_hanging(self):
-        """The same over https, which on Windows is libgit2's WinHTTP transport: it
-        ignores libgit2's timeouts unless patched, and hung here before. The server never
-        answers the TLS handshake, so no certificate is needed; how each TLS backend words
-        the failure varies, so only the bound is asserted -- a fetch that waits about the
-        timeout, rather than failing at once for some other reason."""
-        start = time.monotonic()
+        """The same over https, which needs libgit2_https_timeouts_patch: WinHTTP
+        (Windows) ignored the timeout and hung here, and mbedTLS (elsewhere) reworded it
+        as an opaque SSL error, which envy treats as fatal rather than retrying. The
+        server never answers the TLS handshake, so no certificate is needed."""
         run = self._fetch_from_stalled_server("https")
         self.assertNotEqual(0, run.returncode)
-        self.assertGreaterEqual(time.monotonic() - start, 0.9, run.stderr)
+        self.assertIn("timed out", run.stderr)
 
     def test_nonexistent_repository(self):
         """Non-existent repository URL should fail."""
