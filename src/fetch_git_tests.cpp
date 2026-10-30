@@ -212,12 +212,15 @@ TEST_CASE("git_fetch_first: a plan that lands without the commit falls through")
 }
 
 TEST_CASE("git_fetch_first: refusals fall through, the last one and faults do not") {
-  auto const plans{ envy::git_fetch_plans(kSha, { { "refs/heads/main", kOther } }, false) };
+  auto const plans{
+    envy::git_fetch_plans(kSha, { { "refs/heads/main", kOther } }, false)
+  };
   auto const refuse_shallow{ [](envy::git_fetch_plan const &plan) {
     if (plan.depth) { throw envy::fetch_error(envy::fetch_error_kind::PROTOCOL, "no"); }
   } };
-  CHECK(envy::git_fetch_first(plans, "u", kSha, refuse_shallow, [] { return true; })
-            .strategy == envy::git_fetch_strategy::FULL);
+  CHECK(envy::git_fetch_first(plans, "u", kSha, refuse_shallow, [] {
+          return true;
+        }).strategy == envy::git_fetch_strategy::FULL);
 
   auto const fault{ [](envy::git_fetch_plan const &) {
     throw envy::fetch_error(envy::fetch_error_kind::TRANSFER, "reset");
@@ -228,7 +231,11 @@ TEST_CASE("git_fetch_first: refusals fall through, the last one and faults do no
   // Missing from the deepest plan too: the remote no longer has it, a final answer.
   try {
     envy::git_fetch_first(
-        plans, "u", kSha, [](envy::git_fetch_plan const &) {}, [] { return false; });
+        plans,
+        "u",
+        kSha,
+        [](envy::git_fetch_plan const &) {},
+        [] { return false; });
     FAIL("expected a throw");
   } catch (envy::fetch_error const &e) {
     CHECK(e.kind() == envy::fetch_error_kind::PROTOCOL);
