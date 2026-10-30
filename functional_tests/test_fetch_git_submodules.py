@@ -177,11 +177,12 @@ def _tree(root: Path) -> dict[str, str | None]:
 class _GitServer:
     """A git:// server: one `git upload-pack` per connection, relayed over pipes.
 
-    Not `git daemon`: on Windows it hands the socket itself to upload-pack, and when those
-    processes exit the connection is torn down with a reset, which discards whatever the
-    client has not read yet. libgit2 opens its pack file before it reads the pack, so a
-    small response arrives whole, sits unread, and is lost. Relaying lets this server
-    shut the socket down for writing and drain it, so every client reads to the end.
+    Not `git daemon`: on Windows it hands the socket itself to upload-pack, which exits
+    holding it, with no shutdown or closesocket. Windows aborts a socket that dies with its
+    process: a reset, which discards whatever the client has not read yet. libgit2 opens
+    its pack file before it reads the pack, so a small response arrives whole, sits
+    unread, and is lost. Relaying lets this server shut the socket down for writing and
+    drain it, so every client reads to the end.
     """
 
     def __init__(self, root: Path, env: dict[str, str]):
@@ -207,7 +208,7 @@ class _GitServer:
         with conn:
             head = self._read_exact(conn, 4)
             if len(head) < 4:
-                return  # a readiness probe
+                return  # closed without a request
             request = self._read_exact(conn, int(head, 16) - 4)
             command, _, rest = request.partition(b" ")
             path = rest.split(b"\0", 1)[0].decode().lstrip("/")
@@ -232,8 +233,9 @@ class _GitServer:
 
             threading.Thread(target=to_server, daemon=True).start()
             try:
-                while chunk := proc.stdout.read1(65536):
-                    conn.sendall(chunk)
+                with proc.stdout:
+                    while chunk := proc.stdout.read1(65536):
+                        conn.sendall(chunk)
             except OSError:
                 pass
             proc.wait()
