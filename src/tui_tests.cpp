@@ -1358,6 +1358,28 @@ TEST_CASE("no spec set a display, so the row carries no display column") {
   CHECK(envy::tui::test::render_section_frame(frame, 5, 0) == "[pkg] installed\n");
 }
 
+TEST_CASE_FIXTURE(captured_output, "a shrinking live region leaves no blank line below") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const row{ [](char const *label, char const *text) {
+    return envy::tui::section_frame{ .label = label,
+                                     .content =
+                                         envy::tui::static_text_data{ .text = text } };
+  } };
+  auto tall{ row("[pkg]", "2/3 submodules") };
+  tall.children = { row("a", "fetching"), row("b", "fetching") };
+
+  REQUIRE(envy::tui::test::paint_live_region({ tall }, 0) == 3);
+  messages.clear();
+
+  // Back to the top, one row, the stale two cleared from the end of it: the cursor parks
+  // on the row, as after any paint, so shutdown's newline leaves no gap behind it.
+  CHECK(envy::tui::test::paint_live_region({ row("[pkg]", "installed") }, 3) == 1);
+  CHECK(stream().find('\n') == std::string::npos);
+  CHECK(stream().find("\x1b[0J") != std::string::npos);
+}
+
 TEST_CASE("a child's children indent one level further, at any depth") {
   envy::tui::test::g_terminal_width = 120;
   envy::tui::test::g_isatty = false;

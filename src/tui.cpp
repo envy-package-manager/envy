@@ -681,16 +681,9 @@ int render_progress_sections_ansi(std::vector<section_state> const &sections,
     ++cur_frame_line_count;
   }
 
-  // Clear remaining old lines if shrinking
-  if (cur_frame_line_count < last_line_count) {
-    if (cur_frame_line_count == 0) {  // cursor already parked on the first stale line
-      emit(kAnsiClearToEos);
-    } else {
-      emit("\n");
-      emit(kAnsiClearToEos);
-      ++cur_frame_line_count;  // Account for the newline we just printed
-    }
-  }
+  // Clear what a taller region left below, from where the cursor already parks: a newline
+  // first would make a blank line part of the region, and shutdown would leave it behind.
+  if (cur_frame_line_count < last_line_count) { emit(kAnsiClearToEos); }
 
   emit(kAnsiEnableWrap);
   emit_flush();
@@ -1390,6 +1383,20 @@ std::string render_section_frame(section_frame const &frame) {
                                 width,
                                 g_isatty,
                                 now);
+}
+
+int paint_live_region(std::vector<section_frame> const &frames, int last_line_count) {
+  std::vector<section_state> sections;
+  std::size_t label_width{ 0 };
+  for (auto const &frame : frames) {
+    sections.push_back({ .handle = 0, .cached_frame = frame, .has_content = true });
+    label_width = std::max(label_width, measure_label_width(frame));
+  }
+  return render_progress_sections_ansi(sections,
+                                       { label_width, 0 },
+                                       last_line_count,
+                                       g_terminal_width > 0 ? g_terminal_width : 80,
+                                       std::chrono::steady_clock::now());
 }
 
 std::string render_section_frame(section_frame const &frame,

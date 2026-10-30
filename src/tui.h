@@ -161,6 +161,10 @@ std::string render_section_frame(section_frame const &frame,
                                  std::size_t label_width,
                                  std::size_t display_width);
 
+// One ANSI paint of the live region over `frames`, after a region `last_line_count`
+// lines tall; bytes go to the output handler. Returns the new region's height.
+int paint_live_region(std::vector<section_frame> const &frames, int last_line_count);
+
 // Helper functions for testing ANSI-aware line padding and truncation
 int calculate_visible_length(std::string_view str);
 std::string truncate_to_width_ansi_aware(std::string const &str, int target_width);
