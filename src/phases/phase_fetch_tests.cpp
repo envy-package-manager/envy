@@ -259,7 +259,7 @@ TEST_CASE("fetch_entry_parse reads every key and rejects the rest") {
   sol::state lua;
   auto table{ [&](char const *script) {
     lua.script(std::string{ "t = " } + script);
-    return sol::table{ lua["t"] };
+    return lua["t"].get<sol::table>();  // MSVC rejects brace-init from the proxy
   } };
 
   auto const entry{ fetch_entry_parse(
