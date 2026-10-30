@@ -586,21 +586,21 @@ function(envy_patch_libgit2_longpaths source_dir binary_dir)
     unset(LIBGIT2_UTIL_DIR)
 endfunction()
 
-# Make libgit2's https transports honor and report the server timeouts libgit2_scope
-# sets: WinHTTP (Windows) ignores them; mbedTLS (elsewhere) masks their "timed out".
-function(envy_patch_libgit2_https_timeouts source_dir binary_dir)
-    set(_stamp "${binary_dir}/envy_libgit2_https_timeouts_patch.stamp")
+# Make libgit2's https transports bound and report a failure as its socket stream does:
+# WinHTTP (Windows) ignores the server timeouts; mbedTLS (elsewhere) relabels socket errors.
+function(envy_patch_libgit2_https_transport source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_https_transport_patch.stamp")
     if(EXISTS "${_stamp}")
         return()
     endif()
 
-    set(_script "${binary_dir}/envy_patch_libgit2_https_timeouts.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_https_timeouts_patch.py.in")
+    set(_script "${binary_dir}/envy_patch_libgit2_https_transport.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_https_transport_patch.py.in")
 
-    set(LIBGIT2_SRC_DIR "${source_dir}/src/libgit2")
-    foreach(_file IN ITEMS transports/winhttp.c streams/mbedtls.c)
+    set(LIBGIT2_SRC_DIR "${source_dir}/src")
+    foreach(_file IN ITEMS libgit2/transports/winhttp.c util/win32/error.c libgit2/streams/mbedtls.c)
         if(NOT EXISTS "${LIBGIT2_SRC_DIR}/${_file}")
-            message(FATAL_ERROR "libgit2 https timeouts patch: ${LIBGIT2_SRC_DIR}/${_file} not found")
+            message(FATAL_ERROR "libgit2 https transport patch: ${LIBGIT2_SRC_DIR}/${_file} not found")
         endif()
     endforeach()
 

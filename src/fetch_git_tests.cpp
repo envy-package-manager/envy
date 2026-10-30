@@ -337,4 +337,8 @@ TEST_CASE("git_error_kind: a socket timeout is a timeout, a connect one a connec
   CHECK(
       envy::git_error_kind(GIT_ERROR_NET, "failed to connect to h: Operation timed out") ==
       envy::fetch_error_kind::CONNECT);
+  // WinHTTP's: an OS error, its text kept locale-free by libgit2_https_transport_patch.
+  CHECK(envy::git_error_kind(GIT_ERROR_OS,
+                             "failed to send request: The operation timed out") ==
+        envy::fetch_error_kind::TIMEOUT);
 }

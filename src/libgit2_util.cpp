@@ -116,7 +116,7 @@ libgit2_scope::libgit2_scope() {
 
   // libgit2 waits on a silent server forever by default. Bound it as curl and WinINet are:
   // a connect, and any stretch with no bytes moving. ENVY_GIT_TIMEOUT_MS is for tests.
-  // https needs libgit2_https_timeouts_patch: WinHTTP ignores both; mbedTLS masks them.
+  // Windows https (WinHTTP) takes them only through libgit2_https_transport_patch.
   int const timeout_ms{ [] {
     char const *val{ std::getenv("ENVY_GIT_TIMEOUT_MS") };
     char *end{ nullptr };
