@@ -334,7 +334,7 @@ TEST_CASE("git_error_kind: a socket timeout is a timeout, a connect one a connec
         envy::fetch_error_kind::TIMEOUT);
   CHECK(envy::git_error_kind(GIT_ERROR_NET, "could not write to socket: timed out") ==
         envy::fetch_error_kind::TIMEOUT);
-  CHECK(envy::git_error_kind(GIT_ERROR_NET,
-                             "failed to connect to h: Operation timed out") ==
-        envy::fetch_error_kind::CONNECT);
+  CHECK(
+      envy::git_error_kind(GIT_ERROR_NET, "failed to connect to h: Operation timed out") ==
+      envy::fetch_error_kind::CONNECT);
 }
