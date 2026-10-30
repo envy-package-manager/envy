@@ -55,15 +55,14 @@ constexpr std::string_view kManifestPackageKeys[]{
   kEnvyBaseKey, kEnvyBundlesKey, "needed_by", "options", "platforms",  "product", "ref",
   "setup",      "sha256",        "source",    "spec",    "submodules", "vendor"
 };
-constexpr std::string_view kDependencyKeys[]{ "needed_by", "options", "product",
-                                              "ref",       "setup",   "sha256",
-                                              "source",    "spec",    "submodules",
-                                              "weak" };
-constexpr std::string_view kFetchDependencyKeys[]{ "options", "product", "ref",
-                                                   "sha256",  "source",  "spec",
+constexpr std::string_view kDependencyKeys[]{ "needed_by",  "options", "product", "ref",
+                                              "setup",      "sha256",  "source",  "spec",
+                                              "submodules", "weak" };
+constexpr std::string_view kFetchDependencyKeys[]{ "options",    "product", "ref",
+                                                   "sha256",     "source",  "spec",
                                                    "submodules", "weak" };
-constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options", "product",
-                                                "ref",       "sha256",  "source",
+constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options",   "product",
+                                                "ref",       "sha256",    "source",
                                                 "spec",      "submodules" };
 
 // What one entry shape may say. `fetch_function_runs` is false where nothing could find
@@ -146,7 +145,9 @@ pkg_cfg::source_t parse_source_string(std::string const &source_uri,
                                       sol::table const &table,
                                       std::filesystem::path const &anchor) {
   auto const info{ uri_classify(source_uri) };
-  if (auto git{ pkg_cfg_parse_git_source(table, info, "Spec") }) { return std::move(*git); }
+  if (auto git{ pkg_cfg_parse_git_source(table, info, "Spec") }) {
+    return std::move(*git);
+  }
 
   auto const sha256{ sol_util_get_optional<std::string>(table, "sha256", "Spec source") };
 
@@ -683,7 +684,8 @@ std::optional<pkg_cfg::git_source> pkg_cfg_parse_git_source(sol::table const &ta
   auto submodules{ pkg_cfg_parse_submodules(table, context) };
   if (info.scheme != uri_scheme::GIT && info.scheme != uri_scheme::GIT_HTTPS) {
     if (submodules) {
-      throw_runtime_error({ context, ": submodules requires a git source, not ", info.canonical });
+      throw_runtime_error(
+          { context, ": submodules requires a git source, not ", info.canonical });
     }
     return std::nullopt;
   }

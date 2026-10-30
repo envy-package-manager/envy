@@ -288,8 +288,8 @@ TEST_CASE("cli_parse: cmd_fetch") {
   }
 
   SUBCASE("fetch with submodules") {
-    std::vector<std::string> args{ "envy",       "fetch",       "https://h/r.git", "/tmp/r",
-                                   "--ref",      "main",        "--submodules" };
+    std::vector<std::string> args{ "envy",  "fetch", "https://h/r.git", "/tmp/r",
+                                   "--ref", "main",  "--submodules" };
     auto argv{ make_argv(args) };
 
     auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };

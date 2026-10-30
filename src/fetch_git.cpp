@@ -92,7 +92,8 @@ repo_ptr init_repo(std::filesystem::path const &gitdir,
     git_repository_init_options o;
     git_repository_init_options_init(&o, GIT_REPOSITORY_INIT_OPTIONS_VERSION);
     o.flags = GIT_REPOSITORY_INIT_MKPATH | GIT_REPOSITORY_INIT_NO_REINIT;
-    if (workdir) {  // a submodule: gitdir under .git/modules, a relative gitfile in the tree
+    if (workdir) {  // a submodule: gitdir under .git/modules, a relative gitfile in the
+                    // tree
       o.workdir_path = workdir_str.c_str();
       o.flags |= GIT_REPOSITORY_INIT_NO_DOTGIT_DIR | GIT_REPOSITORY_INIT_RELATIVE_GITLINK;
     }
@@ -224,8 +225,7 @@ class git_progress : unmovable {
     for (auto const &r : repos_) {
       tree.received_bytes += r.last.received_bytes;
       if (!r.done && !r.path.empty()) {
-        tree.in_flight.push_back(
-            { .path = r.path, .counters = r.last, .retry = r.retry });
+        tree.in_flight.push_back({ .path = r.path, .counters = r.last, .retry = r.retry });
       }
     }
     return tree;
@@ -240,8 +240,8 @@ class git_progress : unmovable {
 };
 
 struct git_job {
-  std::string url;  // resolved
-  std::string ref;  // as written for the root; the recorded gitlink below it
+  std::string url;   // resolved
+  std::string ref;   // as written for the root; the recorded gitlink below it
   std::string path;  // '/'-joined from the root; empty for the root itself
   repo_ptr repo;
 };
@@ -268,7 +268,8 @@ class git_tree : unmovable {
       unmatched += (unmatched.empty() ? "" : ", ") + s;
     }
     if (!unmatched.empty()) {
-      throw_runtime_error({ "fetch_git: submodule selector matched nothing: ", unmatched });
+      throw_runtime_error(
+          { "fetch_git: submodule selector matched nothing: ", unmatched });
     }
   }
 
@@ -483,11 +484,12 @@ class git_tree : unmovable {
         continue;
       }
       if (sm.url.empty()) {
-        throw_runtime_error({ "fetch_git: submodule '", full, "' has no url in .gitmodules" });
+        throw_runtime_error(
+            { "fetch_git: submodule '", full, "' has no url in .gitmodules" });
       }
       if (!safe_tree_path(sm.name) || !safe_tree_path(sm.path)) {
-        throw_runtime_error({ "fetch_git: unsafe submodule '", sm.name, "' at '", sm.path,
-                              "'" });
+        throw_runtime_error(
+            { "fetch_git: unsafe submodule '", sm.name, "' at '", sm.path, "'" });
       }
       picked.push_back(&sm);
     }
@@ -496,8 +498,8 @@ class git_tree : unmovable {
     for (auto const *a : picked) {
       for (auto const *b : picked) {
         if (b->name.starts_with(a->name + "/")) {
-          throw_runtime_error({ "fetch_git: submodule name '", b->name, "' nests in '",
-                                a->name, "'" });
+          throw_runtime_error(
+              { "fetch_git: submodule name '", b->name, "' nests in '", a->name, "'" });
         }
       }
     }
@@ -511,8 +513,12 @@ class git_tree : unmovable {
       // Git's protocol.file.allow=user: a served superproject does not get to read this
       // machine's repositories by naming them.
       if (git_url_is_local(url) && !git_url_is_local(job.url)) {
-        throw_runtime_error({ "fetch_git: refusing local submodule url '", url, "' for '",
-                              full, "' from remote superproject ", job.url });
+        throw_runtime_error({ "fetch_git: refusing local submodule url '",
+                              url,
+                              "' for '",
+                              full,
+                              "' from remote superproject ",
+                              job.url });
       }
       require_real_dirs(workdir, sm->path);
 
@@ -522,11 +528,11 @@ class git_tree : unmovable {
         throw_git_error("fetch_git: cannot register submodule " + full + ": ");
       }
       std::filesystem::path const child_workdir{ workdir / sm->path };
-      children.push_back(
-          git_job{ .url = url,
-                   .ref = sm->sha,
-                   .path = full,
-                   .repo = init_repo(gitdir / "modules" / sm->name, &child_workdir, url) });
+      children.push_back(git_job{
+          .url = url,
+          .ref = sm->sha,
+          .path = full,
+          .repo = init_repo(gitdir / "modules" / sm->name, &child_workdir, url) });
     }
     return children;
   }
@@ -577,7 +583,8 @@ std::vector<git_fetch_plan> git_fetch_plans(std::string_view sha,
     if (r.oid != sha) { continue; }
     std::string_view name{ r.name };
     if (name.ends_with("^{}")) { name.remove_suffix(3); }
-    if (!tip || std::pair{ rank(name), name } < std::pair{ rank(*tip), std::string_view{ *tip } }) {
+    if (!tip || std::pair{ rank(name), name } <
+                    std::pair{ rank(*tip), std::string_view{ *tip } }) {
       tip = std::string{ name };
     }
   }
@@ -605,7 +612,8 @@ std::vector<git_fetch_plan> git_fetch_plans(std::string_view sha,
              .depth = 0 } };
 }
 
-std::string git_fetch_target(std::string_view ref, std::vector<git_ref_entry> const &refs) {
+std::string git_fetch_target(std::string_view ref,
+                             std::vector<git_ref_entry> const &refs) {
   if (git_ref_is_full_sha(ref)) { return lowercase(ref); }
   try {
     return git_resolve_ref(refs, ref);
@@ -691,9 +699,11 @@ void fetch_git(fetch_request_git const &req,
                std::filesystem::path const &dest,
                std::string const &trace_spec) {
   // Absolute, so relative submodule urls resolve the same from any working directory.
-  std::string url{ git_url_is_local(req.source) && !req.source.starts_with("file://")
-                       ? std::filesystem::absolute(req.source).lexically_normal().generic_string()
-                       : req.source };
+  std::string url{
+    git_url_is_local(req.source) && !req.source.starts_with("file://")
+        ? std::filesystem::absolute(req.source).lexically_normal().generic_string()
+        : req.source
+  };
   git_tree{ req, trace_spec }.run(dest, std::move(url), req.ref);
 }
 

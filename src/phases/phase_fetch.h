@@ -27,9 +27,10 @@ struct fetch_entry {
 
 fetch_entry fetch_entry_parse(sol::table const &tbl, std::string_view context);
 
-fetch_request url_to_fetch_request(fetch_entry const &entry,
-                                   std::filesystem::path const &dest,
-                                   std::string const &context,
-                                   std::optional<std::filesystem::path> const &file_root = {});
+fetch_request url_to_fetch_request(
+    fetch_entry const &entry,
+    std::filesystem::path const &dest,
+    std::string const &context,
+    std::optional<std::filesystem::path> const &file_root = {});
 
 }  // namespace envy

@@ -186,14 +186,15 @@ tui::section_frame git_frame(std::string const &label,
   }
   oss << tail;
   return { .label = label,
-           .content = tui::progress_data{
-               .percent = resolving ? delta_percent : receiving ? receive_percent : 100.0,
-               .status = oss.str() } };
+           .content = tui::progress_data{ .percent = resolving   ? delta_percent
+                                                     : receiving ? receive_percent
+                                                                 : 100.0,
+                                          .status = oss.str() } };
 }
 
 double percent_of(std::uint64_t part, std::uint64_t whole) {
-  return whole ? std::min(100.0, 100.0 * static_cast<double>(part) /
-                                     static_cast<double>(whole))
+  return whole ? std::min(100.0,
+                          100.0 * static_cast<double>(part) / static_cast<double>(whole))
                : 0.0;
 }
 
@@ -216,15 +217,16 @@ tui::section_frame fetch_git_tree_frame(std::string const &label,
   for (auto const &repo : prog.in_flight) {
     auto const &c{ repo.counters };
     frame.children.push_back(
-        repo.retry ? tui::section_frame{ .label = repo.path,
-                                         .content = tui::spinner_data{
-                                             .text = retry_text(*repo.retry),
-                                             .start_time = {} } }
-                   : git_frame(repo.path,
-                               c,
-                               percent_of(c.received_objects, c.total_objects),
-                               percent_of(c.indexed_deltas, c.total_deltas),
-                               {}));
+        repo.retry
+            ? tui::section_frame{ .label = repo.path,
+                                  .content =
+                                      tui::spinner_data{ .text = retry_text(*repo.retry),
+                                                         .start_time = {} } }
+            : git_frame(repo.path,
+                        c,
+                        percent_of(c.received_objects, c.total_objects),
+                        percent_of(c.indexed_deltas, c.total_deltas),
+                        {}));
   }
   return frame;
 }

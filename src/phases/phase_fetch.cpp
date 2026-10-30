@@ -292,8 +292,11 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
           }
           std::string url{ elem.as<std::string>() };
 
-          specs.push_back(create_fetch_spec(
-              { .source = std::move(url) }, fetch_dir, stage_dir, basenames, key));
+          specs.push_back(create_fetch_spec({ .source = std::move(url) },
+                                            fetch_dir,
+                                            stage_dir,
+                                            basenames,
+                                            key));
         }
       } else if (first_elem_type == sol::type::table) {
         size_t const len{ tbl.size() };

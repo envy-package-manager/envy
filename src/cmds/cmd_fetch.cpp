@@ -26,9 +26,10 @@ cli_cmd &cmd_fetch::register_cli(cli_cmd &app, cfg &c) {
           "Manifest root for resolving relative file URIs");
   sub.opt("--ref", c.ref, "Git ref (full commit SHA, branch, or tag) for git sources");
   sub.flag("--submodules", c.submodules, "Recurse into every git submodule");
-  sub.opt("--submodule-filter",
-          c.submodule_filter,
-          "Recurse into submodules matching this path selector ('!' excludes); repeatable");
+  sub.opt(
+      "--submodule-filter",
+      c.submodule_filter,
+      "Recurse into submodules matching this path selector ('!' excludes); repeatable");
   return sub;
 }
 

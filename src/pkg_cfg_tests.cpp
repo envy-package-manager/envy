@@ -912,7 +912,7 @@ TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
     for (char const *extra : { "", ", submodules = false" }) {
       CAPTURE(extra);
       auto const script{ std::string{ "result = { spec = 'a.b@v1', source = "
-                                       "'https://h/r.git', ref = 'main'" } +
+                                      "'https://h/r.git', ref = 'main'" } +
                          extra + " }" };
       auto const *cfg{ parse(script.c_str()) };
       CHECK_FALSE(std::get<envy::pkg_cfg::git_source>(cfg->source).submodules);
@@ -920,16 +920,18 @@ TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
   }
 
   SUBCASE("true takes all") {
-    auto const *cfg{ parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
-                           "ref = 'main', submodules = true }") };
+    auto const *cfg{ parse(
+        "result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+        "ref = 'main', submodules = true }") };
     auto const &git{ std::get<envy::pkg_cfg::git_source>(cfg->source) };
     REQUIRE(git.submodules);
     CHECK(git.submodules->empty());
   }
 
   SUBCASE("a list splits into include and exclude") {
-    auto const *cfg{ parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
-                           "ref = 'main', submodules = { 'a/**', '!a/b' } }") };
+    auto const *cfg{ parse(
+        "result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+        "ref = 'main', submodules = { 'a/**', '!a/b' } }") };
     auto const &git{ std::get<envy::pkg_cfg::git_source>(cfg->source) };
     REQUIRE(git.submodules);
     CHECK(git.submodules->include == std::vector<std::string>{ "a/**" });

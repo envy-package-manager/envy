@@ -13,7 +13,9 @@
 namespace envy {
 
 TEST_CASE("url_to_fetch_request HTTP") {
-  auto req{ url_to_fetch_request({ .source = "http://example.com/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "http://example.com/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_http>(req));
   auto const &http_req{ std::get<fetch_request_http>(req) };
@@ -23,7 +25,9 @@ TEST_CASE("url_to_fetch_request HTTP") {
 }
 
 TEST_CASE("url_to_fetch_request HTTPS") {
-  auto req{ url_to_fetch_request({ .source = "https://example.com/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "https://example.com/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_https>(req));
   auto const &https_req{ std::get<fetch_request_https>(req) };
@@ -33,7 +37,9 @@ TEST_CASE("url_to_fetch_request HTTPS") {
 }
 
 TEST_CASE("url_to_fetch_request FTP") {
-  auto req{ url_to_fetch_request({ .source = "ftp://example.com/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "ftp://example.com/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_ftp>(req));
   auto const &ftp_req{ std::get<fetch_request_ftp>(req) };
@@ -42,7 +48,9 @@ TEST_CASE("url_to_fetch_request FTP") {
 }
 
 TEST_CASE("url_to_fetch_request FTPS") {
-  auto req{ url_to_fetch_request({ .source = "ftps://example.com/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "ftps://example.com/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_ftps>(req));
   auto const &ftps_req{ std::get<fetch_request_ftps>(req) };
@@ -51,7 +59,9 @@ TEST_CASE("url_to_fetch_request FTPS") {
 }
 
 TEST_CASE("url_to_fetch_request S3") {
-  auto req{ url_to_fetch_request({ .source = "s3://bucket/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "s3://bucket/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_s3>(req));
   auto const &s3_req{ std::get<fetch_request_s3>(req) };
@@ -60,7 +70,9 @@ TEST_CASE("url_to_fetch_request S3") {
 }
 
 TEST_CASE("url_to_fetch_request file absolute") {
-  auto req{ url_to_fetch_request({ .source = "/absolute/path/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "/absolute/path/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_file>(req));
   auto const &file_req{ std::get<fetch_request_file>(req) };
@@ -69,7 +81,9 @@ TEST_CASE("url_to_fetch_request file absolute") {
 }
 
 TEST_CASE("url_to_fetch_request file relative") {
-  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_file>(req));
   auto const &file_req{ std::get<fetch_request_file>(req) };
@@ -78,7 +92,10 @@ TEST_CASE("url_to_fetch_request file relative") {
 }
 
 TEST_CASE("url_to_fetch_request git with ref") {
-  auto req{ url_to_fetch_request({ .source = "git://github.com/user/repo.git", .ref = "abc123def456" }, "/tmp/repo", "test") };
+  auto req{ url_to_fetch_request(
+      { .source = "git://github.com/user/repo.git", .ref = "abc123def456" },
+      "/tmp/repo",
+      "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_git>(req));
   auto const &git_req{ std::get<fetch_request_git>(req) };
@@ -89,7 +106,10 @@ TEST_CASE("url_to_fetch_request git with ref") {
 }
 
 TEST_CASE("url_to_fetch_request git_https with ref") {
-  auto req{ url_to_fetch_request({ .source = "https://github.com/user/repo.git", .ref = "main" }, "/tmp/repo", "test") };
+  auto req{ url_to_fetch_request(
+      { .source = "https://github.com/user/repo.git", .ref = "main" },
+      "/tmp/repo",
+      "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_git>(req));
   auto const &git_req{ std::get<fetch_request_git>(req) };
@@ -100,26 +120,36 @@ TEST_CASE("url_to_fetch_request git_https with ref") {
 }
 
 TEST_CASE("url_to_fetch_request git without ref throws") {
-  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "git://github.com/user/repo.git" }, "/tmp/repo", "test"),
+  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "git://github.com/user/repo.git" },
+                                            "/tmp/repo",
+                                            "test"),
                        "Git URLs require 'ref' field in test",
                        std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request git with empty ref throws") {
-  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "git://github.com/user/repo.git", .ref = "" }, "/tmp/repo", "test"),
-                       "Git URLs require 'ref' field in test",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      url_to_fetch_request({ .source = "git://github.com/user/repo.git", .ref = "" },
+                           "/tmp/repo",
+                           "test"),
+      "Git URLs require 'ref' field in test",
+      std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request unsupported scheme throws") {
   CHECK_THROWS_WITH_AS(
-      url_to_fetch_request({ .source = "unsupported://example.com/file" }, "/tmp/file", "test context"),
+      url_to_fetch_request({ .source = "unsupported://example.com/file" },
+                           "/tmp/file",
+                           "test context"),
       "Unsupported URL scheme in test context: unsupported://example.com/file",
       std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request HTTP with post_data") {
-  auto req{ url_to_fetch_request({ .source = "http://example.com/download", .post_data = "key=value" }, "/tmp/file", "test") };
+  auto req{ url_to_fetch_request(
+      { .source = "http://example.com/download", .post_data = "key=value" },
+      "/tmp/file",
+      "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_http>(req));
   auto const &http_req{ std::get<fetch_request_http>(req) };
@@ -128,7 +158,10 @@ TEST_CASE("url_to_fetch_request HTTP with post_data") {
 }
 
 TEST_CASE("url_to_fetch_request HTTPS with post_data") {
-  auto req{ url_to_fetch_request({ .source = "https://example.com/download", .post_data = "accept_license=yes" }, "/tmp/file", "test") };
+  auto req{ url_to_fetch_request(
+      { .source = "https://example.com/download", .post_data = "accept_license=yes" },
+      "/tmp/file",
+      "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_https>(req));
   auto const &https_req{ std::get<fetch_request_https>(req) };
@@ -137,25 +170,38 @@ TEST_CASE("url_to_fetch_request HTTPS with post_data") {
 }
 
 TEST_CASE("url_to_fetch_request post_data on FTP throws") {
-  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "ftp://example.com/file", .post_data = "data=value" }, "/tmp/file", "test"),
+  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "ftp://example.com/file",
+                                              .post_data = "data=value" },
+                                            "/tmp/file",
+                                            "test"),
                        "post_data only valid for HTTP/HTTPS in test",
                        std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request post_data on git throws") {
-  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "git://github.com/user/repo.git", .ref = "main", .post_data = "data=value" }, "/tmp/repo", "test"),
+  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "git://github.com/user/repo.git",
+                                              .ref = "main",
+                                              .post_data = "data=value" },
+                                            "/tmp/repo",
+                                            "test"),
                        "post_data only valid for HTTP/HTTPS in test",
                        std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request post_data on file throws") {
-  CHECK_THROWS_WITH_AS(url_to_fetch_request({ .source = "/path/to/file", .post_data = "data=value" }, "/tmp/file", "test"),
-                       "post_data only valid for HTTP/HTTPS in test",
-                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      url_to_fetch_request({ .source = "/path/to/file", .post_data = "data=value" },
+                           "/tmp/file",
+                           "test"),
+      "post_data only valid for HTTP/HTTPS in test",
+      std::runtime_error);
 }
 
 TEST_CASE("url_to_fetch_request file with file_root") {
-  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" }, "/tmp/file.tar.gz", "test", "/some/root") };
+  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test",
+                                 "/some/root") };
 
   REQUIRE(std::holds_alternative<fetch_request_file>(req));
   auto const &file_req{ std::get<fetch_request_file>(req) };
@@ -165,7 +211,9 @@ TEST_CASE("url_to_fetch_request file with file_root") {
 }
 
 TEST_CASE("url_to_fetch_request file without file_root") {
-  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" }, "/tmp/file.tar.gz", "test") };
+  auto req{ url_to_fetch_request({ .source = "relative/path/file.tar.gz" },
+                                 "/tmp/file.tar.gz",
+                                 "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_file>(req));
   auto const &file_req{ std::get<fetch_request_file>(req) };
@@ -173,7 +221,10 @@ TEST_CASE("url_to_fetch_request file without file_root") {
 }
 
 TEST_CASE("url_to_fetch_request git uses canonical source") {
-  auto req{ url_to_fetch_request({ .source = "https://github.com/user/repo.git", .ref = "main" }, "/tmp/repo", "test") };
+  auto req{ url_to_fetch_request(
+      { .source = "https://github.com/user/repo.git", .ref = "main" },
+      "/tmp/repo",
+      "test") };
 
   REQUIRE(std::holds_alternative<fetch_request_git>(req));
   auto const &git_req{ std::get<fetch_request_git>(req) };
@@ -196,10 +247,10 @@ TEST_CASE("url_to_fetch_request git carries submodules") {
 
 TEST_CASE("url_to_fetch_request submodules on a non-git source throws") {
   CHECK_THROWS_WITH_AS(
-      url_to_fetch_request({ .source = "https://example.com/a.tar.gz",
-                             .submodules = glob_filter{} },
-                           "/tmp/a",
-                           "test"),
+      url_to_fetch_request(
+          { .source = "https://example.com/a.tar.gz", .submodules = glob_filter{} },
+          "/tmp/a",
+          "test"),
       "submodules requires a git source in test: https://example.com/a.tar.gz",
       std::runtime_error);
 }

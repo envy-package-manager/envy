@@ -743,8 +743,9 @@ using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 // Keys each DEPENDENCIES entry shape that names a bundle reads. `setup` is listed on
 // the pure form only so its own message ("bundle dependencies cannot select setup
 // pairs") wins over the generic sweep.
-constexpr std::string_view kPureBundleDepKeys[]{ "bundle", "needed_by", "ref",   "setup",
-                                                 "sha256", "source",    "submodules" };
+constexpr std::string_view kPureBundleDepKeys[]{ "bundle",    "needed_by", "ref",
+                                                 "setup",     "sha256",    "source",
+                                                 "submodules" };
 constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle",  "needed_by", "options",
                                                      "product", "setup",     "spec" };
 

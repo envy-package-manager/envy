@@ -1396,10 +1396,11 @@ TEST_CASE("fetch_git_tree_frame: X/Y over the tree, a child row per repo in flig
                                    .total_deltas = 8,
                                    .indexed_deltas = 2 } },
                    { .path = "components/spiffs/spiffs",
-                     .retry = envy::fetch_retry_progress{
-                         .attempt = 2,
-                         .remaining = std::chrono::milliseconds{ 5500 },
-                         .reason = "transfer" } } }
+                     .retry =
+                         envy::fetch_retry_progress{ .attempt = 2,
+                                                     .remaining =
+                                                         std::chrono::milliseconds{ 5500 },
+                                                     .reason = "transfer" } } }
   };
 
   auto const frame{ envy::tui_actions::fetch_git_tree_frame("[pkg]", prog, "idf.git") };
@@ -1426,8 +1427,9 @@ TEST_CASE("fetch_git_tree_frame: X/Y over the tree, a child row per repo in flig
 }
 
 TEST_CASE("fetch_git_tree_frame: nothing found yet is an empty bar, not a division") {
-  auto const frame{ envy::tui_actions::fetch_git_tree_frame(
-      "[pkg]", envy::fetch_git_tree_progress{}, {}) };
+  auto const frame{
+    envy::tui_actions::fetch_git_tree_frame("[pkg]", envy::fetch_git_tree_progress{}, {})
+  };
   CHECK(std::get<envy::tui::progress_data>(frame.content).percent == 0.0);
   CHECK(std::get<envy::tui::progress_data>(frame.content).status == "0/0 submodules");
   CHECK(frame.children.empty());

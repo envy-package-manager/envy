@@ -40,7 +40,8 @@ TEST_CASE("git_fetch_plans: an advertised tip is fetched by name, shallow first"
     CHECK(plan.depth == 1);
   }
   SUBCASE("annotated tag matches through its peeled entry") {
-    auto const plan{ only_plan({ { "refs/tags/v1", kOther }, { "refs/tags/v1^{}", kSha } }) };
+    auto const plan{ only_plan(
+        { { "refs/tags/v1", kOther }, { "refs/tags/v1^{}", kSha } }) };
     CHECK(plan.refspecs == std::vector<std::string>{ "+refs/tags/v1:refs/tags/v1" });
   }
   SUBCASE("branch lands as a remote-tracking ref") {
@@ -63,7 +64,9 @@ TEST_CASE("git_fetch_plans: an advertised tip is fetched by name, shallow first"
 }
 
 TEST_CASE("git_fetch_plans: an unadvertised commit tries OID, then FULL") {
-  auto const plans{ envy::git_fetch_plans(kSha, { { "refs/heads/main", kOther } }, false) };
+  auto const plans{
+    envy::git_fetch_plans(kSha, { { "refs/heads/main", kOther } }, false)
+  };
   REQUIRE(plans.size() == 2);
   CHECK(plans[0].strategy == envy::git_fetch_strategy::OID);
   CHECK(plans[0].refspecs == std::vector<std::string>{ kSha });
@@ -130,7 +133,8 @@ TEST_CASE("git_submodule_url resolves relative urls the way git does") {
         "https://github.com/espressif/mbedtls.git");
   CHECK(envy::git_submodule_url(idf, "./sub.git") ==
         "https://github.com/espressif/esp-idf.git/sub.git");
-  CHECK(envy::git_submodule_url(idf, "./../x.git/") == "https://github.com/espressif/x.git");
+  CHECK(envy::git_submodule_url(idf, "./../x.git/") ==
+        "https://github.com/espressif/x.git");
 
   // Nested: a submodule's own url is the base for its children.
   CHECK(envy::git_submodule_url("git://127.0.0.1:9418/lib.git", "../leaf.git") ==
@@ -166,10 +170,12 @@ TEST_CASE("git_submodule_url refuses to climb past the host") {
 TEST_CASE("git_error_kind: a server's refusal is final, a dropped link is not") {
   CHECK(envy::git_error_kind(GIT_ERROR_NET, "remote error: upload-pack: not our ref") ==
         envy::fetch_error_kind::PROTOCOL);
-  CHECK(envy::git_error_kind(GIT_ERROR_INVALID,
-                             "cannot fetch a specific object from the remote repository") ==
+  CHECK(
+      envy::git_error_kind(GIT_ERROR_INVALID,
+                           "cannot fetch a specific object from the remote repository") ==
+      envy::fetch_error_kind::PROTOCOL);
+  CHECK(envy::git_error_kind(GIT_ERROR_REFERENCE, "x") ==
         envy::fetch_error_kind::PROTOCOL);
-  CHECK(envy::git_error_kind(GIT_ERROR_REFERENCE, "x") == envy::fetch_error_kind::PROTOCOL);
   CHECK(envy::git_error_kind(GIT_ERROR_NET, "invalid packet line") ==
         envy::fetch_error_kind::PROTOCOL);
   CHECK(envy::git_error_kind(GIT_ERROR_HTTP,
