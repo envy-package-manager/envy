@@ -7,7 +7,7 @@ relative gitfile, `submodule.<name>.url` in the superproject's config.
 
 Fixtures are built with plumbing (gitlinks via update-index), so making them needs no
 `git submodule add` and no file-transport opt-in. libgit2's local transport cannot go
-shallow, so the strategy tests serve the same repos through `git daemon`.
+shallow, so the strategy tests serve the same repos over git://.
 """
 
 from __future__ import annotations
@@ -16,11 +16,9 @@ import hashlib
 import os
 import re
 import shutil
-import sys
 import socket
 import subprocess
 import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -174,10 +172,6 @@ def _tree(root: Path) -> dict[str, str | None]:
                 (Path(dirpath) / f).read_bytes().replace(b"\r\n", b"\n")
             ).hexdigest()
     return out
-
-
-def _pkt(data: bytes) -> bytes:
-    return f"{len(data) + 4:04x}".encode() + data
 
 
 class _GitServer:
@@ -521,65 +515,6 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         self.assertEqual(0, run.returncode, run.stderr)
         counts = re.findall(r"(\d+)/(\d+) submodules", run.stderr)
         self.assertEqual(("2", "2"), counts[-1] if counts else None, run.stderr)
-
-    @unittest.skipUnless(sys.platform == "win32" or os.environ.get("ENVY_DIAG"), "TEMPORARY")
-    def test_zz_windows_daemon_diagnostic(self):
-        """TEMPORARY: does git daemon's close discard a response the client reads late?"""
-        self.serve_plain()
-
-        def raw_fetch(delay: float) -> str:
-            with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
-                s.sendall(_pkt(b"git-upload-pack /leaf.git\0host=127.0.0.1\0"))
-                buf = b""
-                while b"0000" not in buf:  # advertisement ends in a flush
-                    buf += s.recv(65536)
-                s.sendall(_pkt(f"want {self.repos.leaf_sha} side-band-64k\n".encode())
-                          + b"0000" + _pkt(b"done\n"))
-                time.sleep(delay)
-                got = b""
-                try:
-                    while chunk := s.recv(65536):
-                        got += chunk
-                    return f"{len(got)} bytes, clean EOF"
-                except OSError as e:
-                    return f"{len(got)} bytes, then {type(e).__name__} {getattr(e, 'winerror', e.errno)}"
-
-        rows = [f"git daemon, read at once:    {raw_fetch(0.0)}",
-                f"git daemon, read after 0.5s: {raw_fetch(0.5)}",
-                f"git daemon, read after 0.5s: {raw_fetch(0.5)}"]
-        self.serve(reachable_wants=False)
-        run = self.run_envy("fetch", self.url("leaf"), self.work / "relay",
-                            "--ref", self.repos.leaf_sha)
-        rows.append(f"relay server, envy leaf:     "
-                    f"{'ok' if run.returncode == 0 else run.stderr.strip().splitlines()[-1:]}")
-        self.fail("\n" + "\n".join(rows))
-
-    test_zz_windows_daemon_diagnostic.envy_watchdog_timeout = 120
-
-    def serve_plain(self, extra_env: dict[str, str] | None = None) -> None:
-        """git daemon as test_git_fetch_progress runs it, plus any tracing env."""
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        self.port = sock.getsockname()[1]
-        sock.close()
-        daemon = subprocess.Popen(
-            [_GIT, "daemon", f"--port={self.port}", "--reuseaddr", "--export-all",
-             f"--base-path={self.repos.root}", str(self.repos.root)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env={**os.environ, **(extra_env or {})})
-
-        def stop():
-            daemon.terminate()
-            daemon.wait(timeout=10)
-
-        self.addCleanup(stop)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            with socket.socket() as s:
-                s.settimeout(0.25)
-                if s.connect_ex(("127.0.0.1", self.port)) == 0:
-                    return
-            time.sleep(0.05)
 
     def test_served_superproject_cannot_reach_local_paths(self):
         self.serve(reachable_wants=True)
