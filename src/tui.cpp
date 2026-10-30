@@ -405,6 +405,14 @@ std::string render_static_text(envy::tui::static_text_data const &data,
   return oss.str();
 }
 
+// A child row one level deeper: its label and every descendant's, so a git fetch's
+// submodule rows sit under it even when that fetch is itself a child row.
+envy::tui::section_frame indented(envy::tui::section_frame frame) {
+  frame.label = "  " + frame.label;
+  for (auto &child : frame.children) { child = indented(std::move(child)); }
+  return frame;
+}
+
 std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
                                           std::chrono::steady_clock::time_point now) {
   if (!frame.children.empty()) {
@@ -418,9 +426,7 @@ std::string render_section_frame_fallback(envy::tui::section_frame const &frame,
     output += render_section_frame_fallback(parent_copy, now);
 
     for (auto const &child : frame.children) {
-      auto child_copy{ child };
-      child_copy.label = "  " + child_copy.label;
-      output += render_section_frame_fallback(child_copy, now);
+      output += render_section_frame_fallback(indented(child), now);
     }
     return output;
   }
@@ -492,9 +498,10 @@ std::string render_section_frame(envy::tui::section_frame const &frame,
     output += render_section_frame(parent_copy, widths, width, ansi_mode, now);
 
     for (auto const &child : frame.children) {
-      envy::tui::section_frame const child_copy{ .label = "  " + child.label,
-                                                 .content = child.content,
-                                                 .children = child.children,
+      auto deeper{ indented(child) };
+      envy::tui::section_frame const child_copy{ .label = std::move(deeper.label),
+                                                 .content = std::move(deeper.content),
+                                                 .children = std::move(deeper.children),
                                                  .phase_label = child.phase_label };
       output += render_section_frame(child_copy, widths, width, ansi_mode, now);
     }

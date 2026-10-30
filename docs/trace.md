@@ -67,6 +67,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `download_retry` | url:str, attempt:i64, delay_ms:i64, reason:str (connect\|transfer\|timeout\|http_status), error:str |
 | `download_skipped` | url:str, reason:str |
 | `git_resolve` | url:str, ref:str, sha:str, method:str (sha\|ls-remote) |
+| `git_fetch` | url:str, path:str (from the root; "" = root), sha:str, strategy:str (local\|tip\|oid\|full), depth:i64 (0 = full) |
 | `extract_start` | archive:str, destination:str, strip_components:i64 |
 | `extract_complete` | archive:str, files_extracted:i64, duration_ms:i64 |
 | `vendor_resolved` | path:str, origin:str (derived\|override) |

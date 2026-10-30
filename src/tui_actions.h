@@ -68,6 +68,13 @@ class extract_progress_tracker {
   std::filesystem::path last_entry_;
 };
 
+// A git fetch's row once its submodules have started: X/Y submodules over the whole
+// tree's bytes, one child row per repository in flight. `suffix` trails the status, as a
+// lone row's item label does.
+tui::section_frame fetch_git_tree_frame(std::string const &label,
+                                        fetch_git_tree_progress const &prog,
+                                        std::string_view suffix);
+
 // The one transfer progress tracker: every download in the process reports through
 // it, HTTP or git, one file or many. A single label renders as one row labeled with
 // the package identity; several render as a parent row (group_text, e.g. "fetch",
@@ -107,10 +114,12 @@ class fetch_all_progress_tracker {
     std::uint64_t bytes{ 0 };
     bool bytes_known{ false };
     bool is_git{ false };
+    std::uint32_t submodules{ 0 };  // a git tree's, once any were found
   };
 
   void update_transfer(std::size_t slot, fetch_transfer_progress const &prog);
   void update_git(std::size_t slot, fetch_git_progress const &prog);
+  void update_tree(std::size_t slot, fetch_git_tree_progress const &prog);
   void update_retry(std::size_t slot, fetch_retry_progress const &prog);
   void set_frame(std::size_t slot, tui::section_frame child_frame);
   void publish_unlocked(bool terminal);  // push children_ out; caller holds mutex_

@@ -1,6 +1,7 @@
 #include "cmd_fetch.h"
 
 #include "fetch.h"
+#include "glob.h"
 #include "phases/phase_fetch.h"
 #include "tui.h"
 #include "tui_actions.h"
@@ -23,7 +24,11 @@ cli_cmd &cmd_fetch::register_cli(cli_cmd &app, cfg &c) {
   sub.opt("--manifest-root",
           c.manifest_root,
           "Manifest root for resolving relative file URIs");
-  sub.opt("--ref", c.ref, "Git ref (branch/tag/SHA) for git sources");
+  sub.opt("--ref", c.ref, "Git ref (full commit SHA, branch, or tag) for git sources");
+  sub.flag("--submodules", c.submodules, "Recurse into every git submodule");
+  sub.opt("--submodule-filter",
+          c.submodule_filter,
+          "Recurse into submodules matching this path selector ('!' excludes); repeatable");
   return sub;
 }
 
@@ -40,15 +45,20 @@ void cmd_fetch::execute() {
   auto const scheme{ uri_classify(cfg_.source).scheme };
   if ((scheme == uri_scheme::GIT || scheme == uri_scheme::GIT_HTTPS) &&
       (!cfg_.ref.has_value() || cfg_.ref->empty())) {
-    throw_runtime_error({ "fetch: git sources require --ref <branch|tag|sha>" });
+    throw_runtime_error({ "fetch: git sources require --ref <sha|branch|tag>" });
   }
 
-  auto req{ url_to_fetch_request(cfg_.source,
-                                 cfg_.destination,
-                                 cfg_.ref,
-                                 std::nullopt,
-                                 "fetch",
-                                 cfg_.manifest_root) };
+  auto req{ url_to_fetch_request(
+      { .source = cfg_.source,
+        .ref = cfg_.ref,
+        .submodules = cfg_.submodules || !cfg_.submodule_filter.empty()
+                          ? std::optional{ glob_parse_filter(cfg_.submodule_filter,
+                                                             "fetch",
+                                                             "--submodule-filter") }
+                          : std::nullopt },
+      cfg_.destination,
+      "fetch",
+      cfg_.manifest_root) };
 
   // The whole job of this command is a download, so it draws a bar like any other.
   auto const results{

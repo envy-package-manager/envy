@@ -81,6 +81,7 @@ EVENT_REGISTRY = {
     ],
     "download_skipped": ["url:str", "reason:str"],
     "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
+    "git_fetch": ["url:str", "path:str", "sha:str", "strategy:str", "depth:i64"],
     "extract_start": ["archive:str", "destination:str", "strip_components:i64"],
     "extract_complete": ["archive:str", "files_extracted:i64", "duration_ms:i64"],
     "vendor_resolved": ["path:str", "origin:str"],

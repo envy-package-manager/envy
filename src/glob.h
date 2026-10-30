@@ -40,6 +40,7 @@ struct glob_filter {
   std::vector<std::string> include, exclude;
 
   bool empty() const { return include.empty() && exclude.empty(); }
+  bool operator==(glob_filter const &) const = default;
 
   bool selects(std::string_view path) const;
 

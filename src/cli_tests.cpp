@@ -283,6 +283,43 @@ TEST_CASE("cli_parse: cmd_fetch") {
     CHECK(cfg->destination == std::filesystem::path("/tmp/tool.tar.gz"));
     REQUIRE(cfg->manifest_root.has_value());
     CHECK(*cfg->manifest_root == std::filesystem::path("/workspace"));
+    CHECK_FALSE(cfg->submodules);
+    CHECK(cfg->submodule_filter.empty());
+  }
+
+  SUBCASE("fetch with submodules") {
+    std::vector<std::string> args{ "envy",       "fetch",       "https://h/r.git", "/tmp/r",
+                                   "--ref",      "main",        "--submodules" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_fetch::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK(cfg->ref == "main");
+    CHECK(cfg->submodules);
+    CHECK(cfg->submodule_filter.empty());
+  }
+
+  SUBCASE("fetch with repeated submodule filters") {
+    std::vector<std::string> args{ "envy",
+                                   "fetch",
+                                   "https://h/r.git",
+                                   "/tmp/r",
+                                   "--submodule-filter",
+                                   "components/**",
+                                   "--submodule-filter=!components/openthread" };
+    auto argv{ make_argv(args) };
+
+    auto parsed{ envy::cli_parse(static_cast<int>(args.size()), argv.data()) };
+
+    REQUIRE(parsed.cmd_cfg.has_value());
+    auto const *cfg{ std::get_if<envy::cmd_fetch::cfg>(&*parsed.cmd_cfg) };
+    REQUIRE(cfg != nullptr);
+    CHECK_FALSE(cfg->submodules);  // the filter alone implies them; see cmd_fetch
+    CHECK(cfg->submodule_filter ==
+          std::vector<std::string>{ "components/**", "!components/openthread" });
   }
 }
 

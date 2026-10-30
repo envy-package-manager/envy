@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace envy {
 
@@ -17,6 +18,8 @@ class cmd_fetch : public cmd {
     std::filesystem::path destination;
     std::optional<std::filesystem::path> manifest_root;
     std::optional<std::string> ref;
+    bool submodules{ false };
+    std::vector<std::string> submodule_filter;  // implies submodules
   };
 
   static cli_cmd &register_cli(cli_cmd &app, cfg &c);

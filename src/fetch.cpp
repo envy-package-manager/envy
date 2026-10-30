@@ -2,14 +2,12 @@
 
 #include "aws_util.h"
 #include "fetch_error.h"
+#include "fetch_git.h"
 #include "fetch_http.h"
-#include "libgit2_util.h"
 #include "trace.h"
 #include "tree_hash.h"
 #include "tui.h"
 #include "util.h"
-
-#include "git2.h"
 
 #include <algorithm>
 #include <cctype>
@@ -109,158 +107,7 @@ fetch_result fetch_local_file(std::string const &canonical_path,
                        .resolved_destination = dest };
 }
 
-int git_fetch_progress_callback(git_indexer_progress const *stats, void *payload) {
-  auto *cb{ static_cast<fetch_progress_cb_t *>(payload) };
-  if (!cb || !*cb) { return 0; }
-
-  fetch_git_progress progress{
-    .total_objects = stats->total_objects,
-    .indexed_objects = stats->indexed_objects,
-    .received_objects = stats->received_objects,
-    .total_deltas = stats->total_deltas,
-    .indexed_deltas = stats->indexed_deltas,
-    .received_bytes = stats->received_bytes,
-  };
-
-  return (*cb)(progress) ? 0 : -1;
-}
-
-// Attempt git clone with optional shallow depth. Returns nullptr on failure (no throw).
-git_repository *try_git_clone(std::string const &url,
-                              std::filesystem::path const &dest,
-                              fetch_progress_cb_t const &progress,
-                              int depth) {
-  git_clone_options const clone_opts{ [&] {
-    git_clone_options o;
-    git_clone_options_init(&o, GIT_CLONE_OPTIONS_VERSION);
-    if (depth > 0) { o.fetch_opts.depth = depth; }
-    o.fetch_opts.callbacks.transfer_progress = git_fetch_progress_callback;
-    o.fetch_opts.callbacks.payload = const_cast<fetch_progress_cb_t *>(&progress);
-    return o;
-  }() };
-
-  git_repository *repo_raw{ nullptr };
-  if (git_clone(&repo_raw, url.c_str(), dest.string().c_str(), &clone_opts)) {
-    return nullptr;
-  }
-  return repo_raw;
-}
-
-// libgit2 reports the failing subsystem in git_error::klass, the only signal that
-// separates "the network dropped" from "that ref does not exist". `context` ends in
-// ": " so the library's own message reads as the tail of the sentence.
-[[noreturn]] void throw_git_error(std::string const &context) {
-  git_error const *err{ git_error_last() };
-
-  auto const kind{ [klass = err ? err->klass : GIT_ERROR_NONE] {
-    switch (klass) {
-      case GIT_ERROR_NET:
-      case GIT_ERROR_HTTP:
-      case GIT_ERROR_INDEXER: return fetch_error_kind::TRANSFER;
-      case GIT_ERROR_REFERENCE: return fetch_error_kind::PROTOCOL;
-      default: return fetch_error_kind::OTHER;
-    }
-  }() };
-
-  throw fetch_error(kind, err ? context + err->message : context);
-}
-
-// Try to resolve ref in repo. Returns nullptr on failure (no throw).
-git_object *try_resolve_ref(git_repository *repo, std::string const &ref) {
-  if (git_object *obj{ nullptr }; !git_revparse_single(&obj, repo, ref.c_str())) {
-    return obj;
-  }
-  return nullptr;
-}
-
-fetch_result fetch_git_repo(std::string const &url,
-                            std::string const &ref,
-                            std::filesystem::path const &destination,
-                            fetch_progress_cb_t const &progress,
-                            uri_scheme scheme) {
-  if (scheme == uri_scheme::GIT_HTTPS) { libgit2_require_ssl_certs(); }
-  auto const dest{ prepare_destination(destination) };
-
-  // git_clone rejects a non-empty target, and a failed clone leaves its partial work
-  // behind, so every attempt -- first or retry -- starts from a clean slate.
-  std::error_code ec;
-  tree_remove_best_effort(dest);
-
-  // Try shallow clone first; fall back to full clone if shallow fails or ref not found.
-  // Some servers (e.g., googlesource.com) have libgit2 shallow clone issues.
-  // Shallow clones also may not fetch all tags, causing ref resolution to fail.
-  git_repository *repo_raw{ try_git_clone(url, dest, progress, 1) };
-  git_object *target_obj{ nullptr };
-  bool need_full_clone{ !repo_raw };
-
-  if (repo_raw) {
-    target_obj = try_resolve_ref(repo_raw, ref);
-    if (!target_obj) {
-      // Shallow clone succeeded but ref not found - need full clone
-      git_repository_free(repo_raw);
-      repo_raw = nullptr;
-      need_full_clone = true;
-    }
-  }
-
-  if (need_full_clone) {
-    tree_remove_best_effort(dest);
-    std::filesystem::create_directories(dest, ec);
-
-    repo_raw = try_git_clone(url, dest, progress, 0);
-    if (!repo_raw) { throw_git_error("fetch_git: clone failed: "); }
-
-    target_obj = try_resolve_ref(repo_raw, ref);
-    if (!target_obj) {
-      // The clone succeeded, so whatever git_error_last() holds is stale: a ref the
-      // remote does not publish is a fact about the request, never a transport fault.
-      git_repository_free(repo_raw);
-      git_error const *git_err{ git_error_last() };
-      throw fetch_error(fetch_error_kind::PROTOCOL,
-                        "fetch_git: failed to resolve ref '" + ref +
-                            "': " + (git_err ? git_err->message : ""));
-    }
-  }
-
-  std::unique_ptr<git_repository, decltype(&git_repository_free)> repo{
-    repo_raw,
-    git_repository_free
-  };
-
-  std::unique_ptr<git_object, decltype(&git_object_free)> target{ target_obj,
-                                                                  git_object_free };
-
-  git_checkout_options const checkout_opts{ [] {
-    git_checkout_options o;
-    git_checkout_options_init(&o, GIT_CHECKOUT_OPTIONS_VERSION);
-    o.checkout_strategy = GIT_CHECKOUT_FORCE;
-    return o;
-  }() };
-
-  if (git_checkout_tree(repo.get(), target.get(), &checkout_opts)) {
-    git_error const *git_err{ git_error_last() };
-    std::string msg{ "fetch_git: checkout failed: " };
-    if (git_err) { msg += git_err->message; }
-    throw_runtime_error({ msg });
-  }
-
-  // Update HEAD to point to the target (detached HEAD state)
-  git_oid const *target_oid{ git_object_id(target.get()) };
-  if (git_repository_set_head_detached(repo.get(), target_oid)) {
-    git_error const *git_err{ git_error_last() };
-    std::string msg{ "fetch_git: failed to update HEAD: " };
-    if (git_err) { msg += git_err->message; }
-    throw_runtime_error({ msg });
-  }
-
-  return fetch_result{ .scheme = scheme,
-                       .resolved_source = std::filesystem::path{ url },
-                       .resolved_destination = dest };
-}
-
-}  // namespace
-
-fetch_result fetch_single(fetch_request const &request) {
+fetch_result fetch_single(fetch_request const &request, std::string const &trace_spec) {
   // Every scheme resolves its source the same way, and an unresolvable one is a caller
   // bug, not a transport failure.
   auto const classify{ [](std::string const &source) {
@@ -271,32 +118,32 @@ fetch_result fetch_single(fetch_request const &request) {
     return info;
   } };
 
-  auto const fetch_http{ [&](auto const &req) -> fetch_result {
-    auto const info{ classify(req.source) };
-    return fetch_result{
-      .scheme = info.scheme,
-      .resolved_source = std::filesystem::path{ info.canonical },
-      .resolved_destination =
-          fetch_http_download(info.canonical, req.destination, req.progress, req.post_data)
-    };
+  // Each attempt re-runs the backend's own setup, including the destination wipe.
+  auto const retrying{ [&](auto const &req, auto const &attempt) -> fetch_result {
+    std::optional<fetch_result> result;
+    fetch_retrying([&] { result = attempt(); }, req.progress, trace_spec, req.source);
+    return std::move(*result);
   } };
 
-  auto const fetch_ftp{ [&](auto const &req) -> fetch_result {
-    auto const info{ classify(req.source) };
-    return fetch_result{
-      .scheme = info.scheme,
-      .resolved_source = std::filesystem::path{ info.canonical },
-      .resolved_destination =
-          fetch_http_download(info.canonical, req.destination, req.progress, std::nullopt)
-    };
+  auto const download{ [&](auto const &req, std::optional<std::string> const &post_data) {
+    return retrying(req, [&] {
+      auto const info{ classify(req.source) };
+      return fetch_result{
+        .scheme = info.scheme,
+        .resolved_source = std::filesystem::path{ info.canonical },
+        .resolved_destination =
+            fetch_http_download(info.canonical, req.destination, req.progress, post_data)
+      };
+    });
   } };
 
   return envy::visit(
       match{
-          [&](fetch_request_http const &req) { return fetch_http(req); },
-          [&](fetch_request_https const &req) { return fetch_http(req); },
-          [&](fetch_request_ftp const &req) { return fetch_ftp(req); },
-          [&](fetch_request_ftps const &req) { return fetch_ftp(req); },
+          [&](fetch_request_http const &req) { return download(req, req.post_data); },
+          [&](fetch_request_https const &req) { return download(req, req.post_data); },
+          [&](fetch_request_ftp const &req) { return download(req, std::nullopt); },
+          [&](fetch_request_ftps const &req) { return download(req, std::nullopt); },
+          // The AWS SDK's TransferManager retries internally.
           [&](fetch_request_s3 const &req) -> fetch_result {
             auto const info{ classify(req.source) };
             return fetch_result{ .scheme = info.scheme,
@@ -313,18 +160,18 @@ fetch_result fetch_single(fetch_request const &request) {
                                     req.destination,
                                     req.file_root);
           },
-          [](fetch_request_git const &req) -> fetch_result {
-            return fetch_git_repo(req.source,
-                                  req.ref,
-                                  req.destination,
-                                  req.progress,
-                                  req.scheme);
+          // Retried per repository inside: one blip must not restart a submodule tree.
+          [&](fetch_request_git const &req) -> fetch_result {
+            auto const dest{ prepare_destination(req.destination) };
+            tree_remove_best_effort(dest);
+            fetch_git(req, dest, trace_spec);
+            return fetch_result{ .scheme = req.scheme,
+                                 .resolved_source = std::filesystem::path{ req.source },
+                                 .resolved_destination = dest };
           },
       },
       request);
 }
-
-namespace {
 
 struct retry_policy {
   int attempts;  // hard ceiling; the time budget is what normally binds
@@ -426,20 +273,18 @@ bool sleep_reporting(std::chrono::milliseconds delay,
   return true;
 }
 
+}  // namespace
+
 // The single retry seam. Retrying here rather than inside a backend gives http, ftp
-// and git one policy, and each attempt re-runs the backend's own setup -- including
-// the destination wipe that a partial left behind. s3 is deliberately absent: the AWS
-// SDK's TransferManager already retries internally, so it throws plain runtime_error
-// and never reaches the catch below. Safe because fetches are idempotent GETs and
-// payloads are sha256-verified by the caller after transport, so a replay can never
-// launder bad bytes.
-fetch_result fetch_with_retry(fetch_request const &request,
-                              std::string const &trace_spec,
-                              std::string const &url) {
+// and git one policy; git calls in once per repository, so a tree of submodules never
+// restarts whole. s3 is deliberately absent: the AWS SDK's TransferManager already
+// retries internally. Safe because fetches are idempotent GETs and payloads are
+// sha256-verified by the caller after transport, so a replay can never launder bad bytes.
+void fetch_retrying(function_ref<void()> once,
+                    fetch_progress_cb_t const &progress,
+                    std::string const &trace_spec,
+                    std::string const &url) {
   auto const &policy{ fetch_retry_policy() };
-  auto const &progress{ envy::visit(
-      [](auto const &r) -> fetch_progress_cb_t const & { return r.progress; },
-      request) };
 
   // Anchored on the first failure rather than on entry, so a long transfer that succeeds
   // late is never charged for a budget it did not need.
@@ -447,7 +292,7 @@ fetch_result fetch_with_retry(fetch_request const &request,
 
   for (int attempt{ 1 };; ++attempt) {
     try {
-      return fetch_single(request);
+      return once();
     } catch (fetch_error const &e) {
       if (attempt >= policy.attempts || !fetch_error_retryable(e)) { throw; }
 
@@ -488,8 +333,6 @@ fetch_result fetch_with_retry(fetch_request const &request,
   }
 }
 
-}  // namespace
-
 std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
                                   std::string trace_spec) {
   std::vector<fetch_result_t> results(requests.size());
@@ -521,7 +364,7 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
       auto const start{ std::chrono::steady_clock::now() };
 
       try {
-        results[i] = fetch_with_retry(requests[i], trace_spec, source);
+        results[i] = fetch_single(requests[i], trace_spec);
 
         if (tracing) {
           auto const &res{ std::get<fetch_result>(results[i]) };

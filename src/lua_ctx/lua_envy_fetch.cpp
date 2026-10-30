@@ -22,77 +22,38 @@
 namespace envy {
 namespace {
 
-struct fetch_item {
-  std::string source;
-  std::optional<std::string> sha256;
-  std::optional<std::string> ref;
-  std::optional<std::string> post_data;
-  std::optional<std::string> dest;
-};
-
 // Parse envy.fetch() url_or_spec argument
-std::pair<std::vector<fetch_item>, bool> parse_fetch_args(sol::object const &arg) {
-  std::vector<fetch_item> items;
-  bool is_array{ false };
-
-  if (arg.is<std::string>()) {
-    items.push_back({ arg.as<std::string>(), std::nullopt, std::nullopt, std::nullopt });
-  } else if (arg.is<sol::table>()) {
-    sol::table tbl{ arg.as<sol::table>() };
-    sol::object first_elem{ tbl[1] };
-
-    if (first_elem.get_type() == sol::type::lua_nil) {
-      std::string source{
-        sol_util_get_required<std::string>(tbl, "source", "envy.fetch")
-      };
-
-      auto sha256{ sol_util_get_optional<std::string>(tbl, "sha256", "envy.fetch") };
-      auto ref{ sol_util_get_optional<std::string>(tbl, "ref", "envy.fetch") };
-      auto post_data{ sol_util_get_optional<std::string>(tbl, "post_data", "envy.fetch") };
-      auto dest{ sol_util_get_optional<std::string>(tbl, "dest", "envy.fetch") };
-      items.push_back({ source, sha256, ref, post_data, dest });
-    } else if (first_elem.is<std::string>()) {
-      is_array = true;
-
-      for (auto const &[key, value] : tbl) {
-        if (!value.is<std::string>()) {
-          throw_runtime_error({ "envy.fetch: array elements must be strings" });
-        }
-
-        items.push_back(
-            { value.as<std::string>(), std::nullopt, std::nullopt, std::nullopt });
-      }
-    } else if (first_elem.is<sol::table>()) {
-      is_array = true;
-      for (auto const &[key, value] : tbl) {
-        if (!value.is<sol::table>()) {
-          throw_runtime_error({ "envy.fetch: array elements must be tables" });
-        }
-
-        sol::table item_tbl{ value.as<sol::table>() };
-        std::string source{ sol_util_get_required<std::string>(
-            item_tbl,
-            "source",
-            "envy.fetch array element") };
-        auto sha256{
-          sol_util_get_optional<std::string>(item_tbl, "sha256", "envy.fetch")
-        };
-        auto ref{ sol_util_get_optional<std::string>(item_tbl, "ref", "envy.fetch") };
-        auto post_data{
-          sol_util_get_optional<std::string>(item_tbl, "post_data", "envy.fetch")
-        };
-        auto dest{ sol_util_get_optional<std::string>(item_tbl, "dest", "envy.fetch") };
-
-        items.push_back({ source, sha256, ref, post_data, dest });
-      }
-    } else {
-      throw_runtime_error({ "envy.fetch: invalid array element type" });
-    }
-  } else {
+std::pair<std::vector<fetch_entry>, bool> parse_fetch_args(sol::object const &arg) {
+  if (arg.is<std::string>()) { return { { { .source = arg.as<std::string>() } }, false }; }
+  if (!arg.is<sol::table>()) {
     throw_runtime_error({ "envy.fetch: argument must be string or table" });
   }
 
-  return { std::move(items), is_array };
+  sol::table const tbl{ arg.as<sol::table>() };
+  sol::object const first_elem{ tbl[1] };
+  if (first_elem.get_type() == sol::type::lua_nil) {
+    return { { fetch_entry_parse(tbl, "envy.fetch") }, false };
+  }
+
+  std::vector<fetch_entry> items;
+  if (first_elem.is<std::string>()) {
+    for (auto const &[key, value] : tbl) {
+      if (!value.is<std::string>()) {
+        throw_runtime_error({ "envy.fetch: array elements must be strings" });
+      }
+      items.push_back({ .source = value.as<std::string>() });
+    }
+  } else if (first_elem.is<sol::table>()) {
+    for (auto const &[key, value] : tbl) {
+      if (!value.is<sol::table>()) {
+        throw_runtime_error({ "envy.fetch: array elements must be tables" });
+      }
+      items.push_back(fetch_entry_parse(value.as<sol::table>(), "envy.fetch"));
+    }
+  } else {
+    throw_runtime_error({ "envy.fetch: invalid array element type" });
+  }
+  return { std::move(items), true };
 }
 
 struct commit_entry {
@@ -256,11 +217,7 @@ void lua_envy_fetch_install(sol::table &envy_table) {
       sources.push_back(item.source);
 
       std::filesystem::path const file_dest{ dest_dir / final_basename };
-      requests.push_back(url_to_fetch_request(item.source,
-                                              file_dest,
-                                              item.ref,
-                                              item.post_data,
-                                              "envy.fetch"));
+      requests.push_back(url_to_fetch_request(item, file_dest, "envy.fetch"));
     }
 
     tui::debug("envy.fetch: downloading %zu file(s) to %s",

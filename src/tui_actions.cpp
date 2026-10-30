@@ -141,6 +141,94 @@ void extract_progress_tracker::finish() {
 
 // ==== fetch_all_progress_tracker ====
 
+namespace {
+
+// Rounded up, so the countdown reaches "1s" rather than "0s" before the next attempt.
+std::string retry_text(fetch_retry_progress const &prog) {
+  auto const seconds{ std::chrono::duration_cast<std::chrono::seconds>(
+                          prog.remaining + std::chrono::milliseconds{ 999 })
+                          .count() };
+  std::ostringstream oss;
+  oss << "retry " << prog.attempt << " in " << seconds << "s (" << prog.reason << ")";
+  return oss.str();
+}
+
+// One repository's row: a spinner until the remote has counted, then a bar over objects
+// arriving and, after the last lands, over deltas resolving -- so it never stalls on a
+// bare count. The callback keeps firing while the pack is indexed; follow the live phase.
+tui::section_frame git_frame(std::string const &label,
+                             fetch_git_progress const &p,
+                             double receive_percent,
+                             double delta_percent,
+                             std::string_view suffix) {
+  std::string const tail{ suffix.empty() ? "" : " " + std::string{ suffix } };
+  if (p.total_objects == 0) {
+    // Nothing is counted until the remote finishes negotiating, so the spinner carries
+    // whatever bytes have arrived rather than a bare "starting...".
+    static auto const epoch{ std::chrono::steady_clock::time_point{} };
+    return { .label = label,
+             .content = tui::spinner_data{
+                 .text = (p.received_bytes > 0
+                              ? util_format_bytes(p.received_bytes) + " negotiating"
+                              : std::string{ "starting..." }) +
+                         tail,
+                 .start_time = epoch } };
+  }
+
+  bool const receiving{ p.received_objects < p.total_objects };
+  bool const resolving{ !receiving && p.total_deltas > 0 };
+  std::ostringstream oss;
+  if (resolving) {
+    oss << p.indexed_deltas << "/" << p.total_deltas << " deltas";
+  } else {
+    oss << p.received_objects << "/" << p.total_objects << " objects";
+    if (p.received_bytes > 0) { oss << " " << util_format_bytes(p.received_bytes); }
+  }
+  oss << tail;
+  return { .label = label,
+           .content = tui::progress_data{
+               .percent = resolving ? delta_percent : receiving ? receive_percent : 100.0,
+               .status = oss.str() } };
+}
+
+double percent_of(std::uint64_t part, std::uint64_t whole) {
+  return whole ? std::min(100.0, 100.0 * static_cast<double>(part) /
+                                     static_cast<double>(whole))
+               : 0.0;
+}
+
+}  // namespace
+
+tui::section_frame fetch_git_tree_frame(std::string const &label,
+                                        fetch_git_tree_progress const &prog,
+                                        std::string_view suffix) {
+  std::string status{ std::to_string(prog.done) + "/" + std::to_string(prog.total) +
+                      " submodules" };
+  if (prog.received_bytes > 0) { status += " " + util_format_bytes(prog.received_bytes); }
+  if (!suffix.empty()) { status += " " + std::string{ suffix }; }
+
+  // The bar may dip as nested submodules turn up: Y is a count of the found, not a plan.
+  tui::section_frame frame{ .label = label,
+                            .content = tui::progress_data{
+                                .percent = percent_of(prog.done, prog.total),
+                                .status = std::move(status) } };
+  frame.children.reserve(prog.in_flight.size());
+  for (auto const &repo : prog.in_flight) {
+    auto const &c{ repo.counters };
+    frame.children.push_back(
+        repo.retry ? tui::section_frame{ .label = repo.path,
+                                         .content = tui::spinner_data{
+                                             .text = retry_text(*repo.retry),
+                                             .start_time = {} } }
+                   : git_frame(repo.path,
+                               c,
+                               percent_of(c.received_objects, c.total_objects),
+                               percent_of(c.indexed_deltas, c.total_deltas),
+                               {}));
+  }
+  return frame;
+}
+
 fetch_all_progress_tracker::fetch_all_progress_tracker(
     tui::section_handle section,
     std::string const &pkg_identity,
@@ -172,6 +260,7 @@ fetch_progress_cb_t fetch_all_progress_tracker::make_callback(std::size_t slot) 
     envy::visit(
         envy::match{ [&](fetch_transfer_progress const &p) { update_transfer(slot, p); },
                      [&](fetch_git_progress const &p) { update_git(slot, p); },
+                     [&](fetch_git_tree_progress const &p) { update_tree(slot, p); },
                      [&](fetch_retry_progress const &p) { update_retry(slot, p); } },
         prog);
     return true;
@@ -233,21 +322,12 @@ void fetch_all_progress_tracker::update_retry(std::size_t slot,
   if (slot >= labels_.size()) { return; }
 
   std::string const &item_label{ labels_[slot] };
+  std::string const text{ retry_text(prog) + (grouped_ ? "" : " " + item_label) };
 
-  // Rounded up, so the countdown reaches "1s" rather than "0s" before the next attempt.
-  auto const seconds{ std::chrono::duration_cast<std::chrono::seconds>(
-                          prog.remaining + std::chrono::milliseconds{ 999 })
-                          .count() };
-
-  std::ostringstream oss;
-  oss << "retry " << prog.attempt << " in " << seconds << "s (" << prog.reason << ")";
-  if (!grouped_) { oss << " " << item_label; }
-
-  set_frame(
-      slot,
-      tui::section_frame{
-          .label = item_label,
-          .content = tui::spinner_data{ .text = oss.str(), .start_time = start_time_ } });
+  set_frame(slot,
+            tui::section_frame{
+                .label = item_label,
+                .content = tui::spinner_data{ .text = text, .start_time = start_time_ } });
 }
 
 void fetch_all_progress_tracker::update_git(std::size_t slot,
@@ -297,43 +377,33 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
     delta_percent = state.last_delta_percent;
   }
 
-  if (snapshot_total == 0) {
-    static auto const epoch{ std::chrono::steady_clock::time_point{} };
-    // Nothing is counted until the remote finishes negotiating, so the spinner carries
-    // whatever bytes have arrived rather than a bare "starting...".
-    std::string text{ snapshot_bytes > 0
-                          ? util_format_bytes(snapshot_bytes) + " negotiating"
-                          : std::string{ "starting..." } };
-    if (!grouped_) { text += " " + child_label; }
-    set_frame(slot,
-              tui::section_frame{
-                  .label = child_label,
-                  .content = tui::spinner_data{ .text = text, .start_time = epoch } });
-    return;
-  }
-
-  // The callback keeps firing after the last object lands, while the pack is indexed
-  // and its deltas resolved. Follow whichever phase is live so the row keeps a moving
-  // bar for the whole clone instead of collapsing to a bare object count.
-  bool const receiving{ snapshot_received < snapshot_total };
-  bool const resolving{ !receiving && snapshot_total_deltas > 0 };
-
-  double percent{ 100.0 };
-  std::ostringstream oss;
-  if (resolving) {
-    percent = delta_percent;
-    oss << snapshot_deltas << "/" << snapshot_total_deltas << " deltas";
-  } else {
-    percent = receiving ? receive_percent : 100.0;
-    oss << snapshot_received << "/" << snapshot_total << " objects";
-    if (snapshot_bytes > 0) { oss << " " << util_format_bytes(snapshot_bytes); }
-  }
-  if (!grouped_) { oss << " " << child_label; }
-
   set_frame(slot,
-            tui::section_frame{ .label = child_label,
-                                .content = tui::progress_data{ .percent = percent,
-                                                               .status = oss.str() } });
+            git_frame(child_label,
+                      fetch_git_progress{ .total_objects = snapshot_total,
+                                          .received_objects = snapshot_received,
+                                          .total_deltas = snapshot_total_deltas,
+                                          .indexed_deltas = snapshot_deltas,
+                                          .received_bytes = snapshot_bytes },
+                      receive_percent,
+                      delta_percent,
+                      grouped_ ? std::string_view{} : std::string_view{ child_label }));
+}
+
+void fetch_all_progress_tracker::update_tree(std::size_t slot,
+                                             fetch_git_tree_progress const &prog) {
+  if (slot >= labels_.size()) { return; }
+  {
+    std::lock_guard const lock{ mutex_ };
+    slot_totals_[slot].is_git = true;
+    slot_totals_[slot].submodules = prog.total;
+    git_states_[slot].last_bytes = prog.received_bytes;  // the tree's, for the final frame
+  }
+  std::string const &item_label{ labels_[slot] };
+  set_frame(slot,
+            fetch_git_tree_frame(
+                item_label,
+                prog,
+                grouped_ ? std::string_view{} : std::string_view{ item_label }));
 }
 
 void fetch_all_progress_tracker::set_frame(std::size_t slot,
@@ -368,6 +438,12 @@ tui::section_frame fetch_all_progress_tracker::final_frame_unlocked(
   std::string const &item_label{ labels_[slot] };
 
   std::string status{ [&] {
+    if (total.is_git && total.submodules > 0) {  // a tree counts repositories
+      auto const count{ std::to_string(total.submodules) };
+      auto const bytes{ git_states_[slot].last_bytes };
+      return count + "/" + count + " submodules" +
+             (bytes > 0 ? " " + util_format_bytes(bytes) : "");
+    }
     if (total.is_git) {  // a clone counts objects, and by now it has them all
       auto const &git{ git_states_[slot] };
       if (git.max_total_objects == 0) { return std::string{}; }

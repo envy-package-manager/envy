@@ -184,6 +184,13 @@ ENVY_TRACE_EVENT(git_resolve,
                  ENVY_TRACE_FIELD_STR(sha)
                  ENVY_TRACE_FIELD_STR(method))  // sha | ls-remote
 
+ENVY_TRACE_EVENT(git_fetch,
+                 ENVY_TRACE_FIELD_STR(url)
+                 ENVY_TRACE_FIELD_STR(path)      // from the root, '/'-joined; "" = root
+                 ENVY_TRACE_FIELD_STR(sha)
+                 ENVY_TRACE_FIELD_STR(strategy)  // local | tip | oid | full
+                 ENVY_TRACE_FIELD_I64(depth))    // 0 = full history
+
 ENVY_TRACE_EVENT(extract_start,
                  ENVY_TRACE_FIELD_STR(archive)
                  ENVY_TRACE_FIELD_STR(destination)

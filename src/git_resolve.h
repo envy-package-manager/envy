@@ -4,6 +4,8 @@
 #include <string_view>
 #include <vector>
 
+struct git_remote;
+
 namespace envy {
 
 // One advertised ref from a remote's ref advertisement. `oid` is the full
@@ -31,6 +33,9 @@ bool git_ref_is_full_sha(std::string_view s);
 // Throws std::runtime_error when `ref` is empty, matches nothing, is advertised
 // with conflicting oids, or when a suffix match is ambiguous across oids.
 std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_view ref);
+
+// A connected remote's advertisement, copied out of the connection it borrows from.
+std::vector<git_ref_entry> git_remote_refs(git_remote *remote);
 
 // Resolve `ref` (tag/branch/sha) in remote `repo` to a full commit sha.
 //

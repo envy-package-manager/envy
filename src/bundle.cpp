@@ -34,10 +34,7 @@ struct bundle_decl {
   struct local_source {
     std::filesystem::path file_path;
   };
-  struct git_source {
-    std::string url;
-    std::string ref;
-  };
+  using git_source = pkg_cfg::git_source;
   struct custom_fetch_source {
     std::vector<pkg_cfg *> dependencies;  // Parsed dependencies
   };
@@ -74,11 +71,8 @@ bundle_decl::source_t parse_source_table_for_bundle(sol::table const &source_tab
 
 // Keys a bundle declaration reads, whether it came from a BUNDLES alias or from an
 // inline `bundle = {...}` table.
-constexpr std::string_view kBundleDeclKeys[]{ kEnvyBaseKey,
-                                              "identity",
-                                              "ref",
-                                              "sha256",
-                                              "source" };
+constexpr std::string_view kBundleDeclKeys[]{ kEnvyBaseKey, "identity", "ref",
+                                              "sha256",     "source",   "submodules" };
 
 bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_origin) {
   sol_util_reject_unknown_keys(table, kBundleDeclKeys, "Bundle declaration");
@@ -108,6 +102,9 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
 
   // Handle source as table (custom fetch with dependencies)
   if (source_obj.is<sol::table>()) {
+    if (pkg_cfg_parse_submodules(table, "Bundle")) {
+      throw_runtime_error({ "Bundle: submodules requires a git source" });
+    }
     decl.source = parse_source_table_for_bundle(source_obj.as<sol::table>(), origin);
     return decl;
   }
@@ -124,13 +121,8 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
 
   auto const info{ uri_classify(source_uri) };
 
-  if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
-    auto ref_opt{ sol_util_get_optional<std::string>(table, "ref", "Bundle") };
-    if (!ref_opt.has_value() || ref_opt->empty()) {
-      throw_runtime_error({ "Bundle with git source requires 'ref' field" });
-    }
-    decl.source =
-        bundle_decl::git_source{ .url = info.canonical, .ref = std::move(*ref_opt) };
+  if (auto git{ pkg_cfg_parse_git_source(table, info, "Bundle") }) {
+    decl.source = std::move(*git);
   } else if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE ||
              info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
     std::filesystem::path resolved{ info.canonical };
@@ -161,8 +153,7 @@ pkg_cfg::bundle_source decl_to_source(bundle_decl const &decl) {
                      .fetch_source = pkg_cfg::local_source{ .file_path = s.file_path } };
           },
           [&](bundle_decl::git_source const &s) -> pkg_cfg::bundle_source {
-            return { .bundle_identity = decl.identity,
-                     .fetch_source = pkg_cfg::git_source{ .url = s.url, .ref = s.ref } };
+            return { .bundle_identity = decl.identity, .fetch_source = s };
           },
           [&](bundle_decl::custom_fetch_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity,
@@ -450,7 +441,8 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
             fetch_one(fetch_request_git{ .source = git.url,
                                          .destination = install_dir,
                                          .ref = git.ref,
-                                         .scheme = uri_classify(git.url).scheme },
+                                         .scheme = uri_classify(git.url).scheme,
+                                         .submodules = git.submodules },
                       git.url,
                       "git bundle");
           },

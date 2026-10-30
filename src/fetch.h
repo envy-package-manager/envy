@@ -1,6 +1,8 @@
 #pragma once
 
+#include "glob.h"
 #include "uri.h"
+#include "util.h"
 
 #include <chrono>
 #include <cstdint>
@@ -35,8 +37,27 @@ struct fetch_retry_progress {
   char const *reason{ "" };  // fetch_error_kind_name of the failure; always a literal
 };
 
-using fetch_progress_t =
-    std::variant<fetch_transfer_progress, fetch_git_progress, fetch_retry_progress>;
+// One repository of a submodule tree still fetching, by '/'-joined path from the root.
+struct fetch_git_repo_progress {
+  std::string path;
+  fetch_git_progress counters;
+  std::optional<fetch_retry_progress> retry;  // set while it waits out a backoff
+};
+
+// A git fetch once its first submodule is registered: repositories done of those found
+// (the root excluded; `total` grows as fetched ones turn up their own), the whole tree's
+// bytes, and every repository still in flight.
+struct fetch_git_tree_progress {
+  std::uint32_t done{ 0 };
+  std::uint32_t total{ 0 };
+  std::uint64_t received_bytes{ 0 };
+  std::vector<fetch_git_repo_progress> in_flight;
+};
+
+using fetch_progress_t = std::variant<fetch_transfer_progress,
+                                      fetch_git_progress,
+                                      fetch_git_tree_progress,
+                                      fetch_retry_progress>;
 using fetch_progress_cb_t = std::function<bool(fetch_progress_t const &)>;
 
 struct http_tag {};
@@ -82,14 +103,15 @@ struct fetch_request_file {
   std::filesystem::path file_root;
 };
 
-// Git fetch request with ref (committish: tag, branch, or SHA)
-// Note: Submodules are not yet supported
+// Git fetch request: `ref` is a full commit sha or an advertised branch/tag name.
 struct fetch_request_git {
   std::string source;
   std::filesystem::path destination;
   fetch_progress_cb_t progress{};
   std::string ref;
   uri_scheme scheme{ uri_scheme::GIT };  // GIT or GIT_HTTPS
+  // Submodules to recurse into by root-relative path: none when unset, all when empty.
+  std::optional<glob_filter> submodules;
 };
 
 using fetch_request = std::variant<fetch_request_http,
@@ -112,6 +134,13 @@ using fetch_result_t = std::variant<fetch_result, std::string>;  // string on er
 // identity (empty = engine/command-scoped).
 std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
                                   std::string trace_spec = {});
+
+// Run `once` under the transport retry policy every scheme shares, reporting backoff
+// waits through `progress`; rethrows the last fetch_error once retrying stops paying.
+void fetch_retrying(function_ref<void()> once,
+                    fetch_progress_cb_t const &progress,
+                    std::string const &trace_spec,
+                    std::string const &url);
 
 // Build a fetch_request from a URL + destination. Handles HTTP, HTTPS, FTP, FTPS, S3,
 // and local files. Throws on git, SSH, or unknown schemes.

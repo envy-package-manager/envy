@@ -52,16 +52,19 @@ bool contains_function(sol::object const &val) {
 // Every key one entry shape's parser reads, sorted so the error message is stable.
 // A key absent here is silently inert today, which is the whole reason to reject it.
 constexpr std::string_view kManifestPackageKeys[]{
-  kEnvyBaseKey, kEnvyBundlesKey, "needed_by", "options", "platforms", "product",
-  "ref",        "setup",         "sha256",    "source",  "spec",      "vendor"
+  kEnvyBaseKey, kEnvyBundlesKey, "needed_by", "options", "platforms",  "product", "ref",
+  "setup",      "sha256",        "source",    "spec",    "submodules", "vendor"
 };
 constexpr std::string_view kDependencyKeys[]{ "needed_by", "options", "product",
                                               "ref",       "setup",   "sha256",
-                                              "source",    "spec",    "weak" };
-constexpr std::string_view kFetchDependencyKeys[]{ "options", "product", "ref", "sha256",
-                                                   "source",  "spec",    "weak" };
-constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options", "product", "ref",
-                                                "sha256",    "source",  "spec" };
+                                              "source",    "spec",    "submodules",
+                                              "weak" };
+constexpr std::string_view kFetchDependencyKeys[]{ "options", "product", "ref",
+                                                   "sha256",  "source",  "spec",
+                                                   "submodules", "weak" };
+constexpr std::string_view kWeakFallbackKeys[]{ "needed_by", "options", "product",
+                                                "ref",       "sha256",  "source",
+                                                "spec",      "submodules" };
 
 // What one entry shape may say. `fetch_function_runs` is false where nothing could find
 // the closure again: no parent Lua state (manifest), or no `source` to look on (weak).
@@ -143,15 +146,7 @@ pkg_cfg::source_t parse_source_string(std::string const &source_uri,
                                       sol::table const &table,
                                       std::filesystem::path const &anchor) {
   auto const info{ uri_classify(source_uri) };
-
-  if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
-    std::string const ref_str{
-      sol_util_get_required<std::string>(table, "ref", "Spec with git source")
-    };
-    if (ref_str.empty()) { throw_runtime_error({ "Spec 'ref' field cannot be empty" }); }
-
-    return pkg_cfg::git_source{ .url = info.canonical, .ref = ref_str };
-  }
+  if (auto git{ pkg_cfg_parse_git_source(table, info, "Spec") }) { return std::move(*git); }
 
   auto const sha256{ sol_util_get_optional<std::string>(table, "sha256", "Spec source") };
 
@@ -430,6 +425,11 @@ pkg_cfg *pkg_cfg::parse(sol::object const &lua_val,
     source = pkg_cfg::weak_ref{};
   }
 
+  // A source string read `submodules` already; beside anything else it would do nothing.
+  if (!source_obj.is<std::string>() && pkg_cfg_parse_submodules(table, rules.context)) {
+    throw_runtime_error({ rules.context, ": submodules requires a git source" });
+  }
+
   // Check if options field exists and serialize it
   sol::object options_obj{ table["options"] };
   if (options_obj.valid() && options_obj.get_type() == sol::type::table) {
@@ -651,7 +651,50 @@ bool operator==(pkg_cfg::local_source const &lhs, pkg_cfg::local_source const &r
 }
 
 bool operator==(pkg_cfg::git_source const &lhs, pkg_cfg::git_source const &rhs) {
-  return lhs.url == rhs.url && lhs.ref == rhs.ref && lhs.subdir == rhs.subdir;
+  return lhs.url == rhs.url && lhs.ref == rhs.ref && lhs.subdir == rhs.subdir &&
+         lhs.submodules == rhs.submodules;
+}
+
+std::optional<glob_filter> pkg_cfg_parse_submodules(sol::table const &table,
+                                                    std::string_view context) {
+  sol::object const value{ table["submodules"] };
+  switch (value.get_type()) {
+    case sol::type::lua_nil:
+    case sol::type::none: return std::nullopt;
+    case sol::type::boolean:
+      return value.as<bool>() ? std::optional<glob_filter>{ glob_filter{} } : std::nullopt;
+    case sol::type::table: {
+      auto const selectors{ sol_util_get_string_list(table, "submodules", context) };
+      if (selectors.empty()) {
+        throw_runtime_error(
+            { context, ": submodules = {} selects nothing; write true to take them all" });
+      }
+      return glob_parse_filter(selectors, context, "submodules entry");
+    }
+    default:
+      throw_runtime_error(
+          { context, ": submodules must be a boolean or a list of path selectors" });
+  }
+}
+
+std::optional<pkg_cfg::git_source> pkg_cfg_parse_git_source(sol::table const &table,
+                                                            uri_info const &info,
+                                                            std::string_view context) {
+  auto submodules{ pkg_cfg_parse_submodules(table, context) };
+  if (info.scheme != uri_scheme::GIT && info.scheme != uri_scheme::GIT_HTTPS) {
+    if (submodules) {
+      throw_runtime_error({ context, ": submodules requires a git source, not ", info.canonical });
+    }
+    return std::nullopt;
+  }
+
+  auto ref{ sol_util_get_optional<std::string>(table, "ref", context) };
+  if (!ref || ref->empty()) {
+    throw_runtime_error({ context, " with git source requires 'ref' field" });
+  }
+  return pkg_cfg::git_source{ .url = info.canonical,
+                              .ref = std::move(*ref),
+                              .submodules = std::move(submodules) };
 }
 
 void pkg_cfg_reject_platforms(sol::table const &table, std::string_view context) {
@@ -763,7 +806,13 @@ std::string source_key(pkg_cfg::remote_source const &r) {
 }
 
 std::string source_key(pkg_cfg::git_source const &g) {
-  return "git\n" + g.url + "\n" + g.ref;
+  std::string key{ "git\n" + g.url + "\n" + g.ref };
+  if (g.submodules) {  // a different tree, so a different entry
+    key += "\nsubmodules";
+    for (auto const &s : g.submodules->include) { key += "\n" + s; }
+    for (auto const &s : g.submodules->exclude) { key += "\n!" + s; }
+  }
+  return key;
 }
 
 std::string source_key(pkg_cfg::local_source const &l) {
