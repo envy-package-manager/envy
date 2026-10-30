@@ -16,6 +16,7 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 import socket
 import subprocess
 import time
@@ -475,6 +476,69 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         self.assertEqual(0, run.returncode, run.stderr)
         counts = re.findall(r"(\d+)/(\d+) submodules", run.stderr)
         self.assertEqual(("2", "2"), counts[-1] if counts else None, run.stderr)
+
+    @unittest.skipUnless(sys.platform == "win32" or os.environ.get("ENVY_DIAG"), "TEMPORARY")
+    def test_zz_windows_daemon_diagnostic(self):
+        """TEMPORARY: which of repo shape, daemon env, or client resets on Windows."""
+        rows = []
+        for reachable in (None, False):
+            if reachable is None:
+                env_note = "no GIT_CONFIG env"
+                self.serve_plain()
+            else:
+                env_note = "GIT_CONFIG env"
+                self.serve(reachable_wants=reachable)
+            cases = (
+                ("leaf", self.repos.leaf_sha, "envy-tip-depth1"),   # no gitlinks
+                ("leaf", None, "git-depth1"),
+                ("leaf", None, "git-full"),
+                ("dsuper", self.repos.dsuper_sha, "envy-tip-depth1"),  # has a gitlink
+                ("dsuper", None, "git-depth1"),
+                ("dsuper", None, "git-full"),
+                ("lib", self.repos.lib_c1, "envy-nontip"),  # OID or FULL plan
+            )
+            for name, sha, client in cases:
+                dest = self.work / f"d-{len(rows)}"
+                if client.startswith("git"):
+                    depth = ["--depth", "1"] if client == "git-depth1" else []
+                    r = subprocess.run([_GIT, "clone", *depth, self.url(name), str(dest)],
+                                       capture_output=True, text=True)
+                    ok, err = r.returncode == 0, r.stderr.strip().splitlines()[-1:]
+                else:
+                    run = self.run_envy("fetch", self.url(name), dest, "--ref", sha)
+                    ok, err = run.returncode == 0, run.stderr.strip().splitlines()[-2:]
+                    if ok:
+                        ev = self.git_fetch_events(run).get("", {})
+                        err = [f"{ev.get('strategy')}/{ev.get('depth')}"]
+                rows.append(f"{env_note:18} {name:7} {client:16} "
+                            f"{'ok  ' if ok else 'FAIL'} {err}")
+        self.fail("\n" + "\n".join(rows))
+
+    test_zz_windows_daemon_diagnostic.envy_watchdog_timeout = 300
+
+    def serve_plain(self) -> None:
+        """git daemon with no extra environment, as test_git_fetch_progress runs it."""
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+        daemon = subprocess.Popen(
+            [_GIT, "daemon", f"--port={self.port}", "--reuseaddr", "--export-all",
+             f"--base-path={self.repos.root}", str(self.repos.root)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def stop():
+            daemon.terminate()
+            daemon.wait(timeout=10)
+
+        self.addCleanup(stop)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with socket.socket() as s:
+                s.settimeout(0.25)
+                if s.connect_ex(("127.0.0.1", self.port)) == 0:
+                    return
+            time.sleep(0.05)
 
     def test_served_superproject_cannot_reach_local_paths(self):
         self.serve(reachable_wants=True)
