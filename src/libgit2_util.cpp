@@ -116,9 +116,7 @@ libgit2_scope::libgit2_scope() {
 
   // libgit2 waits on a silent server forever by default. Bound it as curl and WinINet are:
   // a connect, and any stretch with no bytes moving. ENVY_GIT_TIMEOUT_MS is for tests.
-  // Not on Windows: a timeout leaves libgit2's sockets non-blocking, and its read/write
-  // paths test errno, which Winsock never sets. https there is WinHTTP, bounded itself.
-#ifndef _WIN32
+  // Windows https is WinHTTP, which ignores both: 60s connect, no read timeout.
   int const timeout_ms{ [] {
     char const *val{ std::getenv("ENVY_GIT_TIMEOUT_MS") };
     char *end{ nullptr };
@@ -131,7 +129,6 @@ libgit2_scope::libgit2_scope() {
       git_libgit2_opts(GIT_OPT_SET_SERVER_TIMEOUT, timeout_ms)) {
     throw_runtime_error({ "Failed to set libgit2 network timeouts" });
   }
-#endif
 }
 
 libgit2_scope::~libgit2_scope() { git_libgit2_shutdown(); }

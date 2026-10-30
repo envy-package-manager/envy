@@ -168,7 +168,6 @@ class TestFetchGit(EnvyTestCase):
     # Error Cases
     # ========================================================================
 
-    @unittest.skipIf(sys.platform == "win32", "libgit2 socket timeouts are off on Windows")
     def test_stalled_server_times_out_instead_of_hanging(self):
         """A server that accepts and then says nothing must not hold a fetch forever:
         libgit2's own default is no timeout at all."""
