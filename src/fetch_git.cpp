@@ -18,6 +18,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,11 +39,22 @@ using remote_ptr = std::unique_ptr<git_remote, decltype(&git_remote_free)>;
 using object_ptr = std::unique_ptr<git_object, decltype(&git_object_free)>;
 using config_ptr = std::unique_ptr<git_config, decltype(&git_config_free)>;
 
-[[noreturn]] void throw_git_error(std::string const &context) {
+// A fetch_error from message pieces, joined out of line like throw_runtime_error's.
+[[noreturn]] void throw_fetch_error(fetch_error_kind kind,
+                                    std::initializer_list<err_part> parts) {
+  std::string what;
+  for (auto const &part : parts) { part.append_to(what); }
+  throw fetch_error(kind, what);
+}
+
+// `context` reads as the head of a sentence that libgit2's own message completes.
+[[noreturn]] void throw_git_error(std::initializer_list<err_part> context) {
   git_error const *err{ git_error_last() };
-  std::string const message{ err && err->message ? err->message : "" };
+  std::string_view const message{ err && err->message ? err->message : "" };
+  std::string what;
+  for (auto const &part : context) { part.append_to(what); }
   throw fetch_error(git_error_kind(err ? err->klass : GIT_ERROR_NONE, message),
-                    context + message);
+                    what.append(message));
 }
 
 std::string lowercase(std::string_view s) {
@@ -80,7 +92,7 @@ void require_real_dirs(std::filesystem::path const &workdir, std::string const &
 config_ptr repo_config(git_repository *repo) {
   git_config *raw{ nullptr };
   if (git_repository_config(&raw, repo)) {
-    throw_git_error("fetch_git: cannot open repository config: ");
+    throw_git_error({ "fetch_git: cannot open repository config: " });
   }
   return config_ptr{ raw, git_config_free };
 }
@@ -115,14 +127,14 @@ repo_ptr init_repo(std::filesystem::path const &gitdir,
 
   git_repository *raw{ nullptr };
   if (git_repository_init_ext(&raw, gitdir.string().c_str(), &opts)) {
-    throw_git_error("fetch_git: cannot create " + gitdir.string() + ": ");
+    throw_git_error({ "fetch_git: cannot create ", gitdir, ": " });
   }
   repo_ptr repo{ raw, git_repository_free };
 
 #ifdef _WIN32
   // Submodule trees nest deep under a cache root; MAX_PATH is no limit git keeps either.
   if (git_config_set_bool(repo_config(repo.get()).get(), "core.longpaths", 1)) {
-    throw_git_error("fetch_git: cannot configure " + gitdir.string() + ": ");
+    throw_git_error({ "fetch_git: cannot configure ", gitdir, ": " });
   }
 #endif
   return repo;
@@ -155,7 +167,7 @@ std::vector<submodule_entry> list_submodules(git_repository *repo) {
             return 0;
           },
           &out)) {
-    throw_git_error("fetch_git: cannot read submodules: ");
+    throw_git_error({ "fetch_git: cannot read submodules: " });
   }
   util_sort(out, [](auto const &a, auto const &b) { return a.path < b.path; });
   return out;
@@ -259,7 +271,7 @@ class git_tree : unmovable {
     auto const origin{ [&] {
       git_remote *raw{ nullptr };
       if (git_remote_lookup(&raw, job.repo.get(), "origin")) {
-        throw_git_error("fetch_git: no origin for " + job.url + ": ");
+        throw_git_error({ "fetch_git: no origin for ", job.url, ": " });
       }
       return remote_ptr{ raw, git_remote_free };
     } };
@@ -274,11 +286,11 @@ class git_tree : unmovable {
     }() };
 
     // Only an abort can stop the row's callback, so its flag decides what a failure was.
-    auto const fail{ [&](std::string const &what) {
+    auto const fail{ [&](char const *what) {
       if (progress_.aborted()) {
-        throw fetch_error(fetch_error_kind::ABORTED, "fetch_git: aborted: " + job.url);
+        throw_fetch_error(fetch_error_kind::ABORTED, { "fetch_git: aborted: ", job.url });
       }
-      throw_git_error("fetch_git: " + what + " " + job.url + " failed: ");
+      throw_git_error({ "fetch_git: ", what, " ", job.url, " failed: " });
     } };
 
     std::string sha;
@@ -359,8 +371,8 @@ class git_tree : unmovable {
     git_object *raw{ nullptr };
     if (git_oid_fromstr(&oid, sha.c_str()) ||
         git_object_lookup(&raw, job.repo.get(), &oid, GIT_OBJECT_COMMIT)) {
-      throw fetch_error(fetch_error_kind::PROTOCOL,
-                        "fetch_git: " + job.url + " has no commit " + sha);
+      throw_fetch_error(fetch_error_kind::PROTOCOL,
+                        { "fetch_git: ", job.url, " has no commit ", sha });
     }
     object_ptr const commit{ raw, git_object_free };
 
@@ -373,10 +385,10 @@ class git_tree : unmovable {
       return o;
     }() };
     if (git_checkout_tree(job.repo.get(), commit.get(), &opts)) {
-      throw_git_error("fetch_git: checkout of " + sha + " failed: ");
+      throw_git_error({ "fetch_git: checkout of ", sha, " failed: " });
     }
     if (git_repository_set_head_detached(job.repo.get(), &oid)) {
-      throw_git_error("fetch_git: cannot detach HEAD at " + sha + ": ");
+      throw_git_error({ "fetch_git: cannot detach HEAD at ", sha, ": " });
     }
   }
 
@@ -447,7 +459,7 @@ class git_tree : unmovable {
       if (git_config_set_string(cfg.get(),
                                 ("submodule." + sm->name + ".url").c_str(),
                                 url.c_str())) {
-        throw_git_error("fetch_git: cannot register submodule " + full + ": ");
+        throw_git_error({ "fetch_git: cannot register submodule ", full, ": " });
       }
       std::filesystem::path const child_workdir{ workdir / sm->path };
       children.push_back(git_job{
@@ -478,7 +490,7 @@ git_progress::repo *git_progress::track(std::string path) {
   repo *const r{ &repos_.emplace_back(repo{ .sum = this, .path = std::move(path) }) };
   // The local transport never reports a transfer, so here is where a stop is heard.
   if (!publish()) {
-    throw fetch_error(fetch_error_kind::ABORTED, "fetch_git: aborted before " + r->path);
+    throw_fetch_error(fetch_error_kind::ABORTED, { "fetch_git: aborted before ", r->path });
   }
   return r;
 }
@@ -560,10 +572,9 @@ git_fetch_plan const &git_fetch_first(std::vector<git_fetch_plan> const &plans,
       // A ref that moved between advertisement and fetch brings its new tip, not ours;
       // ours is in its history, which the deeper plan after this one reaches.
       if (!has_commit()) {
-        throw fetch_error(fetch_error_kind::PROTOCOL,
-                          "fetch_git: " + std::string{ url } + " sent no commit " +
-                              std::string{ sha } + " at depth " +
-                              std::to_string(plan.depth));
+        throw_fetch_error(
+            fetch_error_kind::PROTOCOL,
+            { "fetch_git: ", url, " sent no commit ", sha, " at depth ", plan.depth });
       }
       return plan;
     } catch (fetch_error const &e) {
@@ -662,10 +673,10 @@ std::string git_fetch_target(std::string_view ref,
   try {
     return git_resolve_ref(refs, ref);
   } catch (std::exception const &e) {
-    throw fetch_error(fetch_error_kind::PROTOCOL,
-                      std::string{ e.what() } +
-                          "; a git ref must be a full commit sha or an advertised branch "
-                          "or tag (`envy git-resolve` pins one)");
+    throw_fetch_error(fetch_error_kind::PROTOCOL,
+                      { e.what(),
+                        "; a git ref must be a full commit sha or an advertised branch "
+                        "or tag (`envy git-resolve` pins one)" });
   }
 }
 
