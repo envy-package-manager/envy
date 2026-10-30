@@ -14,9 +14,9 @@ PATCHES = (
 UTIL = pathlib.Path(r"@LIBGIT2_UTIL_DIR@")
 for name, old, new in PATCHES:
     path = UTIL / name
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if new in text:
         continue
     if text.count(old) != 1:
         raise SystemExit(f"libgit2 longpaths patch: expected one '{old}' in {path}")
-    path.write_text(text.replace(old, new))
+    path.write_text(text.replace(old, new), encoding="utf-8")
