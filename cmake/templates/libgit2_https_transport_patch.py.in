@@ -1,0 +1,83 @@
+import pathlib
+
+# libgit2's https transports, made to bound and report a failure as its socket stream
+# does for git:// and ssh, since git_error_kind classifies by libgit2's error class and
+# text:
+#
+# - WinHTTP (Windows) hardcodes a 60s connect and no send or receive timeout, ignoring
+#   GIT_OPT_SET_SERVER_CONNECT_TIMEOUT and _SERVER_TIMEOUT: a server that accepts and
+#   goes quiet holds a fetch forever. Take them when set. Its timeout then reads in the
+#   UI language (FormatMessage), so give it libgit2's own English instead.
+# - mbedTLS (elsewhere) gets the socket stream's failures back as if they were its own
+#   error codes, and ssl_set_error relabels them "SSL error: ...", which reads as fatal.
+#   Mark them with mbedTLS's NET codes on the way in and keep the socket's error.
+
+PATCHES = {
+    "libgit2/transports/winhttp.c": (
+        ("#define DEFAULT_CONNECT_TIMEOUT 60000\n",
+         "#define DEFAULT_CONNECT_TIMEOUT 60000\n"
+         "\n"
+         "extern int git_socket_stream__connect_timeout;\n"
+         "extern int git_socket_stream__timeout;\n",
+         1),
+        ("\tint default_timeout = TIMEOUT_INFINITE;\n"
+         "\tint default_connect_timeout = DEFAULT_CONNECT_TIMEOUT;\n",
+         "\tint default_timeout = git_socket_stream__timeout > 0 ?\n"
+         "\t\tgit_socket_stream__timeout : TIMEOUT_INFINITE;\n"
+         "\tint default_connect_timeout = git_socket_stream__connect_timeout > 0 ?\n"
+         "\t\tgit_socket_stream__connect_timeout : DEFAULT_CONNECT_TIMEOUT;\n",
+         2),  # the session's timeouts, and each request's
+    ),
+    "util/win32/error.c": (
+        ("#ifdef GIT_WINHTTP\n"
+         "\t/* Errors raised by WinHTTP are not in the system resource table */\n",
+         "#ifdef GIT_WINHTTP\n"
+         "\tif (error_code == ERROR_WINHTTP_TIMEOUT)\n"
+         "\t\treturn git__strdup(\"The operation timed out\");\n"
+         "\n"
+         "\t/* Errors raised by WinHTTP are not in the system resource table */\n",
+         1),
+    ),
+    "libgit2/streams/mbedtls.c": (
+        ("#include <mbedtls/ctr_drbg.h>\n",
+         "#include <mbedtls/ctr_drbg.h>\n"
+         "#include <mbedtls/net_sockets.h>\n",
+         1),
+        ("\treturn (int) git_stream_read(io, buf, min(len, INT_MAX));\n",
+         "\tint ret = (int) git_stream_read(io, buf, min(len, INT_MAX));\n"
+         "\treturn (ret < 0 && ret != GIT_TIMEOUT) ? MBEDTLS_ERR_NET_RECV_FAILED : ret;\n",
+         1),
+        ("\treturn (int) git_stream_write(io, (const char *)buf, min(len, INT_MAX), 0);\n",
+         "\tint ret = (int) git_stream_write(io, (const char *)buf, min(len, INT_MAX), 0);\n"
+         "\treturn (ret < 0 && ret != GIT_TIMEOUT) ? MBEDTLS_ERR_NET_SEND_FAILED : ret;\n",
+         1),
+        ("\tint ret = -1;\n"
+         "\n"
+         "\tGIT_ASSERT(error != MBEDTLS_ERR_SSL_WANT_READ);\n",
+         "\tint ret = -1;\n"
+         "\n"
+         "\t/* The socket stream failed (bio_read, bio_write) and has said why. */\n"
+         "\tif (error == GIT_TIMEOUT)\n"
+         "\t\treturn GIT_TIMEOUT;\n"
+         "\tif (error == MBEDTLS_ERR_NET_RECV_FAILED || error == MBEDTLS_ERR_NET_SEND_FAILED)\n"
+         "\t\treturn -1;\n"
+         "\n"
+         "\tGIT_ASSERT(error != MBEDTLS_ERR_SSL_WANT_READ);\n",
+         1),
+    ),
+}
+
+src = pathlib.Path(r"@LIBGIT2_SRC_DIR@")
+for name, edits in PATCHES.items():
+    path = src / name
+    text = path.read_text(encoding="utf-8")
+    patched = text
+    for old, new, count in edits:
+        if new in patched:
+            continue
+        if patched.count(old) != count:
+            raise SystemExit(f"libgit2 https transport patch: expected {count} of "
+                             f"'{old.strip()}' in {path}")
+        patched = patched.replace(old, new)
+    if patched != text:
+        path.write_text(patched, encoding="utf-8")

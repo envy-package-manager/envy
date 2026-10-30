@@ -4,9 +4,9 @@ libgit2 reports two phases through one callback: objects arriving, then the pack
 deltas resolving. Dropping the bar when the last object lands left the row showing a
 bare "N/N objects" count for the rest of the clone.
 
-The repo is served by `git daemon` out of the fixture's own .git, because libgit2's
-local transport never invokes the transfer-progress callback at all, so a file://
-clone would render nothing.
+The repo is served over git:// (git_server.GitServer) out of the fixture's own .git,
+because libgit2's local transport never invokes the transfer-progress callback at all,
+so a file:// clone would render nothing.
 Assertions read the fallback renderer's output (TERM=dumb, throttle forced to 0),
 where a progress row ends in ": NN.N%" and a bar-less row does not.
 """
@@ -14,15 +14,13 @@ where a progress row ends in ": NN.N%" and a bar-less row does not.
 import os
 import re
 import shutil
-import socket
 import subprocess
-import threading
-import time
 import unittest
 from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .git_server import GitServer
 from .test_config import make_manifest
 
 _GIT = shutil.which("git")
@@ -66,30 +64,11 @@ class TestGitFetchProgress(EnvyTestCase):
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-m", "two")
 
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        self.port = sock.getsockname()[1]
-        sock.close()
         # Serves src/.git directly: a `git clone --bare` staging copy held the same
-        # loose objects upload-pack repacks per fetch, for one more killable process.
-        self.daemon = subprocess.Popen(
-            [
-                _GIT,
-                "daemon",
-                f"--port={self.port}",
-                "--reuseaddr",
-                "--export-all",
-                f"--base-path={self.work}",
-                str(self.work),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self._await_daemon()
-
-    def tearDown(self):
-        self.daemon.terminate()
-        self.daemon.wait(timeout=10)
+        # loose objects upload-pack repacks per fetch.
+        server = GitServer(self.work)
+        self.addCleanup(server.close)
+        self.port = server.port
 
     def _git(self, cwd: Path, *args: str):
         """Run git, failing with git's own diagnosis rather than a bare exit code.
@@ -113,16 +92,6 @@ class TestGitFetchProgress(EnvyTestCase):
         if run.returncode != 0:
             self.fail(f"git {' '.join(args)} failed ({run.returncode}): "
                       f"{run.stderr.strip()}")
-
-    def _await_daemon(self, timeout: float = 10.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with socket.socket() as s:
-                s.settimeout(0.25)
-                if s.connect_ex(("127.0.0.1", self.port)) == 0:
-                    return
-            time.sleep(0.05)
-        self.fail("git daemon did not start")
 
     def _install(self) -> subprocess.CompletedProcess:
         manifest = self.work / "envy.lua"

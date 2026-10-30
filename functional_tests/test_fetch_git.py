@@ -6,10 +6,12 @@ error handling, and basic integration scenarios.
 
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 import unittest
 
@@ -40,6 +42,12 @@ class TestFetchGit(EnvyTestCase):
         self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
+    def _network_env(self) -> dict[str, str]:
+        """For a live clone: envy's own retries ride out a transient 5xx or reset from the
+        host, as in production, where the harness default of one attempt would fail."""
+        return {**os.environ, "ENVY_CACHE_DIR": str(self.cache_root),
+                "ENVY_FETCH_ATTEMPTS": "3"}
+
     # ========================================================================
     # Basic Success Cases
     # ========================================================================
@@ -60,7 +68,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -89,7 +97,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -122,7 +130,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -149,7 +157,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0)
@@ -168,9 +176,8 @@ class TestFetchGit(EnvyTestCase):
     # Error Cases
     # ========================================================================
 
-    def test_stalled_server_times_out_instead_of_hanging(self):
-        """A server that accepts and then says nothing must not hold a fetch forever:
-        libgit2's own default is no timeout at all."""
+    def _serve(self, on_connect) -> int:
+        """A localhost TCP server handing each connection to on_connect; returns its port."""
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -179,9 +186,10 @@ class TestFetchGit(EnvyTestCase):
         def accept():
             while True:
                 try:
-                    held.append(listener.accept()[0])  # keep it open, send nothing
+                    held.append(listener.accept()[0])
                 except OSError:
                     return
+                on_connect(held[-1])
 
         threading.Thread(target=accept, daemon=True).start()
 
@@ -191,19 +199,57 @@ class TestFetchGit(EnvyTestCase):
                 conn.close()
 
         self.addCleanup(close)
-        port = listener.getsockname()[1]
+        return listener.getsockname()[1]
 
+    def _retry_reasons(self, url: str, git_timeout_ms: int = 1000) -> list[str]:
+        """Fetch url, failing, with one retry allowed: why envy retried."""
         try:
             run = self.run_envy(
-                "fetch", f"git://127.0.0.1:{port}/stalled.git", self.work / "out",
-                "--ref", "main",
-                env={**os.environ, "ENVY_GIT_TIMEOUT_MS": "1000"},
-                timeout=20,
+                "fetch", url, self.work / "out", "--ref", "main",
+                env={**os.environ, "ENVY_GIT_TIMEOUT_MS": str(git_timeout_ms),
+                     "ENVY_FETCH_ATTEMPTS": "2", "ENVY_FETCH_RETRY_BASE_MS": "1"},
+                timeout=30,
             )
         except subprocess.TimeoutExpired:
-            self.fail("envy hung on a server that never answered")
+            self.fail(f"envy hung on {url}")
         self.assertNotEqual(0, run.returncode)
-        self.assertIn("timed out", run.stderr)
+        return [e.raw["reason"] for e in run.events("download_retry")]
+
+    @staticmethod
+    def _reset(conn: socket.socket) -> None:
+        """Read the TLS ClientHello, then reset. The pause lets the client block in its
+        read first: libgit2 rereads after any error, and a reread after a reset is end of
+        stream, so a reset that beat the first read would arrive as EOF."""
+        try:
+            conn.recv(65536)
+            time.sleep(0.5)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
+        except OSError:
+            pass
+
+    def test_stalled_server_is_retried_as_a_timeout(self):
+        """A server that accepts and then says nothing must not hold a fetch forever:
+        libgit2's own default is no timeout at all."""
+        port = self._serve(lambda conn: None)
+        self.assertEqual(["timeout"], self._retry_reasons(f"git://127.0.0.1:{port}/x.git"))
+
+    def test_stalled_https_server_is_retried_as_a_timeout(self):
+        """The same over https, through libgit2_https_transport_patch: WinHTTP (Windows)
+        ignored the timeout, and worded it in the UI language when told; mbedTLS
+        (elsewhere) relabeled it an SSL error, which is fatal. The server never answers
+        the TLS handshake, so no certificate is needed."""
+        port = self._serve(lambda conn: None)
+        self.assertEqual(["timeout"], self._retry_reasons(f"https://127.0.0.1:{port}/x.git"))
+
+    @unittest.skipIf(sys.platform == "win32",
+                     "WinHTTP raises every failure but a timeout as GIT_ERROR_OS: fatal")
+    def test_https_reset_is_retried_as_a_transfer_failure(self):
+        """mbedTLS relabeled the socket stream's failures SSL errors, so a mirror that
+        reset an https fetch was never retried."""
+        port = self._serve(self._reset)
+        self.assertEqual(["transfer"], self._retry_reasons(f"https://127.0.0.1:{port}/x.git",
+                                                           git_timeout_ms=10000))
 
     def test_nonexistent_repository(self):
         """Non-existent repository URL should fail."""
@@ -221,7 +267,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -247,7 +293,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -267,7 +313,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -293,7 +339,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -332,6 +378,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -383,6 +430,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -433,6 +481,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")

@@ -586,6 +586,38 @@ function(envy_patch_libgit2_longpaths source_dir binary_dir)
     unset(LIBGIT2_UTIL_DIR)
 endfunction()
 
+# Make libgit2's https transports bound and report a failure as its socket stream does:
+# WinHTTP (Windows) ignores the server timeouts; mbedTLS (elsewhere) relabels socket errors.
+function(envy_patch_libgit2_https_transport source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_https_transport_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${binary_dir}/envy_patch_libgit2_https_transport.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_https_transport_patch.py.in")
+
+    set(LIBGIT2_SRC_DIR "${source_dir}/src")
+    foreach(_file IN ITEMS libgit2/transports/winhttp.c util/win32/error.c libgit2/streams/mbedtls.c)
+        if(NOT EXISTS "${LIBGIT2_SRC_DIR}/${_file}")
+            message(FATAL_ERROR "libgit2 https transport patch: ${LIBGIT2_SRC_DIR}/${_file} not found")
+        endif()
+    endforeach()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(_file)
+    unset(LIBGIT2_SRC_DIR)
+endfunction()
+
 # Strip libgit2 install()/export() calls for the same reason—keep it scoped
 # to Envy's build tree with no accidental installs.
 function(envy_patch_libgit2_install source_dir binary_dir)
