@@ -2,6 +2,7 @@
 
 #include "libgit2_util.h"
 #include "trace.h"
+#include "uri.h"
 #include "util.h"
 
 #include <git2.h>
@@ -107,6 +108,24 @@ std::string git_resolve_ref(std::vector<git_ref_entry> const &refs, std::string_
   return matches.front().second;
 }
 
+std::vector<git_ref_entry> git_remote_refs(git_remote *remote) {
+  git_remote_head const **heads{ nullptr };
+  size_t count{ 0 };
+  if (git_remote_ls(&heads, &count, remote)) {
+    throw git_last_error(std::string{ "cannot list refs of '" } + git_remote_url(remote) +
+                         "'");
+  }
+
+  std::vector<git_ref_entry> entries;
+  entries.reserve(count);
+  char oid_hex[GIT_OID_MAX_HEXSIZE + 1];
+  for (size_t i{ 0 }; i < count; ++i) {
+    git_oid_tostr(oid_hex, sizeof(oid_hex), &heads[i]->oid);
+    entries.push_back({ heads[i]->name ? heads[i]->name : "", std::string{ oid_hex } });
+  }
+  return entries;
+}
+
 std::string git_resolve_remote(std::string const &repo, std::string const &ref) {
   if (repo.empty()) { throw_runtime_error({ "git-resolve: repo must be non-empty" }); }
   if (ref.empty()) { throw_runtime_error({ "git-resolve: ref must be non-empty" }); }
@@ -123,7 +142,7 @@ std::string git_resolve_remote(std::string const &repo, std::string const &ref) 
   }
 
   // HTTPS requires CA certificates be configured (matches fetch_git_repo).
-  if (repo.starts_with("https://")) { libgit2_require_ssl_certs(); }
+  if (uri_is_https_scheme(repo)) { libgit2_require_ssl_certs(); }
 
   std::unique_ptr<git_remote, decltype(&git_remote_free)> const remote{ [&] {
     git_remote *raw{ nullptr };
@@ -150,21 +169,7 @@ std::string git_resolve_remote(std::string const &repo, std::string const &ref) 
     ~disconnect_guard() { git_remote_disconnect(r); }
   } const guard{ remote.get() };
 
-  git_remote_head const **heads{ nullptr };
-  size_t count{ 0 };
-  if (git_remote_ls(&heads, &count, remote.get())) {
-    throw git_last_error("git-resolve: cannot list refs of '" + repo + "'");
-  }
-
-  std::vector<git_ref_entry> entries;
-  entries.reserve(count);
-  char oid_hex[GIT_OID_MAX_HEXSIZE + 1];
-  for (size_t i{ 0 }; i < count; ++i) {
-    git_oid_tostr(oid_hex, sizeof(oid_hex), &heads[i]->oid);
-    entries.push_back({ heads[i]->name ? heads[i]->name : "", std::string{ oid_hex } });
-  }
-
-  auto sha{ git_resolve_ref(entries, ref) };
+  auto sha{ git_resolve_ref(git_remote_refs(remote.get()), ref) };
   ENVY_TRACE(git_resolve, "", .url = repo, .ref = ref, .sha = sha, .method = "ls-remote");
   return sha;
 }

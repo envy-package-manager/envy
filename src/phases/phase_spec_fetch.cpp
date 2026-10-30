@@ -453,7 +453,8 @@ spec_fetch_result fetch_git_source(pkg_cfg const &cfg, pkg *p) {
     fetch_with_progress(fetch_request_git{ .source = git_src->url,
                                            .destination = install_dir,
                                            .ref = git_src->ref,
-                                           .scheme = info.scheme },
+                                           .scheme = info.scheme,
+                                           .submodules = git_src->submodules },
                         p,
                         git_src->url,
                         "git spec");
@@ -742,8 +743,9 @@ using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 // Keys each DEPENDENCIES entry shape that names a bundle reads. `setup` is listed on
 // the pure form only so its own message ("bundle dependencies cannot select setup
 // pairs") wins over the generic sweep.
-constexpr std::string_view kPureBundleDepKeys[]{ "bundle", "needed_by", "ref",
-                                                 "setup",  "sha256",    "source" };
+constexpr std::string_view kPureBundleDepKeys[]{ "bundle",    "needed_by", "ref",
+                                                 "setup",     "sha256",    "source",
+                                                 "submodules" };
 constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle",  "needed_by", "options",
                                                      "product", "setup",     "spec" };
 
@@ -782,6 +784,9 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
 
   // Parse source: string (URL/path) or table { fetch = function, dependencies = {} }
   if (source_obj.is<sol::table>()) {  // Table: custom fetch with optional dependencies
+    if (pkg_cfg_parse_submodules(table, "Bundle dependency")) {
+      throw_runtime_error({ "Bundle dependency: submodules requires a git source" });
+    }
     sol::table source_table{ source_obj.as<sol::table>() };
     sol::object fetch_obj{ source_table["fetch"] };
     if (!fetch_obj.valid() || !fetch_obj.is<sol::function>()) {
@@ -813,15 +818,9 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
   std::string const source_uri{ source_obj.as<std::string>() };
   auto const info{ uri_classify(source_uri) };
 
-  if (info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS) {
-    auto ref_opt{ sol_util_get_optional<std::string>(table, "ref", "Bundle dependency") };
-    if (!ref_opt.has_value() || ref_opt->empty()) {
-      throw_runtime_error({ "Bundle dependency with git source requires 'ref' field" });
-    }
+  if (auto git{ pkg_cfg_parse_git_source(table, info, "Bundle dependency") }) {
     return pkg_cfg::bundle_source{ .bundle_identity = std::move(bundle_identity),
-                                   .fetch_source =
-                                       pkg_cfg::git_source{ .url = info.canonical,
-                                                            .ref = std::move(*ref_opt) } };
+                                   .fetch_source = std::move(*git) };
   }
 
   if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE ||

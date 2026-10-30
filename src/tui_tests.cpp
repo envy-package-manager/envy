@@ -1358,6 +1358,124 @@ TEST_CASE("no spec set a display, so the row carries no display column") {
   CHECK(envy::tui::test::render_section_frame(frame, 5, 0) == "[pkg] installed\n");
 }
 
+TEST_CASE_FIXTURE(captured_output, "a shrinking live region leaves no blank line below") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = true;
+
+  auto const row{ [](char const *label, char const *text) {
+    return envy::tui::section_frame{ .label = label,
+                                     .content =
+                                         envy::tui::static_text_data{ .text = text } };
+  } };
+  auto tall{ row("[pkg]", "2/3 submodules") };
+  tall.children = { row("a", "fetching"), row("b", "fetching") };
+
+  REQUIRE(envy::tui::test::paint_live_region({ tall }, 0) == 3);
+  messages.clear();
+
+  // Back to the top, one row, the stale two cleared from the end of it: the cursor parks
+  // on the row, as after any paint, so shutdown's newline leaves no gap behind it.
+  CHECK(envy::tui::test::paint_live_region({ row("[pkg]", "installed") }, 3) == 1);
+  CHECK(stream().find('\n') == std::string::npos);
+  CHECK(stream().find("\x1b[0J") != std::string::npos);
+}
+
+TEST_CASE("a child's children indent one level further, at any depth") {
+  envy::tui::test::g_terminal_width = 120;
+  envy::tui::test::g_isatty = false;
+  envy::tui::test::g_now = std::chrono::steady_clock::now();
+
+  auto const row{ [](char const *label) {
+    return envy::tui::section_frame{ .label = label,
+                                     .content =
+                                         envy::tui::static_text_data{ .text = "x" } };
+  } };
+  auto leaf_parent{ row("lib") };
+  leaf_parent.children.push_back(row("leaf"));
+  auto fetch{ row("super.git") };
+  fetch.children.push_back(std::move(leaf_parent));
+  auto pkg{ row("[pkg]") };
+  pkg.children.push_back(std::move(fetch));
+
+  CHECK(envy::tui::test::render_section_frame(pkg) ==
+        "[pkg] x\n  super.git x\n    lib x\n      leaf x\n");
+  envy::tui::test::g_isatty = true;
+}
+
+TEST_CASE("fetch_git_tree_frame: X/Y over the tree, a child row per repo in flight") {
+  envy::fetch_git_tree_progress const prog{
+    .done = 9,
+    .total = 24,
+    .received_bytes = 3 * 1024 * 1024,
+    .in_flight = { { .path = "components/bt/lib",
+                     .counters = { .total_objects = 400,
+                                   .received_objects = 100,
+                                   .received_bytes = 2048 } },
+                   { .path = "components/heap/tlsf" },
+                   { .path = "components/lwip/lwip",
+                     .counters = { .total_objects = 10,
+                                   .received_objects = 10,
+                                   .total_deltas = 8,
+                                   .indexed_deltas = 2 } },
+                   { .path = "components/spiffs/spiffs",
+                     .retry =
+                         envy::fetch_retry_progress{ .attempt = 2,
+                                                     .remaining =
+                                                         std::chrono::milliseconds{ 5500 },
+                                                     .reason = "transfer" } } }
+  };
+
+  auto const frame{ envy::tui_actions::fetch_git_tree_frame("[pkg]", prog, "idf.git") };
+  CHECK(frame.label == "[pkg]");
+  auto const &bar{ std::get<envy::tui::progress_data>(frame.content) };
+  CHECK(bar.percent == doctest::Approx(37.5));
+  CHECK(bar.status == "9/24 submodules 3.00MB idf.git");
+
+  REQUIRE(frame.children.size() == 4);
+  CHECK(frame.children[0].label == "components/bt/lib");
+  auto const &receiving{ std::get<envy::tui::progress_data>(frame.children[0].content) };
+  CHECK(receiving.percent == doctest::Approx(25.0));
+  CHECK(receiving.status == "100/400 objects 2.00KB");
+
+  CHECK(std::get<envy::tui::spinner_data>(frame.children[1].content).text ==
+        "starting...");
+
+  auto const &resolving{ std::get<envy::tui::progress_data>(frame.children[2].content) };
+  CHECK(resolving.percent == doctest::Approx(25.0));
+  CHECK(resolving.status == "2/8 deltas");
+
+  CHECK(std::get<envy::tui::spinner_data>(frame.children[3].content).text ==
+        "retry 2 in 6s (transfer)");
+}
+
+TEST_CASE("a git row names the checkout once the pack is in, and counts its files") {
+  envy::fetch_git_tree_progress const prog{
+    .done = 0,
+    .total = 1,
+    .in_flight = { { .path = "components/lwip/lwip",
+                     .counters = { .total_objects = 10,
+                                   .received_objects = 10,
+                                   .total_deltas = 8,
+                                   .indexed_deltas = 8,
+                                   .checkout_done = 450,
+                                   .checkout_total = 1800 } } }
+  };
+  auto const frame{ envy::tui_actions::fetch_git_tree_frame("[pkg]", prog, {}) };
+  REQUIRE(frame.children.size() == 1);
+  auto const &checkout{ std::get<envy::tui::progress_data>(frame.children[0].content) };
+  CHECK(checkout.percent == doctest::Approx(25.0));
+  CHECK(checkout.status == "checkout 450/1800 files");
+}
+
+TEST_CASE("fetch_git_tree_frame: nothing found yet is an empty bar, not a division") {
+  auto const frame{
+    envy::tui_actions::fetch_git_tree_frame("[pkg]", envy::fetch_git_tree_progress{}, {})
+  };
+  CHECK(std::get<envy::tui::progress_data>(frame.content).percent == 0.0);
+  CHECK(std::get<envy::tui::progress_data>(frame.content).status == "0/0 submodules");
+  CHECK(frame.children.empty());
+}
+
 #endif  // ENVY_UNIT_TEST
 
 TEST_CASE("fetch_all_progress_tracker: race - one slot reported from several threads") {

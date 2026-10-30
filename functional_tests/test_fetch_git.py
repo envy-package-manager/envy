@@ -5,8 +5,11 @@ error handling, and basic integration scenarios.
 """
 
 import os
+import socket
+import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 import unittest
 
@@ -164,6 +167,43 @@ class TestFetchGit(EnvyTestCase):
     # ========================================================================
     # Error Cases
     # ========================================================================
+
+    def test_stalled_server_times_out_instead_of_hanging(self):
+        """A server that accepts and then says nothing must not hold a fetch forever:
+        libgit2's own default is no timeout at all."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        held: list[socket.socket] = []
+
+        def accept():
+            while True:
+                try:
+                    held.append(listener.accept()[0])  # keep it open, send nothing
+                except OSError:
+                    return
+
+        threading.Thread(target=accept, daemon=True).start()
+
+        def close():
+            listener.close()
+            for conn in held:
+                conn.close()
+
+        self.addCleanup(close)
+        port = listener.getsockname()[1]
+
+        try:
+            run = self.run_envy(
+                "fetch", f"git://127.0.0.1:{port}/stalled.git", self.work / "out",
+                "--ref", "main",
+                env={**os.environ, "ENVY_GIT_TIMEOUT_MS": "1000"},
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("envy hung on a server that never answered")
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("timed out", run.stderr)
 
     def test_nonexistent_repository(self):
         """Non-existent repository URL should fail."""

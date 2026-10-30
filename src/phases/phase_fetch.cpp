@@ -7,6 +7,7 @@
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "pkg.h"
+#include "pkg_cfg.h"
 #include "sha256.h"
 #include "sol_util.h"
 #include "trace.h"
@@ -29,17 +30,53 @@
 
 namespace envy {
 
-// Not in anonymous namespace so tests can call it
-fetch_request url_to_fetch_request(std::string const &url,
+namespace {
+
+constexpr std::string_view kFetchEntryKeys[]{ "dest",   "post_data", "ref",
+                                              "sha256", "source",    "submodules" };
+
+}  // namespace
+
+fetch_entry fetch_entry_parse(sol::table const &tbl, std::string_view context) {
+  sol_util_reject_unknown_keys(tbl, kFetchEntryKeys, context);
+
+  sol::object const source{ tbl["source"] };
+  if (!source.valid() || source.get_type() == sol::type::lua_nil) {
+    throw_runtime_error(
+        { context, ": fetch entry missing 'source' key; got ", sol_util_dump_table(tbl) });
+  }
+  if (!source.is<std::string>()) {
+    throw_runtime_error({ context,
+                          ": fetch entry 'source' must be a string; got ",
+                          sol::type_name(tbl.lua_state(), source.get_type()) });
+  }
+  if (source.as<std::string>().empty()) {
+    throw_runtime_error({ context, ": fetch entry 'source' cannot be empty" });
+  }
+
+  return { .source = source.as<std::string>(),
+           .sha256 = sol_util_get_optional<std::string>(tbl, "sha256", context),
+           .ref = sol_util_get_optional<std::string>(tbl, "ref", context),
+           .post_data = sol_util_get_optional<std::string>(tbl, "post_data", context),
+           .dest = sol_util_get_optional<std::string>(tbl, "dest", context),
+           .submodules = pkg_cfg_parse_submodules(tbl, context) };
+}
+
+fetch_request url_to_fetch_request(fetch_entry const &entry,
                                    std::filesystem::path const &dest,
-                                   std::optional<std::string> const &ref,
-                                   std::optional<std::string> const &post_data,
                                    std::string const &context,
                                    std::optional<std::filesystem::path> const &file_root) {
+  auto const &url{ entry.source };
+  auto const &ref{ entry.ref };
+  auto const &post_data{ entry.post_data };
   auto const info{ uri_classify(url) };
+  bool const git{ info.scheme == uri_scheme::GIT || info.scheme == uri_scheme::GIT_HTTPS };
 
   if (post_data && info.scheme != uri_scheme::HTTP && info.scheme != uri_scheme::HTTPS) {
     throw_runtime_error({ "post_data only valid for HTTP/HTTPS in ", context });
+  }
+  if (entry.submodules && !git) {
+    throw_runtime_error({ "submodules requires a git source in ", context, ": ", url });
   }
 
   switch (info.scheme) {
@@ -70,7 +107,8 @@ fetch_request url_to_fetch_request(std::string const &url,
       return fetch_request_git{ .source = info.canonical,
                                 .destination = dest,
                                 .ref = *ref,
-                                .scheme = info.scheme };
+                                .scheme = info.scheme,
+                                .submodules = entry.submodules };
     default: throw std::runtime_error("Unsupported URL scheme in " + context + ": " + url);
   }
 }
@@ -92,14 +130,6 @@ std::string const &get_source(fetch_request const &req) {
 struct fetch_spec {
   fetch_request request;
   std::string sha256;
-};
-
-struct table_entry {
-  std::string url;
-  std::string sha256;
-  std::optional<std::string> ref;
-  std::optional<std::string> post_data;
-  std::optional<std::string> dest;
 };
 
 std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
@@ -171,54 +201,13 @@ bool run_programmatic_fetch(sol::protected_function fetch_func,
   return should_mark_complete;
 }
 
-table_entry parse_table_entry(sol::table const &tbl, std::string const &context) {
-  sol::optional<sol::object> source_obj = tbl["source"];
-  if (!source_obj || !source_obj->valid() ||
-      source_obj->get_type() == sol::type::lua_nil) {
-    throw_runtime_error(
-        { context, ": FETCH table missing 'source' key; got ", sol_util_dump_table(tbl) });
-  }
-  if (!source_obj->is<std::string>()) {
-    throw_runtime_error({ context,
-                          ": FETCH table 'source' must be a string; got ",
-                          sol::type_name(tbl.lua_state(), source_obj->get_type()) });
-  }
-  std::string url{ source_obj->as<std::string>() };
-  if (url.empty()) {
-    throw_runtime_error({ context, ": FETCH table 'source' cannot be empty" });
-  }
-
-  table_entry entry;
-  entry.url = std::move(url);
-
-  if (auto sha{ sol_util_get_optional<std::string>(tbl, "sha256", context) }) {
-    entry.sha256 = std::move(*sha);
-  }
-
-  if (auto ref{ sol_util_get_optional<std::string>(tbl, "ref", context) }) {
-    entry.ref = std::move(*ref);
-  }
-
-  if (auto pd{ sol_util_get_optional<std::string>(tbl, "post_data", context) }) {
-    entry.post_data = std::move(*pd);
-  }
-
-  if (auto dst{ sol_util_get_optional<std::string>(tbl, "dest", context) }) {
-    entry.dest = std::move(*dst);
-  }
-
-  return entry;
-}
-
-fetch_spec create_fetch_spec(std::string url,
-                             std::string sha256,
-                             std::optional<std::string> ref,
-                             std::optional<std::string> post_data,
-                             std::optional<std::string> dest_name,
+fetch_spec create_fetch_spec(fetch_entry entry,
                              std::filesystem::path const &fetch_dir,
                              std::filesystem::path const &stage_dir,
                              std::unordered_set<std::string> &basenames,
                              std::string const &context) {
+  std::string const &url{ entry.source };
+  auto &dest_name{ entry.dest };
   std::string basename;
   if (dest_name) {
     if (dest_name->empty()) {
@@ -251,8 +240,8 @@ fetch_spec create_fetch_spec(std::string url,
                                         ? stage_dir / basename
                                         : fetch_dir / basename };
 
-  return { .request = url_to_fetch_request(url, dest, ref, post_data, context),
-           .sha256 = std::move(sha256) };
+  return { .request = url_to_fetch_request(entry, dest, context),
+           .sha256 = entry.sha256.value_or("") };
 }
 
 // Parse the fetch field from Lua into a vector of fetch_specs.
@@ -271,8 +260,7 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
       }
       std::filesystem::path dest{ fetch_dir / basename };
 
-      return { { .request =
-                     url_to_fetch_request(url, dest, std::nullopt, std::nullopt, key),
+      return { { .request = url_to_fetch_request({ .source = url }, dest, key),
                  .sha256 = "" } };
     }
 
@@ -286,12 +274,7 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
       sol::type first_elem_type{ first_elem.get_type() };
 
       auto process_table_entry{ [&](sol::table const &entry_tbl) {
-        auto entry{ parse_table_entry(entry_tbl, key) };
-        specs.push_back(create_fetch_spec(std::move(entry.url),
-                                          std::move(entry.sha256),
-                                          std::move(entry.ref),
-                                          std::move(entry.post_data),
-                                          std::move(entry.dest),
+        specs.push_back(create_fetch_spec(fetch_entry_parse(entry_tbl, key),
                                           fetch_dir,
                                           stage_dir,
                                           basenames,
@@ -309,11 +292,7 @@ std::vector<fetch_spec> parse_fetch_field(sol::object const &fetch_obj,
           }
           std::string url{ elem.as<std::string>() };
 
-          specs.push_back(create_fetch_spec(std::move(url),
-                                            "",
-                                            std::nullopt,
-                                            std::nullopt,
-                                            std::nullopt,
+          specs.push_back(create_fetch_spec({ .source = std::move(url) },
                                             fetch_dir,
                                             stage_dir,
                                             basenames,

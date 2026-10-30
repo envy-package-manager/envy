@@ -557,6 +557,35 @@ function(envy_patch_libgit2_cflags source_dir binary_dir)
     unset(LIBGIT2_DEFAULT_CFLAGS)
 endfunction()
 
+# Lift libgit2's MAX_PATH cap on paths inside a repository (Windows only in effect): a
+# nested submodule gitdir under the cache root needs more than 260 characters.
+function(envy_patch_libgit2_longpaths source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_longpaths_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${binary_dir}/envy_patch_libgit2_longpaths.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_longpaths_patch.py.in")
+
+    set(LIBGIT2_UTIL_DIR "${source_dir}/src/util")
+    if(NOT EXISTS "${LIBGIT2_UTIL_DIR}/fs_path.c")
+        message(FATAL_ERROR "libgit2 longpaths patch: ${LIBGIT2_UTIL_DIR}/fs_path.c not found")
+    endif()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(LIBGIT2_UTIL_DIR)
+endfunction()
+
 # Strip libgit2 install()/export() calls for the same reason—keep it scoped
 # to Envy's build tree with no accidental installs.
 function(envy_patch_libgit2_install source_dir binary_dir)

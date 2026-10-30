@@ -236,7 +236,8 @@ Download files to destination.
 **spec fields:**
 - `source` — required URL
 - `sha256` — optional hash for verification
-- `ref` — required for git URLs (branch, tag, or SHA)
+- `ref` — required for git URLs: full commit sha, or an advertised branch/tag name
+- `submodules` — git only: `true` for every submodule, `{ selectors }` by root-relative path (`!` excludes)
 - `post_data` — optional form-urlencoded body; triggers HTTP POST (HTTP/HTTPS only)
 - `dest` — optional override for cache filename (use when URL lacks a recognizable filename)
 
@@ -418,7 +419,7 @@ naming the module. A module out of a bundle sees `ENVY_BUNDLE`, its `alias` `nil
 ```lua
 DEPENDENCIES = {                       -- the bundle itself: `bundle` plus its own source
   { bundle = "acme.toolchain@v1", source = "git://github.com/acme/specs",
-    ref = "a1b2c3d", needed_by = "fetch" },   -- build (the default) would be too late
+    ref = "a1b2c3d4...", needed_by = "fetch" },   -- build (the default) would be too late
 }
 
 FETCH = function(tmp_dir, options)
@@ -458,7 +459,7 @@ already complete.
 
 ```lua
 BUNDLES = { tools = { identity = "acme.specs@r1",
-                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d" } }
+                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d4..." } }
 
 local gh = envy.loadenv_bundle("tools", "lib.github")
 

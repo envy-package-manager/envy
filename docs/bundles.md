@@ -71,7 +71,8 @@ BUNDLES = {
   ["toolchain"] = {
     identity = "acme.toolchain-specs@v1",  -- actual bundle identity
     source = "git://github.com/acme/toolchain-specs",
-    ref = "a1b2c3d4e5f6",
+    ref = "a1b2c3d4e5f6...",
+    submodules = true,  -- git only; or { selectors }: specs may live in submodules
   },
 }
 
@@ -89,7 +90,7 @@ PACKAGES = {
   {spec = "other.thing@v1", bundle = {
     identity = "other.misc@v1",
     source = "git://github.com/other/misc",
-    ref = "deadbeef",
+    ref = "deadbeef...",
   }},
 }
 ```
@@ -145,7 +146,7 @@ return M
 ```lua
 -- consuming manifest
 BUNDLES = { tools = { identity = "acme.specs@r1",
-                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d" } }
+                      source = "https://github.com/acme/specs.git", ref = "a1b2c3d4..." } }
 
 local gh = envy.loadenv_bundle("tools", "lib.github")
 
@@ -241,7 +242,7 @@ DEPENDENCIES = {
   {
     bundle = "acme.toolchain-specs@v1",
     source = "git://github.com/acme/toolchain-specs",
-    ref = "a1b2c3d4e5f6",
+    ref = "a1b2c3d4e5f6...",
     needed_by = "fetch",  -- the access below is checked against this; build is too late
   },
 }
@@ -267,7 +268,7 @@ DEPENDENCIES = {
     bundle = {
       identity = "acme.toolchain-specs@v1",
       source = "git://github.com/acme/toolchain-specs",
-      ref = "a1b2c3d4e5f6",
+      ref = "a1b2c3d4e5f6...",
     },
   },
 }
@@ -290,7 +291,7 @@ DEPENDENCIES = {
   {
     bundle = "acme.toolchain-specs@v1",
     source = "git://github.com/acme/toolchain-specs",
-    ref = "a1b2c3d4e5f6",
+    ref = "a1b2c3d4e5f6...",
   },
   -- A spec from the same bundle (shorthand: bundle already declared above)
   {
@@ -309,7 +310,7 @@ Both manifests and specs can declare BUNDLES tables:
 ```lua
 -- In a spec file (with BUNDLES table)
 BUNDLES = {
-  ["tc"] = {identity = "acme.toolchain-specs@v1", source = "git://...", ref = "abc123"},
+  ["tc"] = {identity = "acme.toolchain-specs@v1", source = "git://...", ref = "abc123..."},
 }
 DEPENDENCIES = {
   {spec = "acme.gcc@v2", bundle = "tc"},    -- alias reference
@@ -322,7 +323,7 @@ Or inline bundle declarations in DEPENDENCIES (for single references):
 ```lua
 -- In a spec file (inline bundle declaration)
 DEPENDENCIES = {
-  {bundle = "acme.toolchain-specs@v1", source = "git://...", ref = "abc123"},
+  {bundle = "acme.toolchain-specs@v1", source = "git://...", ref = "abc123..."},
   {spec = "acme.gcc@v2", bundle = "acme.toolchain-specs@v1"},  -- reference by identity
 }
 ```

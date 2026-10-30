@@ -348,3 +348,21 @@ TEST_CASE("glob_filter both selects() overloads agree") {
     CHECK(f.selects(path) == f.selects(path, matched));
   }
 }
+
+TEST_CASE("glob_filter::reaches_below: enter a directory an include may match inside") {
+  auto const filter{ [](std::vector<std::string> const &selectors) {
+    return envy::glob_parse_filter(selectors, "test", "entry");
+  } };
+
+  CHECK(filter({ "deps/lib/vendor/leaf" }).reaches_below("deps/lib"));
+  CHECK(filter({ "deps/lib/vendor/leaf" }).reaches_below("deps"));
+  CHECK_FALSE(filter({ "deps/lib/vendor/leaf" }).reaches_below("deps/other"));
+  CHECK(filter({ "deps/*/vendor/leaf" }).reaches_below("deps/other"));
+  CHECK(filter({ "**/leaf" }).reaches_below("anything/at/all"));
+  CHECK(filter({ "deps" }).reaches_below("deps/lib"));  // a directory covers its subtree
+  CHECK_FALSE(filter({ "deps/lib" }).reaches_below("other"));
+
+  // An exclude prunes the whole subtree, whatever an include might find inside it.
+  CHECK_FALSE(filter({ "**/leaf", "!deps/lib" }).reaches_below("deps/lib"));
+  CHECK_FALSE(filter({ "**/leaf", "!deps" }).reaches_below("deps/lib"));
+}

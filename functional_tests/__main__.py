@@ -72,6 +72,9 @@ def _disable_fetch_retry_by_default() -> None:
     that actually tests the policy, sets ENVY_FETCH_ATTEMPTS back up for itself.
     """
     os.environ.setdefault("ENVY_FETCH_ATTEMPTS", "1")
+    # A silent git server fails inside the watchdog, naming the url, instead of being
+    # killed with it at the same 60s: production's libgit2 bound.
+    os.environ.setdefault("ENVY_GIT_TIMEOUT_MS", "20000")
 
 
 def _setup_sanitizer_env() -> None:

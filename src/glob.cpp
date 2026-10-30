@@ -243,6 +243,27 @@ bool glob_filter::selects(std::string_view path,
   return exclude.empty() || !glob_any_match(exclude, path);
 }
 
+bool glob_filter::reaches_below(std::string_view path) const {
+  if (glob_any_match(exclude, path)) { return false; }
+  return std::ranges::any_of(include, [&](std::string_view pattern) {
+    // Component by component: '**' can swallow whatever lies below, and a pattern left
+    // with components once the path runs out names something beneath it.
+    for (std::string_view rest{ path }; !rest.empty();) {
+      if (pattern.empty()) { return true; }
+      auto const take{ [](std::string_view &s) {
+        auto const slash{ s.find('/') };
+        auto const head{ s.substr(0, slash) };
+        s = slash == std::string_view::npos ? std::string_view{} : s.substr(slash + 1);
+        return head;
+      } };
+      auto const p{ take(pattern) };
+      if (p == "**") { return true; }
+      if (!glob_match(p, take(rest))) { return false; }
+    }
+    return true;
+  });
+}
+
 glob_filter glob_parse_filter(std::vector<std::string> const &selectors,
                               std::string_view context,
                               std::string_view what) {

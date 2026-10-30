@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -878,6 +879,85 @@ TEST_CASE("git_source equality covers every field") {
   envy::pkg_cfg::git_source with_subdir{ base };
   with_subdir.subdir = "inner";
   CHECK_FALSE(base == with_subdir);
+
+  envy::pkg_cfg::git_source with_submodules{ base };
+  with_submodules.submodules = envy::glob_filter{};
+  CHECK_FALSE(base == with_submodules);
+  envy::pkg_cfg::git_source filtered{ with_submodules };
+  filtered.submodules->exclude = { "a" };
+  CHECK_FALSE(with_submodules == filtered);
+}
+
+TEST_CASE("source_key of a git source carries its submodule selection") {
+  envy::pkg_cfg::git_source const base{ .url = "git://x/b.git", .ref = "main" };
+  CHECK(envy::source_key(base) == "git\ngit://x/b.git\nmain");  // unchanged entries
+
+  envy::pkg_cfg::git_source all{ base };
+  all.submodules = envy::glob_filter{};
+  envy::pkg_cfg::git_source some{ base };
+  some.submodules = envy::glob_filter{ .include = { "a" }, .exclude = { "b" } };
+  CHECK(envy::source_key(all) == "git\ngit://x/b.git\nmain\nsubmodules");
+  CHECK(envy::source_key(some) == "git\ngit://x/b.git\nmain\nsubmodules\n+1:a\n-1:b");
+}
+
+TEST_CASE("source_key tells an include of '!x' from an exclude of 'x'") {
+  // `./!lib` normalizes to the literal path `!lib`, which selects what `!lib` excludes.
+  envy::pkg_cfg::git_source include_bang{ .url = "git://x/b.git", .ref = "main" };
+  include_bang.submodules = envy::glob_filter{ .include = { "!lib" }, .exclude = {} };
+  envy::pkg_cfg::git_source exclude{ .url = "git://x/b.git", .ref = "main" };
+  exclude.submodules = envy::glob_filter{ .include = {}, .exclude = { "lib" } };
+  CHECK(envy::source_key(include_bang) != envy::source_key(exclude));
+}
+
+TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
+  sol::state lua;
+  auto parse{ [&](char const *script) {
+    return envy::pkg_cfg::parse(lua_eval(script, lua),
+                                fs::path("/fake"),
+                                envy::pkg_entry_shape::MANIFEST_PACKAGE);
+  } };
+
+  SUBCASE("absent or false takes none") {
+    for (char const *extra : { "", ", submodules = false" }) {
+      CAPTURE(extra);
+      auto const script{ std::string{ "result = { spec = 'a.b@v1', source = "
+                                      "'https://h/r.git', ref = 'main'" } +
+                         extra + " }" };
+      auto const *cfg{ parse(script.c_str()) };
+      CHECK_FALSE(std::get<envy::pkg_cfg::git_source>(cfg->source).submodules);
+    }
+  }
+
+  SUBCASE("true takes all") {
+    auto const *cfg{ parse(
+        "result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+        "ref = 'main', submodules = true }") };
+    auto const &git{ std::get<envy::pkg_cfg::git_source>(cfg->source) };
+    REQUIRE(git.submodules);
+    CHECK(git.submodules->empty());
+  }
+
+  SUBCASE("a list splits into include and exclude") {
+    auto const *cfg{ parse(
+        "result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+        "ref = 'main', submodules = { 'a/**', '!a/b' } }") };
+    auto const &git{ std::get<envy::pkg_cfg::git_source>(cfg->source) };
+    REQUIRE(git.submodules);
+    CHECK(git.submodules->include == std::vector<std::string>{ "a/**" });
+    CHECK(git.submodules->exclude == std::vector<std::string>{ "a/b" });
+  }
+
+  SUBCASE("an empty list, a wrong type, or a non-git source is an error") {
+    CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+                            "ref = 'main', submodules = {} }"),
+                      doctest::Contains("selects nothing"));
+    CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+                            "ref = 'main', submodules = 'x' }"),
+                      doctest::Contains("boolean or a list"));
+    CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.tar.gz', "
+                            "submodules = true }"),
+                      doctest::Contains("requires a git source"));
+  }
 }
 
 TEST_CASE("local_source equality compares the path") {

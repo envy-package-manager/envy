@@ -1,6 +1,8 @@
 #pragma once
 
+#include "glob.h"
 #include "pkg_phase.h"
+#include "uri.h"
 #include "util.h"
 
 #include "sol/forward.hpp"
@@ -76,8 +78,9 @@ struct pkg_cfg : unmovable {
 
   struct git_source {
     std::string url;
-    std::string ref;  // commit SHA or committish
+    std::string ref;  // full commit sha, or an advertised branch/tag name
     std::optional<std::string> subdir;
+    std::optional<glob_filter> submodules;  // none when unset, all when empty
   };
 
   struct fetch_function {};  // Spec defines custom fetch()
@@ -250,6 +253,17 @@ std::string source_key(pkg_cfg::remote_source const &r);
 std::string source_key(pkg_cfg::git_source const &g);
 std::string source_key(pkg_cfg::local_source const &l);
 std::string custom_fetch_source_key(pkg_cfg const &cfg);
+
+// `submodules = true | { selectors }` on a git entry: true takes every submodule, a list
+// selects by root-relative path ('!' excludes), absent or false takes none.
+std::optional<glob_filter> pkg_cfg_parse_submodules(sol::table const &table,
+                                                    std::string_view context);
+
+// A git entry's `ref` (required) and `submodules` beside its url; nullopt for any other
+// scheme, where `submodules` is an error. Every shape that names a git source reads it so.
+std::optional<pkg_cfg::git_source> pkg_cfg_parse_git_source(sol::table const &table,
+                                                            uri_info const &info,
+                                                            std::string_view context);
 
 // Throw if `table` carries 'platforms': it filters manifest PACKAGES entries and nothing
 // else, so a dependency entry dropped it. Shared, so every such shape says it alike.

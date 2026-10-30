@@ -4,7 +4,7 @@
 
 All script-global variables are uppercase: manifests export `PACKAGES`, plus optional `BUNDLES`, `DEFAULT_SHELL` and `PACKAGE_DEPOTS`; specs declare `IDENTITY`, `FETCH`, `STAGE`, `BUILD`, `INSTALL`, `SETUP`, `DEPENDENCIES`, `BUNDLES`, `PRODUCTS`, `OPTIONS`, `PLATFORMS`, `DISPLAY`, `USER_MANAGED` and `EXPORTABLE`.
 
-**Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `options`, `platforms`, `needed_by`, `product`, `setup`, `vendor`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
+**Syntax:** every `PACKAGES` entry is a table—there is no bare-string shorthand—naming a `spec` plus exactly one of `source` or `bundle`, and any of `sha256`, `ref`, `submodules`, `options`, `platforms`, `needed_by`, `product`, `setup`, `vendor`. Every other key is an error: a key envy does not read is a key that silently does nothing, and a misspelled `sha256` must not quietly disable verification.
 
 **Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.extend()` to combine common and OS-specific package lists.
 
@@ -57,7 +57,10 @@ PACKAGES = envy.PLATFORM == "darwin" and envy.extend(common, darwin_packages)
 - `spec` — the identity this entry declares; the spec file's own `IDENTITY` must match it
 - `source` — URL (http/https/s3/ftp/git/file) or a path relative to the declaring file; a
   local path is loaded in place and never enters the cache
-- `ref` — git commit SHA or committish (required for git sources)
+- `ref` — required for git sources: a full commit sha (the pin; `envy git-resolve` makes one) or an
+  advertised branch/tag name. Short shas and expressions (`HEAD~1`) are errors—neither fetches shallow
+- `submodules` — git sources only: `true` takes every submodule, `{ selectors }` picks by
+  root-relative path (`!` excludes, envy's one selector language). Recursive; part of the cache key
 - `sha256` — expected hash (**optional**, permissive by default; a future strict mode will
   require it for non-`local.*`). On a local path it makes the entry verified *and* cached
 - `options` — spec configuration, passed to every phase function and hashed into the
@@ -189,11 +192,12 @@ Specs define verbs describing how to acquire, validate, and install packages:
 
 - **`fetch`** — Acquire source materials. Can be:
   - String: `FETCH = "https://..."` (no verification)
-  - Single file: `FETCH = {source="...", sha256="..."}` (optional verification)
+  - Single file: `FETCH = {source="...", sha256="..."}` (optional verification); entries take `source`, `sha256`, `ref`, `submodules`, `post_data`, `dest`—any other key is an error, as in `envy.fetch`
   - Multiple files: `FETCH = {{source="..."}, {source="..."}}` (concurrent, optional verification per-file)
   - Custom function: `FETCH = function(tmp_dir, options) envy.fetch(...) end` (imperative with `envy.fetch()` API)
   - Function returning declarative: `FETCH = function(tmp_dir, options) return "https://..." end` (enables templating with options; return value can be any declarative form: string, table, array; can mix with imperative `envy.fetch()` calls)
-  - **Transport retry:** http, ftp and git retry transient transport failures under a wall-clock budget running from the first failure—90s, or 5s for connect failures, a host that will not finish a handshake being down rather than busy. Backoff doubles from 1s (±50% jitter, 30s per-wait cap): dense early, where transient faults live, and jittered to keep a batch of threads off a single bad mirror. `Retry-After` on a 429 or 503 is a floor rather than an override, jittered upward only; one exceeding what the budget has left ends the fetch instead of earning the same refusal early. Retryable: connect/DNS failure, mid-body read failure, stall timeout, 5xx, 429. Not retryable: 4xx except 429, sha256 mismatch, callback abort—including during a backoff wait, which surfaces as an abort rather than as the failure that preceded it. The wait gets a progress row of its own (`retry 2 in 6s (http_status)`), counting down, since a minute of a frozen byte count reads as a stall. Safe because fetches are idempotent GETs and payloads are verified after transport. `ENVY_FETCH_BUDGET_MS` (default 90000, 0 disables), `ENVY_FETCH_ATTEMPTS` (default 10, a backstop the budget normally beats; 1 disables) and `ENVY_FETCH_RETRY_BASE_MS` (default 1000) tune it; s3 is excluded because the AWS SDK retries internally. Transports are bounded on both platforms—curl by `LOW_SPEED_LIMIT`/`LOW_SPEED_TIME`, WinINet by connect/send/receive timeouts—so a mirror that accepts and then stops sending fails in ~60s instead of hanging.
+  - **Git sources:** each repository fetches its commit at depth 1 when an advertised ref points at it (any server) or the server takes unadvertised wants (`allow-reachable-sha1-in-want`: GitHub, GitLab, googlesource); a server refusing one gets a full fetch. Local paths fetch full—libgit2's local transport cannot go shallow. No tags beyond a named one, so `git describe` needs the spec's help. `submodules` checks each selected submodule out at the commit its parent records, recursively, ≤8 fetching at once, in git's layout (`.git/modules/<name>`, relative gitfiles, `submodule.<name>.url`) so `git submodule status` reads clean. Relative urls resolve against the parent's; `update = none` is skipped; a gitlink without a `.gitmodules` url, a path through a symlink, and a local url under a remote parent are errors. An include selector matching nothing is a typo, so an error. The row shows the superproject's fetch—objects, deltas, then `checkout N/M files` as the working tree is written—then `X/Y submodules` over the whole tree's bytes—Y grows as nested ones turn up, so the bar may dip—with an indented row per submodule in flight. The `git_fetch` trace names each repository's strategy and depth.
+  - **Transport retry:** http, ftp and git retry transient transport failures under a wall-clock budget running from the first failure—90s, or 5s for connect failures, a host that will not finish a handshake being down rather than busy. Backoff doubles from 1s (±50% jitter, 30s per-wait cap): dense early, where transient faults live, and jittered to keep a batch of threads off a single bad mirror. `Retry-After` on a 429 or 503 is a floor rather than an override, jittered upward only; one exceeding what the budget has left ends the fetch instead of earning the same refusal early. Retryable: connect/DNS failure, mid-body read failure, stall timeout, 5xx, 429. Not retryable: 4xx except 429, sha256 mismatch, callback abort—including during a backoff wait, which surfaces as an abort rather than as the failure that preceded it. The wait gets a progress row of its own (`retry 2 in 6s (http_status)`), counting down, since a minute of a frozen byte count reads as a stall. Git retries per repository, so one blip never restarts a submodule tree. Safe because fetches are idempotent GETs and payloads are verified after transport. `ENVY_FETCH_BUDGET_MS` (default 90000, 0 disables), `ENVY_FETCH_ATTEMPTS` (default 10, a backstop the budget normally beats; 1 disables) and `ENVY_FETCH_RETRY_BASE_MS` (default 1000) tune it; s3 is excluded because the AWS SDK retries internally. Transports are bounded on both platforms—curl by `LOW_SPEED_LIMIT`/`LOW_SPEED_TIME`, WinINet by connect/send/receive timeouts, libgit2 by a 30s connect and 60s silence timeout (`ENVY_GIT_TIMEOUT_MS`; not Windows https, which is WinHTTP's: 60s connect, no read timeout)—so a mirror that accepts and then stops sending fails in ~60s instead of hanging.
 - **`stage`** — Prepare staging area from fetched content. Default extracts archives; custom functions can manipulate source tree. Declarative form takes `strip`, `only` and `archives`—`STAGE = {strip = 1, only = {"bin/clang-*", "lib/**/include/*.h"}}` extracts only matching paths (a directory takes its subtree), matched post-`strip`; the rest of the archive is never decompressed. Globs: `*`/`?` within a component, `**` across, `[a-z]` classes. An `only` entry nothing in the fetch dir provides is a hard error. Archives are known by extension; `archives = {"*.pack", "!docs.zip"}` unpacks or keeps whole a fetched file by name.
 - **`build`** — Compile or process staged content. Specs access staging directory, dependency artifacts, and install directory.
 - **`install`** — Write final artifacts into the entry's `pkg/` directory. On a clean return the lock destructor drops the ephemeral dirs and touches `envy-complete`, which is what makes the entry a cache hit ever after.
@@ -501,6 +505,8 @@ FETCH = {                                                    -- concurrent, veri
   { source = "https://example.com/gcc.tar.gz.sig" },
 }
 FETCH = { source = "git://github.com/vendor/lib.git", ref = "a1b2c3d4..." }
+FETCH = { source = "https://github.com/espressif/esp-idf.git", ref = "fff9895c...",
+          submodules = { "!components/openthread" } }               -- recursive, pruned
 FETCH = { source = "s3://bucket/lib.tar.gz", sha256 = "ghi..." }        -- first-class
 ```
 
@@ -744,7 +750,7 @@ siblings a spec just `require`s: the bundle root is on `package.path`.
 ```lua
 -- vendor.mytool@v1, in some other bundle or standalone
 DEPENDENCIES = {
-  { bundle = "acme.toolchain@v1", source = "git://github.com/acme/specs", ref = "a1b2c3d",
+  { bundle = "acme.toolchain@v1", source = "git://github.com/acme/specs", ref = "a1b2c3d4...",
     needed_by = "fetch" },     -- the access is checked against this, and build is too late
 }
 

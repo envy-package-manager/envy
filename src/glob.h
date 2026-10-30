@@ -40,12 +40,17 @@ struct glob_filter {
   std::vector<std::string> include, exclude;
 
   bool empty() const { return include.empty() && exclude.empty(); }
+  bool operator==(glob_filter const &) const = default;
 
   bool selects(std::string_view path) const;
 
   // Flags matching includes. Excludes are not tracked: an exclude naming nothing is a
   // set that lacked it, while an include naming nothing is a typo.
   bool selects(std::string_view path, std::vector<bool> &include_matched) const;
+
+  // `path` is not excluded and an include could match something beneath it: a walk that
+  // learns what a directory holds only by entering it must enter this one.
+  bool reaches_below(std::string_view path) const;
 };
 
 // A leading '!' excludes. Both halves go through glob_normalize_selectors. A bare "!"
