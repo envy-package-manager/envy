@@ -206,7 +206,6 @@ tui::section_frame git_frame(std::string const &label,
                                           .status = oss.str() } };
 }
 
-
 }  // namespace
 
 tui::section_frame fetch_git_tree_frame(std::string const &label,
