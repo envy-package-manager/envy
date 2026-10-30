@@ -29,7 +29,7 @@
 **Version:** 1.9.7
 **License:** GPL-2.0 with linking exception
 **Purpose:** Every git fetch—spec, bundle, and package sources with their submodules—and `envy git-resolve`
-**Integration:** Smart protocol v0 only (no v2 client through 2.0.0-rc.1), so an unadvertised commit needs the server's `allow-reachable-sha1-in-want`; GitHub, GitLab, googlesource, and kernel.org advertise it. `USE_SHA1` stays unset: the default collision-detecting SHA-1 is what makes a commit pin the integrity check for a whole submodule tree
+**Integration:** Smart protocol v0 only (no v2 client through 2.0.0-rc.1), so an unadvertised commit needs the server's `allow-reachable-sha1-in-want`; GitHub, GitLab, googlesource, and kernel.org advertise it. `USE_SHA1` stays unset: the default collision-detecting SHA-1 is what makes a commit pin the integrity check for a whole submodule tree; `cmake/templates/libgit2_longpaths_patch.py.in` raises libgit2's Windows `MAX_PATH` cap on repository-internal paths (gitdir, refs, packs) to `GIT_PATH_MAX`, which its `\\?\` path layer already reaches—nested submodule gitdirs outgrow 260
 **Rationale:** 1.9.7 escapes repository paths in the libssh2 transport (CVE-2026-5917); 2.0 waits for a release
 
 ## AWS SDK for C++

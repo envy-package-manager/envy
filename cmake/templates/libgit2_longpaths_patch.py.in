@@ -1,0 +1,22 @@
+import pathlib
+
+# On Windows libgit2 caps every path inside a repository -- gitdir, refs, packs, locks --
+# at MAX_PATH (260), whatever core.longpaths says. Its Win32 layer names every path in
+# the NT "\\?\" form and reaches GIT_PATH_MAX, so the cap is policy, not capacity, and it
+# rules out a nested submodule gitdir (.git/modules/a/modules/b) under any real cache
+# root. Raise it to the layer's own limit; working-tree paths still obey core.longpaths.
+
+PATCHES = (
+    ("fs_path.c", "total_len > MAX_PATH) {", "total_len >= GIT_PATH_MAX) {"),
+    ("fs_path.h", "total_chars > MAX_PATH) {", "total_chars >= GIT_PATH_MAX) {"),
+)
+
+UTIL = pathlib.Path(r"@LIBGIT2_UTIL_DIR@")
+for name, old, new in PATCHES:
+    path = UTIL / name
+    text = path.read_text()
+    if new in text:
+        continue
+    if text.count(old) != 1:
+        raise SystemExit(f"libgit2 longpaths patch: expected one '{old}' in {path}")
+    path.write_text(text.replace(old, new))

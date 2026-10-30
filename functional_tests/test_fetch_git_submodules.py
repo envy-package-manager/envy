@@ -228,6 +228,19 @@ class TestFetchGitSubmodulesLocal(_SubmoduleCase):
         self.assertEqual(self.repos.lib_c1, events["deps/lib"]["sha"])
         self.assertEqual({"local"}, {e["strategy"] for e in events.values()})
 
+    def test_nested_gitdir_past_libgit2s_windows_cap(self):
+        """libgit2 rejects a gitdir whose path, plus 92 for its longest file, passes
+        MAX_PATH -- about 168 characters -- whatever core.longpaths says; envy patches
+        that out. Aim the nested gitdir near 185, so every real file stays under 260 and
+        only that cap is under test."""
+        dest = self.work / "out"
+        while len(str(dest / ".git/modules/deps/lib/modules/vendor/leaf")) < 185:
+            dest = dest.parent / ("x" + dest.name)
+        run = self.run_envy("fetch", self.repos.super, dest,
+                            "--ref", self.repos.super_sha, "--submodules")
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue((dest / "deps/lib/vendor/leaf/leaf.txt").is_file())
+
     def test_without_the_flag_no_submodule_is_fetched(self):
         dest, run = self.fetch(str(self.repos.super), self.repos.super_sha)
         self.assertEqual(0, run.returncode, run.stderr)
