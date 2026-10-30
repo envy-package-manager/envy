@@ -4,6 +4,7 @@
 #include "libgit2_util.h"
 #include "trace.h"
 #include "tui.h"
+#include "uri.h"
 #include "util.h"
 
 #include "git2.h"
@@ -84,6 +85,17 @@ config_ptr repo_config(git_repository *repo) {
   return config_ptr{ raw, git_config_free };
 }
 
+bool has_commit(git_repository *repo, std::string const &sha) {
+  git_oid oid;
+  git_object *raw{ nullptr };
+  if (git_oid_fromstr(&oid, sha.c_str()) ||
+      git_object_lookup(&raw, repo, &oid, GIT_OBJECT_COMMIT)) {
+    return false;
+  }
+  git_object_free(raw);
+  return true;
+}
+
 repo_ptr init_repo(std::filesystem::path const &gitdir,
                    std::filesystem::path const *workdir,
                    std::string const &url) {
@@ -148,96 +160,6 @@ std::vector<submodule_entry> list_submodules(git_repository *repo) {
   util_sort(out, [](auto const &a, auto const &b) { return a.path < b.path; });
   return out;
 }
-
-// Every repository's progress, rolled into the request's one row. Until a submodule is
-// registered that row is the root's own fetch, like any clone; after, it is the tree --
-// X/Y submodules over the whole tree's bytes, each in-flight repository beneath. libgit2
-// and retry waits call in from every worker, so the row's callback runs under one lock.
-class git_progress : unmovable {
- public:
-  struct repo {
-    git_progress *sum;
-    std::string path;  // empty for the root
-    fetch_git_progress last{};
-    std::optional<fetch_retry_progress> retry;  // set while it waits out a backoff
-    bool done{ false };
-  };
-
-  explicit git_progress(fetch_progress_cb_t const &row) : row_{ row } {}
-
-  repo *track(std::string path) {
-    std::lock_guard const lock{ mutex_ };
-    repo *const r{ &repos_.emplace_back(repo{ .sum = this, .path = std::move(path) }) };
-    publish();
-    return r;
-  }
-
-  void finished(repo *r) {
-    std::lock_guard const lock{ mutex_ };
-    r->done = true;
-    r->retry.reset();
-    if (!r->path.empty()) { ++done_; }
-    publish();
-  }
-
-  void discovered(std::size_t count) {
-    std::lock_guard const lock{ mutex_ };
-    total_ += static_cast<std::uint32_t>(count);
-    publish();
-  }
-
-  // What fetch_retrying reports for one repository: its backoff waits.
-  fetch_progress_cb_t waits(repo *r) {
-    return [this, r](fetch_progress_t const &p) {
-      std::lock_guard const lock{ mutex_ };
-      if (auto const *wait{ std::get_if<fetch_retry_progress>(&p) }) { r->retry = *wait; }
-      return publish();
-    };
-  }
-
-  bool aborted() const { return aborted_; }
-
-  static int on_transfer(git_indexer_progress const *stats, void *payload) {
-    auto &r{ *static_cast<repo *>(payload) };
-    std::lock_guard const lock{ r.sum->mutex_ };
-    r.last = { .total_objects = stats->total_objects,
-               .indexed_objects = stats->indexed_objects,
-               .received_objects = stats->received_objects,
-               .total_deltas = stats->total_deltas,
-               .indexed_deltas = stats->indexed_deltas,
-               .received_bytes = stats->received_bytes };
-    r.retry.reset();  // bytes are moving again
-    return r.sum->publish() ? 0 : GIT_EUSER;
-  }
-
- private:
-  bool publish() {  // mutex_ held
-    if (row_ && !aborted_ && !row_(snapshot())) { aborted_ = true; }
-    return !aborted_;
-  }
-
-  fetch_progress_t snapshot() const {
-    if (total_ == 0) {  // just the root so far: its fetch is the row
-      repo const &root{ repos_.front() };
-      return root.retry ? fetch_progress_t{ *root.retry } : fetch_progress_t{ root.last };
-    }
-    fetch_git_tree_progress tree{ .done = done_, .total = total_ };
-    for (auto const &r : repos_) {
-      tree.received_bytes += r.last.received_bytes;
-      if (!r.done && !r.path.empty()) {
-        tree.in_flight.push_back({ .path = r.path, .counters = r.last, .retry = r.retry });
-      }
-    }
-    return tree;
-  }
-
-  fetch_progress_cb_t const &row_;
-  std::mutex mutex_;
-  std::deque<repo> repos_;  // stable addresses: each is a libgit2 callback payload
-  std::uint32_t done_{ 0 };
-  std::uint32_t total_{ 0 };
-  std::atomic<bool> aborted_{ false };
-};
 
 struct git_job {
   std::string url;   // resolved
@@ -331,7 +253,7 @@ class git_tree : unmovable {
   // Connect, pick a plan from the advertisement, download, and check the commit out
   // detached. The retry wraps the network half only: a repository is created once.
   void fetch_repo(git_job const &job) {
-    if (job.url.starts_with("https://")) { libgit2_require_ssl_certs(); }
+    if (uri_is_https_scheme(job.url)) { libgit2_require_ssl_certs(); }
 
     // One remote per connection: libgit2 cannot reconnect one whose fetch failed.
     auto const origin{ [&] {
@@ -380,23 +302,14 @@ class git_tree : unmovable {
           sha = git_fetch_target(job.ref, refs);
           plans = git_fetch_plans(sha, refs, git_url_is_local(job.url));
 
-          for (auto const &plan : plans) {
-            try {
-              download(origin().get(), plan, callbacks, fail);
-              fetched = &plan;
-              return;
-            } catch (fetch_error const &e) {
-              // A refusal is the server's answer to this plan; the next may not draw it.
-              if (e.kind() != fetch_error_kind::PROTOCOL || &plan == &plans.back()) {
-                throw;
-              }
-              tui::debug("fetch: %s refused %s at depth %d: %s",
-                         job.url.c_str(),
-                         git_fetch_strategy_name(plan.strategy),
-                         plan.depth,
-                         e.what());
-            }
-          }
+          fetched = &git_fetch_first(
+              plans,
+              job.url,
+              sha,
+              [&](git_fetch_plan const &plan) {
+                download(origin().get(), plan, callbacks, fail);
+              },
+              [&] { return has_commit(job.repo.get(), sha); });
         },
         progress_.waits(prog),
         trace_spec_,
@@ -473,14 +386,16 @@ class git_tree : unmovable {
     std::vector<submodule_entry const *> picked;
     for (auto const &sm : subs) {
       std::string const full{ job.path.empty() ? sm.path : job.path + "/" + sm.path };
-      bool const selected{ [&] {
+      // Selected, or on the way to something an include may select: only fetching a
+      // submodule says what it holds.
+      bool const wanted{ [&] {
         std::lock_guard const lock{ mutex_ };
-        return filter_->selects(full, matched_);
+        return filter_->selects(full, matched_) || filter_->reaches_below(full);
       }() };
-      if (!selected || sm.update_none) {
+      if (!wanted || sm.update_none) {
         tui::debug("fetch: submodule %s skipped (%s)",
                    full.c_str(),
-                   selected ? "update = none" : "not selected");
+                   wanted ? "update = none" : "not selected");
         continue;
       }
       if (sm.url.empty()) {
@@ -495,13 +410,16 @@ class git_tree : unmovable {
     }
 
     // A name inside another's gitdir would nest one repository in another's metadata.
-    for (auto const *a : picked) {
-      for (auto const *b : picked) {
-        if (b->name.starts_with(a->name + "/")) {
-          throw_runtime_error(
-              { "fetch_git: submodule name '", b->name, "' nests in '", a->name, "'" });
-        }
-      }
+    if (auto const clash{ git_submodule_name_clash([&] {
+          std::vector<std::string> names;
+          for (auto const *sm : picked) { names.push_back(sm->name); }
+          return names;
+        }()) }) {
+      throw_runtime_error({ "fetch_git: submodule names '",
+                            clash->first,
+                            "' and '",
+                            clash->second,
+                            "' share a gitdir" });
     }
 
     config_ptr const cfg{ repo_config(job.repo.get()) };
@@ -550,6 +468,117 @@ class git_tree : unmovable {
 };
 
 }  // namespace
+
+git_progress::repo *git_progress::track(std::string path) {
+  std::lock_guard const lock{ mutex_ };
+  repo *const r{ &repos_.emplace_back(repo{ .sum = this, .path = std::move(path) }) };
+  // The local transport never reports a transfer, so here is where a stop is heard.
+  if (!publish()) {
+    throw fetch_error(fetch_error_kind::ABORTED, "fetch_git: aborted before " + r->path);
+  }
+  return r;
+}
+
+void git_progress::finished(repo *r) {
+  std::lock_guard const lock{ mutex_ };
+  r->done = true;
+  r->retry.reset();
+  if (!r->path.empty()) { ++done_; }
+  publish();
+}
+
+void git_progress::discovered(std::size_t count) {
+  std::lock_guard const lock{ mutex_ };
+  total_ += static_cast<std::uint32_t>(count);
+  publish();
+}
+
+fetch_progress_cb_t git_progress::waits(repo *r) {
+  return [this, r](fetch_progress_t const &p) {
+    std::lock_guard const lock{ mutex_ };
+    if (auto const *wait{ std::get_if<fetch_retry_progress>(&p) }) { r->retry = *wait; }
+    return publish();
+  };
+}
+
+int git_progress::on_transfer(git_indexer_progress const *stats, void *payload) {
+  auto &r{ *static_cast<repo *>(payload) };
+  std::lock_guard const lock{ r.sum->mutex_ };
+  r.last = { .total_objects = stats->total_objects,
+             .indexed_objects = stats->indexed_objects,
+             .received_objects = stats->received_objects,
+             .total_deltas = stats->total_deltas,
+             .indexed_deltas = stats->indexed_deltas,
+             .received_bytes = stats->received_bytes };
+  r.retry.reset();  // bytes are moving again
+  return r.sum->publish() ? 0 : GIT_EUSER;
+}
+
+bool git_progress::publish() {
+  if (row_ && !aborted_ && !row_(snapshot())) { aborted_ = true; }
+  return !aborted_;
+}
+
+fetch_progress_t git_progress::snapshot() const {
+  if (total_ == 0) {  // just the root so far: its fetch is the row
+    repo const &root{ repos_.front() };
+    return root.retry ? fetch_progress_t{ *root.retry } : fetch_progress_t{ root.last };
+  }
+  fetch_git_tree_progress tree{ .done = done_, .total = total_ };
+  for (auto const &r : repos_) {
+    tree.received_bytes += r.last.received_bytes;
+    if (!r.done && !r.path.empty()) {
+      tree.in_flight.push_back({ .path = r.path, .counters = r.last, .retry = r.retry });
+    }
+  }
+  return tree;
+}
+
+git_fetch_plan const &git_fetch_first(std::vector<git_fetch_plan> const &plans,
+                                      std::string_view url,
+                                      std::string_view sha,
+                                      function_ref<void(git_fetch_plan const &)> download,
+                                      function_ref<bool()> has_commit) {
+  for (auto const &plan : plans) {
+    try {
+      download(plan);
+      // A ref that moved between advertisement and fetch brings its new tip, not ours;
+      // ours is in its history, which the deeper plan after this one reaches.
+      if (!has_commit()) {
+        throw fetch_error(fetch_error_kind::PROTOCOL,
+                          "fetch_git: " + std::string{ url } + " sent no commit " +
+                              std::string{ sha } + " at depth " +
+                              std::to_string(plan.depth));
+      }
+      return plan;
+    } catch (fetch_error const &e) {
+      // A refusal is the server's answer to this plan; the next may not draw it.
+      if (e.kind() != fetch_error_kind::PROTOCOL || &plan == &plans.back()) { throw; }
+      tui::debug("fetch: %.*s refused %s at depth %d: %s",
+                 static_cast<int>(url.size()),
+                 url.data(),
+                 git_fetch_strategy_name(plan.strategy),
+                 plan.depth,
+                 e.what());
+    }
+  }
+  throw_runtime_error({ "fetch_git: no fetch plan for ", url });
+}
+
+std::optional<std::pair<std::string, std::string>> git_submodule_name_clash(
+    std::vector<std::string> const &names) {
+  // Compared as Windows and macOS see a path: either separator, any case.
+  std::vector<std::string> keys;
+  for (auto const &n : names) { keys.push_back(lowercase(glob_canonical_path(n))); }
+  for (std::size_t i{ 0 }; i < keys.size(); ++i) {
+    for (std::size_t j{ 0 }; j < keys.size(); ++j) {
+      if (i != j && (keys[i] == keys[j] ? i < j : keys[j].starts_with(keys[i] + "/"))) {
+        return std::pair{ names[i], names[j] };
+      }
+    }
+  }
+  return std::nullopt;
+}
 
 char const *git_fetch_strategy_name(git_fetch_strategy strategy) {
   switch (strategy) {
@@ -680,6 +709,7 @@ fetch_error_kind git_error_kind(int klass, std::string_view message) {
                         ? std::atoi(std::string{ message.substr(kStatus.size()) }.c_str())
                         : 0 };
   if (message.starts_with("remote error:") || message.starts_with("invalid packet line") ||
+      message.starts_with("server doesn't support") ||
       message.find("authentication required") != std::string_view::npos ||
       (status >= 400 && status < 500 && status != 429)) {
     return fetch_error_kind::PROTOCOL;

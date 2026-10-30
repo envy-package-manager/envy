@@ -117,6 +117,13 @@ class _Repos:
                                       None)])
         self.evil_sha = self.head(self.evil)
 
+        # A gitlink with no .gitmodules at all: nothing says where to fetch it from.
+        self.orphan = self._repo("orphan", {"top.txt": "top\n"})
+        _git("update-index", "--add", "--cacheinfo", f"160000,{self.leaf_sha},deps/x",
+             cwd=self.orphan)
+        _git("commit", "-m", "orphan gitlink", cwd=self.orphan)
+        self.orphan_sha = self.head(self.orphan)
+
     def _repo(self, name: str, files: dict[str, str]) -> Path:
         repo = self.root / f"{name}.git"
         repo.mkdir()
@@ -242,6 +249,28 @@ class TestFetchGitSubmodulesLocal(_SubmoduleCase):
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertTrue((dest / "deps" / "lib" / "vendor" / "leaf" / "leaf.txt").is_file())
         self.assertFalse((dest / "deps" / "other" / "other.txt").exists())
+
+    def test_nested_selector_fetches_the_submodules_on_its_path(self):
+        for selector in ("deps/lib/vendor/leaf", "**/leaf"):
+            with self.subTest(selector=selector):
+                dest, run = self.fetch(str(self.repos.super), self.repos.super_sha,
+                                       "--submodule-filter", selector)
+                self.assertEqual(0, run.returncode, run.stderr)
+                self.assertTrue((dest / "deps/lib/vendor/leaf/leaf.txt").is_file())
+                self.assertIn("deps/lib/vendor/leaf", self.git_fetch_events(run))
+
+    def test_nested_selector_still_honors_an_excluded_ancestor(self):
+        dest, run = self.fetch(str(self.repos.super), self.repos.super_sha,
+                               "--submodule-filter", "**/leaf",
+                               "--submodule-filter", "!deps/lib")
+        self.assertNotEqual(0, run.returncode)  # nothing left to match **/leaf
+        self.assertIn("**/leaf", run.stderr)
+        self.assertNotIn("deps/lib", self.git_fetch_events(run))
+
+    def test_gitlink_without_gitmodules_is_an_error(self):
+        _, run = self.fetch(str(self.repos.orphan), self.repos.orphan_sha, "--submodules")
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("'deps/x' has no url", run.stderr)
 
     def test_include_matching_nothing_is_an_error(self):
         _, run = self.fetch(str(self.repos.super), self.repos.super_sha,
@@ -407,10 +436,9 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         self.assertTrue((dest / ".git" / "modules" / "deps" / "lib" / "shallow").is_file())
         self.assertEqual("v1\n", (dest / "deps" / "lib" / "lib.txt").read_text())
 
-    def test_row_counts_submodules_beside_a_row_per_fetch(self):
-        """The row turns to X/Y submodules, Y growing as nested ones turn up, with an
-        indented row for each submodule while it fetches. Read off the fallback
-        renderer, unthrottled, where every frame prints."""
+    def test_row_lands_on_the_tree_count(self):
+        """The row ends on N/N submodules. Off a TTY only the last frame is certain to
+        print; the counts and child rows along the way are unit-tested (git_progress)."""
         self.serve(reachable_wants=True)
         env = test_config.get_test_env()
         env["TERM"] = "dumb"
@@ -418,15 +446,8 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         _, run = self.fetch(self.url("dsuper"), self.repos.dsuper_sha, "--submodules",
                             env=env)
         self.assertEqual(0, run.returncode, run.stderr)
-
-        counts = [(int(x), int(y))
-                  for x, y in re.findall(r"(\d+)/(\d+) submodules", run.stderr)]
-        self.assertTrue(counts, run.stderr)
-        self.assertEqual({1, 2}, {y for _, y in counts}, run.stderr)  # leaf found late
-        self.assertEqual((2, 2), counts[-1], run.stderr)
-
-        children = {ln.split()[0] for ln in run.stderr.splitlines() if ln.startswith("  ")}
-        self.assertLessEqual({"deps/lib", "deps/lib/vendor/leaf"}, children, run.stderr)
+        counts = re.findall(r"(\d+)/(\d+) submodules", run.stderr)
+        self.assertEqual(("2", "2"), counts[-1] if counts else None, run.stderr)
 
     def test_served_superproject_cannot_reach_local_paths(self):
         self.serve(reachable_wants=True)

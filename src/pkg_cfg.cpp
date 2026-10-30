@@ -810,9 +810,14 @@ std::string source_key(pkg_cfg::remote_source const &r) {
 std::string source_key(pkg_cfg::git_source const &g) {
   std::string key{ "git\n" + g.url + "\n" + g.ref };
   if (g.submodules) {  // a different tree, so a different entry
+    // Kind and length per selector: an include may itself start with '!' or hold '\n'.
     key += "\nsubmodules";
-    for (auto const &s : g.submodules->include) { key += "\n" + s; }
-    for (auto const &s : g.submodules->exclude) { key += "\n!" + s; }
+    for (auto const &s : g.submodules->include) {
+      key += "\n+" + std::to_string(s.size()) + ":" + s;
+    }
+    for (auto const &s : g.submodules->exclude) {
+      key += "\n-" + std::to_string(s.size()) + ":" + s;
+    }
   }
   return key;
 }

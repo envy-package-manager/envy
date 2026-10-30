@@ -897,7 +897,16 @@ TEST_CASE("source_key of a git source carries its submodule selection") {
   envy::pkg_cfg::git_source some{ base };
   some.submodules = envy::glob_filter{ .include = { "a" }, .exclude = { "b" } };
   CHECK(envy::source_key(all) == "git\ngit://x/b.git\nmain\nsubmodules");
-  CHECK(envy::source_key(some) == "git\ngit://x/b.git\nmain\nsubmodules\na\n!b");
+  CHECK(envy::source_key(some) == "git\ngit://x/b.git\nmain\nsubmodules\n+1:a\n-1:b");
+}
+
+TEST_CASE("source_key tells an include of '!x' from an exclude of 'x'") {
+  // `./!lib` normalizes to the literal path `!lib`, which selects what `!lib` excludes.
+  envy::pkg_cfg::git_source include_bang{ .url = "git://x/b.git", .ref = "main" };
+  include_bang.submodules = envy::glob_filter{ .include = { "!lib" }, .exclude = {} };
+  envy::pkg_cfg::git_source exclude{ .url = "git://x/b.git", .ref = "main" };
+  exclude.submodules = envy::glob_filter{ .include = {}, .exclude = { "lib" } };
+  CHECK(envy::source_key(include_bang) != envy::source_key(exclude));
 }
 
 TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
