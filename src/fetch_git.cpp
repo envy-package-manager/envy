@@ -741,6 +741,10 @@ fetch_error_kind git_error_kind(int klass, std::string_view message) {
       (status >= 400 && status < 500 && status != 429)) {
     return fetch_error_kind::PROTOCOL;
   }
+  if (message.find("timed out") != std::string_view::npos) {  // a bound we set ran out
+    return message.starts_with("failed to connect") ? fetch_error_kind::CONNECT
+                                                     : fetch_error_kind::TIMEOUT;
+  }
   switch (klass) {
     case GIT_ERROR_NET:
     case GIT_ERROR_HTTP:

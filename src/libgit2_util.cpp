@@ -2,6 +2,8 @@
 
 #include <git2.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -111,6 +113,21 @@ void ensure_ssl_certs_configured() {
 
 libgit2_scope::libgit2_scope() {
   if (git_libgit2_init() < 0) { throw_runtime_error({ "Failed to initialize libgit2" }); }
+
+  // libgit2 waits on a silent server forever by default. Bound it as curl and WinINet are:
+  // a connect, and any stretch with no bytes moving. ENVY_GIT_TIMEOUT_MS is for tests.
+  int const timeout_ms{ [] {
+    char const *val{ std::getenv("ENVY_GIT_TIMEOUT_MS") };
+    char *end{ nullptr };
+    long const parsed{ val && *val ? std::strtol(val, &end, 10) : 0 };
+    return (end && *end == '\0' && parsed > 0 && parsed <= 3600000)
+               ? static_cast<int>(parsed)
+               : 60000;
+  }() };
+  if (git_libgit2_opts(GIT_OPT_SET_SERVER_CONNECT_TIMEOUT, std::min(timeout_ms, 30000)) ||
+      git_libgit2_opts(GIT_OPT_SET_SERVER_TIMEOUT, timeout_ms)) {
+    throw_runtime_error({ "Failed to set libgit2 network timeouts" });
+  }
 }
 
 libgit2_scope::~libgit2_scope() { git_libgit2_shutdown(); }

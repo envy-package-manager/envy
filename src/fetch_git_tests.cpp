@@ -328,3 +328,13 @@ TEST_CASE("git_progress: a checkout reports files written of files to write") {
   CHECK(last.checkout_done == 450);
   CHECK(last.checkout_total == 1800);
 }
+
+TEST_CASE("git_error_kind: a socket timeout is a timeout, a connect one a connect") {
+  CHECK(envy::git_error_kind(GIT_ERROR_NET, "could not read from socket: timed out") ==
+        envy::fetch_error_kind::TIMEOUT);
+  CHECK(envy::git_error_kind(GIT_ERROR_NET, "could not write to socket: timed out") ==
+        envy::fetch_error_kind::TIMEOUT);
+  CHECK(envy::git_error_kind(GIT_ERROR_NET,
+                             "failed to connect to h: Operation timed out") ==
+        envy::fetch_error_kind::CONNECT);
+}
