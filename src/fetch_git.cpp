@@ -490,7 +490,8 @@ git_progress::repo *git_progress::track(std::string path) {
   repo *const r{ &repos_.emplace_back(repo{ .sum = this, .path = std::move(path) }) };
   // The local transport never reports a transfer, so here is where a stop is heard.
   if (!publish()) {
-    throw_fetch_error(fetch_error_kind::ABORTED, { "fetch_git: aborted before ", r->path });
+    throw_fetch_error(fetch_error_kind::ABORTED,
+                      { "fetch_git: aborted before ", r->path });
   }
   return r;
 }
