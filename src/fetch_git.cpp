@@ -298,28 +298,27 @@ class git_tree : unmovable {
     git_fetch_plan const *fetched{ nullptr };
     fetch_retrying(
         [&] {
-          auto const refs{ [&] {
-            remote_ptr const remote{ origin() };
-            if (git_remote_connect(remote.get(),
-                                   GIT_DIRECTION_FETCH,
-                                   &callbacks,
-                                   nullptr,
-                                   nullptr)) {
-              fail("connect to");
-            }
-            auto r{ git_remote_refs(remote.get()) };
-            git_remote_disconnect(remote.get());
-            return r;
-          }() };
+          remote_ptr advertised{ origin() };
+          if (git_remote_connect(advertised.get(),
+                                 GIT_DIRECTION_FETCH,
+                                 &callbacks,
+                                 nullptr,
+                                 nullptr)) {
+            fail("connect to");
+          }
+          auto const refs{ git_remote_refs(advertised.get()) };
           sha = git_fetch_target(job.ref, refs);
           plans = git_fetch_plans(sha, refs, git_url_is_local(job.url));
 
+          // The first plan fetches over the connection that advertised, as a clone does;
+          // a fallback gets a fresh remote, since libgit2 cannot reconnect a failed one.
           fetched = &git_fetch_first(
               plans,
               job.url,
               sha,
               [&](git_fetch_plan const &plan) {
-                download(origin().get(), plan, callbacks, fail);
+                remote_ptr const remote{ advertised ? std::move(advertised) : origin() };
+                download(remote.get(), plan, callbacks, fail);
               },
               [&] { return has_commit(job.repo.get(), sha); });
         },
