@@ -479,45 +479,48 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
 
     @unittest.skipUnless(sys.platform == "win32" or os.environ.get("ENVY_DIAG"), "TEMPORARY")
     def test_zz_windows_daemon_diagnostic(self):
-        """TEMPORARY: which of repo shape, daemon env, or client resets on Windows."""
+        """TEMPORARY: protocol v0 vs v2, small vs large, with the server's packet trace."""
+        big = self.repos.root / "big.git"
+        big.mkdir()
+        _git("init", "-b", "main", cwd=big)
+        for i in range(150):
+            (big / f"blob{i}.bin").write_bytes(os.urandom(48 * 1024))
+        _git("add", "-A", cwd=big)
+        _git("commit", "-m", "big", cwd=big)
+        big_sha = self.repos.head(big)
+
+        trace = self.work / "server-packets.log"
+        self.serve_plain(extra_env={"GIT_TRACE_PACKET": str(trace), "GIT_TRACE": str(trace)})
+
         rows = []
-        for reachable in (None, False):
-            if reachable is None:
-                env_note = "no GIT_CONFIG env"
-                self.serve_plain()
-            else:
-                env_note = "GIT_CONFIG env"
-                self.serve(reachable_wants=reachable)
-            cases = (
-                ("leaf", self.repos.leaf_sha, "envy-tip-depth1"),   # no gitlinks
-                ("leaf", None, "git-depth1"),
-                ("leaf", None, "git-full"),
-                ("dsuper", self.repos.dsuper_sha, "envy-tip-depth1"),  # has a gitlink
-                ("dsuper", None, "git-depth1"),
-                ("dsuper", None, "git-full"),
-                ("lib", self.repos.lib_c1, "envy-nontip"),  # OID or FULL plan
-            )
-            for name, sha, client in cases:
+        first_envy_failure_trace = ""
+        for name, sha in (("leaf", self.repos.leaf_sha), ("big", big_sha)):
+            for client in ("envy", "git-v0-depth1", "git-v0-full", "git-v2-depth1"):
                 dest = self.work / f"d-{len(rows)}"
-                if client.startswith("git"):
-                    depth = ["--depth", "1"] if client == "git-depth1" else []
-                    r = subprocess.run([_GIT, "clone", *depth, self.url(name), str(dest)],
+                mark = trace.stat().st_size if trace.exists() else 0
+                if client == "envy":
+                    run = self.run_envy("fetch", self.url(name), dest, "--ref", sha)
+                    ok, err = run.returncode == 0, run.stderr.strip().splitlines()[-1:]
+                else:
+                    proto = "0" if "v0" in client else "2"
+                    depth = ["--depth", "1"] if "depth1" in client else []
+                    r = subprocess.run([_GIT, "-c", f"protocol.version={proto}", "clone",
+                                        *depth, self.url(name), str(dest)],
                                        capture_output=True, text=True)
                     ok, err = r.returncode == 0, r.stderr.strip().splitlines()[-1:]
-                else:
-                    run = self.run_envy("fetch", self.url(name), dest, "--ref", sha)
-                    ok, err = run.returncode == 0, run.stderr.strip().splitlines()[-2:]
-                    if ok:
-                        ev = self.git_fetch_events(run).get("", {})
-                        err = [f"{ev.get('strategy')}/{ev.get('depth')}"]
-                rows.append(f"{env_note:18} {name:7} {client:16} "
-                            f"{'ok  ' if ok else 'FAIL'} {err}")
-        self.fail("\n" + "\n".join(rows))
+                time.sleep(1.0)  # let the server finish writing its trace
+                if not ok and client == "envy" and not first_envy_failure_trace:
+                    text = trace.read_bytes()[mark:].decode("utf-8", "replace")
+                    first_envy_failure_trace = "\n".join(text.splitlines()[-60:])
+                rows.append(f"{name:5} {client:14} {'ok  ' if ok else 'FAIL'} "
+                            f"{'' if ok else err}")
+        self.fail("\n" + "\n".join(rows) +
+                  "\n--- server trace, first envy failure ---\n" + first_envy_failure_trace)
 
     test_zz_windows_daemon_diagnostic.envy_watchdog_timeout = 300
 
-    def serve_plain(self) -> None:
-        """git daemon with no extra environment, as test_git_fetch_progress runs it."""
+    def serve_plain(self, extra_env: dict[str, str] | None = None) -> None:
+        """git daemon as test_git_fetch_progress runs it, plus any tracing env."""
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         self.port = sock.getsockname()[1]
@@ -525,7 +528,8 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         daemon = subprocess.Popen(
             [_GIT, "daemon", f"--port={self.port}", "--reuseaddr", "--export-all",
              f"--base-path={self.repos.root}", str(self.repos.root)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={**os.environ, **(extra_env or {})})
 
         def stop():
             daemon.terminate()
