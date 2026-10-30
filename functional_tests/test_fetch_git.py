@@ -42,6 +42,12 @@ class TestFetchGit(EnvyTestCase):
         self.specs_dir = self.make_temp_dir("specs_dir")
         self.trace_flag = ["--trace"] if os.environ.get("ENVY_TEST_TRACE") else []
 
+    def _network_env(self) -> dict[str, str]:
+        """For a live clone: envy's own retries ride out a transient 5xx or reset from the
+        host, as in production, where the harness default of one attempt would fail."""
+        return {**os.environ, "ENVY_CACHE_DIR": str(self.cache_root),
+                "ENVY_FETCH_ATTEMPTS": "3"}
+
     # ========================================================================
     # Basic Success Cases
     # ========================================================================
@@ -62,7 +68,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -91,7 +97,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -124,7 +130,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -151,7 +157,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0)
@@ -261,7 +267,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -287,7 +293,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -307,7 +313,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertNotEqual(result.returncode, 0)
@@ -333,7 +339,7 @@ class TestFetchGit(EnvyTestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "ENVY_CACHE_DIR": str(self.cache_root)},
+                env=self._network_env(),
             )
 
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -372,6 +378,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -423,6 +430,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -473,6 +481,7 @@ end
             ],
             capture_output=True,
             text=True,
+            env=self._network_env(),
         )
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
