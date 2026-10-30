@@ -314,3 +314,17 @@ TEST_CASE("git_progress: the root's own row, then X/Y over the tree, rows in fli
   CHECK(tree().done == 2);
   CHECK(tree().in_flight.empty());
 }
+
+TEST_CASE("git_progress: a checkout reports files written of files to write") {
+  std::vector<envy::fetch_progress_t> seen;
+  envy::fetch_progress_cb_t const row{ [&](envy::fetch_progress_t const &p) {
+    seen.push_back(p);
+    return true;
+  } };
+  envy::git_progress progress{ row };
+  auto *const root{ progress.track("") };
+  envy::git_progress::on_checkout("a/b.c", 450, 1800, root);
+  auto const &last{ std::get<envy::fetch_git_progress>(seen.back()) };
+  CHECK(last.checkout_done == 450);
+  CHECK(last.checkout_total == 1800);
+}

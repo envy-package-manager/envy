@@ -92,6 +92,10 @@ class git_progress : unmovable {
   bool aborted() const { return aborted_; }
 
   static int on_transfer(git_indexer_progress const *stats, void *payload);
+  static void on_checkout(char const *path,
+                          std::size_t completed,
+                          std::size_t total,
+                          void *payload);
 
  private:
   bool publish();  // mutex_ held

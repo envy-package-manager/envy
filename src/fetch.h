@@ -27,6 +27,9 @@ struct fetch_git_progress {
   std::uint32_t total_deltas{ 0 };
   std::uint32_t indexed_deltas{ 0 };
   std::uint64_t received_bytes{ 0 };
+  // Writing the working tree, after the pack: seconds of silence on a large repository.
+  std::uint64_t checkout_done{ 0 };
+  std::uint64_t checkout_total{ 0 };  // 0 until checkout has counted its files
 };
 
 // A wait with nothing moving. Without a report of its own a backoff reads as a stall:

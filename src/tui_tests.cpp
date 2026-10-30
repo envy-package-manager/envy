@@ -1448,6 +1448,25 @@ TEST_CASE("fetch_git_tree_frame: X/Y over the tree, a child row per repo in flig
         "retry 2 in 6s (transfer)");
 }
 
+TEST_CASE("a git row names the checkout once the pack is in, and counts its files") {
+  envy::fetch_git_tree_progress const prog{
+    .done = 0,
+    .total = 1,
+    .in_flight = { { .path = "components/lwip/lwip",
+                     .counters = { .total_objects = 10,
+                                   .received_objects = 10,
+                                   .total_deltas = 8,
+                                   .indexed_deltas = 8,
+                                   .checkout_done = 450,
+                                   .checkout_total = 1800 } } }
+  };
+  auto const frame{ envy::tui_actions::fetch_git_tree_frame("[pkg]", prog, {}) };
+  REQUIRE(frame.children.size() == 1);
+  auto const &checkout{ std::get<envy::tui::progress_data>(frame.children[0].content) };
+  CHECK(checkout.percent == doctest::Approx(25.0));
+  CHECK(checkout.status == "checkout 450/1800 files");
+}
+
 TEST_CASE("fetch_git_tree_frame: nothing found yet is an empty bar, not a division") {
   auto const frame{
     envy::tui_actions::fetch_git_tree_frame("[pkg]", envy::fetch_git_tree_progress{}, {})

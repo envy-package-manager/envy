@@ -153,6 +153,12 @@ std::string retry_text(fetch_retry_progress const &prog) {
   return oss.str();
 }
 
+double percent_of(std::uint64_t part, std::uint64_t whole) {
+  return whole ? std::min(100.0,
+                          100.0 * static_cast<double>(part) / static_cast<double>(whole))
+               : 0.0;
+}
+
 // One repository's row: a spinner until the remote has counted, then a bar over objects
 // arriving and, after the last lands, over deltas resolving -- so it never stalls on a
 // bare count. The callback keeps firing while the pack is indexed; follow the live phase.
@@ -175,6 +181,14 @@ tui::section_frame git_frame(std::string const &label,
                  .start_time = epoch } };
   }
 
+  if (p.checkout_total > 0) {  // the pack is in; the working tree is being written
+    return { .label = label,
+             .content = tui::progress_data{
+                 .percent = percent_of(p.checkout_done, p.checkout_total),
+                 .status = "checkout " + std::to_string(p.checkout_done) + "/" +
+                           std::to_string(p.checkout_total) + " files" + tail } };
+  }
+
   bool const receiving{ p.received_objects < p.total_objects };
   bool const resolving{ !receiving && p.total_deltas > 0 };
   std::ostringstream oss;
@@ -192,11 +206,6 @@ tui::section_frame git_frame(std::string const &label,
                                           .status = oss.str() } };
 }
 
-double percent_of(std::uint64_t part, std::uint64_t whole) {
-  return whole ? std::min(100.0,
-                          100.0 * static_cast<double>(part) / static_cast<double>(whole))
-               : 0.0;
-}
 
 }  // namespace
 
@@ -385,7 +394,9 @@ void fetch_all_progress_tracker::update_git(std::size_t slot,
                                           .received_objects = snapshot_received,
                                           .total_deltas = snapshot_total_deltas,
                                           .indexed_deltas = snapshot_deltas,
-                                          .received_bytes = snapshot_bytes },
+                                          .received_bytes = snapshot_bytes,
+                                          .checkout_done = prog.checkout_done,
+                                          .checkout_total = prog.checkout_total },
                       receive_percent,
                       delta_percent,
                       grouped_ ? std::string_view{} : std::string_view{ child_label }));

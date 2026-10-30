@@ -315,7 +315,7 @@ class git_tree : unmovable {
         trace_spec_,
         job.url);
 
-    checkout(job, sha);
+    checkout(job, sha, prog);
     progress_.finished(prog);
 
     ENVY_TRACE(git_fetch,
@@ -352,7 +352,9 @@ class git_tree : unmovable {
     if (git_remote_fetch(remote, &arr, &opts, nullptr)) { fail("fetch from"); }
   }
 
-  static void checkout(git_job const &job, std::string const &sha) {
+  static void checkout(git_job const &job,
+                       std::string const &sha,
+                       git_progress::repo *prog) {
     git_oid oid;
     git_object *raw{ nullptr };
     if (git_oid_fromstr(&oid, sha.c_str()) ||
@@ -362,10 +364,12 @@ class git_tree : unmovable {
     }
     object_ptr const commit{ raw, git_object_free };
 
-    git_checkout_options const opts{ [] {
+    git_checkout_options const opts{ [&] {
       git_checkout_options o;
       git_checkout_options_init(&o, GIT_CHECKOUT_OPTIONS_VERSION);
       o.checkout_strategy = GIT_CHECKOUT_FORCE;
+      o.progress_cb = git_progress::on_checkout;
+      o.progress_payload = prog;
       return o;
     }() };
     if (git_checkout_tree(job.repo.get(), commit.get(), &opts)) {
@@ -512,6 +516,17 @@ int git_progress::on_transfer(git_indexer_progress const *stats, void *payload) 
              .received_bytes = stats->received_bytes };
   r.retry.reset();  // bytes are moving again
   return r.sum->publish() ? 0 : GIT_EUSER;
+}
+
+void git_progress::on_checkout(char const * /*path*/,
+                               std::size_t completed,
+                               std::size_t total,
+                               void *payload) {
+  auto &r{ *static_cast<repo *>(payload) };
+  std::lock_guard const lock{ r.sum->mutex_ };
+  r.last.checkout_done = completed;
+  r.last.checkout_total = total;
+  r.sum->publish();  // libgit2 cannot stop a checkout midway; the next repository will
 }
 
 bool git_progress::publish() {
