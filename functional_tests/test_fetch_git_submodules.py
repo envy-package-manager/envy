@@ -19,6 +19,7 @@ import shutil
 import sys
 import socket
 import subprocess
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -173,6 +174,93 @@ def _tree(root: Path) -> dict[str, str | None]:
                 (Path(dirpath) / f).read_bytes().replace(b"\r\n", b"\n")
             ).hexdigest()
     return out
+
+
+def _pkt(data: bytes) -> bytes:
+    return f"{len(data) + 4:04x}".encode() + data
+
+
+class _GitServer:
+    """A git:// server: one `git upload-pack` per connection, relayed over pipes.
+
+    Not `git daemon`: on Windows it hands the socket itself to upload-pack, and when those
+    processes exit the connection is torn down with a reset, which discards whatever the
+    client has not read yet. libgit2 opens its pack file before it reads the pack, so a
+    small response arrives whole, sits unread, and is lost. Relaying lets this server
+    shut the socket down for writing and drain it, so every client reads to the end.
+    """
+
+    def __init__(self, root: Path, env: dict[str, str]):
+        self.root, self.env = root, env
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen()
+        self.port = self.listener.getsockname()[1]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def close(self) -> None:
+        self.listener.close()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn: socket.socket) -> None:
+        with conn:
+            head = self._read_exact(conn, 4)
+            if len(head) < 4:
+                return  # a readiness probe
+            request = self._read_exact(conn, int(head, 16) - 4)
+            command, _, rest = request.partition(b" ")
+            path = rest.split(b"\0", 1)[0].decode().lstrip("/")
+            if command != b"git-upload-pack":
+                return
+            proc = subprocess.Popen([_GIT, "upload-pack", "--timeout=0", str(self.root / path)],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    env=self.env)
+
+            def to_server():
+                try:
+                    while chunk := conn.recv(65536):
+                        proc.stdin.write(chunk)
+                        proc.stdin.flush()
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+
+            threading.Thread(target=to_server, daemon=True).start()
+            try:
+                while chunk := proc.stdout.read1(65536):
+                    conn.sendall(chunk)
+            except OSError:
+                pass
+            proc.wait()
+            # A graceful close: say we are done, then wait for the client to finish.
+            try:
+                conn.shutdown(socket.SHUT_WR)
+                conn.settimeout(10)
+                while conn.recv(65536):
+                    pass
+            except OSError:
+                pass
+
+    @staticmethod
+    def _read_exact(conn: socket.socket, n: int) -> bytes:
+        data = b""
+        while len(data) < n:
+            chunk = conn.recv(n - len(data))
+            if not chunk:
+                break
+            data += chunk
+        return data
 
 
 class _SubmoduleCase(EnvyTestCase):
@@ -385,61 +473,18 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
     envy_watchdog_timeout = 30
 
     def serve(self, reachable_wants: bool) -> None:
-        """`git daemon` over the fixture; upload-pack inherits the want policy via env."""
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        self.port = sock.getsockname()[1]
-        sock.close()
-        self.daemon_log = self.work / "git-daemon.log"
-        log = open(self.daemon_log, "w", encoding="utf-8")
-        self.addCleanup(log.close)
-        daemon = subprocess.Popen(
-            [
-                _GIT,
-                "daemon",
-                "--verbose",
-                "--informative-errors",
-                f"--port={self.port}",
-                "--reuseaddr",
-                "--export-all",
-                f"--base-path={self.repos.root}",
-                str(self.repos.root),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=log,
-            env={
-                **os.environ,
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "uploadpack.allowReachableSHA1InWant",
-                "GIT_CONFIG_VALUE_0": "true" if reachable_wants else "false",
-            },
-        )
-
-        def stop():
-            daemon.terminate()
-            daemon.wait(timeout=10)
-
-        self.addCleanup(stop)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            with socket.socket() as s:
-                s.settimeout(0.25)
-                if s.connect_ex(("127.0.0.1", self.port)) == 0:
-                    return
-            time.sleep(0.05)
-        self.fail("git daemon did not start")
+        """A git:// server over the fixture; upload-pack takes the want policy via env."""
+        server = _GitServer(self.repos.root, {
+            **os.environ,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "uploadpack.allowReachableSHA1InWant",
+            "GIT_CONFIG_VALUE_0": "true" if reachable_wants else "false",
+        })
+        self.addCleanup(server.close)
+        self.port = server.port
 
     def url(self, name: str) -> str:
         return f"git://127.0.0.1:{self.port}/{name}.git"
-
-    def fetch(self, source: str, ref: str, *extra, **kwargs):
-        """A failed run carries the daemon's own account, so a server-side refusal is
-        legible in CI rather than a bare connection reset."""
-        dest, run = super().fetch(source, ref, *extra, **kwargs)
-        if run.returncode != 0 and self.daemon_log.exists():
-            daemon = self.daemon_log.read_text(encoding="utf-8", errors="replace")
-            run.stderr += f"\n--- git daemon ---\n{daemon}"
-        return dest, run
 
     def test_tip_shallow_and_full_fallback(self):
         """The superproject's tip goes shallow anywhere; lib's non-tip pin cannot."""
@@ -479,45 +524,37 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
 
     @unittest.skipUnless(sys.platform == "win32" or os.environ.get("ENVY_DIAG"), "TEMPORARY")
     def test_zz_windows_daemon_diagnostic(self):
-        """TEMPORARY: protocol v0 vs v2, small vs large, with the server's packet trace."""
-        big = self.repos.root / "big.git"
-        big.mkdir()
-        _git("init", "-b", "main", cwd=big)
-        for i in range(150):
-            (big / f"blob{i}.bin").write_bytes(os.urandom(48 * 1024))
-        _git("add", "-A", cwd=big)
-        _git("commit", "-m", "big", cwd=big)
-        big_sha = self.repos.head(big)
+        """TEMPORARY: does git daemon's close discard a response the client reads late?"""
+        self.serve_plain()
 
-        trace = self.work / "server-packets.log"
-        self.serve_plain(extra_env={"GIT_TRACE_PACKET": str(trace), "GIT_TRACE": str(trace)})
+        def raw_fetch(delay: float) -> str:
+            with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
+                s.sendall(_pkt(b"git-upload-pack /leaf.git\0host=127.0.0.1\0"))
+                buf = b""
+                while b"0000" not in buf:  # advertisement ends in a flush
+                    buf += s.recv(65536)
+                s.sendall(_pkt(f"want {self.repos.leaf_sha} side-band-64k\n".encode())
+                          + b"0000" + _pkt(b"done\n"))
+                time.sleep(delay)
+                got = b""
+                try:
+                    while chunk := s.recv(65536):
+                        got += chunk
+                    return f"{len(got)} bytes, clean EOF"
+                except OSError as e:
+                    return f"{len(got)} bytes, then {type(e).__name__} {getattr(e, 'winerror', e.errno)}"
 
-        rows = []
-        first_envy_failure_trace = ""
-        for name, sha in (("leaf", self.repos.leaf_sha), ("big", big_sha)):
-            for client in ("envy", "git-v0-depth1", "git-v0-full", "git-v2-depth1"):
-                dest = self.work / f"d-{len(rows)}"
-                mark = trace.stat().st_size if trace.exists() else 0
-                if client == "envy":
-                    run = self.run_envy("fetch", self.url(name), dest, "--ref", sha)
-                    ok, err = run.returncode == 0, run.stderr.strip().splitlines()[-1:]
-                else:
-                    proto = "0" if "v0" in client else "2"
-                    depth = ["--depth", "1"] if "depth1" in client else []
-                    r = subprocess.run([_GIT, "-c", f"protocol.version={proto}", "clone",
-                                        *depth, self.url(name), str(dest)],
-                                       capture_output=True, text=True)
-                    ok, err = r.returncode == 0, r.stderr.strip().splitlines()[-1:]
-                time.sleep(1.0)  # let the server finish writing its trace
-                if not ok and client == "envy" and not first_envy_failure_trace:
-                    text = trace.read_bytes()[mark:].decode("utf-8", "replace")
-                    first_envy_failure_trace = "\n".join(text.splitlines()[-60:])
-                rows.append(f"{name:5} {client:14} {'ok  ' if ok else 'FAIL'} "
-                            f"{'' if ok else err}")
-        self.fail("\n" + "\n".join(rows) +
-                  "\n--- server trace, first envy failure ---\n" + first_envy_failure_trace)
+        rows = [f"git daemon, read at once:    {raw_fetch(0.0)}",
+                f"git daemon, read after 0.5s: {raw_fetch(0.5)}",
+                f"git daemon, read after 0.5s: {raw_fetch(0.5)}"]
+        self.serve(reachable_wants=False)
+        run = self.run_envy("fetch", self.url("leaf"), self.work / "relay",
+                            "--ref", self.repos.leaf_sha)
+        rows.append(f"relay server, envy leaf:     "
+                    f"{'ok' if run.returncode == 0 else run.stderr.strip().splitlines()[-1:]}")
+        self.fail("\n" + "\n".join(rows))
 
-    test_zz_windows_daemon_diagnostic.envy_watchdog_timeout = 300
+    test_zz_windows_daemon_diagnostic.envy_watchdog_timeout = 120
 
     def serve_plain(self, extra_env: dict[str, str] | None = None) -> None:
         """git daemon as test_git_fetch_progress runs it, plus any tracing env."""
