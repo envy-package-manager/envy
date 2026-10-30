@@ -389,10 +389,15 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
         sock.bind(("127.0.0.1", 0))
         self.port = sock.getsockname()[1]
         sock.close()
+        self.daemon_log = self.work / "git-daemon.log"
+        log = open(self.daemon_log, "w", encoding="utf-8")
+        self.addCleanup(log.close)
         daemon = subprocess.Popen(
             [
                 _GIT,
                 "daemon",
+                "--verbose",
+                "--informative-errors",
                 f"--port={self.port}",
                 "--reuseaddr",
                 "--export-all",
@@ -400,7 +405,7 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
                 str(self.repos.root),
             ],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=log,
             env={
                 **os.environ,
                 "GIT_CONFIG_COUNT": "1",
@@ -425,6 +430,15 @@ class TestFetchGitSubmodulesServed(_SubmoduleCase):
 
     def url(self, name: str) -> str:
         return f"git://127.0.0.1:{self.port}/{name}.git"
+
+    def fetch(self, source: str, ref: str, *extra, **kwargs):
+        """A failed run carries the daemon's own account, so a server-side refusal is
+        legible in CI rather than a bare connection reset."""
+        dest, run = super().fetch(source, ref, *extra, **kwargs)
+        if run.returncode != 0 and self.daemon_log.exists():
+            daemon = self.daemon_log.read_text(encoding="utf-8", errors="replace")
+            run.stderr += f"\n--- git daemon ---\n{daemon}"
+        return dest, run
 
     def test_tip_shallow_and_full_fallback(self):
         """The superproject's tip goes shallow anywhere; lib's non-tip pin cannot."""
