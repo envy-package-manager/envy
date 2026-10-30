@@ -100,12 +100,12 @@ class TestGitResolve(EnvyTestCase):
         result = self._resolve(ref)
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Progress rows, not diagnostics: with no tty the fallback renderer prints a
-        # `[[section]] label` line once a resolve outruns its 2s throttle, which a loaded
-        # runner does. Asserting stderr is empty would make this a load test.
+        # `[git-resolve] resolving ...` line once a resolve outruns its 2s throttle, which
+        # a loaded runner does. Asserting stderr is empty would make this a load test.
         noise = [
             line
             for line in result.stderr.splitlines()
-            if line.strip() and not line.lstrip().startswith("[[")
+            if line.strip() and not line.lstrip().startswith("[git-resolve] ")
         ]
         self.assertEqual(noise, [])
         return result.stdout.strip()
