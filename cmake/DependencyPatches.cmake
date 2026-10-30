@@ -586,6 +586,35 @@ function(envy_patch_libgit2_longpaths source_dir binary_dir)
     unset(LIBGIT2_UTIL_DIR)
 endfunction()
 
+# Bound libgit2's WinHTTP transport (Windows https) by the server timeouts libgit2_scope
+# sets, which it otherwise ignores for a 60s connect and no read timeout at all.
+function(envy_patch_libgit2_winhttp_timeouts source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_winhttp_timeouts_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${binary_dir}/envy_patch_libgit2_winhttp_timeouts.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_winhttp_timeouts_patch.py.in")
+
+    set(LIBGIT2_WINHTTP_C "${source_dir}/src/libgit2/transports/winhttp.c")
+    if(NOT EXISTS "${LIBGIT2_WINHTTP_C}")
+        message(FATAL_ERROR "libgit2 winhttp timeouts patch: ${LIBGIT2_WINHTTP_C} not found")
+    endif()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(LIBGIT2_WINHTTP_C)
+endfunction()
+
 # Strip libgit2 install()/export() calls for the same reason—keep it scoped
 # to Envy's build tree with no accidental installs.
 function(envy_patch_libgit2_install source_dir binary_dir)

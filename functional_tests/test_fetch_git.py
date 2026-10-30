@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 import unittest
 
@@ -168,9 +169,8 @@ class TestFetchGit(EnvyTestCase):
     # Error Cases
     # ========================================================================
 
-    def test_stalled_server_times_out_instead_of_hanging(self):
-        """A server that accepts and then says nothing must not hold a fetch forever:
-        libgit2's own default is no timeout at all."""
+    def _fetch_from_stalled_server(self, scheme: str) -> subprocess.CompletedProcess:
+        """Fetch from a server that accepts and then says nothing, with a 1s git timeout."""
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -194,16 +194,32 @@ class TestFetchGit(EnvyTestCase):
         port = listener.getsockname()[1]
 
         try:
-            run = self.run_envy(
-                "fetch", f"git://127.0.0.1:{port}/stalled.git", self.work / "out",
+            return self.run_envy(
+                "fetch", f"{scheme}://127.0.0.1:{port}/stalled.git", self.work / "out",
                 "--ref", "main",
                 env={**os.environ, "ENVY_GIT_TIMEOUT_MS": "1000"},
                 timeout=20,
             )
         except subprocess.TimeoutExpired:
-            self.fail("envy hung on a server that never answered")
+            self.fail(f"envy hung on a {scheme} server that never answered")
+
+    def test_stalled_server_times_out_instead_of_hanging(self):
+        """A server that accepts and then says nothing must not hold a fetch forever:
+        libgit2's own default is no timeout at all."""
+        run = self._fetch_from_stalled_server("git")
         self.assertNotEqual(0, run.returncode)
         self.assertIn("timed out", run.stderr)
+
+    def test_stalled_https_server_times_out_instead_of_hanging(self):
+        """The same over https, which on Windows is libgit2's WinHTTP transport: it
+        ignores libgit2's timeouts unless patched, and hung here before. The server never
+        answers the TLS handshake, so no certificate is needed; how each TLS backend words
+        the failure varies, so only the bound is asserted -- a fetch that waits about the
+        timeout, rather than failing at once for some other reason."""
+        start = time.monotonic()
+        run = self._fetch_from_stalled_server("https")
+        self.assertNotEqual(0, run.returncode)
+        self.assertGreaterEqual(time.monotonic() - start, 0.9, run.stderr)
 
     def test_nonexistent_repository(self):
         """Non-existent repository URL should fail."""
