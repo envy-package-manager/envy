@@ -500,9 +500,11 @@ bool run_declarative_fetch(sol::object const &fetch_obj,
                            engine &eng,
                            pkg *p) {
   // A submodules predicate is Lua run on fetch's workers: it gets FETCH's envy.* context.
-  phase_context_guard const ctx_guard{
-    &eng, p, fetch_obj.lua_state(), lock->tmp_dir(), lock
-  };
+  phase_context_guard const ctx_guard{ &eng,
+                                       p,
+                                       fetch_obj.lua_state(),
+                                       lock->tmp_dir(),
+                                       lock };
 
   // Ensure stage_dir exists (needed for git repos that clone directly there)
   std::error_code ec;
