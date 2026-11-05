@@ -43,8 +43,14 @@ git_submodule_pred lua_submodule_pred(sol::protected_function fn,
   return [fn = std::make_shared<sol::protected_function>(std::move(fn)),
           context = std::string{ context }](git_submodule_info const &sm) {
     sol::state_view lua{ fn->lua_state() };
-    sol::protected_function_result const result{ (*fn)(lua.create_table_with(
-        "name", sm.name, "path", sm.path, "url", sm.url, "sha", sm.sha)) };
+    sol::protected_function_result const result{ (*fn)(lua.create_table_with("name",
+                                                                             sm.name,
+                                                                             "path",
+                                                                             sm.path,
+                                                                             "url",
+                                                                             sm.url,
+                                                                             "sha",
+                                                                             sm.sha)) };
     if (!result.valid()) {
       sol::error err = result;
       throw_runtime_error(

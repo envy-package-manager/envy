@@ -127,7 +127,7 @@ struct fetch_request_git {
   std::filesystem::path destination;
   fetch_progress_cb_t progress{};
   std::string ref;
-  uri_scheme scheme{ uri_scheme::GIT };  // GIT or GIT_HTTPS
+  uri_scheme scheme{ uri_scheme::GIT };            // GIT or GIT_HTTPS
   std::optional<git_submodule_select> submodules;  // none when unset
 };
 
