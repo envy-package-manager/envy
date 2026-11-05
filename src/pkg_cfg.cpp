@@ -672,6 +672,10 @@ std::optional<glob_filter> pkg_cfg_parse_submodules(sol::table const &table,
       }
       return glob_parse_filter(selectors, context, "submodules entry");
     }
+    case sol::type::function:
+      throw_runtime_error({ context,
+                            ": submodules = function works only in FETCH and envy.fetch; "
+                            "a spec or bundle source keys its cache on its selectors" });
     default:
       throw_runtime_error(
           { context, ": submodules must be a boolean or a list of path selectors" });

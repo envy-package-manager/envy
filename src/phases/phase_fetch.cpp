@@ -35,6 +35,44 @@ namespace {
 constexpr std::string_view kFetchEntryKeys[]{ "dest",   "post_data", "ref",
                                               "sha256", "source",    "submodules" };
 
+// fetch() calls it from its workers, one at a time, while the owning thread waits on
+// that fetch: the Lua state is borrowed, never shared.
+git_submodule_pred lua_submodule_pred(sol::protected_function fn,
+                                      std::string_view context) {
+  // Shared, so copying a request never touches the Lua registry off the owning thread.
+  return [fn = std::make_shared<sol::protected_function>(std::move(fn)),
+          context = std::string{ context }](git_submodule_info const &sm) {
+    sol::state_view lua{ fn->lua_state() };
+    sol::protected_function_result const result{ (*fn)(lua.create_table_with(
+        "name", sm.name, "path", sm.path, "url", sm.url, "sha", sm.sha)) };
+    if (!result.valid()) {
+      sol::error err = result;
+      throw_runtime_error(
+          { context, ": submodules function failed on '", sm.path, "': ", err.what() });
+    }
+    sol::object const keep{ result };
+    if (keep.get_type() != sol::type::boolean) {
+      throw_runtime_error({ context,
+                            ": submodules function must return a boolean for '",
+                            sm.path,
+                            "' (got ",
+                            sol::type_name(lua, keep.get_type()),
+                            ")" });
+    }
+    return keep.as<bool>();
+  };
+}
+
+// A function is a predicate; anything else reads as it does on every git entry.
+std::optional<git_submodule_select> parse_submodules(sol::table const &tbl,
+                                                     std::string_view context) {
+  sol::object const value{ tbl["submodules"] };
+  if (value.get_type() != sol::type::function) {
+    return pkg_cfg_parse_submodules(tbl, context);
+  }
+  return lua_submodule_pred(value.as<sol::protected_function>(), context);
+}
+
 }  // namespace
 
 fetch_entry fetch_entry_parse(sol::table const &tbl, std::string_view context) {
@@ -59,7 +97,7 @@ fetch_entry fetch_entry_parse(sol::table const &tbl, std::string_view context) {
            .ref = sol_util_get_optional<std::string>(tbl, "ref", context),
            .post_data = sol_util_get_optional<std::string>(tbl, "post_data", context),
            .dest = sol_util_get_optional<std::string>(tbl, "dest", context),
-           .submodules = pkg_cfg_parse_submodules(tbl, context) };
+           .submodules = parse_submodules(tbl, context) };
 }
 
 fetch_request url_to_fetch_request(fetch_entry const &entry,

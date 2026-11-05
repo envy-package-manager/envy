@@ -110,9 +110,11 @@ class git_progress : unmovable {
 };
 
 // Fetch `req.ref` of `req.source` into the empty directory `dest`, then every submodule
-// req.submodules selects, recursively, in git's layout. Each repository retries alone.
+// req.submodules selects, recursively, in git's layout. Each repository retries alone;
+// a predicate is called holding `predicates`, which fetch() shares across its batch.
 void fetch_git(fetch_request_git const &req,
                std::filesystem::path const &dest,
-               std::string const &trace_spec);
+               std::string const &trace_spec,
+               std::mutex &predicates);
 
 }  // namespace envy

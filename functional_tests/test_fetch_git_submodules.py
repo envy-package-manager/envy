@@ -1,9 +1,10 @@
 """Git fetches recurse into submodules on request.
 
 `envy fetch --submodules` and `submodules = true | { selectors }` on every git entry
-(FETCH, envy.fetch, spec and bundle sources) check out each submodule at the commit its
-superproject records, recursively, in git's own layout: `.git/modules/<name>`, a
-relative gitfile, `submodule.<name>.url` in the superproject's config.
+(FETCH, envy.fetch, spec and bundle sources), or a predicate function on FETCH and
+envy.fetch, check out each submodule at the commit its superproject records,
+recursively, in git's own layout: `.git/modules/<name>`, a relative gitfile,
+`submodule.<name>.url` in the superproject's config.
 
 Fixtures are built with plumbing (gitlinks via update-index), so making them needs no
 `git submodule add` and no file-transport opt-in. libgit2's local transport cannot go
@@ -374,6 +375,114 @@ function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode)
         self.assertIn("submodule", run.stderr)
+
+    def install_spec(self, name: str, body: str):
+        spec = self.write_spec(f"{name}.lua", f'IDENTITY = "local.{name}@v1"\n{body}')
+        manifest = self.write_manifest(
+            f'PACKAGES = {{ {{ spec = "local.{name}@v1", source = "{spec.as_posix()}" }} }}'
+        )
+        return self.install(manifest)
+
+    def test_fetch_verb_with_a_submodule_predicate(self):
+        """Asked once per submodule found, nested ones only under a kept parent."""
+        run = self.install_spec(
+            "subpred",
+            f"""local keep = {{ ["deps/lib"] = true, ["deps/lib/vendor/leaf"] = true }}
+SEEN = {{}}
+FETCH = {{
+    source = "{self.repos.super.as_posix()}",
+    ref = "{self.repos.super_sha}",
+    submodules = function(sm)
+        assert(sm.path ~= "deps/skipped", "asked about an update = none submodule")
+        SEEN[sm.path] = sm
+        return keep[sm.path] == true
+    end,
+}}
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options)
+    local function exists(p)
+        local f = io.open(stage_dir .. "/super.git/" .. p, "r")
+        if f then f:close() end
+        return f ~= nil
+    end
+    assert(exists("deps/lib/vendor/leaf/leaf.txt"), "nested submodule missing")
+    assert(not exists("deps/other/other.txt"), "rejected submodule fetched")
+    assert(SEEN["deps/other"].name == "other-mod", "name")
+    assert(SEEN["deps/lib"].sha == "{self.repos.lib_c1}", "sha")
+    assert(SEEN["deps/lib"].url == "{self.repos.lib.as_posix()}", SEEN["deps/lib"].url)
+    assert(SEEN["deps/lib/vendor/leaf"].url == "{self.repos.leaf.as_posix()}", "url")
+end
+""",
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual({"", "deps/lib", "deps/lib/vendor/leaf"},
+                         set(self.git_fetch_events(run)))
+
+    def test_envy_fetch_predicate_prunes_a_rejected_subtree(self):
+        run = self.install_spec(
+            "subpredfn",
+            f"""FETCH = function(tmp_dir, options)
+    local seen = {{}}
+    envy.fetch({{
+        source = "{self.repos.super.as_posix()}",
+        ref = "{self.repos.super_sha}",
+        submodules = function(sm)
+            seen[#seen + 1] = sm.path
+            return sm.name == "other-mod"
+        end,
+    }}, {{ dest = tmp_dir }})
+    assert(table.concat(seen, ",") == "deps/lib,deps/other", table.concat(seen, ","))
+    local f = io.open(tmp_dir .. "/super.git/deps/other/other.txt", "r")
+    assert(f, "kept submodule missing")
+    f:close()
+end
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
+""",
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual({"", "deps/other"}, set(self.git_fetch_events(run)))
+
+    def test_predicates_of_parallel_trees_take_turns(self):
+        """Two trees fetch at once; their predicates share one Lua state, one at a time."""
+        def entry(dest: str) -> str:
+            return (f'{{ source = "{self.repos.super.as_posix()}", '
+                    f'ref = "{self.repos.super_sha}", dest = "{dest}", submodules = slow }}')
+
+        run = self.install_spec(
+            "subpredpar",
+            f"""local inside = false
+local function slow(sm)
+    assert(not inside, "two submodule predicates ran at once")
+    inside = true
+    local t = os.clock()
+    while os.clock() - t < 0.05 do end
+    inside = false
+    return true
+end
+FETCH = {{ {entry("a")}, {entry("b")} }}
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
+""",
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(2, sum(1 for e in run.events("git_fetch")
+                                if e.raw["path"] == "deps/lib/vendor/leaf"))
+
+    def test_submodule_predicate_must_answer_with_a_boolean(self):
+        for answer, expected in (("nil", "must return a boolean"),
+                                 ('error("no such list")', "no such list")):
+            with self.subTest(answer=answer):
+                run = self.install_spec(
+                    "subprednil",
+                    f"""FETCH = {{
+    source = "{self.repos.super.as_posix()}",
+    ref = "{self.repos.super_sha}",
+    submodules = function(sm) return {answer} end,
+}}
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
+""",
+                )
+                self.assertNotEqual(0, run.returncode)
+                self.assertIn(expected, run.stderr)
+                self.assertIn("deps/lib", run.stderr)
 
 
 @unittest.skipIf(_GIT is None, "git binary not available")
