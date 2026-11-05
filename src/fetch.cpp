@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -107,7 +108,9 @@ fetch_result fetch_local_file(std::string const &canonical_path,
                        .resolved_destination = dest };
 }
 
-fetch_result fetch_single(fetch_request const &request, std::string const &trace_spec) {
+fetch_result fetch_single(fetch_request const &request,
+                          std::string const &trace_spec,
+                          std::mutex &predicates) {
   // Every scheme resolves its source the same way, and an unresolvable one is a caller
   // bug, not a transport failure.
   auto const classify{ [](std::string const &source) {
@@ -164,7 +167,7 @@ fetch_result fetch_single(fetch_request const &request, std::string const &trace
           [&](fetch_request_git const &req) -> fetch_result {
             auto const dest{ prepare_destination(req.destination) };
             tree_remove_best_effort(dest);
-            fetch_git(req, dest, trace_spec);
+            fetch_git(req, dest, trace_spec, predicates);
             return fetch_result{ .scheme = req.scheme,
                                  .resolved_source = std::filesystem::path{ req.source },
                                  .resolved_destination = dest };
@@ -343,9 +346,10 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
   // Read on the calling thread: the engine's per-package context is thread-local, so
   // every worker below has to reopen it or its log lines come out unattributed.
   std::string const log_ctx{ tui::log_ctx() };
+  std::mutex predicates;
 
   for (size_t i = 0; i < requests.size(); ++i) {
-    workers.emplace_back([i, &requests, &results, &trace_spec, &log_ctx]() {
+    workers.emplace_back([i, &requests, &results, &trace_spec, &log_ctx, &predicates]() {
       tui::log_ctx_scope const worker_log_ctx{ log_ctx };
 
       // The source URL names the retry target, so it is always needed; the rest is
@@ -364,7 +368,7 @@ std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
       auto const start{ std::chrono::steady_clock::now() };
 
       try {
-        results[i] = fetch_single(requests[i], trace_spec);
+        results[i] = fetch_single(requests[i], trace_spec, predicates);
 
         if (tracing) {
           auto const &res{ std::get<fetch_result>(results[i]) };

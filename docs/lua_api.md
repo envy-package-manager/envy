@@ -237,7 +237,7 @@ Download files to destination.
 - `source` — required URL
 - `sha256` — optional hash for verification
 - `ref` — required for git URLs: full commit sha, or an advertised branch/tag name
-- `submodules` — git only: `true` for every submodule, `{ selectors }` by root-relative path (`!` excludes)
+- `submodules` — git only: `true` for every submodule, `{ selectors }` by root-relative path (`!` excludes), or `function(sm)` returning a boolean per submodule found (`sm.name`, `.path`, `.url`, `.sha`); false prunes its subtree
 - `post_data` — optional form-urlencoded body; triggers HTTP POST (HTTP/HTTPS only)
 - `dest` — optional override for cache filename (use when URL lacks a recognizable filename)
 

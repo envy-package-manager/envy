@@ -27,6 +27,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -185,8 +186,13 @@ struct git_job {
 // any is queued, so no two workers ever write one repository.
 class git_tree : unmovable {
  public:
-  git_tree(fetch_request_git const &req, std::string const &trace_spec)
-      : filter_{ req.submodules }, trace_spec_{ trace_spec }, progress_{ req.progress } {}
+  git_tree(fetch_request_git const &req,
+           std::string const &trace_spec,
+           std::mutex &predicates)
+      : filter_{ req.submodules },
+        trace_spec_{ trace_spec },
+        predicates_{ predicates },
+        progress_{ req.progress } {}
 
   void run(std::filesystem::path const &dest, std::string url, std::string ref) {
     auto repo{ init_repo(dest, nullptr, url) };
@@ -196,9 +202,10 @@ class git_tree : unmovable {
                      .repo = std::move(repo) });
     if (!queue_.empty()) { drain(); }
 
-    if (!filter_) { return; }
+    auto const *globs{ filter_ ? std::get_if<glob_filter>(&*filter_) : nullptr };
+    if (!globs) { return; }
     std::string unmatched;
-    for (auto const &s : glob_unmatched_selectors(filter_->include, matched_)) {
+    for (auto const &s : glob_unmatched_selectors(globs->include, matched_)) {
       unmatched += (unmatched.empty() ? "" : ", ") + s;
     }
     if (!unmatched.empty()) {
@@ -391,6 +398,31 @@ class git_tree : unmovable {
     }
   }
 
+  // Selected, or on the way to something an include may select: only fetching a
+  // submodule says what it holds. A predicate is asked only what it decides.
+  bool wants(git_job const &job, submodule_entry const &sm, std::string const &full) {
+    return envy::visit(
+        match{
+            [&](glob_filter const &f) {
+              std::lock_guard const lock{ mutex_ };
+              return f.selects(full, matched_) || f.reaches_below(full);
+            },
+            [&](git_submodule_pred const &keep) {
+              if (sm.update_none) { return true; }  // skipped as such, whatever it says
+              // A url that will not resolve goes raw: it is an error only once kept,
+              // when registration resolves it again.
+              std::string const url{ [&] {
+                try {
+                  return git_submodule_url(job.url, sm.url);
+                } catch (std::exception const &) { return sm.url; }
+              }() };
+              std::lock_guard const lock{ predicates_ };
+              return keep({ .name = sm.name, .path = full, .url = url, .sha = sm.sha });
+            },
+        },
+        *filter_);
+  }
+
   // Each selected submodule of a checked-out repository, registered the way
   // `git submodule update --init` leaves it and ready to fetch.
   std::vector<git_job> register_children(git_job const &job,
@@ -401,12 +433,7 @@ class git_tree : unmovable {
     std::vector<submodule_entry const *> picked;
     for (auto const &sm : subs) {
       std::string const full{ job.path.empty() ? sm.path : job.path + "/" + sm.path };
-      // Selected, or on the way to something an include may select: only fetching a
-      // submodule says what it holds.
-      bool const wanted{ [&] {
-        std::lock_guard const lock{ mutex_ };
-        return filter_->selects(full, matched_) || filter_->reaches_below(full);
-      }() };
+      bool const wanted{ wants(job, sm, full) };
       if (!wanted || sm.update_none) {
         tui::debug("fetch: submodule %s skipped (%s)",
                    full.c_str(),
@@ -470,8 +497,9 @@ class git_tree : unmovable {
     return children;
   }
 
-  std::optional<glob_filter> const &filter_;
+  std::optional<git_submodule_select> const &filter_;
   std::string const &trace_spec_;
+  std::mutex &predicates_;  // held across a predicate call; shared by fetch()'s batch
   git_progress progress_;
 
   std::mutex mutex_;  // guards everything below
@@ -757,14 +785,15 @@ fetch_error_kind git_error_kind(int klass, std::string_view message) {
 
 void fetch_git(fetch_request_git const &req,
                std::filesystem::path const &dest,
-               std::string const &trace_spec) {
+               std::string const &trace_spec,
+               std::mutex &predicates) {
   // Absolute, so relative submodule urls resolve the same from any working directory.
   std::string url{
     git_url_is_local(req.source) && !req.source.starts_with("file://")
         ? std::filesystem::absolute(req.source).lexically_normal().generic_string()
         : req.source
   };
-  git_tree{ req, trace_spec }.run(dest, std::move(url), req.ref);
+  git_tree{ req, trace_spec, predicates }.run(dest, std::move(url), req.ref);
 }
 
 }  // namespace envy

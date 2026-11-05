@@ -255,7 +255,8 @@ std::string source_key(pkg_cfg::local_source const &l);
 std::string custom_fetch_source_key(pkg_cfg const &cfg);
 
 // `submodules = true | { selectors }` on a git entry: true takes every submodule, a list
-// selects by root-relative path ('!' excludes), absent or false takes none.
+// selects by root-relative path ('!' excludes), absent or false takes none. A function is
+// FETCH's and envy.fetch's alone (fetch_entry_parse), so here it throws.
 std::optional<glob_filter> pkg_cfg_parse_submodules(sol::table const &table,
                                                     std::string_view context);
 

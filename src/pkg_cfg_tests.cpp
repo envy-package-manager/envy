@@ -947,13 +947,16 @@ TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
     CHECK(git.submodules->exclude == std::vector<std::string>{ "a/b" });
   }
 
-  SUBCASE("an empty list, a wrong type, or a non-git source is an error") {
+  SUBCASE("an empty list, a wrong type, a function, or a non-git source is an error") {
     CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
                             "ref = 'main', submodules = {} }"),
                       doctest::Contains("selects nothing"));
     CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
                             "ref = 'main', submodules = 'x' }"),
                       doctest::Contains("boolean or a list"));
+    CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.git', "
+                            "ref = 'main', submodules = function() return true end }"),
+                      doctest::Contains("only in FETCH and envy.fetch"));
     CHECK_THROWS_WITH(parse("result = { spec = 'a.b@v1', source = 'https://h/r.tar.gz', "
                             "submodules = true }"),
                       doctest::Contains("requires a git source"));

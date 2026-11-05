@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -106,15 +107,28 @@ struct fetch_request_file {
   std::filesystem::path file_root;
 };
 
+// A submodule as its parent records it: what a `submodules` predicate is asked about.
+struct git_submodule_info {
+  std::string_view name;  // its .gitmodules stanza
+  std::string_view path;  // '/'-joined from the root
+  std::string_view url;   // resolved against the parent's
+  std::string_view sha;   // the commit the parent records
+};
+
+// True fetches the submodule and asks again of each of its own; false prunes the subtree.
+using git_submodule_pred = std::function<bool(git_submodule_info const &)>;
+
+// Path selectors (empty takes all) or a predicate.
+using git_submodule_select = std::variant<glob_filter, git_submodule_pred>;
+
 // Git fetch request: `ref` is a full commit sha or an advertised branch/tag name.
 struct fetch_request_git {
   std::string source;
   std::filesystem::path destination;
   fetch_progress_cb_t progress{};
   std::string ref;
-  uri_scheme scheme{ uri_scheme::GIT };  // GIT or GIT_HTTPS
-  // Submodules to recurse into by root-relative path: none when unset, all when empty.
-  std::optional<glob_filter> submodules;
+  uri_scheme scheme{ uri_scheme::GIT };            // GIT or GIT_HTTPS
+  std::optional<git_submodule_select> submodules;  // none when unset
 };
 
 using fetch_request = std::variant<fetch_request_http,
@@ -134,7 +148,8 @@ struct fetch_result {
 using fetch_result_t = std::variant<fetch_result, std::string>;  // string on error
 
 // trace_spec labels emitted download_* trace events with the requesting package
-// identity (empty = engine/command-scoped).
+// identity (empty = engine/command-scoped). A call's submodule predicates run one at a
+// time, whatever thread asks: they may share a Lua state.
 std::vector<fetch_result_t> fetch(std::vector<fetch_request> const &requests,
                                   std::string trace_spec = {});
 

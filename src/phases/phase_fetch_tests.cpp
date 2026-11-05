@@ -242,7 +242,8 @@ TEST_CASE("url_to_fetch_request git carries submodules") {
 
   auto const &git_req{ std::get<fetch_request_git>(req) };
   REQUIRE(git_req.submodules.has_value());
-  CHECK(git_req.submodules->exclude == std::vector<std::string>{ "a" });
+  CHECK(std::get<glob_filter>(*git_req.submodules).exclude ==
+        std::vector<std::string>{ "a" });
 }
 
 TEST_CASE("url_to_fetch_request submodules on a non-git source throws") {
@@ -272,13 +273,41 @@ TEST_CASE("fetch_entry_parse reads every key and rejects the rest") {
   CHECK(entry.dest == "r");
   CHECK(entry.post_data == "k=v");
   REQUIRE(entry.submodules.has_value());
-  CHECK(entry.submodules->exclude == std::vector<std::string>{ "x" });
+  CHECK(std::get<glob_filter>(*entry.submodules).exclude ==
+        std::vector<std::string>{ "x" });
 
   CHECK_THROWS_WITH(
       fetch_entry_parse(table("{ source = 'https://h/r.git', submodule = true }"), "test"),
       doctest::Contains("unknown key 'submodule'"));
   CHECK_THROWS_WITH(fetch_entry_parse(table("{ ref = 'main' }"), "test"),
                     doctest::Contains("missing 'source'"));
+}
+
+TEST_CASE("fetch_entry_parse: a submodules function is a predicate over each one") {
+  sol::state lua;
+  lua.open_libraries(sol::lib::base);
+  lua.script(R"(
+    seen = ''
+    t = { source = 'https://h/r.git', ref = 'main', submodules = function(sm)
+      seen = seen .. sm.name .. '|' .. sm.path .. '|' .. sm.url .. '|' .. sm.sha .. ';'
+      if sm.path == 'nil' then return nil end
+      if sm.path == 'boom' then error('no list') end
+      return sm.path == 'a'
+    end })");
+  auto const entry{ fetch_entry_parse(lua["t"].get<sol::table>(), "test") };
+  REQUIRE(entry.submodules.has_value());
+  auto const &keep{ std::get<git_submodule_pred>(*entry.submodules) };
+  auto const ask{ [&](char const *path) {
+    return keep({ .name = "n", .path = path, .url = "u", .sha = "s" });
+  } };
+
+  CHECK(ask("a"));
+  CHECK_FALSE(ask("b"));
+  CHECK(lua["seen"].get<std::string>() == "n|a|u|s;n|b|u|s;");
+  CHECK_THROWS_WITH(ask("nil"),
+                    "test: submodules function must return a boolean for 'nil' (got nil)");
+  CHECK_THROWS_WITH(ask("boom"), doctest::Contains("failed on 'boom'"));
+  CHECK_THROWS_WITH(ask("boom"), doctest::Contains("no list"));
 }
 
 }  // namespace envy

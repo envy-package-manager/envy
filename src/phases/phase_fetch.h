@@ -1,7 +1,6 @@
 #pragma once
 
 #include "fetch.h"
-#include "glob.h"
 
 #include "sol/forward.hpp"
 
@@ -22,7 +21,7 @@ void run_fetch_phase(pkg *p, engine &eng);
 struct fetch_entry {
   std::string source;
   std::optional<std::string> sha256, ref, post_data, dest;
-  std::optional<glob_filter> submodules;
+  std::optional<git_submodule_select> submodules;  // a function only here: no cache key
 };
 
 fetch_entry fetch_entry_parse(sol::table const &tbl, std::string_view context);
