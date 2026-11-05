@@ -497,7 +497,13 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
 bool run_declarative_fetch(sol::object const &fetch_obj,
                            cache::scoped_entry_lock *lock,
                            std::string const &identity,
+                           engine &eng,
                            pkg *p) {
+  // A submodules predicate is Lua run on fetch's workers: it gets FETCH's envy.* context.
+  phase_context_guard const ctx_guard{
+    &eng, p, fetch_obj.lua_state(), lock->tmp_dir(), lock
+  };
+
   // Ensure stage_dir exists (needed for git repos that clone directly there)
   std::error_code ec;
   std::filesystem::create_directories(lock->stage_dir(), ec);
@@ -559,7 +565,7 @@ void run_fetch_phase(pkg *p, engine &eng) {
                                                   eng,
                                                   p);
   } else if (fetch_obj.is<std::string>() || fetch_obj.is<sol::table>()) {
-    should_mark_complete = run_declarative_fetch(fetch_obj, lock, identity, p);
+    should_mark_complete = run_declarative_fetch(fetch_obj, lock, identity, eng, p);
   } else {
     throw_runtime_error(
         { "Fetch field must be nil, string, table, or function in ", identity });

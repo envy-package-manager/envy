@@ -409,7 +409,13 @@ class git_tree : unmovable {
             },
             [&](git_submodule_pred const &keep) {
               if (sm.update_none) { return true; }  // skipped as such, whatever it says
-              std::string const url{ git_submodule_url(job.url, sm.url) };
+              // A url that will not resolve goes raw: it is an error only once kept,
+              // when registration resolves it again.
+              std::string const url{ [&] {
+                try {
+                  return git_submodule_url(job.url, sm.url);
+                } catch (std::exception const &) { return sm.url; }
+              }() };
               std::lock_guard const lock{ predicates_ };
               return keep({ .name = sm.name, .path = full, .url = url, .sha = sm.sha });
             },

@@ -76,6 +76,7 @@ class _Repos:
       deps/other   -> other.git, absolute local url, submodule *name* "other-mod"
       deps/skipped -> skipped.git, update = none
     dsuper.git       deps/lib only: every url relative, so a server can resolve it
+    badurl.git       deps/lib, and deps/broken whose relative url climbs past the root
     evil.git         deps/other by absolute local path, for a served superproject
     """
 
@@ -110,6 +111,15 @@ class _Repos:
         self.dsuper = self._repo("dsuper", {"top.txt": "top\n"})
         self._submodules(self.dsuper, [lib_entry])
         self.dsuper_sha = self.head(self.dsuper)
+
+        # Unresolvable, so an error only for a submodule something keeps.
+        self.badurl = self._repo("badurl", {"top.txt": "top\n"})
+        self._submodules(self.badurl, [
+            lib_entry,
+            ("deps/broken", "deps/broken", "../" * 64 + "nowhere.git", self.leaf_sha,
+             None),
+        ])
+        self.badurl_sha = self.head(self.badurl)
 
         self.evil = self._repo("evil", {"top.txt": "top\n"})
         self._submodules(self.evil, [("deps/other", "deps/other",
@@ -465,6 +475,62 @@ function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(2, sum(1 for e in run.events("git_fetch")
                                 if e.raw["path"] == "deps/lib/vendor/leaf"))
+
+    def test_predicate_prunes_a_submodule_whose_url_will_not_resolve(self):
+        for name, keep, ok in (("subpredurlok", 'sm.path ~= "deps/broken"', True),
+                               ("subpredurlbad", "true", False)):
+            with self.subTest(keep=keep):
+                run = self.install_spec(
+                    name,
+                    f"""FETCH = {{
+    source = "{self.repos.badurl.as_posix()}",
+    ref = "{self.repos.badurl_sha}",
+    submodules = function(sm) return {keep} end,
+}}
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
+""",
+                )
+                if ok:
+                    self.assertEqual(0, run.returncode, run.stderr)
+                    self.assertEqual({"", "deps/lib", "deps/lib/vendor/leaf"},
+                                     set(self.git_fetch_events(run)))
+                else:
+                    self.assertNotEqual(0, run.returncode)
+                    self.assertIn("climbs above", run.stderr)
+
+    def test_declarative_predicate_reads_a_dependency_through_envy_package(self):
+        """The predicate gets FETCH's envy.* context: here, a list another package built."""
+        dep = self.write_spec(
+            "subkeep.lua",
+            """IDENTITY = "local.subkeep@v1"
+function FETCH(tmp_dir, options) end
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options)
+    local f = assert(io.open(install_dir .. "/keep.txt", "w"))
+    f:write("deps/lib\\n")
+    f:close()
+end
+""",
+        )
+        run = self.install_spec(
+            "subpredctx",
+            f"""DEPENDENCIES = {{
+    {{ spec = "local.subkeep@v1", source = "{dep.as_posix()}", needed_by = "fetch" }},
+}}
+FETCH = {{
+    source = "{self.repos.super.as_posix()}",
+    ref = "{self.repos.super_sha}",
+    submodules = function(sm)
+        local f = assert(io.open(envy.package("local.subkeep@v1") .. "/keep.txt"))
+        local keep = "\\n" .. f:read("a")
+        f:close()
+        return keep:find("\\n" .. sm.path .. "\\n", 1, true) ~= nil
+    end,
+}}
+function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
+""",
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual({"", "deps/lib"}, set(self.git_fetch_events(run)))
 
     def test_submodule_predicate_must_answer_with_a_boolean(self):
         for answer, expected in (("nil", "must return a boolean"),
