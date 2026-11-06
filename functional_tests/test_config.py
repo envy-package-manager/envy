@@ -131,6 +131,28 @@ def popen(*args, **kwargs) -> subprocess.Popen[str]:
     return subprocess.Popen(*args, **kwargs)
 
 
+# Popen can start a session but not hand it a terminal: a fresh, single-threaded
+# interpreter claims the pty with TIOCSCTTY as session leader, then becomes `cmd`.
+_CLAIM_TTY_AND_EXEC = (
+    "import fcntl, os, sys, termios\n"
+    "fcntl.ioctl(0, termios.TIOCSCTTY, 0)\n"
+    "os.execvp(sys.argv[1], sys.argv[1:])\n"
+)
+
+
+def popen_on_controlling_tty(cmd, tty: int, **kwargs) -> subprocess.Popen:
+    """`cmd`, wrapped like popen, in its own session with pty secondary `tty` as stdio and
+    controlling terminal, as a shell runs it (POSIX). pty.fork would fork the runner."""
+    return subprocess.Popen(
+        [sys.executable, "-c", _CLAIM_TTY_AND_EXEC, *_wrap_cmd(list(cmd))],
+        stdin=tty,
+        stdout=tty,
+        stderr=tty,
+        start_new_session=True,
+        **kwargs,
+    )
+
+
 # Required manifest header for all manifests (bin is mandatory)
 MANIFEST_HEADER = '-- @envy bin "envy-bin"\n'
 

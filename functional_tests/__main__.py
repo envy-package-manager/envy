@@ -63,6 +63,16 @@ def _thread_excepthook(args):
 threading.excepthook = _thread_excepthook
 
 
+def _forbid_fork(event: str, _args) -> None:
+    """Stop a fork before it happens: a child of this thread-pool process inherits locks
+    other threads hold, and deadlocks if the Python it runs before exec needs one."""
+    if event in ("os.fork", "os.forkpty"):
+        raise RuntimeError(
+            f"{event} in the threaded test runner; spawn with subprocess instead "
+            "(test_config.popen_on_controlling_tty when the child needs a terminal)"
+        )
+
+
 def _disable_fetch_retry_by_default() -> None:
     """Fetches fail fast unless a test asks otherwise.
 
@@ -291,6 +301,7 @@ def _run_parallel(
 
 
 def main() -> None:
+    sys.addaudithook(_forbid_fork)  # audit events fire before the fork, so nothing leaks
     _setup_sanitizer_env()
     _disable_fetch_retry_by_default()
 

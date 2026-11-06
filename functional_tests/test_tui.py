@@ -304,35 +304,30 @@ class TestInteractiveHandoff(EnvyTestCase):
         (self.specs_dir / "noisy.lua").write_text(SPEC_NOISY)
 
     def _spawn_on_controlling_tty(self, manifest):
-        """envy on a pty that is its session's controlling terminal, as a shell gives it.
-
-        `pty.fork` is what buys that: `openpty` plus an inherited fd leaves /dev/tty
-        unopenable in the child, and the prompt this test waits for never arrives.
-        """
+        """(process, pty primary) for envy on a pty that is its controlling terminal: an
+        inherited fd alone leaves /dev/tty unopenable, and the prompt never arrives."""
         import pty
 
-        # _wrap_cmd is what puts envy under valgrind on the sanitizer runners; spawning by
-        # hand rather than through test_config.popen would quietly opt this test out.
-        argv = test_config._wrap_cmd(
-            [
-                str(self.envy),
-                "--cache-root",
-                str(self.cache_root),
-                "--verbose",  # the log stream is the half of the pause that used to leak
-                "install",
-                "--manifest",
-                str(manifest),
-            ]
-        )
-        pid, fd = pty.fork()
-        if pid == 0:
-            try:
-                os.chdir(str(self.project_root))
-                os.environ["TERM"] = "xterm-256color"
-                os.execvp(argv[0], argv)  # argv[0] may be a wrapper found on PATH
-            finally:
-                os._exit(127)  # exec failed; never return into the test runner
-        return pid, fd
+        envy = [
+            str(self.envy),
+            "--cache-root",
+            str(self.cache_root),
+            "--verbose",  # the log stream is the half of the pause that used to leak
+            "install",
+            "--manifest",
+            str(manifest),
+        ]
+        primary, secondary = pty.openpty()
+        try:
+            proc = test_config.popen_on_controlling_tty(
+                envy,
+                secondary,
+                cwd=str(self.project_root),
+                env={**os.environ, "TERM": "xterm-256color"},
+            )
+        finally:
+            os.close(secondary)  # the child holds its own; EOF on primary needs ours gone
+        return proc, primary
 
     def test_the_live_region_stops_while_a_child_owns_the_terminal(self):
         manifest = self.test_dir / "envy.lua"
@@ -365,7 +360,7 @@ class TestInteractiveHandoff(EnvyTestCase):
             except OSError:
                 return b""
 
-        pid, fd = self._spawn_on_controlling_tty(manifest)
+        proc, fd = self._spawn_on_controlling_tty(manifest)
         painted, seen = b"", b""
         try:
 
@@ -391,8 +386,8 @@ class TestInteractiveHandoff(EnvyTestCase):
             while read_ready(fd, 60.0):
                 pass
         finally:
-            _, status = os.waitpid(pid, 0)
+            returncode = proc.wait()
             os.close(fd)
 
-        self.assertEqual(0, os.waitstatus_to_exitcode(status), seen)
+        self.assertEqual(0, returncode, seen)
         self.assertEqual(b"", painted, f"envy painted over a waiting child: {painted!r}")
