@@ -249,6 +249,7 @@ void run_setup_pair(pkg *p,
 
   auto cache_result{ p->cache_ptr->ensure_pkg(
       p->cfg->identity,
+      p->display,
       platform::os_name(),
       platform::arch_name(),
       hash_prefix,

@@ -58,7 +58,8 @@ void run_export_phase(pkg *p, engine &eng) {
     }
   }
 
-  std::string const filename{ std::string(p->key.identity()) + "-" +
+  // The entry's own two dir names, so a DISPLAY label rides along for import to restore.
+  std::string const filename{ entry_dir.parent_path().filename().string() + "-" +
                               entry_dir.filename().string() + ".tar.zst" };
   std::filesystem::path const output_path{ ecfg->output_dir / filename };
 

@@ -1,15 +1,14 @@
 #include "product_util.h"
 
-#include "blake3_util.h"
 #include "cache.h"
 #include "engine.h"
+#include "phases/phase_check.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "platform.h"
 #include "util.h"
 
 #include <filesystem>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -42,18 +41,13 @@ std::string product_util_predict(product_info const &pi, pkg *provider, cache &c
     throw_runtime_error({ "Product '", pi.product_name, "' has no provider" });
   }
 
-  // Where the payload will land: the same key the cache will hash when it installs it,
-  // so the printed path is the one that appears.
-  std::ostringstream key;
-  key << provider->cfg->format_key();
-  for (auto const &wk : provider->resolved_weak_dependency_keys) { key << '|' << wk; }
-  auto const key_for_hash{ key.str() };
-  auto const digest{ blake3_hash(key_for_hash.data(), key_for_hash.size()) };
-
+  // Where the payload will land: the same hash and label check will use when it installs
+  // it, so the printed path is the one that appears.
   auto const pkg_path{ c.compute_pkg_path(provider->cfg->identity,
+                                          provider->display,
                                           platform::os_name(),
                                           platform::arch_name(),
-                                          util_bytes_to_hex(digest.data(), 8)) };
+                                          pkg_cache_hash(*provider).substr(0, 16)) };
   return util_normalized_path(pkg_path / pi.value);
 }
 

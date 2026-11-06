@@ -407,6 +407,8 @@ USER_MANAGED = nil
 ---column and before the bar or status. String, or a function of the validated options --
 ---the form one spec instantiated many times under one identity needs to tell its rows
 ---apart. Resolved once after OPTIONS validates; nil is the same as absent; single line.
+---Also slugged into the cache dir name ("envy.github~nanoprintf@r1"): never hashed, but
+---editing it moves the entry, so the next run refetches.
 ---@type string|fun(options: table): string?
 DISPLAY = nil
 

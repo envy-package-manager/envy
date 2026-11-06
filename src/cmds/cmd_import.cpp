@@ -89,13 +89,15 @@ import_result import_one_archive(cache &c,
   if (!parsed) {
     throw_runtime_error(
         { "import: invalid archive filename, expected "
-          "<identity>@<revision>-<platform>-<arch>-blake3-<hash_prefix>.tar.zst" });
+          "<namespace>.<name>[~<label>]@<revision>-<platform>-<arch>-blake3-<hash_prefix>"
+          ".tar.zst" });
   }
 
   std::string const label{ "[" + parsed->identity + "]" };
 
   auto result{ c.ensure_pkg(
       parsed->identity,
+      parsed->label,
       parsed->platform,
       parsed->arch,
       parsed->hash_prefix,

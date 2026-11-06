@@ -40,7 +40,7 @@ class package_depot_index {
   static package_depot_index build_from_entries(std::vector<depot_entry> const &entries);
 
   // Build index from a local directory of .tar.zst archives.
-  // Scans dir for .tar.zst files, maps filename stems → absolute file paths.
+  // Scans dir for .tar.zst files, maps their depot keys → absolute file paths.
   static package_depot_index build_from_directory(std::filesystem::path const &dir);
 
   // Build from directory with accompanying checksums (filename → sha256 hex).
@@ -61,7 +61,7 @@ class package_depot_index {
   bool empty() const;
 
  private:
-  // Filename stem → depot entry (URL + optional SHA256)
+  // cache::key of the archive (label-free) → depot entry (URL + optional SHA256)
   std::unordered_map<std::string, depot_entry> entries_;
 };
 

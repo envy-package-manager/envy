@@ -31,7 +31,7 @@
 │           │   └── envy-complete # Marker: all fetches verified
 │           └── work/             # Ephemeral workspace (wiped each attempt)
 ├── packages/                     # Package entries (one per identity/options/platform)
-│   └── {namespace}.{name}@{version}/
+│   └── {namespace}.{name}[~{label}]@{version}/  # label: slugged DISPLAY, never keyed
 │       └── {platform}-{arch}-blake3-{hash}/
 │           ├── envy-complete
 │           ├── envy-vendor-{sel} # Pristine vendor digest, one per VENDOR selector set
@@ -92,6 +92,7 @@ machine that has never run envy. See "Vendoring" in `docs/architecture.md`.
 ## Keys
 - **Spec/bundle**: `{identity}/blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical source — URL + sha256, git URL + ref (+ submodule selection), or local path. Identity alone would not do: a complete entry is never revalidated, so repointing a spec at a new source must land on a new entry rather than serve the old bytes. A custom fetch function has no fingerprint; its entries key on the declaring file, so editing the function body in place reuses the entry.
 - **Package**: `{identity}/{platform}-{arch}-blake3-{hash}` where `hash` is the leading 16 hex chars of BLAKE3 over the canonical key plus every resolved weak dependency key; computed at `pkg_check`, before any download, so locks can be acquired early.
+- **Label**: a spec's `DISPLAY`, slugged — runs outside `[A-Za-z0-9._-]` become one `-`, edges trimmed, 32 bytes max — rides between name and `@`: `envy.github` cloning nanoprintf at tag `v0.5.4` lands in `packages/envy.github~nanoprintf-v0.5.4@r1/`. It tells one spec's instances apart for `ls`, `du`, and `rm`; it never enters the hash, lock, or depot key, and `~` cannot occur in an identity, so it strips cleanly. `~` because it is RFC 3986 unreserved: depot URLs carry it verbatim, where S3 would read a `+` as a space. It is still part of the path: editing a spec's `DISPLAY` moves its entries, refetching into a new directory and orphaning the old one. Exported archives carry it (`envy.github~nanoprintf-v0.5.4@r1-darwin-arm64-blake3-{hash}.tar.zst`) so `envy import` lands where install looks.
 
 ## Locking & Workspace Lifecycle
 

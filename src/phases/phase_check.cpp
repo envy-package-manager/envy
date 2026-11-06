@@ -25,20 +25,8 @@ namespace {
 // entry's file lock, and holding p->lua across that would invert the lock order
 // taken by later phases (cache lock, then p->lua).
 cache::ensure_result compute_hash_and_lookup_cache(pkg *p) {
-  // Compute hash including resolved weak/ref-only dependencies
-  std::string const key_for_hash{ [&] {
-    std::ostringstream key;
-    key << p->cfg->format_key();
-    {  // deps_mutex guards the dependency maps; keep the scope to just the read
-      std::lock_guard const deps_lock(p->deps_mutex);
-      for (auto const &wk : p->resolved_weak_dependency_keys) { key << '|' << wk; }
-    }
-    return key.str();
-  }() };
-
-  auto const digest{ blake3_hash(key_for_hash.data(), key_for_hash.size()) };
-  p->canonical_identity_hash = util_bytes_to_hex(digest.data(), 32);
-  std::string const hash_prefix{ util_bytes_to_hex(digest.data(), 8) };
+  p->canonical_identity_hash = pkg_cache_hash(*p);
+  std::string const hash_prefix{ p->canonical_identity_hash.substr(0, 16) };
 
   auto const [platform, arch]{ [&] {
     auto const lua_acc{ p->lua.lock() };
@@ -49,6 +37,7 @@ cache::ensure_result compute_hash_and_lookup_cache(pkg *p) {
 
   return p->cache_ptr->ensure_pkg(
       p->cfg->identity,
+      p->display,
       platform,
       arch,
       hash_prefix,
@@ -56,6 +45,21 @@ cache::ensure_result compute_hash_and_lookup_cache(pkg *p) {
 }
 
 }  // namespace
+
+std::string pkg_cache_hash(pkg const &p) {
+  std::string const key_for_hash{ [&] {
+    std::ostringstream key;
+    key << p.cfg->format_key();
+    {  // deps_mutex guards the dependency maps; keep the scope to just the read
+      std::lock_guard const deps_lock(p.deps_mutex);
+      for (auto const &wk : p.resolved_weak_dependency_keys) { key << '|' << wk; }
+    }
+    return key.str();
+  }() };
+
+  auto const digest{ blake3_hash(key_for_hash.data(), key_for_hash.size()) };
+  return util_bytes_to_hex(digest.data(), 32);
+}
 
 void run_check_phase(pkg *p, engine &eng) {
   phase_trace_scope const phase_scope{ p->cfg->identity,

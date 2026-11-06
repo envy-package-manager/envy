@@ -4,10 +4,12 @@
 #include "platform.h"
 #include "util.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <string_view>
 
 #ifndef ENVY_VERSION_STR
 #error "ENVY_VERSION_STR must be defined by the build system"
@@ -56,7 +58,7 @@ struct temp_cache_fixture {
 };
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "repeated mark_install_complete calls are safe") {
-  auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+  auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
   REQUIRE(result.lock != nullptr);
 
   // Write something to install_dir
@@ -101,7 +103,7 @@ TEST_CASE("scoped_entry_lock is unmovable") {
 
 TEST_CASE_FIXTURE(temp_cache_fixture,
                   "ensure_pkg returns lock for cold entry and publishes pkg directory") {
-  auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+  auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
   CHECK(result.lock != nullptr);
   CHECK_FALSE(result.pkg_path.empty());
   CHECK(std::filesystem::exists(result.lock->install_dir()));
@@ -126,14 +128,14 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg fast path when marker present"
   std::ofstream{ pkg_dir / "existing.txt" } << "cached";
   envy::platform::touch_file(entry_dir / "envy-complete");
 
-  auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+  auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
   CHECK(result.lock == nullptr);
   CHECK(result.pkg_path == pkg_dir);
   CHECK(std::filesystem::exists(result.pkg_path / "existing.txt"));
 }
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg entry layout") {
-  auto result = cache->ensure_pkg("gcc", "linux", "x86_64", "deadbeef");
+  auto result = cache->ensure_pkg("gcc", "", "linux", "x86_64", "deadbeef");
   REQUIRE(result.lock != nullptr);
 
   CHECK(result.entry_path ==
@@ -182,13 +184,13 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_spec keys entries on the source") 
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg creates locks directory on demand") {
   REQUIRE_FALSE(std::filesystem::exists(temp_root / "locks"));
-  auto result = cache->ensure_pkg("gcc", "darwin", "arm64", "auto1");
+  auto result = cache->ensure_pkg("gcc", "", "darwin", "arm64", "auto1");
   CHECK(std::filesystem::is_directory(temp_root / "locks"));
   result.lock.reset();
 }
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "mark_fetch_complete creates sentinel") {
-  auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+  auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
   REQUIRE(result.lock != nullptr);
 
   CHECK_FALSE(result.lock->is_fetch_complete());
@@ -201,7 +203,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "mark_fetch_complete creates sentinel") {
 TEST_CASE_FIXTURE(temp_cache_fixture, "fetch_dir preserved when marked complete") {
   // First acquisition: populate fetch/ and mark complete
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     auto fetch_file = result.lock->fetch_dir() / "payload.tar.gz";
@@ -211,7 +213,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "fetch_dir preserved when marked complete"
 
   // Second acquisition: verify fetch/ survived
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     CHECK(result.lock->is_fetch_complete());
@@ -227,7 +229,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "fetch_dir preserved when marked complete"
 TEST_CASE_FIXTURE(temp_cache_fixture, "fetch_dir preserved when not marked complete") {
   // First acquisition: populate fetch/ but don't mark complete (simulates crash)
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     auto fetch_file = result.lock->fetch_dir() / "partial.tar.gz";
@@ -237,7 +239,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "fetch_dir preserved when not marked compl
 
   // Second acquisition: verify fetch/ was preserved for per-file caching
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     CHECK_FALSE(result.lock->is_fetch_complete());
@@ -258,7 +260,7 @@ TEST_CASE_FIXTURE(
 
   // Acquire lock, don't mark complete, leave directories empty
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -279,7 +281,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "programmatic package with fetch_dir prese
 
   // First acquisition: populate fetch_dir but don't mark complete
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -309,7 +311,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
 
   // Acquire lock, populate install_dir, but don't mark complete
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -335,7 +337,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
 
   // Acquire lock, mark as user-managed, leave directories empty
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -358,7 +360,7 @@ TEST_CASE_FIXTURE(
 
   // Acquire lock, mark as user-managed, populate fetch_dir
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -385,7 +387,7 @@ TEST_CASE_FIXTURE(
 
   // Acquire lock, mark as user-managed, populate install_dir
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -410,7 +412,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
 
   // Acquire lock, mark as user-managed, populate fetch/stage/install dirs
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     entry_dir = result.entry_path;
 
@@ -435,7 +437,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   std::filesystem::path lock_path;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     // Capture lock path (not exposed via public API, but we can infer it)
@@ -459,7 +461,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   std::filesystem::path lock_path;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     lock_path = temp_root / "locks" / "packages.foo-darwin-arm64-blake3-deadbeef.lock";
@@ -482,7 +484,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   std::filesystem::path lock_path;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     entry_dir = result.entry_path;
@@ -524,7 +526,7 @@ TEST_CASE_FIXTURE(
   std::filesystem::path lock_path;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     entry_dir = result.entry_path;
@@ -572,7 +574,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   std::filesystem::path fetch_file;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
 
     entry_dir = result.entry_path;
@@ -605,7 +607,7 @@ TEST_CASE_FIXTURE(temp_cache_fixture,
   std::filesystem::path fetch_file;
 
   {
-    auto result = cache->ensure_pkg("foo", "darwin", "arm64", "deadbeef02");
+    auto result = cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef02");
     REQUIRE(result.lock != nullptr);
 
     entry_dir = result.entry_path;
@@ -986,6 +988,46 @@ TEST_CASE("cache::key") {
   CHECK(envy::cache::key("llvm.clang@18.1.8", "windows", "x86_64", "ff00") ==
         "llvm.clang@18.1.8-windows-x86_64-blake3-ff00");
   CHECK(envy::cache::key("foo", "posix", "riscv", "0") == "foo-posix-riscv-blake3-0");
+}
+
+TEST_CASE("cache::entry_label slugs DISPLAY text into a path-safe label") {
+  using envy::cache;
+  CHECK(cache::entry_label("libusb/hidapi") == "libusb-hidapi");
+  CHECK(cache::entry_label("git cmake  ninja") == "git-cmake-ninja");
+  CHECK(cache::entry_label("13.2.rel1_x") == "13.2.rel1_x");
+  CHECK(cache::entry_label("caf\xc3\xa9") == "caf");  // non-ASCII is never path-safe
+  CHECK(cache::entry_label(" ..-/x/.- ") == "x");
+  CHECK(cache::entry_label("a~b@c+d") == "a-b-c-d");  // '~' and '@' delimit the dir name
+  CHECK(cache::entry_label("///").empty());
+  CHECK(cache::entry_label("").empty());
+  CHECK(cache::entry_label(std::string(40, 'a')) == std::string(32, 'a'));
+  CHECK(cache::entry_label(std::string(31, 'a') + "/b") == std::string(31, 'a'));
+
+  for (char const *s : { "libusb/hidapi", "caf\xc3\xa9", " ..-/x/.- ", "a-/b" }) {
+    CHECK(cache::entry_label(cache::entry_label(s)) == cache::entry_label(s));
+  }
+}
+
+TEST_CASE("cache::compute_pkg_path splices the label into the identity segment") {
+  envy::cache const c{ kAbsRoot / "c" };
+  auto const packages{ kAbsRoot / "c" / "packages" };
+  auto const labelled{
+    c.compute_pkg_path("fi.github@r1", "libusb/hidapi + more", "darwin", "arm64", "ab")
+  };
+  CHECK(labelled ==
+        packages / "fi.github~libusb-hidapi-more@r1" / "darwin-arm64-blake3-ab" / "pkg");
+
+  // Export names carry this into depot URLs verbatim, so only RFC 3986 unreserved
+  // characters (plus the identity's own '@'): S3 reads a literal '+' as a space.
+  std::string const dir{ labelled.parent_path().parent_path().filename().string() };
+  CHECK(std::ranges::all_of(dir, [](char ch) {
+    return envy::util_ascii_is_alnum(ch) ||
+           std::string_view{ "-._~@" }.find(ch) != std::string_view::npos;
+  }));
+  CHECK(c.compute_pkg_path("fi.github@r1", "", "darwin", "arm64", "ab") ==
+        packages / "fi.github@r1" / "darwin-arm64-blake3-ab" / "pkg");
+  CHECK(c.compute_pkg_path("fi.github@r1", "///", "darwin", "arm64", "ab") ==
+        packages / "fi.github@r1" / "darwin-arm64-blake3-ab" / "pkg");
 }
 
 TEST_CASE("cache::key round-trips with util_parse_archive_filename") {

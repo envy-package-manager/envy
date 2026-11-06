@@ -503,7 +503,15 @@ std::optional<parsed_archive_filename> util_parse_archive_filename(std::string_v
   if (dash_pos == std::string_view::npos) { return std::nullopt; }
 
   auto const identity_end{ at_pos + 1 + dash_pos };
-  std::string const identity{ stem.substr(0, identity_end) };
+  // A DISPLAY label sits between name and '@'; '~' never occurs in an identity.
+  auto const tilde_pos{ stem.substr(0, at_pos).find('~') };
+  bool const labelled{ tilde_pos != std::string_view::npos };
+  std::string const label{ labelled ? stem.substr(tilde_pos + 1, at_pos - tilde_pos - 1)
+                                    : std::string_view{} };
+  if (labelled && label.empty()) { return std::nullopt; }
+  std::string const identity{ std::string{
+                                  stem.substr(0, labelled ? tilde_pos : at_pos) } +
+                              std::string{ stem.substr(at_pos, identity_end - at_pos) } };
   std::string_view remaining{ stem.substr(identity_end + 1) };
 
   // remaining = platform-arch-blake3-hash_prefix
@@ -528,7 +536,7 @@ std::optional<parsed_archive_filename> util_parse_archive_filename(std::string_v
     return std::nullopt;
   }
 
-  return parsed_archive_filename{ identity, platform, arch, hash_prefix };
+  return parsed_archive_filename{ identity, label, platform, arch, hash_prefix };
 }
 
 bool util_platform_matches(std::vector<std::string> const &constraints,

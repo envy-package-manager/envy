@@ -168,13 +168,18 @@ class cache : unmovable {
 
   // `on_lock_contended` fires when another envy holds this entry and this call is about to
   // block on it for however long that takes. See tui_actions::lock_wait_spinner.
+  // `label` is the spec's DISPLAY: never keyed, slugged into the dir name for humans.
   ensure_result ensure_pkg(std::string_view identity,
+                           std::string_view label,
                            std::string_view platform,
                            std::string_view arch,
                            std::string_view hash_prefix,
                            platform::file_lock::contended_cb_t on_lock_contended = {});
 
+  // packages/<ns.name>[~<entry_label(label)>]@<rev>/<platform>-<arch>-blake3-<hash>/pkg
+  // '~': RFC 3986 unreserved, so depot URLs carry it verbatim (S3 reads '+' as a space).
   path compute_pkg_path(std::string_view identity,
+                        std::string_view label,
                         std::string_view platform,
                         std::string_view arch,
                         std::string_view hash_prefix) const;
@@ -203,6 +208,10 @@ class cache : unmovable {
   envy_ensure_result ensure_envy(std::string_view version);
 
   static bool is_entry_complete(std::filesystem::path const &entry_dir);
+
+  // DISPLAY text slugged to a path-safe label: runs outside [A-Za-z0-9._-] become one '-',
+  // edge '-'/'.' trimmed, 32 bytes max. Idempotent, so an archive's label round-trips.
+  static std::string entry_label(std::string_view display);
 
   // Canonical cache key: identity-platform-arch-blake3-hash_prefix
   static std::string key(std::string_view identity,

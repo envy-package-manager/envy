@@ -778,6 +778,69 @@ PACKAGES = {{
             0,
             f"install after import failed: {install_result.stderr}",
         )
+
+    def test_display_labels_archives_and_both_imports_land_where_install_looks(self):
+        """A DISPLAY label rides the archive name beside a bare one; `import <archive>` and
+        `import --dir` both restore each, so install finds every entry without the source."""
+        spec_path = self.test_dir / "labelled_pkg.lua"
+        spec_path.write_text(
+            (self.test_dir / "exportable_pkg.lua")
+            .read_text(encoding="utf-8")
+            .replace("local.exportable_pkg@v1", "local.labelled_pkg@v1")
+            + 'OPTIONS = { variant = { type = "string", required = true } }\n'
+            + 'DISPLAY = function(options) return "v/" .. options.variant end\n',
+            encoding="utf-8",
+        )
+        manifest = self.create_manifest(
+            f'''
+PACKAGES = {{
+    {{ spec = "local.exportable_pkg@v1", source = "{self.lua_path(self.test_dir)}/exportable_pkg.lua" }},
+    {{ spec = "local.labelled_pkg@v1", source = "{self.lua_path(spec_path)}", options = {{ variant = "alpha" }} }},
+    {{ spec = "local.labelled_pkg@v1", source = "{self.lua_path(spec_path)}", options = {{ variant = "beta" }} }}
+}}
+'''
+        )
+
+        install = self.run_envy("install", "--manifest", str(manifest))
+        self.assertEqual(install.returncode, 0, f"install failed: {install.stderr}")
+        export = self.run_envy(
+            "export", "-o", str(self.output_dir), "--manifest", str(manifest)
+        )
+        self.assertEqual(export.returncode, 0, f"export failed: {export.stderr}")
+
+        archives = sorted(self.output_dir.glob("*.tar.zst"))
+        entries = [
+            "local.exportable_pkg@v1",
+            "local.labelled_pkg~v-alpha@v1",
+            "local.labelled_pkg~v-beta@v1",
+        ]
+        self.assertEqual(entries, [a.name[: a.name.index("@v1") + 3] for a in archives])
+
+        self.archive_path.unlink()  # a miss would now fail to fetch
+
+        def envy_in(cache_root, *args):
+            return test_config.run(
+                [str(self.envy), "--cache-root", str(cache_root), *(str(a) for a in args)],
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+            )
+
+        one_by_one = self.make_temp_dir("import_one")
+        for archive in archives:
+            result = envy_in(one_by_one, "import", archive)
+            self.assertEqual(result.returncode, 0, f"import failed: {result.stderr}")
+
+        from_dir = self.make_temp_dir("import_dir")
+        result = envy_in(from_dir, "import", "--dir", self.output_dir, "--manifest", manifest)
+        self.assertEqual(result.returncode, 0, f"import --dir failed: {result.stderr}")
+
+        for cache_root in (one_by_one, from_dir):
+            landed = sorted(p.name for p in (cache_root / "packages").iterdir())
+            self.assertEqual(entries, landed)
+            result = envy_in(cache_root, "install", "--manifest", manifest)
+            self.assertEqual(result.returncode, 0, f"install after import: {result.stderr}")
+
     def test_import_dir_stale_hash_skipped(self):
         """Archive with valid identity but wrong hash is not imported."""
         manifest = self.create_manifest(

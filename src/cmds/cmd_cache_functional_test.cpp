@@ -118,7 +118,7 @@ cmd_cache_ensure_package::cmd_cache_ensure_package(
 void cmd_cache_ensure_package::execute() {
   cache c{ cli_cache_root_ };
   run_ensure(cfg_, [&] {
-    return c.ensure_pkg(cfg_.identity, cfg_.platform, cfg_.arch, cfg_.hash_prefix);
+    return c.ensure_pkg(cfg_.identity, "", cfg_.platform, cfg_.arch, cfg_.hash_prefix);
   });
 }
 
