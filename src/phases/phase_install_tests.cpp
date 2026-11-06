@@ -105,7 +105,8 @@ struct install_test_fixture {
   }
 
   void acquire_lock() {
-    auto result = test_cache.ensure_pkg("test.package@v1", "darwin", "arm64", "deadbeef");
+    auto result =
+        test_cache.ensure_pkg("test.package@v1", "", "darwin", "arm64", "deadbeef");
     REQUIRE(result.lock != nullptr);
     p->lock = std::move(result.lock);
   }

@@ -37,10 +37,17 @@ bool is_valid_sha256_hex(std::string_view hex) {
   return true;
 }
 
-// Extract the archive filename stem (filename minus .tar.zst) from a URL.
-// Returns nullopt (with a warning naming `context`) when the URL has no
-// .tar.zst extension or the stem doesn't parse as an archive filename.
-std::optional<std::string> stem_from_url(std::string_view url, std::string_view context) {
+// The cache key an archive filename stem names, its DISPLAY label stripped so find()'s
+// bare identity hits a labelled archive; nullopt when the stem doesn't parse.
+std::optional<std::string> depot_key(std::string_view stem) {
+  auto const parsed{ util_parse_archive_filename(stem) };
+  if (!parsed) { return std::nullopt; }
+  return cache::key(parsed->identity, parsed->platform, parsed->arch, parsed->hash_prefix);
+}
+
+// The depot key of the archive a URL names. Returns nullopt (with a warning naming
+// `context`) when the URL has no .tar.zst extension or the stem doesn't parse.
+std::optional<std::string> key_from_url(std::string_view url, std::string_view context) {
   auto const slash_pos{ url.rfind('/') };
   std::string_view filename{ (slash_pos != std::string_view::npos &&
                               slash_pos + 1 < url.size())
@@ -56,15 +63,14 @@ std::optional<std::string> stem_from_url(std::string_view url, std::string_view 
     return std::nullopt;
   }
 
-  if (!util_parse_archive_filename(stem)) {
+  auto key{ depot_key(stem) };
+  if (!key) {
     tui::warn("depot: skipping unparseable entry: %s", std::string(context).c_str());
-    return std::nullopt;
   }
-
-  return std::string{ stem };
+  return key;
 }
 
-// Parse a single manifest text into a map of filename stem → depot entry.
+// Parse a single manifest text into a map of depot key → depot entry.
 // Supports two line formats:
 //   <URL>                           (plain URL, no hash — rejected when require_sha256)
 //   <64hex>  <URL>                  (SHA256 hash + two spaces + URL)
@@ -93,15 +99,15 @@ std::unordered_map<std::string, depot_entry> parse_manifest_text(std::string_vie
       url_part = std::string_view{ line }.substr(66);
     }
 
-    auto stem{ stem_from_url(url_part, line) };
-    if (!stem) { continue; }
+    auto key{ key_from_url(url_part, line) };
+    if (!key) { continue; }
 
     if (require_sha256 && !sha256_hash) {
       tui::warn("depot: skipping line without SHA256: %s", line.c_str());
       continue;
     }
 
-    entries.try_emplace(std::move(*stem),
+    entries.try_emplace(std::move(*key),
                         depot_entry{ std::string(url_part), std::move(sha256_hash) });
   }
 
@@ -226,10 +232,10 @@ package_depot_index package_depot_index::build_from_entries(
       sha256_hash = lowercase_hex(*entry.sha256);
     }
 
-    auto stem{ stem_from_url(entry.url, entry.url) };
-    if (!stem) { continue; }
+    auto key{ key_from_url(entry.url, entry.url) };
+    if (!key) { continue; }
 
-    index.entries_.try_emplace(std::move(*stem),
+    index.entries_.try_emplace(std::move(*key),
                                depot_entry{ entry.url, std::move(sha256_hash) });
   }
 
@@ -254,9 +260,8 @@ package_depot_index package_depot_index::build_from_directory(
     if (p.extension() != ".zst") { continue; }
     auto stem_path{ p.stem() };  // strips .zst
     if (stem_path.extension() != ".tar") { continue; }
-    std::string const stem{ stem_path.stem().string() };
-
-    if (!util_parse_archive_filename(stem)) {
+    auto key{ depot_key(stem_path.stem().string()) };
+    if (!key) {
       tui::warn("depot: skipping unrecognized file %s", p.filename().string().c_str());
       continue;
     }
@@ -267,7 +272,7 @@ package_depot_index package_depot_index::build_from_directory(
     if (it != checksums.end()) { sha256_hash = it->second; }
 
     index.entries_.try_emplace(
-        stem,
+        std::move(*key),
         depot_entry{ fs::absolute(p).string(), std::move(sha256_hash) });
   }
 
@@ -275,11 +280,11 @@ package_depot_index package_depot_index::build_from_directory(
 }
 
 void package_depot_index::merge(package_depot_index other) {
-  for (auto &[stem, entry] : other.entries_) {
-    auto const [it, inserted]{ entries_.try_emplace(stem, std::move(entry)) };
+  for (auto &[key, entry] : other.entries_) {
+    auto const [it, inserted]{ entries_.try_emplace(key, std::move(entry)) };
     if (!inserted && it->second.sha256 != entry.sha256) {
       tui::warn("depot: duplicate entry %s with differing SHA256; keeping first",
-                stem.c_str());
+                key.c_str());
     }
   }
 }

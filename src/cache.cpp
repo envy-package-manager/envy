@@ -7,6 +7,7 @@
 #include "tui.h"
 #include "util.h"
 
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
@@ -532,17 +533,40 @@ std::string cache::key(std::string_view identity,
   return s.str();
 }
 
+std::string cache::entry_label(std::string_view display) {
+  std::string slug;
+  for (char const c : display) {
+    if (util_ascii_is_alnum(c) || c == '.' || c == '-' || c == '_') {
+      slug += c;
+    } else if (!slug.empty() && slug.back() != '-') {
+      slug += '-';
+    }
+  }
+  std::string_view s{ slug };
+  s = s.substr(std::min(s.find_first_not_of("-."), s.size())).substr(0, 32);
+  return std::string{ s.substr(0, s.find_last_not_of("-.") + 1) };  // npos + 1 == 0
+}
+
 path cache::compute_pkg_path(std::string_view identity,
+                             std::string_view label,
                              std::string_view platform,
                              std::string_view arch,
                              std::string_view hash_prefix) const {
+  std::string const dir{ [&] {
+    std::string d{ identity };
+    if (std::string const slug{ entry_label(label) }; !slug.empty()) {
+      d.insert(std::min(d.find('@'), d.size()), "+" + slug);  // '+' never in an identity
+    }
+    return d;
+  }() };
   std::ostringstream oss;
   oss << platform << '-' << arch << "-blake3-" << hash_prefix;
-  return m->packages_dir() / std::string(identity) / oss.str() / "pkg";
+  return m->packages_dir() / dir / oss.str() / "pkg";
 }
 
 cache::ensure_result cache::ensure_pkg(
     std::string_view identity,
+    std::string_view label,
     std::string_view platform,
     std::string_view arch,
     std::string_view hash_prefix,
@@ -550,7 +574,7 @@ cache::ensure_result cache::ensure_pkg(
   if (!util_is_safe_path_component(identity)) {
     throw_runtime_error({ "cache: invalid package identity: '", identity, "'" });
   }
-  path const pkg_path{ compute_pkg_path(identity, platform, arch, hash_prefix) };
+  path const pkg_path{ compute_pkg_path(identity, label, platform, arch, hash_prefix) };
   path const entry_dir{ pkg_path.parent_path() };
   auto const k{ key(identity, platform, arch, hash_prefix) };
 

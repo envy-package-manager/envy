@@ -230,6 +230,19 @@ TEST_CASE("package_depot_index: bare filename with SHA256") {
   CHECK(result->url == "arm.gcc@r2-darwin-arm64-blake3-aaaa.tar.zst");
 }
 
+TEST_CASE("package_depot_index: a labelled archive is found by its bare identity") {
+  auto index{ package_depot_index::build_from_contents(
+      { std::string{ kHashA } +
+        "  https://cdn.example.com/"
+        "fi.github+libusb-hidapi@r1-darwin-arm64-blake3-aaaa.tar.zst\n" }) };
+
+  auto const result{ index.find("fi.github@r1", "darwin", "arm64", "aaaa") };
+  REQUIRE(result.has_value());
+  CHECK(result->url ==
+        "https://cdn.example.com/"
+        "fi.github+libusb-hidapi@r1-darwin-arm64-blake3-aaaa.tar.zst");
+}
+
 TEST_CASE("package_depot_index: manifest with only comments yields empty index") {
   auto index{ package_depot_index::build_from_contents(
       { "# This is just comments\n"

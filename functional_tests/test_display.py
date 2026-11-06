@@ -12,6 +12,7 @@ a log that omits the no-ops cannot be read as a record of the run.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import select
@@ -316,6 +317,148 @@ class TestDisplay(EnvyTestCase):
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode)
         self.assertIn("DISPLAY function must return a string or nil", run.stderr)
+
+    # -- cache entry label ---------------------------------------------------
+
+    def _packages(self) -> list[str]:
+        return sorted(p.name for p in (self.cache_root / "packages").iterdir())
+
+    def test_display_labels_each_instance_s_cache_directory(self):
+        """One spec, two repos: each entry's directory names its repo; a rerun hits both."""
+        spec = self._spec(
+            "repo.lua",
+            "local.repo@r0",
+            'OPTIONS = { repo = { type = "string", required = true } }\n'
+            "DISPLAY = function(options) return options.repo end",
+        )
+        manifest = self.write_manifest(
+            "PACKAGES = {\n"
+            + test_config.spec_entry(
+                "local.repo@r0", spec, options='{ repo = "libusb/hidapi" }'
+            )
+            + "\n"
+            + test_config.spec_entry(
+                "local.repo@r0", spec, options='{ repo = "nanopb/nanopb" }'
+            )
+            + "\n}\n"
+        )
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(
+            ["local.repo+libusb-hidapi@r0", "local.repo+nanopb-nanopb@r0"],
+            self._packages(),
+        )
+        self.assertEqual(2, len(self.pkg_entries("local.repo@r0")))
+
+        again = self.install(manifest)
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertEqual(
+            ["cache_hit", "cache_hit"],
+            [e.raw["outcome"] for e in again.events("pkg_outcome")],
+        )
+
+    def test_display_slugs_into_the_label_or_drops_out(self):
+        """Path-unsafe runs collapse to '-'; a DISPLAY with nothing path-safe adds no label."""
+        entries = [
+            ("local.s@v1", self._spec("s.lua", "local.s@v1", 'DISPLAY = "the  payload!"')),
+            ("local.j@v1", self._spec("j.lua", "local.j@v1", 'DISPLAY = "///"')),
+            ("local.n@v1", self._spec("n.lua", "local.n@v1", "DISPLAY = nil")),
+        ]
+        manifest = test_config.write_spec_manifest(self.work, entries)
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(
+            ["local.j@v1", "local.n@v1", "local.s+the-payload@v1"], self._packages()
+        )
+
+    def test_mixed_manifest_labels_only_what_has_a_display(self):
+        """Labelled and bare packages side by side: one spec labelling some instances and not
+        others, dependencies across the two kinds, products predicted where install lands."""
+        install = (
+            "INSTALL = function(install_dir, stage_dir, fetch_dir)\n"
+            '  envy.copy(fetch_dir .. "/payload.txt", install_dir .. "/out.txt")\n'
+            "end\n"
+        )
+
+        def consumer(dep, dep_spec):
+            source = self.lua_path(dep_spec)
+            return (
+                f'DEPENDENCIES = {{ {{ spec = "{dep}", source = "{source}" }} }}\n'
+                "INSTALL = function(install_dir)\n"
+                f'  local dep = envy.package("{dep}")\n'
+                '  envy.copy(dep .. "/out.txt", install_dir .. "/dep.txt")\n'
+                "end\n"
+            )
+
+        plain = self._spec(
+            "plain.lua", "local.plain@v1", install + 'PRODUCTS = { plain_tool = "out.txt" }'
+        )
+        named = self._spec(
+            "named.lua",
+            "local.named@v1",
+            install + 'DISPLAY = "named thing"\nPRODUCTS = { named_tool = "out.txt" }',
+        )
+        repo = self._spec(
+            "repo.lua",
+            "local.repo@r0",
+            install + 'OPTIONS = { repo = { type = "string" } }\n'
+            "DISPLAY = function(options) return options.repo end",
+        )
+        lc = self._spec(
+            "lc.lua", "local.lc@v1", consumer("local.plain@v1", plain) + 'DISPLAY = "consumer"'
+        )
+        bc = self._spec("bc.lua", "local.bc@v1", consumer("local.named@v1", named))
+
+        manifest = self.write_manifest(
+            "PACKAGES = {\n"
+            + "\n".join(
+                [
+                    test_config.spec_entry("local.plain@v1", plain),
+                    test_config.spec_entry("local.named@v1", named),
+                    test_config.spec_entry(
+                        "local.repo@r0", repo, options='{ repo = "libusb/hidapi" }'
+                    ),
+                    test_config.spec_entry("local.repo@r0", repo),
+                    test_config.spec_entry("local.lc@v1", lc),
+                    test_config.spec_entry("local.bc@v1", bc),
+                ]
+            )
+            + "\n}\n"
+        )
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(
+            [
+                "local.bc@v1",
+                "local.lc+consumer@v1",
+                "local.named+named-thing@v1",
+                "local.plain@v1",
+                "local.repo+libusb-hidapi@r0",
+                "local.repo@r0",
+            ],
+            self._packages(),
+        )
+        self.assertEqual(2, len(self.pkg_entries("local.repo@r0")))
+
+        # Each consumer read its dependency from wherever that dependency's label put it.
+        for identity in ("local.lc@v1", "local.bc@v1"):
+            (entry,) = self.pkg_entries(identity)
+            dep_txt = entry / "pkg" / "dep.txt"
+            self.assertEqual("hello\n", dep_txt.read_text(encoding="utf-8"))
+
+        products = self.run_envy("product", "--json", "--manifest", manifest)
+        self.assertEqual(0, products.returncode, products.stderr)
+        predicted = json.loads(products.stdout)
+        self.assertIn("local.named+named-thing@v1", Path(predicted["named_tool"]).parts)
+        self.assertIn("local.plain@v1", Path(predicted["plain_tool"]).parts)
+        for tool in ("named_tool", "plain_tool"):
+            self.assertTrue(Path(predicted[tool]).is_file(), predicted[tool])
+
+        again = self.install(manifest)
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertEqual(
+            ["cache_hit"] * 6, [e.raw["outcome"] for e in again.events("pkg_outcome")]
+        )
 
 
 @unittest.skipIf(sys.platform == "win32", "no pty on Windows")

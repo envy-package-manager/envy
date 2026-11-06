@@ -1227,6 +1227,23 @@ TEST_CASE("util_parse_archive_filename: identity edge cases") {
   }
 }
 
+TEST_CASE("util_parse_archive_filename: a DISPLAY label is split off the identity") {
+  auto const r{ envy::util_parse_archive_filename(
+      "fi.github+libusb-hidapi@r1-darwin-arm64-blake3-abcdef0123456789") };
+  REQUIRE(r.has_value());
+  CHECK(r->identity == "fi.github@r1");
+  CHECK(r->label == "libusb-hidapi");
+  CHECK(r->platform == "darwin");
+  CHECK(r->arch == "arm64");
+  CHECK(r->hash_prefix == "abcdef0123456789");
+
+  auto const bare{ envy::util_parse_archive_filename("a.b@r2-darwin-arm64-blake3-ab") };
+  REQUIRE(bare.has_value());
+  CHECK(bare->label.empty());
+
+  CHECK_FALSE(envy::util_parse_archive_filename("a.b+@r1-darwin-arm64-blake3-ab"));
+}
+
 TEST_CASE("util_parse_archive_filename: platform/arch variants") {
   SUBCASE("unknown platform (forward compatibility)") {
     auto const r{ envy::util_parse_archive_filename(

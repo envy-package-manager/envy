@@ -303,8 +303,12 @@ class EnvyTestCase(unittest.TestCase):
         return self._entries(self.cache_root / "specs" / identity)
 
     def pkg_entries(self, identity: str) -> list[Path]:
-        """Every cache entry for a package identity, one per platform/option hash."""
-        return self._entries(self.cache_root / "packages" / identity)
+        """Every cache entry for a package identity, one per platform/option hash, across
+        the `<ns.name>+<label>@<rev>` directories a DISPLAY label splits them into."""
+        base, _, rev = identity.partition("@")
+        packages = self.cache_root / "packages"
+        dirs = [packages / identity, *packages.glob(f"{base}+*@{rev}")]
+        return sorted(e for d in dirs for e in self._entries(d))
 
     def spec_complete(self, identity: str) -> bool:
         """True when some entry for `identity` was finalized (`envy-complete`)."""
