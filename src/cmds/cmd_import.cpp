@@ -89,7 +89,7 @@ import_result import_one_archive(cache &c,
   if (!parsed) {
     throw_runtime_error(
         { "import: invalid archive filename, expected "
-          "<namespace>.<name>[+<label>]@<revision>-<platform>-<arch>-blake3-<hash_prefix>"
+          "<namespace>.<name>[~<label>]@<revision>-<platform>-<arch>-blake3-<hash_prefix>"
           ".tar.zst" });
   }
 

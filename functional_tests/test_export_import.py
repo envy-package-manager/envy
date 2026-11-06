@@ -811,8 +811,8 @@ PACKAGES = {{
         archives = sorted(self.output_dir.glob("*.tar.zst"))
         entries = [
             "local.exportable_pkg@v1",
-            "local.labelled_pkg+v-alpha@v1",
-            "local.labelled_pkg+v-beta@v1",
+            "local.labelled_pkg~v-alpha@v1",
+            "local.labelled_pkg~v-beta@v1",
         ]
         self.assertEqual(entries, [a.name[: a.name.index("@v1") + 3] for a in archives])
 

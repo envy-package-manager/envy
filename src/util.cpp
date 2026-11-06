@@ -503,14 +503,16 @@ std::optional<parsed_archive_filename> util_parse_archive_filename(std::string_v
   if (dash_pos == std::string_view::npos) { return std::nullopt; }
 
   auto const identity_end{ at_pos + 1 + dash_pos };
-  // A DISPLAY label sits between name and '@'; '+' never occurs in an identity.
-  auto const plus_pos{ stem.substr(0, at_pos).find('+') };
-  bool const labelled{ plus_pos != std::string_view::npos };
-  std::string const label{ labelled ? stem.substr(plus_pos + 1, at_pos - plus_pos - 1)
+  // A DISPLAY label sits between name and '@'; '~' never occurs in an identity.
+  auto const tilde_pos{ stem.substr(0, at_pos).find('~') };
+  bool const labelled{ tilde_pos != std::string_view::npos };
+  std::string const label{ labelled ? stem.substr(tilde_pos + 1, at_pos - tilde_pos - 1)
                                     : std::string_view{} };
   if (labelled && label.empty()) { return std::nullopt; }
-  std::string const identity{ std::string{ stem.substr(0, labelled ? plus_pos : at_pos) } +
-                              std::string{ stem.substr(at_pos, identity_end - at_pos) } };
+  std::string const identity{
+    std::string{ stem.substr(0, labelled ? tilde_pos : at_pos) } +
+    std::string{ stem.substr(at_pos, identity_end - at_pos) }
+  };
   std::string_view remaining{ stem.substr(identity_end + 1) };
 
   // remaining = platform-arch-blake3-hash_prefix

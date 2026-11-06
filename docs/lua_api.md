@@ -60,7 +60,7 @@ error, because a row is one line whose width the live region counts. Padded to a
 its own, so keep it short; a run with no work to do prints nothing at all on a TTY.
 
 It also labels the package's cache directory, slugged to path-safe ASCII:
-`packages/envy.github+nanoprintf-v0.5.4@r1/`. Never hashed, but part of the path—editing it
+`packages/envy.github~nanoprintf-v0.5.4@r1/`. Never hashed, but part of the path—editing it
 moves the entry, so the next run refetches (see `docs/cache.md`, "Keys").
 
 ---

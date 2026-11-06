@@ -176,7 +176,8 @@ class cache : unmovable {
                            std::string_view hash_prefix,
                            platform::file_lock::contended_cb_t on_lock_contended = {});
 
-  // packages/<ns.name>[+<entry_label(label)>]@<rev>/<platform>-<arch>-blake3-<hash>/pkg
+  // packages/<ns.name>[~<entry_label(label)>]@<rev>/<platform>-<arch>-blake3-<hash>/pkg
+  // '~': RFC 3986 unreserved, so depot URLs carry it verbatim (S3 reads '+' as a space).
   path compute_pkg_path(std::string_view identity,
                         std::string_view label,
                         std::string_view platform,

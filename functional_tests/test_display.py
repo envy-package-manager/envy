@@ -345,7 +345,7 @@ class TestDisplay(EnvyTestCase):
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(
-            ["local.repo+libusb-hidapi@r0", "local.repo+nanopb-nanopb@r0"],
+            ["local.repo~libusb-hidapi@r0", "local.repo~nanopb-nanopb@r0"],
             self._packages(),
         )
         self.assertEqual(2, len(self.pkg_entries("local.repo@r0")))
@@ -368,7 +368,7 @@ class TestDisplay(EnvyTestCase):
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(
-            ["local.j@v1", "local.n@v1", "local.s+the-payload@v1"], self._packages()
+            ["local.j@v1", "local.n@v1", "local.s~the-payload@v1"], self._packages()
         )
 
     def test_mixed_manifest_labels_only_what_has_a_display(self):
@@ -430,11 +430,11 @@ class TestDisplay(EnvyTestCase):
         self.assertEqual(
             [
                 "local.bc@v1",
-                "local.lc+consumer@v1",
-                "local.named+named-thing@v1",
+                "local.lc~consumer@v1",
+                "local.named~named-thing@v1",
                 "local.plain@v1",
-                "local.repo+libusb-hidapi@r0",
                 "local.repo@r0",
+                "local.repo~libusb-hidapi@r0",
             ],
             self._packages(),
         )
@@ -449,7 +449,7 @@ class TestDisplay(EnvyTestCase):
         products = self.run_envy("product", "--json", "--manifest", manifest)
         self.assertEqual(0, products.returncode, products.stderr)
         predicted = json.loads(products.stdout)
-        self.assertIn("local.named+named-thing@v1", Path(predicted["named_tool"]).parts)
+        self.assertIn("local.named~named-thing@v1", Path(predicted["named_tool"]).parts)
         self.assertIn("local.plain@v1", Path(predicted["plain_tool"]).parts)
         for tool in ("named_tool", "plain_tool"):
             self.assertTrue(Path(predicted[tool]).is_file(), predicted[tool])

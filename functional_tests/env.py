@@ -304,10 +304,10 @@ class EnvyTestCase(unittest.TestCase):
 
     def pkg_entries(self, identity: str) -> list[Path]:
         """Every cache entry for a package identity, one per platform/option hash, across
-        the `<ns.name>+<label>@<rev>` directories a DISPLAY label splits them into."""
+        the `<ns.name>~<label>@<rev>` directories a DISPLAY label splits them into."""
         base, _, rev = identity.partition("@")
         packages = self.cache_root / "packages"
-        dirs = [packages / identity, *packages.glob(f"{base}+*@{rev}")]
+        dirs = [packages / identity, *packages.glob(f"{base}~*@{rev}")]
         return sorted(e for d in dirs for e in self._entries(d))
 
     def spec_complete(self, identity: str) -> bool:

@@ -555,7 +555,7 @@ path cache::compute_pkg_path(std::string_view identity,
   std::string const dir{ [&] {
     std::string d{ identity };
     if (std::string const slug{ entry_label(label) }; !slug.empty()) {
-      d.insert(std::min(d.find('@'), d.size()), "+" + slug);  // '+' never in an identity
+      d.insert(std::min(d.find('@'), d.size()), "~" + slug);  // '~' never in an identity
     }
     return d;
   }() };

@@ -4,10 +4,12 @@
 #include "platform.h"
 #include "util.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <string_view>
 
 #ifndef ENVY_VERSION_STR
 #error "ENVY_VERSION_STR must be defined by the build system"
@@ -995,7 +997,7 @@ TEST_CASE("cache::entry_label slugs DISPLAY text into a path-safe label") {
   CHECK(cache::entry_label("13.2.rel1_x") == "13.2.rel1_x");
   CHECK(cache::entry_label("caf\xc3\xa9") == "caf");  // non-ASCII is never path-safe
   CHECK(cache::entry_label(" ..-/x/.- ") == "x");
-  CHECK(cache::entry_label("a+b@c") == "a-b-c");  // '+' and '@' delimit the dir name
+  CHECK(cache::entry_label("a~b@c+d") == "a-b-c-d");  // '~' and '@' delimit the dir name
   CHECK(cache::entry_label("///").empty());
   CHECK(cache::entry_label("").empty());
   CHECK(cache::entry_label(std::string(40, 'a')) == std::string(32, 'a'));
@@ -1009,8 +1011,18 @@ TEST_CASE("cache::entry_label slugs DISPLAY text into a path-safe label") {
 TEST_CASE("cache::compute_pkg_path splices the label into the identity segment") {
   envy::cache const c{ kAbsRoot / "c" };
   auto const packages{ kAbsRoot / "c" / "packages" };
-  CHECK(c.compute_pkg_path("fi.github@r1", "libusb/hidapi", "darwin", "arm64", "ab") ==
-        packages / "fi.github+libusb-hidapi@r1" / "darwin-arm64-blake3-ab" / "pkg");
+  auto const labelled{ c.compute_pkg_path(
+      "fi.github@r1", "libusb/hidapi + more", "darwin", "arm64", "ab") };
+  CHECK(labelled ==
+        packages / "fi.github~libusb-hidapi-more@r1" / "darwin-arm64-blake3-ab" / "pkg");
+
+  // Export names carry this into depot URLs verbatim, so only RFC 3986 unreserved
+  // characters (plus the identity's own '@'): S3 reads a literal '+' as a space.
+  std::string const dir{ labelled.parent_path().parent_path().filename().string() };
+  CHECK(std::ranges::all_of(dir, [](char ch) {
+    return envy::util_ascii_is_alnum(ch) ||
+           std::string_view{ "-._~@" }.find(ch) != std::string_view::npos;
+  }));
   CHECK(c.compute_pkg_path("fi.github@r1", "", "darwin", "arm64", "ab") ==
         packages / "fi.github@r1" / "darwin-arm64-blake3-ab" / "pkg");
   CHECK(c.compute_pkg_path("fi.github@r1", "///", "darwin", "arm64", "ab") ==
