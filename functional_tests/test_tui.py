@@ -325,6 +325,9 @@ class TestInteractiveHandoff(EnvyTestCase):
                 cwd=str(self.project_root),
                 env={**os.environ, "TERM": "xterm-256color"},
             )
+        except BaseException:
+            os.close(primary)  # never reaches the caller's cleanup
+            raise
         finally:
             os.close(secondary)  # the child holds its own; EOF on primary needs ours gone
         return proc, primary
