@@ -1011,8 +1011,9 @@ TEST_CASE("cache::entry_label slugs DISPLAY text into a path-safe label") {
 TEST_CASE("cache::compute_pkg_path splices the label into the identity segment") {
   envy::cache const c{ kAbsRoot / "c" };
   auto const packages{ kAbsRoot / "c" / "packages" };
-  auto const labelled{ c.compute_pkg_path(
-      "fi.github@r1", "libusb/hidapi + more", "darwin", "arm64", "ab") };
+  auto const labelled{
+    c.compute_pkg_path("fi.github@r1", "libusb/hidapi + more", "darwin", "arm64", "ab")
+  };
   CHECK(labelled ==
         packages / "fi.github~libusb-hidapi-more@r1" / "darwin-arm64-blake3-ab" / "pkg");
 

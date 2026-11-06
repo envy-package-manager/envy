@@ -509,10 +509,9 @@ std::optional<parsed_archive_filename> util_parse_archive_filename(std::string_v
   std::string const label{ labelled ? stem.substr(tilde_pos + 1, at_pos - tilde_pos - 1)
                                     : std::string_view{} };
   if (labelled && label.empty()) { return std::nullopt; }
-  std::string const identity{
-    std::string{ stem.substr(0, labelled ? tilde_pos : at_pos) } +
-    std::string{ stem.substr(at_pos, identity_end - at_pos) }
-  };
+  std::string const identity{ std::string{
+                                  stem.substr(0, labelled ? tilde_pos : at_pos) } +
+                              std::string{ stem.substr(at_pos, identity_end - at_pos) } };
   std::string_view remaining{ stem.substr(identity_end + 1) };
 
   // remaining = platform-arch-blake3-hash_prefix
