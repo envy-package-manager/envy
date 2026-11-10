@@ -29,6 +29,10 @@ struct phase_context {
   // runs before the manifest shell can exist, and the manifest state is one
   // non-recursive mutex — evaluating the shell from inside it would self-deadlock.
   bool builtin_shell{ false };
+
+  // `root` for dependencies' ENV in this phase: the package's tmp dir. Unset falls back to
+  // lock's tmp dir; with neither, only the pre-activation env applies.
+  std::optional<std::filesystem::path> env_root;
 };
 
 // Get phase context from Lua registry (returns nullptr if not in phase execution)
@@ -45,7 +49,8 @@ class phase_context_guard : unmovable {
                       pkg *p,
                       lua_State *L,
                       std::optional<std::filesystem::path> run_dir = std::nullopt,
-                      cache::scoped_entry_lock const *lock = nullptr);
+                      cache::scoped_entry_lock const *lock = nullptr,
+                      std::optional<std::filesystem::path> env_root = std::nullopt);
   ~phase_context_guard();
 
  private:

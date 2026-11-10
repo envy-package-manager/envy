@@ -448,8 +448,9 @@ std::vector<wchar_t> build_environment_block(shell_env_t const &env) {
   // Inherit parent when no overrides.
   if (env.empty()) { return {}; }
 
-  // Merge parent + overrides (Windows env vars are case-insensitive).
-  shell_env_t merged{ shell_getenv() };
+  // `env` is the child's whole environment, as on POSIX: a name it lacks stays unset. Names
+  // are case-insensitive, so fold any two spellings of one into a single entry.
+  shell_env_t merged;
   for (auto const &[override_key, override_value] : env) {
     // Find and replace existing entry case-insensitively
     auto it{ std::find_if(merged.begin(),

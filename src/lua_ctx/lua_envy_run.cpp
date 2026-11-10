@@ -1,9 +1,11 @@
 #include "lua_envy_run.h"
 
 #include "engine.h"
+#include "env_ops.h"
 #include "lua_phase_context.h"
 #include "lua_shell.h"
 #include "pkg.h"
+#include "pkg_env.h"
 #include "shell.h"
 #include "sol_util.h"
 #include "tui.h"
@@ -98,7 +100,7 @@ void lua_envy_run_install(sol::table &envy_table) {
                                                     : pkg_default_shell(p) };
 
     std::optional<std::filesystem::path> cwd;
-    shell_env_t env{ shell_getenv() };
+    shell_env_t env{ pkg_env_for_context(ctx) };
 
     if (opts_table) {
       sol::table opts{ *opts_table };
@@ -110,7 +112,7 @@ void lua_envy_run_install(sol::table &envy_table) {
       if (env_table) {
         for (auto const &[key, value] : *env_table) {
           if (key.is<std::string>() && value.is<std::string>()) {
-            env[key.as<std::string>()] = value.as<std::string>();
+            env_put(env, key.as<std::string>(), value.as<std::string>());
           }
         }
       }

@@ -119,7 +119,7 @@ class TestBashHook(EnvyTestCase):
         """Clean environment for hook tests — strip ENVY_SHELL_* to avoid leaking host config."""
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("ENVY_SHELL_"):
+            if key.startswith(("ENVY_SHELL_", "ENVY_ACTIVATE_")):
                 del env[key]
         return env
 
@@ -660,7 +660,7 @@ class TestZshHook(EnvyTestCase):
         """Clean environment for hook tests — strip ENVY_SHELL_* to avoid leaking host config."""
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("ENVY_SHELL_"):
+            if key.startswith(("ENVY_SHELL_", "ENVY_ACTIVATE_")):
                 del env[key]
         return env
 
@@ -1227,7 +1227,7 @@ class TestFishHook(EnvyTestCase):
         """Clean environment for hook tests — strip ENVY_SHELL_* to avoid leaking host config."""
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("ENVY_SHELL_"):
+            if key.startswith(("ENVY_SHELL_", "ENVY_ACTIVATE_")):
                 del env[key]
         return env
 
@@ -1398,7 +1398,7 @@ class TestPowerShellHook(EnvyTestCase):
         """Clean environment for hook tests — strip ENVY_SHELL_* to avoid leaking host config."""
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("ENVY_SHELL_"):
+            if key.startswith(("ENVY_SHELL_", "ENVY_ACTIVATE_")):
                 del env[key]
         return env
 

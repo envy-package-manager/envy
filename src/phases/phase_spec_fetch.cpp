@@ -2,6 +2,7 @@
 
 #include "bundle.h"
 #include "engine.h"
+#include "env_ops.h"
 #include "extract.h"
 #include "fetch.h"
 #include "lua_ctx/lua_envy_options.h"
@@ -46,6 +47,22 @@ tree_filter parse_vendor_table(sol::state_view lua, std::string const &identity)
   return vendor_parse_selectors(
       sol_util_get_string_list(lua.globals(), "VENDOR", "spec '" + identity + "'"),
       "spec '" + identity + "'");
+}
+
+// The spec's ENV global: a table, parsed now so a malformed constant fails before any
+// fetch, or a function, called per consumer (see pkg_env_eval). Absent means none.
+bool resolve_env(sol::state_view lua, std::string const &identity) {
+  sol::object obj{ lua["ENV"] };
+  if (!obj.valid() || obj.get_type() == sol::type::lua_nil) { return false; }
+  if (obj.get_type() == sol::type::table) {
+    env_ops_parse(obj, "spec '" + identity + "'");
+  } else if (obj.get_type() != sol::type::function) {
+    throw_runtime_error({ "ENV must be a table or a function (got ",
+                          sol::type_name(lua.lua_state(), obj.get_type()),
+                          ") for ",
+                          identity });
+  }
+  return true;
 }
 
 // What column two of this package's rows leads with. A function of the validated options
@@ -1545,6 +1562,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
 
   p->display = resolve_display(p, *lua);
   tui::section_set_display(p->tui_section, p->display);
+  p->has_env = resolve_env(*lua, cfg.identity);
 
   p->lua.set(std::move(lua));
 

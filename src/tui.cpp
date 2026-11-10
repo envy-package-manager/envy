@@ -1302,6 +1302,13 @@ void section_commit(section_handle h) {
   s_tui.cv.notify_one();
 }
 
+void flush() {
+  if (!s_tui.initialized) { return; }
+  render_once();
+  emit_flush();
+  std::fflush(stdout);
+}
+
 void sections_clear() {
   if (!s_progress.enabled) { return; }
 

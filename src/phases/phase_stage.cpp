@@ -8,6 +8,7 @@
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "pkg.h"
+#include "pkg_env.h"
 #include "platform.h"
 #include "shell.h"
 #include "trace.h"
@@ -64,7 +65,9 @@ void run_programmatic_stage(sol::protected_function stage_func,
   tui::debug("stage: stage function");
 
   // Set up Lua registry context for envy.* functions (run_dir = stage_dir)
-  phase_context_guard ctx_guard{ &eng, p, stage_func.lua_state(), stage_dir };
+  phase_context_guard ctx_guard{
+    &eng, p, stage_func.lua_state(), stage_dir, nullptr, tmp_dir
+  };
 
   sol::state_view lua{ stage_func.lua_state() };
   sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
@@ -79,18 +82,18 @@ void run_programmatic_stage(sol::protected_function stage_func,
 
 void run_shell_stage(std::string_view script,
                      std::filesystem::path const &dest_dir,
-                     std::string const &identity,
-                     resolved_shell shell,
-                     tui::section_handle tui_section,
+                     pkg *p,
                      std::filesystem::path const &cache_root) {
   tui::debug("stage: shell script");
-  tui_actions::run_phase_shell_script(script,
-                                      "Stage",
-                                      dest_dir,
-                                      identity,
-                                      std::move(shell),
-                                      tui_section,
-                                      cache_root);
+  tui_actions::run_phase_shell_script(
+      script,
+      "Stage",
+      dest_dir,
+      p->cfg->identity,
+      pkg_default_shell(p),
+      p->tui_section,
+      cache_root,
+      pkg_env_for_phase(p, pkg_phase::pkg_stage, p->lock->tmp_dir()));
 }
 
 }  // namespace
@@ -118,12 +121,7 @@ void run_stage_phase(pkg *p, engine &eng) {
     extract_all_archives(lock->fetch_dir(), stage_dir, {}, identity, p->tui_section);
   } else if (stage_obj.is<std::string>()) {
     auto const script_str{ stage_obj.as<std::string>() };
-    run_shell_stage(script_str,
-                    stage_dir,
-                    identity,
-                    pkg_default_shell(p),
-                    p->tui_section,
-                    eng.cache_root());
+    run_shell_stage(script_str, stage_dir, p, eng.cache_root());
   } else if (stage_obj.is<sol::protected_function>()) {
     run_programmatic_stage(stage_obj.as<sol::protected_function>(),
                            lock->fetch_dir(),

@@ -341,6 +341,27 @@ end
 
 **Security:** a non-`local.*` spec cannot depend on a `local.*` spec—a published spec must not reach into someone's working tree. Enforced while parsing `DEPENDENCIES`, naming both identities.
 
+### Environment (`ENV`)
+
+A spec publishes variables; a string sets, `false` unsets, an edit wraps the current value (`sep` defaults to the platform path separator), `nil` leaves a name alone. `ENVY_*` names are reserved. Table form for constants; the function form gets the payload, the consumer's `root`, and options.
+
+```lua
+ENV = function(pkg_path, root, options)              -- pkg_path is nil when user-managed
+  return {
+    RUSTUP_HOME = envy.path.join(pkg_path, "rustup"),  -- toolchain: one per cache entry
+    CARGO_HOME  = envy.path.join(root, ".cargo"),      -- mutable state: per consumer
+    PATH        = { prepend = envy.path.join(pkg_path, "bin") },
+  }
+end
+```
+
+Two consumers, one syntax:
+
+- **Shell:** `envy activate` applies every installed package's `ENV` with `root` = the project root (depth-first from `PACKAGES`, a package before its dependencies, earlier wins), then the bin dir on `PATH` and `ENVY_PROJECT_ROOT`. See `docs/shell-integration.md`.
+- **Phases:** a package's verbs (string forms, `envy.run`, SETUP pairs) see the `ENV` of everything reached through the edges their phase waits on, with `root` = that package's tmp dir; deepest applies first, so nearer dependencies win, ties by key. A's INSTALL running B's tool that runs C's cargo gets C's `CARGO_HOME`, sandboxed under A's build.
+
+**Same hash, same bytes:** nothing project- or shell-specific reaches a phase. Phases and Lua `os.getenv` see the pre-activation environment—an activated shell's variables are undone before envy runs any verb—and `root` in a phase is never a project path. A dependency's `ENV` derives only from its own path, options and spec, all already behind the dependent's key. Project layout (e.g. `CARGO_HOME` under `out/`) belongs in no package's `options`.
+
 ## Unified DAG Execution Model
 
 ### Overview

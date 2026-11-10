@@ -16,8 +16,14 @@ phase_context_guard::phase_context_guard(engine *eng,
                                          pkg *p,
                                          lua_State *L,
                                          std::optional<std::filesystem::path> run_dir,
-                                         cache::scoped_entry_lock const *lock)
-    : lua_state_{ L }, ctx_{ eng, p, std::move(run_dir), lock } {
+                                         cache::scoped_entry_lock const *lock,
+                                         std::optional<std::filesystem::path> env_root)
+    : lua_state_{ L },
+      ctx_{ .eng = eng,
+            .p = p,
+            .run_dir = std::move(run_dir),
+            .lock = lock,
+            .env_root = std::move(env_root) } {
   if (!lua_state_) { return; }
 
   sol::state_view lua{ lua_state_ };

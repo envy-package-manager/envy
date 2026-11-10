@@ -15,7 +15,8 @@ cmd_startup cmd_startup_load(std::string_view cmd_name,
                              std::optional<std::filesystem::path> const &manifest_path,
                              std::optional<std::filesystem::path> const &cli_cache_root,
                              bool subproject,
-                             std::optional<std::filesystem::path> const &project_dir) {
+                             std::optional<std::filesystem::path> const &project_dir,
+                             bool read_only_cache) {
   // Bytes and '@envy' header only: everything below picks the cache, and the manifest
   // may fetch a bundle into it during its own global scope (envy.loadenv_bundle).
   auto const found{ manifest::find_and_discover(manifest_path, subproject, project_dir) };
@@ -31,9 +32,10 @@ cmd_startup cmd_startup_load(std::string_view cmd_name,
   // path -- which is what keeps the first-run notice from printing twice per invocation.
   reexec_if_needed(found.meta, resolved, manifest_dir);
 
-  cache_announce_root_once(resolved, found.meta.bin);
+  if (!read_only_cache) { cache_announce_root_once(resolved, found.meta.bin); }
 
   auto c{ self_deploy::ensure(resolved.root, resolved.mode) };
+  c->set_read_only(read_only_cache);
 
   auto m{ manifest::load(found.content, found.path, c.get()) };
   if (!m) { throw_runtime_error({ cmd_name, ": could not load manifest" }); }

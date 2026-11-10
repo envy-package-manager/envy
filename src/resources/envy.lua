@@ -413,6 +413,17 @@ USER_MANAGED = nil
 ---@type string|fun(options: table): string?
 DISPLAY = nil
 
+---@alias envy.env_edit { prepend?: string|string[], append?: string|string[], sep?: string }
+---@alias envy.env_value string|false|envy.env_edit
+
+---ENV: variables this package publishes. Applied in `envy activate`'d shells (root = the
+---project root) and to the phases of every package that depends on this one, transitively
+---(root = that dependent's tmp dir). A string sets, false unsets, an edit wraps the current
+---value (sep defaults to the platform path separator); nil leaves a name alone. Names
+---starting ENVY_ are reserved. pkg_path is nil for user-managed packages.
+---@type table<string, envy.env_value>|fun(pkg_path: string?, root: string, options: table): table<string, envy.env_value>?
+ENV = nil
+
 ---EXPORTABLE: cache-managed packages with EXPORTABLE=true expose their install output for export.
 ---When false, only fetched bytes are preserved in the cache.
 ---@type boolean

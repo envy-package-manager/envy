@@ -89,6 +89,8 @@ Execute shell script in phase context.
 
 **Returns:** `{ exit_code, stdout, stderr }`
 
+**Environment:** the pre-activation environment plus the `ENV` of every package the current phase's edges reach (see `docs/architecture.md`), then `env` on top. `env` drops non-string values and cannot unset. Lua's `os.getenv` reads the same pre-activation environment; `os.execute` and `io.popen` are unavailable, since they would spawn with the live one—use `envy.run` (`capture = true` replaces `io.popen`).
+
 ```lua
 -- Simple command
 envy.run("make -j$(nproc)")

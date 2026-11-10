@@ -86,6 +86,12 @@ envy vendor patched --force         # throw away deliberate edits to an exempt c
 
 ### Shell Integration
 
+**`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell only) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is skipped with a `run 'envy install'` hint. Prints a usage hint instead of the script when stdout is a terminal.
+
+**`envy deactivate <shell>`** — Print shell code that restores every variable activation touched, byte-for-byte, from the backups activation keeps in the environment. Reads nothing but those variables: no manifest, no Lua, no network.
+
+**`envy run --activate <cmd>`** — Run `cmd` with the project's activated environment, as `envy activate` would set it. Without the flag, `run` passes the caller's environment through with the bin dir prepended.
+
 **`envy shell <shell>`** — Print the `source` line to add to your shell profile for automatic PATH management. Supported shells: `bash`, `zsh`, `fish`, `powershell`. Hook files live under the user-wide cache and are created during self-deploy; this command just prints the line. Warns only under `--cache-root`/`ENVY_CACHE_ROOT`, and reports plainly that a project-local cache never populates hooks. Names a stale project-local `shell/` an older envy left behind. See `docs/shell-integration.md` for details.
 
 ### Utilities

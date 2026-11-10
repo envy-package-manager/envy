@@ -6,6 +6,7 @@
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "pkg.h"
+#include "pkg_env.h"
 #include "shell.h"
 #include "trace.h"
 #include "tui.h"
@@ -24,17 +25,17 @@ namespace {
 
 void execute_build_script(std::string_view script,
                           std::filesystem::path const &cwd,
-                          std::string const &identity,
-                          resolved_shell shell,
-                          tui::section_handle tui_section,
+                          pkg *p,
                           std::filesystem::path const &cache_root) {
-  tui_actions::run_phase_shell_script(script,
-                                      "Build",
-                                      cwd,
-                                      identity,
-                                      std::move(shell),
-                                      tui_section,
-                                      cache_root);
+  tui_actions::run_phase_shell_script(
+      script,
+      "Build",
+      cwd,
+      p->cfg->identity,
+      pkg_default_shell(p),
+      p->tui_section,
+      cache_root,
+      pkg_env_for_phase(p, pkg_phase::pkg_build, p->lock->tmp_dir()));
 }
 
 void run_programmatic_build(sol::protected_function build_func,
@@ -42,13 +43,14 @@ void run_programmatic_build(sol::protected_function build_func,
                             std::filesystem::path const &fetch_dir,
                             std::filesystem::path const &stage_dir,
                             std::filesystem::path const &tmp_dir,
-                            std::string const &identity,
                             engine &eng,
                             pkg *p) {
   tui::debug("build: build function");
 
   // Set up Lua registry context for envy.* functions (run_dir = stage_dir)
-  phase_context_guard ctx_guard{ &eng, p, build_func.lua_state(), stage_dir };
+  phase_context_guard ctx_guard{
+    &eng, p, build_func.lua_state(), stage_dir, nullptr, tmp_dir
+  };
 
   sol::state_view lua{ build_func.lua_state() };
   sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
@@ -69,29 +71,17 @@ void run_programmatic_build(sol::protected_function build_func,
     sol::object return_value = build_result;
     if (return_value.is<std::string>()) {
       std::string const script{ return_value.as<std::string>() };
-      execute_build_script(script,
-                           stage_dir,
-                           identity,
-                           pkg_default_shell(p),
-                           p->tui_section,
-                           eng.cache_root());
+      execute_build_script(script, stage_dir, p, eng.cache_root());
     }
   }
 }
 
 void run_shell_build(std::string_view script,
                      std::filesystem::path const &stage_dir,
-                     std::string const &identity,
                      pkg *p,
-                     tui::section_handle tui_section,
                      std::filesystem::path const &cache_root) {
   tui::debug("build: shell script");
-  execute_build_script(script,
-                       stage_dir,
-                       identity,
-                       pkg_default_shell(p),
-                       tui_section,
-                       cache_root);
+  execute_build_script(script, stage_dir, p, cache_root);
 }
 
 }  // namespace
@@ -110,19 +100,13 @@ void run_build_phase(pkg *p, engine &eng) {
     // no BUILD field
   } else if (build_obj.is<std::string>()) {
     std::string const script{ build_obj.as<std::string>() };
-    run_shell_build(script,
-                    p->lock->stage_dir(),
-                    p->cfg->identity,
-                    p,
-                    p->tui_section,
-                    eng.cache_root());
+    run_shell_build(script, p->lock->stage_dir(), p, eng.cache_root());
   } else if (build_obj.is<sol::protected_function>()) {
     run_programmatic_build(build_obj.as<sol::protected_function>(),
                            p->lock->install_dir(),
                            p->lock->fetch_dir(),
                            p->lock->stage_dir(),
                            p->lock->tmp_dir(),
-                           p->cfg->identity,
                            eng,
                            p);
   } else {

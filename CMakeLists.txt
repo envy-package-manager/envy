@@ -238,12 +238,15 @@ add_dependencies(envy_embedded_licenses envy_licenses_collected)
 
 # Common source files shared by all envy executables (main added separately)
 set(ENVY_BASE_SOURCES
+    src/activation.cpp
     src/bootstrap.cpp
     src/cache.cpp
     src/cli.cpp
     src/cli_parse.cpp
     src/cmd.cpp
+    src/cmds/cmd_activate.cpp
     src/cmds/cmd_cache.cpp
+    src/cmds/cmd_deactivate.cpp
     src/cmds/cmd_deploy.cpp
     src/cmds/cmd_export.cpp
     src/cmds/cmd_extract.cpp
@@ -266,6 +269,7 @@ set(ENVY_BASE_SOURCES
     src/cmds/cmd_version.cpp
     src/deploy.cpp
     src/engine.cpp
+    src/env_ops.cpp
     src/task_engine.cpp
     src/pkg_phase.cpp
     src/pkg_key.cpp
@@ -319,6 +323,7 @@ set(ENVY_BASE_SOURCES
     src/manifest.cpp
     src/package_depot.cpp
     src/pkg_cfg.cpp
+    src/pkg_env.cpp
     src/bundle.cpp
     src/spec_util.cpp
     $<$<PLATFORM_ID:Windows>:src/sha256_win.cpp>
@@ -537,6 +542,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/extract_tests.cpp
     src/engine_tests.cpp
     src/engine_weak_resolution_tests.cpp
+    src/env_ops_tests.cpp
     src/task_engine_tests.cpp
     src/fetch_tests.cpp
     src/fetch_error_tests.cpp

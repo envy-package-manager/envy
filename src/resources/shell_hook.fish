@@ -67,50 +67,90 @@ function _envy_unset_prompt
     set -e _ENVY_PROMPT_ACTIVE
 end
 
+# The project's bin-dir envy prints the activate/deactivate script and its status lines;
+# the announce switch goes along even when it is not exported.
+function _envy_activate
+    test -x "$argv[2]/envy"; or return 1
+    set -l out (ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" "$argv[2]/envy" activate fish); or return 1
+    test (count $out) -gt 0; or return 1
+    printf '%s\n' $out | source
+    set -gx ENVY_ACTIVATE_KEY "$argv[1]"
+end
+
+function _envy_deactivate
+    set -l out
+    if test -x "$ENVY_ACTIVATE_EXE"; and set out (ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" "$ENVY_ACTIVATE_EXE" deactivate fish)
+        printf '%s\n' $out | source
+    else
+        echo "envy: cannot restore the environment ($ENVY_ACTIVATE_EXE is gone); restart your shell" >&2
+        for v in (set -n | string match 'ENVY_ACTIVATE_*')
+            set -e $v
+        end
+    end
+    set -e ENVY_ACTIVATE_KEY
+end
+
+# A project pinned to an envy without `activate` just gets its bin dir on PATH.
+function _envy_legacy_enter
+    if test "$argv[2]" != "$_ENVY_BIN_DIR"
+        set -gx PATH "$argv[2]" $PATH
+        set -g _ENVY_BIN_DIR "$argv[2]"
+        test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: entering "(string replace -r '.*/' '' "$argv[1]")" $_ENVY_DASH tools added to PATH" >&2
+    end
+    set -gx ENVY_PROJECT_ROOT "$argv[1]"
+end
+
+function _envy_legacy_leave
+    test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: leaving "(string replace -r '.*/' '' "$ENVY_PROJECT_ROOT")" $_ENVY_DASH PATH restored" >&2
+    set -l idx (contains -i -- "$_ENVY_BIN_DIR" $PATH)
+    if test -n "$idx"
+        set -e PATH[$idx]
+    end
+    set -e _ENVY_BIN_DIR
+    set -e ENVY_PROJECT_ROOT
+end
+
+# $argv[1] = refresh: `envy install` bumped the generation file, so re-activate in place.
 function _envy_hook --on-variable PWD
     test "$ENVY_SHELL_HOOK_DISABLE" = 1; and return
+    set -l refresh (test "$argv[1]" = refresh; and echo 1)
     # --on-variable PWD also fires from a cd in a command substitution.
-    test "$PWD" = "$_ENVY_LAST_PWD"; and return
+    test -z "$refresh"; and test "$PWD" = "$_ENVY_LAST_PWD"; and return
     set -g _ENVY_LAST_PWD "$PWD"
 
     set -l manifest_dir (_envy_find_manifest 2>/dev/null)
-
+    set -l bin_dir
     if test -n "$manifest_dir"
         set -l bin_val (_envy_parse_bin "$manifest_dir")
         if test -n "$bin_val"
-            set -l bin_dir (realpath "$manifest_dir/$bin_val" 2>/dev/null)
-            if test -n "$bin_dir"
-                if test "$bin_dir" != "$_ENVY_BIN_DIR"
-                    # Leaving the old project (switching)?
-                    if set -q _ENVY_BIN_DIR
-                        test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: leaving "(string replace -r '.*/' '' "$ENVY_PROJECT_ROOT")" $_ENVY_DASH PATH restored" >&2
-                        set -l idx (contains -i -- "$_ENVY_BIN_DIR" $PATH)
-                        if test -n "$idx"
-                            set -e PATH[$idx]
-                        end
-                    end
-                    set -gx PATH "$bin_dir" $PATH
-                    set -g _ENVY_BIN_DIR "$bin_dir"
-                    test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: entering "(string replace -r '.*/' '' "$manifest_dir")" $_ENVY_DASH tools added to PATH" >&2
-                    _envy_set_prompt
-                end
-                set -gx ENVY_PROJECT_ROOT "$manifest_dir"
-                return
-            end
+            set bin_dir (realpath "$manifest_dir/$bin_val" 2>/dev/null)
         end
     end
 
-    # Left all projects or no bin — clean up
-    if set -q _ENVY_BIN_DIR
-        test "$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" != 1; and echo "envy: leaving "(string replace -r '.*/' '' "$ENVY_PROJECT_ROOT")" $_ENVY_DASH PATH restored" >&2
-        set -l idx (contains -i -- "$_ENVY_BIN_DIR" $PATH)
-        if test -n "$idx"
-            set -e PATH[$idx]
+    if test -n "$bin_dir"
+        if test -n "$refresh"; or begin; test "$manifest_dir" != "$ENVY_ACTIVATE_KEY"; and test "$bin_dir" != "$_ENVY_BIN_DIR"; end
+            set -q _ENVY_BIN_DIR; and _envy_legacy_leave
+            if not _envy_activate "$manifest_dir" "$bin_dir"
+                set -q ENVY_ACTIVATE_KEY; and _envy_deactivate
+                _envy_legacy_enter "$manifest_dir" "$bin_dir"
+            end
         end
-        set -e _ENVY_BIN_DIR
-        _envy_unset_prompt
+        _envy_set_prompt
+        return
     end
-    set -e ENVY_PROJECT_ROOT
+
+    # Left all projects or no bin -- clean up
+    set -q ENVY_ACTIVATE_KEY; and _envy_deactivate
+    set -q _ENVY_BIN_DIR; and _envy_legacy_leave
+    _envy_unset_prompt
+end
+
+# Per prompt, no fork: re-activate when `envy install` bumped this project's generation.
+function _envy_refresh --on-event fish_prompt
+    set -q ENVY_ACTIVATE_KEY; and test -f "$ENVY_ACTIVATE_GENFILE"; or return
+    read -l gen < "$ENVY_ACTIVATE_GENFILE"
+    test -z "$gen"; and set gen 0
+    test "$gen" != "$ENVY_ACTIVATE_GEN"; and _envy_hook refresh
 end
 
 _envy_hook

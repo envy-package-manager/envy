@@ -8,15 +8,19 @@
 #include "lua_error_formatter.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
+#include "pkg_env.h"
 #include "platform.h"
 #include "shell.h"
 #include "trace.h"
+#include "tree_hash.h"
 #include "tui.h"
 #include "tui_actions.h"
 #include "util.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -39,9 +43,10 @@ sol::object make_pkg_dir_arg(sol::state_view lua, pkg *p) {
 bool run_pair_check_command(pkg *p,
                             std::string_view cmd,
                             std::string const &context,
-                            std::filesystem::path const &project_root) {
+                            std::filesystem::path const &project_root,
+                            std::filesystem::path const &env_root) {
   shell_run_cfg cfg;
-  cfg.env = shell_getenv();
+  cfg.env = pkg_env_for_phase(p, pkg_phase::pkg_setup, env_root);
   cfg.on_stdout_line = [](std::string_view) {};
   cfg.on_stderr_line = [](std::string_view) {};
   cfg.cwd = project_root;
@@ -70,6 +75,23 @@ std::filesystem::path pair_project_root(engine const &eng, pkg const *p) {
   return root.empty() ? pkg_cfg::compute_project_root(p->cfg) : root;
 }
 
+// `root` for a pair's dependency ENV: an unguessable scratch path of its own, created only
+// by whatever tool writes there, and gone when the pair returns.
+class pair_env_root : unmovable {
+ public:
+  pair_env_root()
+      : dir_{ std::filesystem::temp_directory_path() / [] {
+          std::random_device rd;
+          std::uint64_t const r{ (std::uint64_t{ rd() } << 32) | rd() };
+          return "envy-setup-" + util_bytes_to_hex(&r, sizeof r);
+        }() } {}
+  ~pair_env_root() { tree_remove_best_effort(dir_); }
+  std::filesystem::path const &path() const { return dir_; }
+
+ private:
+  std::filesystem::path dir_;
+};
+
 }  // namespace
 
 // Run a pair's CHECK verb. Returns true when the host state is already satisfied.
@@ -81,6 +103,7 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
   std::string const context{ "SETUP." + name + ".CHECK" };
 
   std::filesystem::path const project_root{ pair_project_root(eng, p) };
+  pair_env_root const env_root;
   std::optional<bool> verdict;
   std::optional<std::string> cmd;
   {
@@ -94,7 +117,9 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
       throw_runtime_error(
           { context, " must be a function or string for ", p->cfg->identity });
     } else {
-      phase_context_guard ctx_guard{ &eng, p, lua.lua_state(), project_root };
+      phase_context_guard ctx_guard{
+        &eng, p, lua.lua_state(), project_root, nullptr, env_root.path()
+      };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
 
       sol::object result_obj{ call_lua_function_with_enriched_errors(p, context, [&]() {
@@ -115,7 +140,8 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
     }
   }
 
-  return verdict ? *verdict : run_pair_check_command(p, *cmd, context, project_root);
+  return verdict ? *verdict
+                 : run_pair_check_command(p, *cmd, context, project_root, env_root.path());
 }
 
 // Run a pair's INSTALL verb against the host (cwd = project_root). Shell output
@@ -129,6 +155,7 @@ void run_pair_install(pkg *p,
                       tui::section_handle section) {
   std::string const context{ "SETUP." + name + ".INSTALL" };
   std::filesystem::path const project_root{ pair_project_root(eng, p) };
+  pair_env_root const env_root;
 
   std::optional<std::string> script;
   {
@@ -142,7 +169,9 @@ void run_pair_install(pkg *p,
       throw_runtime_error(
           { context, " must be a function or string for ", p->cfg->identity });
     } else {
-      phase_context_guard ctx_guard{ &eng, p, lua.lua_state(), project_root };
+      phase_context_guard ctx_guard{
+        &eng, p, lua.lua_state(), project_root, nullptr, env_root.path()
+      };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
 
       sol::object result_obj{ call_lua_function_with_enriched_errors(p, context, [&]() {
@@ -171,7 +200,8 @@ void run_pair_install(pkg *p,
         p->cfg->identity,
         pkg_default_shell(p),
         section,
-        eng.cache_root());
+        eng.cache_root(),
+        pkg_env_for_phase(p, pkg_phase::pkg_setup, env_root.path()));
   }
 }
 

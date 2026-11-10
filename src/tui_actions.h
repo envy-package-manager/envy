@@ -211,6 +211,7 @@ void run_phase_shell_script(std::string_view script,
                             std::string const &identity,
                             resolved_shell shell,
                             tui::section_handle section,
-                            std::filesystem::path const &cache_root);
+                            std::filesystem::path const &cache_root,
+                            shell_env_t env);
 
 }  // namespace envy::tui_actions

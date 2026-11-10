@@ -169,7 +169,7 @@ cli_args cli_parse(int argc, char **argv) {
 
   // Subcommands are listed in registration order, so this list is sorted by subcommand
   // name; split around 'cache-test' to keep it in place. cli_tests enforces the order.
-  register_cmds.operator()<cmd_cache>(app);
+  register_cmds.operator()<cmd_activate, cmd_cache>(app);
 
 #ifdef ENVY_FUNCTIONAL_TESTER
   // Test-only cache drivers get their own parent so the production "cache"
@@ -178,7 +178,8 @@ cli_args cli_parse(int argc, char **argv) {
       app.sub("cache-test", "Drive cache primitives directly (test only)"));
 #endif
 
-  register_cmds.operator()<cmd_deploy,
+  register_cmds.operator()<cmd_deactivate,
+                           cmd_deploy,
                            cmd_export,
                            cmd_extract,
                            cmd_fetch,

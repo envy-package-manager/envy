@@ -67,55 +67,98 @@ _envy_unset_prompt() {
   unset _ENVY_PROMPT_ACTIVE
 }
 
+# The project's bin-dir envy prints the activate/deactivate script and its status lines.
+# Locals on the eval's stack are ENVY_-prefixed: scoping is dynamic and ENV can't use one.
+_envy_activate() {
+  local ENVY_HOOK_OUT
+  if [ ! -x "$2/envy" ]; then return 1; fi
+  if ! ENVY_HOOK_OUT=$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
+                       "$2/envy" activate bash) || [ -z "$ENVY_HOOK_OUT" ]; then
+    return 1
+  fi
+  eval "$ENVY_HOOK_OUT"
+  ENVY_ACTIVATE_KEY="$1"
+  export ENVY_ACTIVATE_KEY
+}
+
+_envy_deactivate() {
+  local ENVY_HOOK_OUT
+  if [ -x "${ENVY_ACTIVATE_EXE:-}" ] &&
+     ENVY_HOOK_OUT=$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
+                     "$ENVY_ACTIVATE_EXE" deactivate bash); then
+    eval "$ENVY_HOOK_OUT"
+  else
+    printf 'envy: cannot restore the environment (%s is gone); restart your shell\n' \
+      "${ENVY_ACTIVATE_EXE:-envy}" >&2
+    unset $(compgen -v ENVY_ACTIVATE_)
+  fi
+  unset ENVY_ACTIVATE_KEY
+}
+
+# A project pinned to an envy without `activate` just gets its bin dir on PATH.
+_envy_legacy_enter() {
+  if [ "$2" != "${_ENVY_BIN_DIR:-}" ]; then
+    PATH="$2:$PATH"
+    export PATH
+    _ENVY_BIN_DIR="$2"
+    if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
+      printf 'envy: entering %s %s tools added to PATH\n' "${1##*/}" "$_ENVY_DASH" >&2
+    fi
+  fi
+  ENVY_PROJECT_ROOT="$1"
+  export ENVY_PROJECT_ROOT
+}
+
+_envy_legacy_leave() {
+  if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
+    printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
+  fi
+  PATH=$(_envy_remove_from_path "$_ENVY_BIN_DIR")
+  export PATH
+  unset _ENVY_BIN_DIR
+  unset ENVY_PROJECT_ROOT
+}
+
 _envy_hook() {
   if [ "${ENVY_SHELL_HOOK_DISABLE:-}" = "1" ]; then return; fi
-  if [ "$PWD" = "${_ENVY_LAST_PWD:-}" ]; then return; fi
+
+  # `envy install` bumps the project's generation file; the next prompt re-activates.
+  local ENVY_HOOK_REFRESH="" ENVY_HOOK_GEN=""
+  if [ -n "${ENVY_ACTIVATE_KEY:-}" ] && [ -f "${ENVY_ACTIVATE_GENFILE:-}" ]; then
+    read -r ENVY_HOOK_GEN < "$ENVY_ACTIVATE_GENFILE" || true  # `||`: no final newline
+    if [ "${ENVY_HOOK_GEN:-0}" != "${ENVY_ACTIVATE_GEN:-}" ]; then ENVY_HOOK_REFRESH=1; fi
+  fi
+  if [ -z "$ENVY_HOOK_REFRESH" ] && [ "$PWD" = "${_ENVY_LAST_PWD:-}" ]; then return; fi
   _ENVY_LAST_PWD="$PWD"
 
-  local manifest_dir
-  manifest_dir=$(_envy_find_manifest 2>/dev/null) || true
+  local ENVY_HOOK_MANIFEST ENVY_HOOK_BIN_VAL ENVY_HOOK_BIN=""
+  ENVY_HOOK_MANIFEST=$(_envy_find_manifest 2>/dev/null) || true
+  if [ -n "$ENVY_HOOK_MANIFEST" ]; then
+    ENVY_HOOK_BIN_VAL=$(_envy_parse_bin "$ENVY_HOOK_MANIFEST")
+    if [ -n "$ENVY_HOOK_BIN_VAL" ]; then
+      ENVY_HOOK_BIN="$(cd "$ENVY_HOOK_MANIFEST/$ENVY_HOOK_BIN_VAL" 2>/dev/null && pwd)" ||
+        ENVY_HOOK_BIN=""
+    fi
+  fi
 
-  if [ -n "$manifest_dir" ]; then
-    local bin_val
-    bin_val=$(_envy_parse_bin "$manifest_dir")
-    if [ -n "$bin_val" ]; then
-      local bin_dir
-      bin_dir="$(cd "$manifest_dir/$bin_val" 2>/dev/null && pwd)" || true
-      if [ -n "$bin_dir" ]; then
-        if [ "$bin_dir" != "${_ENVY_BIN_DIR:-}" ]; then
-          # Leaving the old project (switching)?
-          if [ -n "${_ENVY_BIN_DIR:-}" ]; then
-            if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-              printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
-            fi
-            PATH=$(_envy_remove_from_path "$_ENVY_BIN_DIR")
-          fi
-          PATH="$bin_dir:$PATH"
-          export PATH
-          _ENVY_BIN_DIR="$bin_dir"
-          if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-            printf 'envy: entering %s %s tools added to PATH\n' "${manifest_dir##*/}" "$_ENVY_DASH" >&2
-          fi
-          _envy_set_prompt
-        fi
-        ENVY_PROJECT_ROOT="$manifest_dir"
-        export ENVY_PROJECT_ROOT
-        return
+  if [ -n "$ENVY_HOOK_BIN" ]; then
+    if [ -n "$ENVY_HOOK_REFRESH" ] ||
+       { [ "$ENVY_HOOK_MANIFEST" != "${ENVY_ACTIVATE_KEY:-}" ] &&
+         [ "$ENVY_HOOK_BIN" != "${_ENVY_BIN_DIR:-}" ]; }; then
+      if [ -n "${_ENVY_BIN_DIR:-}" ]; then _envy_legacy_leave; fi
+      if ! _envy_activate "$ENVY_HOOK_MANIFEST" "$ENVY_HOOK_BIN"; then
+        if [ -n "${ENVY_ACTIVATE_KEY:-}" ]; then _envy_deactivate; fi
+        _envy_legacy_enter "$ENVY_HOOK_MANIFEST" "$ENVY_HOOK_BIN"
       fi
     fi
+    _envy_set_prompt
+    return
   fi
 
-  # Left all projects or no bin — clean up
-  if [ -n "${_ENVY_BIN_DIR:-}" ]; then
-    if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-      printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
-    fi
-    PATH=$(_envy_remove_from_path "$_ENVY_BIN_DIR")
-    export PATH
-    unset _ENVY_BIN_DIR
-    _envy_unset_prompt
-  fi
-  unset ENVY_PROJECT_ROOT
+  # Left all projects or no bin -- clean up
+  if [ -n "${ENVY_ACTIVATE_KEY:-}" ]; then _envy_deactivate; fi
+  if [ -n "${_ENVY_BIN_DIR:-}" ]; then _envy_legacy_leave; fi
+  _envy_unset_prompt
 }
 
 if [[ "${PROMPT_COMMAND:-}" != *"_envy_hook"* ]]; then

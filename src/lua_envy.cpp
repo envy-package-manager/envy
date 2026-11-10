@@ -1,5 +1,6 @@
 #include "lua_envy.h"
 
+#include "env_ops.h"
 #include "lua_ctx/lua_envy_extract.h"
 #include "lua_ctx/lua_envy_fetch.h"
 #include "lua_ctx/lua_envy_file_ops.h"
@@ -164,6 +165,24 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
   lua_envy_options_install(envy_table);
 
   lua["envy"] = envy_table;
+
+  // Spec and manifest Lua read the environment as it was before any `envy activate`, the
+  // same one CI sees, so a shell's activation can never steer what a package builds.
+  if (sol::optional<sol::table> os_tbl = lua["os"]) {
+    (*os_tbl)["getenv"] = [](std::string const &name) -> sol::optional<std::string> {
+      if (auto const *v{ env_get(env_pristine(), name) }) { return *v; }
+      return sol::nullopt;
+    };
+    // Both spawn with the live environment, which can be an activated shell's.
+    (*os_tbl)["execute"] = [] {
+      throw_runtime_error({ "os.execute is unavailable; use envy.run" });
+    };
+  }
+  if (sol::optional<sol::table> io_tbl = lua["io"]) {
+    (*io_tbl)["popen"] = [] {
+      throw_runtime_error({ "io.popen is unavailable; use envy.run (capture = true)" });
+    };
+  }
 
   // Register all shell constants on all platforms; runtime validation rejects incompatible
   // shells
