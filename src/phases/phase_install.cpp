@@ -6,8 +6,8 @@
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "pkg.h"
-#include "pkg_env.h"
 #include "pkg_cfg.h"
+#include "pkg_env.h"
 #include "platform.h"
 #include "shell.h"
 #include "trace.h"
@@ -47,14 +47,15 @@ bool run_shell_install(std::string_view script,
                        pkg *p,
                        std::filesystem::path const &cache_root) {
   tui::debug("install: shell script");
-  tui_actions::run_phase_shell_script(script,
-                                      "Install",
-                                      install_dir,
-                                      p->cfg->identity,
-                                      pkg_default_shell(p),
-                                      p->tui_section,
-                                      cache_root,
-                                      pkg_env_for_phase(p, pkg_phase::pkg_install, tmp_dir));
+  tui_actions::run_phase_shell_script(
+      script,
+      "Install",
+      install_dir,
+      p->cfg->identity,
+      pkg_default_shell(p),
+      p->tui_section,
+      cache_root,
+      pkg_env_for_phase(p, pkg_phase::pkg_install, tmp_dir));
 
   if (lock) {
     lock->mark_install_complete();
@@ -76,9 +77,8 @@ bool run_programmatic_install(sol::protected_function install_func,
   tui::debug("install: install function");
 
   // Set up Lua registry context for envy.* functions
-  phase_context_guard ctx_guard{
-    &eng, p, install_func.lua_state(), stage_dir, nullptr, tmp_dir
-  };
+  phase_context_guard ctx_guard{ &eng,      p,       install_func.lua_state(),
+                                 stage_dir, nullptr, tmp_dir };
 
   sol::state_view lua{ install_func.lua_state() };
   sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
@@ -103,7 +103,12 @@ bool run_programmatic_install(sol::protected_function install_func,
 
     // Returned string: spawn fresh shell with manifest defaults
     std::string const returned_script{ result_obj.as<std::string>() };
-    return run_shell_install(returned_script, stage_dir, lock, tmp_dir, p, eng.cache_root());
+    return run_shell_install(returned_script,
+                             stage_dir,
+                             lock,
+                             tmp_dir,
+                             p,
+                             eng.cache_root());
   }
 
   // Function returned nil/none successfully - mark complete

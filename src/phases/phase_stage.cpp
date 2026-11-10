@@ -65,9 +65,8 @@ void run_programmatic_stage(sol::protected_function stage_func,
   tui::debug("stage: stage function");
 
   // Set up Lua registry context for envy.* functions (run_dir = stage_dir)
-  phase_context_guard ctx_guard{
-    &eng, p, stage_func.lua_state(), stage_dir, nullptr, tmp_dir
-  };
+  phase_context_guard ctx_guard{ &eng,      p,       stage_func.lua_state(),
+                                 stage_dir, nullptr, tmp_dir };
 
   sol::state_view lua{ stage_func.lua_state() };
   sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };

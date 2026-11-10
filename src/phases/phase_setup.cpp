@@ -117,9 +117,8 @@ bool run_pair_check(pkg *p, engine &eng, std::string const &name) {
       throw_runtime_error(
           { context, " must be a function or string for ", p->cfg->identity });
     } else {
-      phase_context_guard ctx_guard{
-        &eng, p, lua.lua_state(), project_root, nullptr, env_root.path()
-      };
+      phase_context_guard ctx_guard{ &eng,         p,       lua.lua_state(),
+                                     project_root, nullptr, env_root.path() };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
 
       sol::object result_obj{ call_lua_function_with_enriched_errors(p, context, [&]() {
@@ -169,9 +168,8 @@ void run_pair_install(pkg *p,
       throw_runtime_error(
           { context, " must be a function or string for ", p->cfg->identity });
     } else {
-      phase_context_guard ctx_guard{
-        &eng, p, lua.lua_state(), project_root, nullptr, env_root.path()
-      };
+      phase_context_guard ctx_guard{ &eng,         p,       lua.lua_state(),
+                                     project_root, nullptr, env_root.path() };
       sol::object opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
 
       sol::object result_obj{ call_lua_function_with_enriched_errors(p, context, [&]() {

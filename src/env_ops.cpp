@@ -17,11 +17,14 @@ namespace envy {
 
 namespace {
 
-constexpr char ascii_lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; }
+constexpr char ascii_lower(char c) {
+  return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
+}
 
 bool names_equal(std::string_view a, std::string_view b) {
 #ifdef _WIN32
-  return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+  return a.size() == b.size() &&
+         std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
            return ascii_lower(x) == ascii_lower(y);
          });
 #else
@@ -32,9 +35,11 @@ bool names_equal(std::string_view a, std::string_view b) {
 bool name_less(std::string_view a, std::string_view b) {
 #ifdef _WIN32
   return std::lexicographical_compare(
-      a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) {
-        return ascii_lower(x) < ascii_lower(y);
-      });
+      a.begin(),
+      a.end(),
+      b.begin(),
+      b.end(),
+      [](char x, char y) { return ascii_lower(x) < ascii_lower(y); });
 #else
   return a < b;
 #endif
@@ -42,7 +47,8 @@ bool name_less(std::string_view a, std::string_view b) {
 
 bool is_state_name(std::string_view name) {
   std::string_view const prefix{ kEnvStatePrefix };
-  return name.size() >= prefix.size() && names_equal(name.substr(0, prefix.size()), prefix);
+  return name.size() >= prefix.size() &&
+         names_equal(name.substr(0, prefix.size()), prefix);
 }
 
 std::string state_name(std::string_view suffix) {
@@ -95,7 +101,8 @@ std::vector<std::string> segments(sol::object const &obj,
   std::vector<std::pair<long long, sol::object>> items;
   for (auto const &[k, v] : obj.as<sol::table>()) {
     if (k.get_type() != sol::type::number) {
-      throw_runtime_error({ context, ": ", field, " must be a string or a list of strings" });
+      throw_runtime_error(
+          { context, ": ", field, " must be a string or a list of strings" });
     }
     items.emplace_back(k.as<long long>(), v);
   }
@@ -138,7 +145,9 @@ std::optional<env_op> parse_value(sol::object const &v, std::string const &conte
 
 void append_quoted_posix(std::string &out, std::string_view v) {
   out += '\'';
-  for (char const c : v) { out += (c == '\'') ? std::string_view{ "'\\''" } : std::string_view{ &c, 1 }; }
+  for (char const c : v) {
+    out += (c == '\'') ? std::string_view{ "'\\''" } : std::string_view{ &c, 1 };
+  }
   out += '\'';
 }
 
@@ -170,20 +179,27 @@ void append_quoted_pwsh(std::string &out, std::string_view v) {
 }
 
 // Every name whose value differs between `a` and `b`, sorted; state included on request.
-std::vector<std::string> changed(shell_env_t const &a, shell_env_t const &b, bool with_state) {
+std::vector<std::string> changed(shell_env_t const &a,
+                                 shell_env_t const &b,
+                                 bool with_state) {
   std::vector<std::string> out;
-  auto const differs{ [](shell_env_t const &x, shell_env_t const &y, std::string const &n) {
-    auto const *xv{ env_get(x, n) };
-    auto const *yv{ env_get(y, n) };
-    return (xv == nullptr) != (yv == nullptr) || (xv && *xv != *yv);
-  } };
+  auto const differs{
+    [](shell_env_t const &x, shell_env_t const &y, std::string const &n) {
+      auto const *xv{ env_get(x, n) };
+      auto const *yv{ env_get(y, n) };
+      return (xv == nullptr) != (yv == nullptr) || (xv && *xv != *yv);
+    }
+  };
   for (auto const &[name, _] : a) {
-    if ((with_state || !is_state_name(name)) && differs(a, b, name)) { out.push_back(name); }
+    if ((with_state || !is_state_name(name)) && differs(a, b, name)) {
+      out.push_back(name);
+    }
   }
   for (auto const &[name, _] : b) {
     if ((with_state || !is_state_name(name)) && !env_get(a, name)) { out.push_back(name); }
   }
-  util_sort(out, [](std::string const &x, std::string const &y) { return name_less(x, y); });
+  util_sort(out,
+            [](std::string const &x, std::string const &y) { return name_less(x, y); });
   return out;
 }
 
@@ -234,7 +250,8 @@ env_ops env_ops_parse(sol::object const &obj, std::string_view context) {
     std::string name{ k.as<std::string>() };
     std::string const where{ std::string{ context } + ": ENV." + name };
     if (!env_name_valid(name)) {
-      throw_runtime_error({ where, " is not a valid variable name ([A-Za-z_][A-Za-z0-9_]*)" });
+      throw_runtime_error(
+          { where, " is not a valid variable name ([A-Za-z_][A-Za-z0-9_]*)" });
     }
     if (names_equal(std::string_view{ name }.substr(0, std::min<size_t>(5, name.size())),
                     "ENVY_")) {
@@ -245,7 +262,9 @@ env_ops env_ops_parse(sol::object const &obj, std::string_view context) {
     }
   }
 
-  util_sort(ops, [](env_entry const &a, env_entry const &b) { return name_less(a.name, b.name); });
+  util_sort(ops, [](env_entry const &a, env_entry const &b) {
+    return name_less(a.name, b.name);
+  });
   for (size_t i{ 1 }; i < ops.size(); ++i) {
     if (names_equal(ops[i - 1].name, ops[i].name)) {
       throw_runtime_error({ context,

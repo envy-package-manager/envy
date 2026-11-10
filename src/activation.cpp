@@ -36,7 +36,8 @@ namespace {
 
 // Depth-first from the manifest roots, each package before its dependencies and children
 // in key order: the order activation's "earlier wins" precedence is defined over.
-std::vector<pkg *> walk_graph(engine const &eng, std::vector<pkg_cfg const *> const &roots) {
+std::vector<pkg *> walk_graph(engine const &eng,
+                              std::vector<pkg_cfg const *> const &roots) {
   std::vector<pkg *> order;
   std::unordered_set<pkg *> seen;
   auto const visit{ [&](auto const &self, pkg *p) -> void {
@@ -63,7 +64,8 @@ struct keyed_layer {
 };
 
 // The graph under `roots`, resolved by one engine and walked into ENV layers in priority
-// order; `uninstalled` counts ENV-bearing packages not in the cache. Throws if unresolvable.
+// order; `uninstalled` counts ENV-bearing packages not in the cache. Throws if
+// unresolvable.
 std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
                                         std::vector<pkg_cfg const *> const &roots,
                                         std::filesystem::path const &root,
@@ -122,7 +124,8 @@ size_t package_layers(cmd_startup const &startup,
     try {
       keep(resolve_layers(startup, { cfg }, root, uninstalled));
     } catch (std::exception const &e) {
-      if (std::string_view{ e.what() }.find(kCacheReadOnlyMissText) != std::string_view::npos) {
+      if (std::string_view{ e.what() }.find(kCacheReadOnlyMissText) !=
+          std::string_view::npos) {
         ++uninstalled;
       } else {
         tui::warn("activate: skipping %s: %s", cfg->identity.c_str(), e.what());
@@ -137,23 +140,28 @@ size_t package_layers(cmd_startup const &startup,
 activation activation_compute(std::optional<std::filesystem::path> const &project_dir,
                               std::optional<std::filesystem::path> const &cli_cache_root,
                               shell_env_t const &live) {
-  // Re-exec into the pinned envy before anything reads the state: that envy owns its format.
-  // A manifest that fails to load still activates its bin dir and root.
+  // Re-exec into the pinned envy before anything reads the state: that envy owns its
+  // format. A manifest that fails to load still activates its bin dir and root.
   auto const found{ manifest::find_and_discover(std::nullopt, false, project_dir) };
   std::filesystem::path const root{ util_canonical_path(found.path).parent_path() };
 
   // Read before any package is inspected: an install finishing mid-activation then leaves
   // the recorded generation stale, and the next prompt refreshes.
   auto const genfile{ activation_genfile(
-      resolve_cache_root(found.meta.cache_request(cli_cache_root, found.path.parent_path()))
+      resolve_cache_root(
+          found.meta.cache_request(cli_cache_root, found.path.parent_path()))
           .root,
       root) };
   std::string const gen{ activation_gen_read(genfile) };
 
   std::optional<cmd_startup> startup;
   try {
-    startup.emplace(
-        cmd_startup_load("activate", found.path, cli_cache_root, false, std::nullopt, true));
+    startup.emplace(cmd_startup_load("activate",
+                                     found.path,
+                                     cli_cache_root,
+                                     false,
+                                     std::nullopt,
+                                     true));
   } catch (std::exception const &e) {
     tui::warn("activate: %s; only the bin dir is active", e.what());
   }
@@ -165,9 +173,10 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
   if (found.meta.bin) {
     std::error_code ec;
     if (auto const bin{ std::filesystem::canonical(root / *found.meta.bin, ec) }; !ec) {
-      layers.front().push_back({ .name = "PATH",
-                                 .op = env_edit{ .prepend = { bin.string() },
-                                                 .sep = std::string(1, env_path_sep()) } });
+      layers.front().push_back(
+          { .name = "PATH",
+            .op = env_edit{ .prepend = { bin.string() },
+                            .sep = std::string(1, env_path_sep()) } });
     }
   }
 
@@ -184,7 +193,9 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
   }
 
   shell_env_t target{ base };
-  for (auto it{ layers.rbegin() }; it != layers.rend(); ++it) { env_ops_apply(target, *it); }
+  for (auto it{ layers.rbegin() }; it != layers.rend(); ++it) {
+    env_ops_apply(target, *it);
+  }
 
   size_t const vars{ env_changed_names(base, target).size() };
   return { .target = env_with_state(base,
@@ -257,7 +268,9 @@ std::string activation_eval_hint(std::string_view cmd, std::string_view shell) {
   return "eval \"$(" + call + ")\"";
 }
 
-void activation_announce(char const *verb, std::string const &root, std::string const &tail) {
+void activation_announce(char const *verb,
+                         std::string const &root,
+                         std::string const &tail) {
   if (char const *quiet{ std::getenv("ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE") };
       quiet && std::string_view{ quiet } == "1") {
     return;

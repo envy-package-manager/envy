@@ -63,14 +63,16 @@ class stdout_to_stderr : unmovable {
 }  // namespace
 
 cli_cmd &cmd_activate::register_cli(cli_cmd &app, cfg &c) {
-  auto &sub{ app.sub("activate", "Print shell code that loads the project's environment") };
+  auto &sub{ app.sub("activate",
+                     "Print shell code that loads the project's environment") };
   sub.pos("shell", c.shell, "Shell name (bash, zsh, fish, powershell)")
       .required()
       .one_of("bash,zsh,fish,powershell");
   return sub;
 }
 
-cmd_activate::cmd_activate(cfg cfg, std::optional<std::filesystem::path> const &cli_cache_root)
+cmd_activate::cmd_activate(cfg cfg,
+                           std::optional<std::filesystem::path> const &cli_cache_root)
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_activate::execute() {

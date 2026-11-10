@@ -38,7 +38,9 @@ std::optional<env_ops> pkg_env_eval(pkg *p,
   sol::state_view lua{ *lua_acc };
   sol::object const env_obj{ lua["ENV"] };
   std::string const context{ "spec '" + p->cfg->identity + "'" };
-  if (env_obj.get_type() != sol::type::function) { return env_ops_parse(env_obj, context); }
+  if (env_obj.get_type() != sol::type::function) {
+    return env_ops_parse(env_obj, context);
+  }
 
   sol::object const path_arg{
     pkg_path ? sol::make_object(lua, util_path_with_separator(*pkg_path))
@@ -47,8 +49,8 @@ std::optional<env_ops> pkg_env_eval(pkg *p,
   sol::object const opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
   sol::object const result{ call_lua_function_with_enriched_errors(p, "ENV", [&] {
     return env_obj.as<sol::protected_function>()(path_arg,
-                                                  util_path_with_separator(root),
-                                                  opts);
+                                                 util_path_with_separator(root),
+                                                 opts);
   }) };
 
   if (!result.valid() || result.get_type() == sol::type::lua_nil) { return env_ops{}; }

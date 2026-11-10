@@ -45,10 +45,13 @@ class activation_refresh_guard : unmovable {
 // The shell `cmd` (activate/deactivate) emits for; Windows supports only powershell.
 env_shell activation_shell(std::string_view name, std::string_view cmd);
 bool activation_stdout_is_tty();
-std::string activation_eval_hint(std::string_view cmd, std::string_view shell);  // eval "$(…)"
+std::string activation_eval_hint(std::string_view cmd,
+                                 std::string_view shell);  // eval "$(…)"
 
 // "envy: entering foo — 3 vars"-style status lines, silenced by
 // ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE.
-void activation_announce(char const *verb, std::string const &root, std::string const &tail);
+void activation_announce(char const *verb,
+                         std::string const &root,
+                         std::string const &tail);
 
 }  // namespace envy

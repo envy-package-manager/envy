@@ -4185,7 +4185,8 @@ TEST_CASE("cli_parse: cmd_deactivate") {
 
 TEST_CASE("cli_parse: cmd_run --activate") {
   SUBCASE("before the command it is run's own flag") {
-    auto const cfg{ accepts<envy::cmd_run::cfg>({ "envy", "run", "--activate", "make", "-j" }) };
+    auto const cfg{ accepts<envy::cmd_run::cfg>(
+        { "envy", "run", "--activate", "make", "-j" }) };
     CHECK(cfg.activate);
     CHECK(cfg.command == std::vector<std::string>{ "make", "-j" });
   }

@@ -35,7 +35,8 @@ TEST_CASE("env_ops_parse: value forms") {
 }
 
 TEST_CASE("env_ops_parse: nil list holes and empty edits drop out") {
-  auto const ops{ parse(R"({ P = { prepend = { "a", nil, "b", "" } }, Q = { prepend = {} } })") };
+  auto const ops{ parse(
+      R"({ P = { prepend = { "a", nil, "b", "" } }, Q = { prepend = {} } })") };
   REQUIRE(ops.size() == 1);
   auto const &edit{ std::get<env_edit>(ops[0].op) };
   CHECK(edit.prepend == std::vector<std::string>{ "a", "b" });
@@ -123,7 +124,8 @@ TEST_CASE("env_restore: no state is the identity, minus stray state variables") 
 }
 
 TEST_CASE("env_restore: a foreign schema is refused") {
-  shell_env_t const live{ { "ENVY_ACTIVATE_VARS", "A" }, { "ENVY_ACTIVATE_SCHEMA", "99" } };
+  shell_env_t const live{ { "ENVY_ACTIVATE_VARS", "A" },
+                          { "ENVY_ACTIVATE_SCHEMA", "99" } };
   CHECK_THROWS_WITH_AS(env_restore(live),
                        doctest::Contains("restart your shell"),
                        std::runtime_error);
