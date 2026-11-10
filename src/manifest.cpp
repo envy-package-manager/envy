@@ -714,8 +714,8 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
   }
 
   auto const project_root{ manifest_path.empty()
-                                ? std::filesystem::path{}
-                                : util_canonical_path(manifest_path).parent_path() };
+                               ? std::filesystem::path{}
+                               : util_canonical_path(manifest_path).parent_path() };
   auto state{ sol_util_make_lua_state() };
   lua_envy_install(*state, project_root);
   lua_envy_import_install(*state, meta.version, manifest_path);

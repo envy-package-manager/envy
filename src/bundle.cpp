@@ -284,28 +284,25 @@ void bundle::validate(std::filesystem::path const &project_root) const {
   size_t i{ 0 };
   for (auto const &[expected_id, relative_path] : specs) {
     results[i].spec_key = expected_id;
-    threads.emplace_back([this,
-                          expected_id,
-                          relative_path,
-                          &project_root,
-                          &r = results[i]] {
-      std::filesystem::path const spec_path{ cache_path / relative_path };
+    threads.emplace_back(
+        [this, expected_id, relative_path, &project_root, &r = results[i]] {
+          std::filesystem::path const spec_path{ cache_path / relative_path };
 
-      if (!std::filesystem::exists(spec_path)) {
-        r.error = "file not found: " + spec_path.string();
-        return;
-      }
+          if (!std::filesystem::exists(spec_path)) {
+            r.error = "file not found: " + spec_path.string();
+            return;
+          }
 
-      try {  // Execute spec and verify IDENTITY matches key
-        std::string const actual_id{
-          extract_spec_identity(spec_path, cache_path, project_root)
-        };
-        if (actual_id != expected_id) {
-          r.error =
-              "IDENTITY mismatch: expected '" + expected_id + "', got '" + actual_id + "'";
-        }
-      } catch (std::exception const &e) { r.error = e.what(); }
-    });
+          try {  // Execute spec and verify IDENTITY matches key
+            std::string const actual_id{
+              extract_spec_identity(spec_path, cache_path, project_root)
+            };
+            if (actual_id != expected_id) {
+              r.error = "IDENTITY mismatch: expected '" + expected_id + "', got '" +
+                        actual_id + "'";
+            }
+          } catch (std::exception const &e) { r.error = e.what(); }
+        });
     ++i;
   }
 
