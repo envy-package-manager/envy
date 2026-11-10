@@ -85,6 +85,30 @@ def _write_project(parent_dir: Path, name: str, content: str) -> Path:
     return project
 
 
+# An envy pinned below 0.6.0 has no `activate`: running it dumps usage on every entry, so
+# the hook must not run it at all. 0.6.0 and the 0.0.0 dev build are still asked.
+_PINS = {"0.5.1": False, "0.6.0": True, "0.0.0": True}
+
+
+def _write_pinned_projects(parent_dir: Path, prefix: str) -> dict[str, Path]:
+    """One project per `_PINS` version, its launcher leaving `tools/ran` when run."""
+    projects = {}
+    for version in _PINS:
+        project = _write_project(
+            parent_dir,
+            f"{prefix}-{version}",
+            f'-- @envy version "{version}"\n-- @envy bin "tools"\nPACKAGES = {{}}\n',
+        )
+        launcher = project / "tools" / "envy"
+        launcher.write_text('#!/bin/sh\ntouch "$(dirname "$0")/ran"\nexit 1\n')
+        launcher.chmod(0o755)
+        (project / "tools" / "envy.bat").write_text(
+            '@echo off\r\ntype nul > "%~dp0ran"\r\nexit /b 1\r\n'
+        )
+        projects[version] = project
+    return projects
+
+
 @unittest.skipIf(sys.platform == "win32", "bash hook tests require Unix")
 class TestBashHook(EnvyTestCase):
     """Test bash shell hook behavior by sourcing and invoking _envy_hook."""
@@ -335,6 +359,17 @@ class TestBashHook(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn(str(project / "tools"), result.stdout)
         self.assertNotIn(str(project / "stale"), result.stdout)
+
+    def test_pin_predating_activate_never_runs_the_launcher(self) -> None:
+        projects = _write_pinned_projects(self._temp_dir, "pin")
+        result = self._run_bash_hook_test(
+            f'source "{self._hook_path}"\n'
+            + "".join(f'cd "{p}"; _envy_hook\n' for p in projects.values())
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        for version, project in projects.items():
+            self.assertEqual(_PINS[version], (project / "tools" / "ran").exists(), version)
+            self.assertIn(f"envy: entering {project.name}", result.stderr)
 
     def test_bin_dir_with_spaces(self) -> None:
         project = self._temp_dir / "space proj"
@@ -782,6 +817,17 @@ class TestZshHook(EnvyTestCase):
         self.assertIn(str(project / "tools"), result.stdout)
         self.assertNotIn(str(project / "stale"), result.stdout)
 
+    def test_pin_predating_activate_never_runs_the_launcher(self) -> None:
+        projects = _write_pinned_projects(self._temp_dir, "zsh-pin")
+        result = self._run_zsh_hook_test(
+            f'source "{self._hook_path}"\n'
+            + "".join(f'cd "{p}"\n' for p in projects.values())
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        for version, project in projects.items():
+            self.assertEqual(_PINS[version], (project / "tools" / "ran").exists(), version)
+            self.assertIn(f"envy: entering {project.name}", result.stderr)
+
     # --- v2: enter/leave messages ---
 
     def test_entering_message_on_cd_into_project(self) -> None:
@@ -1221,6 +1267,17 @@ class TestFishHook(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn(str(project / "tools"), result.stdout)
         self.assertNotIn(str(project / "stale"), result.stdout)
+
+    def test_pin_predating_activate_never_runs_the_launcher(self) -> None:
+        projects = _write_pinned_projects(self._temp_dir, "fish-pin")
+        result = self._run_fish_hook_test(
+            f'source "{self._hook_path}"\n'
+            + "".join(f'cd "{p}"\n' for p in projects.values())
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        for version, project in projects.items():
+            self.assertEqual(_PINS[version], (project / "tools" / "ran").exists(), version)
+            self.assertIn(f"envy: entering {project.name}", result.stderr)
 
     @staticmethod
     def _hook_test_env() -> dict[str, str]:
@@ -1676,6 +1733,17 @@ class TestPowerShellHook(EnvyTestCase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
         self.assertIn(str(project / "tools"), result.stdout)
         self.assertNotIn(str(project / "stale"), result.stdout)
+
+    def test_pin_predating_activate_never_runs_the_launcher(self) -> None:
+        projects = _write_pinned_projects(self._temp_dir, "ps-pin")
+        result = self._run_pwsh_hook_test(
+            f'. "{self._hook_path}"\n'
+            + "".join(f'Set-Location "{p}"; _envy_hook\n' for p in projects.values())
+        )
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        for version, project in projects.items():
+            self.assertEqual(_PINS[version], (project / "tools" / "ran").exists(), version)
+            self.assertIn(f"envy: entering {project.name}", result.stderr)
 
     def test_initial_activation_inside_project(self) -> None:
         """Dot-sourcing hook while already in a project activates immediately."""

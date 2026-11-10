@@ -67,10 +67,17 @@ function _envy_unset_prompt
     set -e _ENVY_PROMPT_ACTIVE
 end
 
+# A pin below 0.6.0 resolves an envy with no `activate`; running it just dumps usage.
+function _envy_predates_activate
+    set -l v (_envy_header_directive "$argv[1]/envy.lua" version)
+    string match -qr '^0\.[0-5]\.[0-9]+$' -- "$v"; and test "$v" != 0.0.0  # 0.0.0: a dev build
+end
+
 # The project's bin-dir envy prints the activate/deactivate script and its status lines;
 # the announce switch goes along even when it is not exported.
 function _envy_activate
     test -x "$argv[2]/envy"; or return 1
+    _envy_predates_activate "$argv[1]"; and return 1
     set -l out (ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="$ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE" "$argv[2]/envy" activate fish); or return 1
     test (count $out) -gt 0; or return 1
     printf '%s\n' $out | source

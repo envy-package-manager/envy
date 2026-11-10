@@ -65,9 +65,15 @@ function _envy_native_utf8($exe) {
     }
 }
 
+# A pin below 0.6.0 resolves an envy with no `activate`; running it just dumps usage.
+function _envy_predates_activate($manifestDir) {
+    $v = _envy_header_directive (Join-Path $manifestDir "envy.lua") "version"
+    return ($v -match '^0\.[0-5]\.[0-9]+$' -and $v -ne '0.0.0')  # 0.0.0: a dev build
+}
+
 function _envy_activate($manifestDir, $binDir) {
     $launcher = Join-Path $binDir $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'envy.bat' } else { 'envy' })
-    if (-not (Test-Path $launcher -PathType Leaf)) { return $false }
+    if (-not (Test-Path $launcher -PathType Leaf) -or (_envy_predates_activate $manifestDir)) { return $false }
     $out = _envy_native_utf8 $launcher activate powershell
     if ($LASTEXITCODE -ne 0 -or -not $out) { return $false }
     ($out -join "`n") | Invoke-Expression
