@@ -6,7 +6,6 @@
 #include "lua_ctx/lua_phase_context.h"
 #include "lua_envy.h"
 #include "lua_error_formatter.h"
-#include "manifest.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "platform.h"
@@ -67,10 +66,8 @@ bool run_pair_check_command(pkg *p,
 // cwd for pair verbs: the project this run operates on. An imported entry declares its own
 // file, so the resolved manifest names it; the cfg walk covers a run with no manifest.
 std::filesystem::path pair_project_root(engine const &eng, pkg const *p) {
-  manifest const *m{ eng.get_manifest() };
-  return (m && !m->manifest_path.empty())
-             ? util_canonical_path(m->manifest_path).parent_path()
-             : pkg_cfg::compute_project_root(p->cfg);
+  auto const root{ eng.project_root() };  // envy.PROJECT_ROOT, so Lua and cwd agree
+  return root.empty() ? pkg_cfg::compute_project_root(p->cfg) : root;
 }
 
 }  // namespace

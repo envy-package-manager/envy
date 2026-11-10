@@ -640,6 +640,7 @@ Specs run only on host platform—no cross-deployment. Single spec file adapts v
 - `envy.ARCH` — `"arm64"`, `"x86_64"`
 - `envy.PLATFORM_ARCH` — combined: `"darwin-arm64"`, `"linux-x86_64"`
 - `envy.EXE_EXT` — `""`, or `".exe"` on Windows
+- `envy.PROJECT_ROOT` — root manifest's directory; nil when there is no project (`envy lua`)
 
 `ENVY_SHELL` (the shell constants), `ENVY_IMPORTER` and `ENVY_BUNDLE` are the only bare
 globals envy installs.

@@ -30,13 +30,15 @@ std::optional<pkg_cfg::bundle_source> find_alias(sol::object const &table,
 
 void lua_envy_loadenv_bundle_install(sol::state &lua_state,
                                      cache *c,
-                                     std::filesystem::path root_path) {
+                                     std::filesystem::path root_path,
+                                     std::filesystem::path project_root) {
   sol::table envy_table = lua_state["envy"];  // a state-keyed ref: must not outlive it
-  envy_table["loadenv_bundle"] = [c, root = std::move(root_path)](
-                                     std::string const &alias,
-                                     std::string const &module_path,
-                                     sol::this_environment te,
-                                     sol::this_state L) -> sol::table {
+  envy_table["loadenv_bundle"] =
+      [c, root = std::move(root_path), project_root = std::move(project_root)](
+          std::string const &alias,
+          std::string const &module_path,
+          sol::this_environment te,
+          sol::this_state L) -> sol::table {
     std::string const scope{ "bundle '" + alias + "'" };
     std::string const subpath{ lua_module_subpath(module_path, kFn, scope) };
 
@@ -66,7 +68,9 @@ void lua_envy_loadenv_bundle_install(sol::state &lua_state,
                             "top to bottom" });
     }
 
-    std::filesystem::path const bundle_root{ bundle_materialize_bare(*src, c, kFn) };
+    std::filesystem::path const bundle_root{
+      bundle_materialize_bare(*src, c, kFn, project_root)
+    };
     std::filesystem::path const full_path{
       lua_module_path_under(bundle_root, subpath, kFn, module_path, scope)
     };

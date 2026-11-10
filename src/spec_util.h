@@ -14,7 +14,9 @@ namespace envy {
 //
 // If package_path_root is non-empty, configures Lua's package.path to enable
 // bundle-local requires (e.g., for specs that use require("lib.helpers")).
+// project_root becomes envy.PROJECT_ROOT, as lua_envy_install documents.
 std::string extract_spec_identity(std::filesystem::path const &spec_path,
-                                  std::filesystem::path const &package_path_root = {});
+                                  std::filesystem::path const &package_path_root = {},
+                                  std::filesystem::path const &project_root = {});
 
 }  // namespace envy

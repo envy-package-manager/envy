@@ -12,7 +12,8 @@ class cache;
 // bundle mid-global-scope, `root_path` anchors an alias a fragment inherited.
 void lua_envy_loadenv_bundle_install(sol::state &lua,
                                      cache *c,
-                                     std::filesystem::path root_path);
+                                     std::filesystem::path root_path,
+                                     std::filesystem::path project_root);
 
 // The refusal every other state gets: a spec is pointed at envy.loadenv_spec.
 void lua_envy_loadenv_bundle_install_refusal(sol::table &envy_table);

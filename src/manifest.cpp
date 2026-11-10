@@ -713,11 +713,14 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
           "Add to manifest header, e.g.: -- @envy bin \"tools\"" });
   }
 
+  auto const project_root{ manifest_path.empty()
+                               ? std::filesystem::path{}
+                               : util_canonical_path(manifest_path).parent_path() };
   auto state{ sol_util_make_lua_state() };
-  lua_envy_install(*state);
+  lua_envy_install(*state, project_root);
   lua_envy_import_install(*state, meta.version, manifest_path);
   // Replaces the refusal every other Lua state carries: this is manifest scope.
-  lua_envy_loadenv_bundle_install(*state, c, manifest_path);
+  lua_envy_loadenv_bundle_install(*state, c, manifest_path, project_root);
 
   // Use manifest path as chunk name so debug.getinfo can find it for envy.loadenv()
   std::string const chunk_name{ "@" + manifest_path.string() };
@@ -732,6 +735,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
 
   auto m{ std::make_unique<manifest>() };
   m->manifest_path = manifest_path;
+  m->project_root = project_root;
   m->meta = std::move(meta);
   m->lua_ = std::move(state);  // Keep lua state alive for DEFAULT_SHELL access
 

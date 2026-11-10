@@ -23,7 +23,7 @@ cmd_lua::cmd_lua(cmd_lua::cfg cfg,
 
 void cmd_lua::execute() {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});  // no project: envy.PROJECT_ROOT stays nil
 
   sol::protected_function_result result =
       lua->safe_script_file(cfg_.script_path.string(), sol::script_pass_on_error);

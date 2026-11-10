@@ -80,6 +80,7 @@ struct manifest : unmovable {
   std::vector<pkg_cfg *> packages;
   std::vector<depot_source> package_depots;
   std::filesystem::path manifest_path;
+  std::filesystem::path project_root;  // canonical dir: envy.PROJECT_ROOT, SETUP cwd
   envy_meta meta;
 
   // Where `vendor = true` entries land, relative to this manifest. No default: an entry

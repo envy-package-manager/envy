@@ -38,7 +38,7 @@ struct formatter_test_fixture {
                                    std::move(declaring_path));
 
     auto lua_state = sol_util_make_lua_state();
-    lua_envy_install(*lua_state);
+    lua_envy_install(*lua_state, {});
 
     p = std::unique_ptr<pkg>(new pkg{ .key = pkg_key(*cfg),
                                       .cfg = cfg,

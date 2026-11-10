@@ -132,6 +132,7 @@ class engine : unmovable {
   bundle *find_bundle(std::string const &identity) const;
 
   manifest const *get_manifest() const;
+  std::filesystem::path project_root() const;  // manifest's; empty without one
   void set_depot_index(package_depot_index idx);
   void set_ignore_depot(bool ignore);
 
