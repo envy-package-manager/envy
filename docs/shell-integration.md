@@ -36,7 +36,7 @@ On every directory change:
 
 `envy install` bumps a per-project generation file; at the next prompt every shell activated in that project re-activates, picking up what was just installed. The check is a builtin `read`, no fork.
 
-A project pinned to an envy that predates `activate` (its launcher fails) falls back to the old behavior: the bin dir on `PATH` and `ENVY_PROJECT_ROOT`, managed by the hook itself.
+A project whose `@envy version` predates `activate` (below 0.6.0) falls back to the old behavior without running its launcher: the bin dir on `PATH` and `ENVY_PROJECT_ROOT`, managed by the hook itself. A launcher that fails falls back the same way.
 
 Without hooks, the same commands work by hand: `eval "$(envy activate zsh)"`, `eval "$(envy deactivate zsh)"`. Activating always deactivates first, from any project.
 

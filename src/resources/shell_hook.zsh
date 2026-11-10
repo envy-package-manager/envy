@@ -101,12 +101,19 @@ _envy_precmd() {
   fi
 }
 
+# A pin below 0.6.0 resolves an envy with no `activate`; running it just dumps usage.
+_envy_predates_activate() {
+  emulate -L zsh
+  _envy_header_directive "$1/envy.lua" version
+  [[ "$REPLY" =~ '^0\.[0-5]\.[0-9]+$' && "$REPLY" != 0.0.0 ]]  # 0.0.0: a dev build
+}
+
 # The project's bin-dir envy prints the activate/deactivate script and its status lines.
 # Locals on the eval's stack are ENVY_-prefixed: scoping is dynamic and ENV can't use one.
 _envy_activate() {
   emulate -L zsh
   local ENVY_HOOK_OUT=""
-  [[ -x "$2/envy" ]] || return 1
+  if [[ ! -x "$2/envy" ]] || _envy_predates_activate "$1"; then return 1; fi
   ENVY_HOOK_OUT="$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
                    "$2/envy" activate zsh)" || return 1
   [[ -n "$ENVY_HOOK_OUT" ]] || return 1

@@ -67,11 +67,18 @@ _envy_unset_prompt() {
   unset _ENVY_PROMPT_ACTIVE
 }
 
+# A pin below 0.6.0 resolves an envy with no `activate`; running it just dumps usage.
+_envy_predates_activate() {
+  local v
+  v=$(_envy_header_directive "$1/envy.lua" version)
+  [[ "$v" =~ ^0\.[0-5]\.[0-9]+$ && "$v" != 0.0.0 ]]  # 0.0.0: a dev build
+}
+
 # The project's bin-dir envy prints the activate/deactivate script and its status lines.
 # Locals on the eval's stack are ENVY_-prefixed: scoping is dynamic and ENV can't use one.
 _envy_activate() {
   local ENVY_HOOK_OUT
-  if [ ! -x "$2/envy" ]; then return 1; fi
+  if [ ! -x "$2/envy" ] || _envy_predates_activate "$1"; then return 1; fi
   if ! ENVY_HOOK_OUT=$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
                        "$2/envy" activate bash) || [ -z "$ENVY_HOOK_OUT" ]; then
     return 1

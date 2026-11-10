@@ -56,11 +56,12 @@ jobs:
             build_args: --sanitizer=asan
             cache_group: linux-x64-asan
             cache_writer: true
-          # Stamped so version bugs land here, not at tag time; a tag's own -D still wins.
+          # Stamped so version bugs land here, not at tag time; a tag's own -D still wins. Keep
+          # it at the newest release: an older stamp disowns features (hooks: `activate`).
           - name: linux-x64-ubsan
             os: ubuntu-latest
             shard: func-ubsan
-            build_args: --sanitizer=ubsan -DENVY_VERSION=0.3.0
+            build_args: --sanitizer=ubsan -DENVY_VERSION=0.6.0
             cache_group: linux-x64-ubsan
             cache_writer: true
           # Pinned: on ubuntu-26.04 TSan aborts at startup ("incompatible memory layout")
