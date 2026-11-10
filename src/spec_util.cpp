@@ -9,13 +9,14 @@
 namespace envy {
 
 std::string extract_spec_identity(std::filesystem::path const &spec_path,
-                                  std::filesystem::path const &package_path_root) {
+                                  std::filesystem::path const &package_path_root,
+                                  std::filesystem::path const &project_root) {
   if (!std::filesystem::exists(spec_path)) {
     throw_runtime_error({ "spec file not found: ", spec_path });
   }
 
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, project_root);
 
   // Configure package.path for bundle-local requires if root provided
   if (!package_path_root.empty()) {

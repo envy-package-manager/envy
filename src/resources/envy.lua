@@ -11,6 +11,7 @@
 ---@field ARCH "arm64"|"x86_64" CPU architecture
 ---@field PLATFORM_ARCH string Platform-architecture pair (e.g., "darwin-arm64")
 ---@field EXE_EXT ""|".exe" Executable extension ("" on Unix, ".exe" on Windows)
+---@field PROJECT_ROOT string? Root manifest's directory, symlinks resolved; nil outside a project (`envy lua`)
 envy = {}
 
 --------------------------------------------------------------------------------

@@ -11,7 +11,7 @@ namespace envy {
 
 TEST_CASE("envy.EXE_EXT injected into Lua state") {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   sol::table envy_table = (*lua)["envy"];
   REQUIRE(envy_table.valid());
@@ -26,9 +26,22 @@ TEST_CASE("envy.EXE_EXT injected into Lua state") {
 #endif
 }
 
+TEST_CASE("envy.PROJECT_ROOT is the given root in platform spelling, nil without one") {
+  std::filesystem::path const root{ std::filesystem::path{ "/proj" } / "sub" };
+  auto with{ sol_util_make_lua_state() };
+  lua_envy_install(*with, root);
+  sol::object const set{ (*with)["envy"]["PROJECT_ROOT"] };
+  REQUIRE(set.is<std::string>());
+  CHECK(set.as<std::string>() == std::filesystem::path{ root }.make_preferred().string());
+
+  auto without{ sol_util_make_lua_state() };
+  lua_envy_install(*without, {});
+  CHECK_FALSE((*without)["envy"]["PROJECT_ROOT"].valid());
+}
+
 TEST_CASE("envy.extend") {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   SUBCASE("extends target with single list") {
     auto result{ lua->safe_script(R"lua(
@@ -143,7 +156,7 @@ constexpr char kCaller[]{ "@test_data/lua/caller.lua" };
 
 TEST_CASE("envy.loadenv hands back what the module returns") {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   SUBCASE("a returned table is the result") {
     auto const result{ lua->safe_script(R"lua(
@@ -197,7 +210,7 @@ TEST_CASE("envy.loadenv hands back what the module returns") {
 
 TEST_CASE("envy.loadenv leaves ENVY_BUNDLE nil: no bundle is involved") {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   auto const result{ lua->safe_script(R"lua(
     return envy.loadenv("loadenv.mod_bundle").FROM_BUNDLE
@@ -211,7 +224,7 @@ TEST_CASE("envy.loadenv leaves ENVY_BUNDLE nil: no bundle is involved") {
 TEST_CASE("envy.loadenv_bundle points a spec at envy.loadenv_spec") {
   // Installed as a refusal everywhere but a manifest, so a spec gets a sentence.
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   auto const result{ lua->safe_script(R"lua(
     local ok, err = pcall(function() envy.loadenv_bundle("tools", "lib.entries") end)
@@ -227,7 +240,7 @@ TEST_CASE("every envy function is declared in the LuaLS type definitions") {
   // src/resources/envy.lua is what `envy init` hands an editor. Nothing else compares
   // it against the runtime, so a new envy.* used to reach users as an undefined global.
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, {});
 
   std::ifstream types{ "src/resources/envy.lua" };
   REQUIRE(types.good());

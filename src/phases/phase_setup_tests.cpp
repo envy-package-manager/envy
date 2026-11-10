@@ -44,7 +44,7 @@ struct setup_test_fixture {
 
     // Create Lua state first
     auto lua_state = sol_util_make_lua_state();
-    lua_envy_install(*lua_state);
+    lua_envy_install(*lua_state, {});
 
     p = std::unique_ptr<pkg>(new pkg{ .key = pkg_key(*cfg),
                                       .cfg = cfg,

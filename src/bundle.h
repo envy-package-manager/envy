@@ -35,7 +35,7 @@ struct bundle {
   // - All spec files execute successfully in Lua
   // - All spec files have IDENTITY matching the SPECS table key
   // Throws with detailed error message on failure
-  void validate() const;
+  void validate(std::filesystem::path const &project_root) const;  // envy.PROJECT_ROOT
 
   // Parse BUNDLES table from manifest into alias -> fetch config map
   // Returns empty map if bundles_obj is nil or missing
@@ -91,12 +91,15 @@ std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *
 
 // Parse, identity-check and validate a materialized bundle, before its entry is
 // finalized: `envy-complete` is never revalidated, so a bad one would be permanent.
-bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id);
+bundle bundle_verify(std::filesystem::path const &root,
+                     std::string const &expected_id,
+                     std::filesystem::path const &project_root);
 
 // A bundle's root, materialized with no engine, package or phase behind it -- manifest
 // scope has none. Throws on custom fetch; a null `c` suits only a 'local.' bundle.
 std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
                                               cache *c,
-                                              std::string_view fn);
+                                              std::string_view fn,
+                                              std::filesystem::path const &project_root);
 
 }  // namespace envy

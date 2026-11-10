@@ -271,7 +271,7 @@ void bundle::configure_package_path(sol::state &lua) const {
       bundle_root + "/?.lua;" + bundle_root + "/?/init.lua;" + current_path;
 }
 
-void bundle::validate() const {
+void bundle::validate(std::filesystem::path const &project_root) const {
   struct validation_result {
     std::string spec_key;
     std::optional<std::string> error;
@@ -284,7 +284,11 @@ void bundle::validate() const {
   size_t i{ 0 };
   for (auto const &[expected_id, relative_path] : specs) {
     results[i].spec_key = expected_id;
-    threads.emplace_back([this, expected_id, relative_path, &r = results[i]] {
+    threads.emplace_back([this,
+                          expected_id,
+                          relative_path,
+                          &project_root,
+                          &r = results[i]] {
       std::filesystem::path const spec_path{ cache_path / relative_path };
 
       if (!std::filesystem::exists(spec_path)) {
@@ -293,7 +297,9 @@ void bundle::validate() const {
       }
 
       try {  // Execute spec and verify IDENTITY matches key
-        std::string const actual_id{ extract_spec_identity(spec_path, cache_path) };
+        std::string const actual_id{
+          extract_spec_identity(spec_path, cache_path, project_root)
+        };
         if (actual_id != expected_id) {
           r.error =
               "IDENTITY mismatch: expected '" + expected_id + "', got '" + actual_id + "'";
@@ -481,7 +487,9 @@ std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *
       src.fetch_source);
 }
 
-bundle bundle_verify(std::filesystem::path const &root, std::string const &expected_id) {
+bundle bundle_verify(std::filesystem::path const &root,
+                     std::string const &expected_id,
+                     std::filesystem::path const &project_root) {
   bundle parsed{ bundle::from_path(root) };
   if (parsed.identity != expected_id) {
     throw_runtime_error({ "Bundle identity mismatch: expected '",
@@ -490,13 +498,14 @@ bundle bundle_verify(std::filesystem::path const &root, std::string const &expec
                           parsed.identity,
                           "'" });
   }
-  parsed.validate();
+  parsed.validate(project_root);
   return parsed;
 }
 
 std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
                                               cache *c,
-                                              std::string_view fn) {
+                                              std::string_view fn,
+                                              std::filesystem::path const &project_root) {
   std::string const &id{ src.bundle_identity };
   auto const fail{ [&](std::string const &why) {
     return std::runtime_error(std::string{ fn } + ": bundle '" + id + "' " + why);
@@ -512,7 +521,7 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
   if (auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
       local && id.starts_with("local.") &&
       std::filesystem::is_directory(local->file_path)) {
-    bundle_verify(local->file_path, id);
+    bundle_verify(local->file_path, id, project_root);
     return local->file_path;
   }
 
@@ -544,7 +553,7 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
   }
 
   // Validated before the entry is finalized: `envy-complete` is never revalidated.
-  bundle_verify(result.pkg_path, id);
+  bundle_verify(result.pkg_path, id, project_root);
   if (!result.lock) {
     tui::section_delete(section);
     return result.pkg_path;

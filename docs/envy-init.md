@@ -595,6 +595,7 @@ Types and binary are co-located so each version is self-contained. Deleting a ve
 ---@field ARCH "arm64"|"x86_64"
 ---@field PLATFORM_ARCH string
 ---@field EXE_EXT string
+---@field PROJECT_ROOT string?
 envy = {}
 
 ---@class envy.path

@@ -14,6 +14,7 @@
 #include "platform.h"
 #include "shell.h"
 #include "tui.h"
+#include "util.h"
 
 #include <sstream>
 
@@ -97,7 +98,7 @@ end
 
 }  // namespace
 
-void lua_envy_install(sol::state &lua) {
+void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root) {
   // Override print to route through TUI
   lua["print"] = [](sol::variadic_args va) {
     std::ostringstream oss;
@@ -145,6 +146,9 @@ void lua_envy_install(sol::state &lua) {
   envy_table["ARCH"] = platform::arch_name();
   envy_table["PLATFORM_ARCH"] =
       std::string{ platform::os_name() } + "-" + std::string{ platform::arch_name() };
+  if (!project_root.empty()) {
+    envy_table["PROJECT_ROOT"] = util_normalized_path(project_root);
+  }
 
   // Install module functions
   lua_envy_path_install(envy_table);

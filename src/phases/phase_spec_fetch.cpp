@@ -339,9 +339,9 @@ std::map<std::string, pkg::setup_pair_decl> parse_setup_table(
   return pairs;
 }
 
-sol_state_ptr create_lua_state() {
+sol_state_ptr create_lua_state(engine const &eng) {
   auto lua{ sol_util_make_lua_state() };
-  lua_envy_install(*lua);
+  lua_envy_install(*lua, eng.project_root());
   return lua;
 }
 
@@ -1256,7 +1256,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
     if (local_src && std::filesystem::is_directory(local_src->file_path)) {
       tui::debug("spec: local bundle %s", bundle_id.c_str());
 
-      bundle parsed{ bundle_verify(local_src->file_path, bundle_id) };
+      bundle parsed{ bundle_verify(local_src->file_path, bundle_id, eng.project_root()) };
       eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path);
       p->bundle_in_situ = true;
       return;
@@ -1365,7 +1365,7 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
   // bundle a permanent cache entry that fails identically on every later run.
   // Throwing here drops the lock uncompleted, its destructor scrubs the entry, and
   // the next run refetches.
-  bundle parsed{ bundle_verify(cache_result.pkg_path, bundle_id) };
+  bundle parsed{ bundle_verify(cache_result.pkg_path, bundle_id, eng.project_root()) };
 
   if (cache_result.lock) {
     cache_result.lock->mark_install_complete();
@@ -1429,7 +1429,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   }
 
   // Load and validate spec script
-  auto lua{ create_lua_state() };
+  auto lua{ create_lua_state(eng) };
 
   // For specs from bundles, configure package.path for require() calls
   if (cfg.bundle_identity.has_value()) {

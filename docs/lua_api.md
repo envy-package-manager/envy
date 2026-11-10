@@ -9,7 +9,12 @@ envy.PLATFORM      -- "darwin" | "linux" | "windows"
 envy.ARCH          -- "arm64" | "x86_64"
 envy.PLATFORM_ARCH -- e.g., "darwin-arm64", "linux-x86_64"
 envy.EXE_EXT       -- "" on Unix, ".exe" on Windows
+envy.PROJECT_ROOT  -- root manifest's dir, symlinks resolved; nil under `envy lua`
 ```
+
+`PROJECT_ROOT` is fixed per run—manifest, spec top level, every phase and bundle validation
+all see one value—and is the cwd SETUP verbs and `DEFAULT_SHELL` run in. Don't bake it into
+a cache-managed payload: cache entries are shared across projects.
 
 ## Shell Constants
 

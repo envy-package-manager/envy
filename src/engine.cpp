@@ -811,6 +811,10 @@ std::filesystem::path const &engine::cache_root() const { return cache_.root(); 
 
 manifest const *engine::get_manifest() const { return manifest_; }
 
+std::filesystem::path engine::project_root() const {
+  return manifest_ ? manifest_->project_root : std::filesystem::path{};
+}
+
 void engine::set_depot_index(package_depot_index idx) {
   depot_index_ = std::move(idx);
   depot_pre_set_ = true;
@@ -1282,10 +1286,10 @@ void engine::run_default_shell_step() {
 
   // The manifest's directory, not the CWD: DEFAULT_SHELL belongs to the project, and a
   // command anchored elsewhere (--project, --manifest) would otherwise run it in the
-  // caller's tree -- the same cwd SETUP verbs get from compute_project_root.
+  // caller's tree -- the same cwd SETUP verbs get, and what envy.PROJECT_ROOT names.
   phase_context ctx{ .eng = this,
                      .p = default_shell_consumer_.get(),
-                     .run_dir = manifest_->manifest_path.parent_path(),
+                     .run_dir = manifest_->project_root,
                      .lock = nullptr,
                      .builtin_shell = true };
   default_shell_ = manifest_->run_default_shell_fn(&ctx);
