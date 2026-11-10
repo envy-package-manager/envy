@@ -1,6 +1,6 @@
 # Shell Integration
 
-Envy shell hooks auto-manage `PATH` and `ENVY_PROJECT_ROOT` as you navigate envy projects. No envy binary required at shell startup—hooks are pure shell.
+Envy shell hooks activate a project's environment as you `cd` into it and restore your own as you leave. Shell startup runs no envy binary; entering a project runs that project's launcher.
 
 ## Setup
 
@@ -31,9 +31,29 @@ On every directory change:
 1. Walk up from `$PWD` looking for `envy.lua`
 2. Respect `@envy root "false"` (continue upward) vs default `root=true` (stop)
 3. Parse `@envy bin` from the manifest header—blank lines and comments up to the first line of code, same rule as the launcher and the runtime
-4. Compute absolute bin path: `$manifest_dir/$bin_value`
-5. Manage `PATH`—prepend new bin dir, remove old one on project switch or exit
-6. Export `ENVY_PROJECT_ROOT` (or unset when leaving)
+4. Entering a project (or switching to another): eval `<bin>/envy activate <shell>`—the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV` (see `docs/architecture.md`)
+5. Leaving all projects: eval `envy deactivate <shell>`, which restores every variable activation touched
+
+`envy install` bumps a per-project generation file; at the next prompt every shell activated in that project re-activates, picking up what was just installed. The check is a builtin `read`, no fork.
+
+A project pinned to an envy that predates `activate` (its launcher fails) falls back to the old behavior: the bin dir on `PATH` and `ENVY_PROJECT_ROOT`, managed by the hook itself.
+
+Without hooks, the same commands work by hand: `eval "$(envy activate zsh)"`, `eval "$(envy deactivate zsh)"`. Activating always deactivates first, from any project.
+
+## Activation State
+
+Activation is modal and lives in exported variables, so nested shells, tmux panes and IDEs launched from the shell inherit it rather than re-applying it.
+
+| Variable | Meaning |
+|---|---|
+| `ENVY_ACTIVATE_VARS` | Names activation touched |
+| `ENVY_ACTIVATE_ORIG__<NAME>` | `<NAME>`'s value before activation; absent means it was unset |
+| `ENVY_ACTIVATE_ROOT` | Activated project (canonical); `ENVY_ACTIVATE_KEY` is the hook's spelling of it |
+| `ENVY_ACTIVATE_EXE` | Binary that wrote the state; the hook deactivates with it |
+| `ENVY_ACTIVATE_GEN` / `_GENFILE` | Generation in effect / the file `envy install` bumps |
+| `ENVY_ACTIVATE_SCHEMA` | State format; a mismatch says to restart the shell |
+
+Restore is wholesale: a variable activation touched goes back to its pre-activate value on leave, including edits you made to it inside the project. Envy never applies activation to its own phases—`envy install` from an activated shell builds exactly what it builds in CI.
 
 ## Auto-Update
 
@@ -43,8 +63,8 @@ Hook files carry `_ENVY_HOOK_STAMP=<envy version>:<digest>`—which envy wrote t
 
 | Variable | Effect |
 |---|---|
-| `ENVY_SHELL_HOOK_DISABLE=1` | Disable the hook entirely—no PATH changes, no messages, no icon |
-| `ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE=1` | Suppress "entering/leaving" status messages; PATH and icon still work |
+| `ENVY_SHELL_HOOK_DISABLE=1` | Disable the hook entirely—no activation, no messages, no icon |
+| `ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE=1` | Suppress "entering/leaving" status messages; activation and icon still work |
 | `ENVY_SHELL_NO_ICON=1` | Suppress the raccoon prompt icon; messages and PATH still work |
 
 All three are independent—combine as needed.

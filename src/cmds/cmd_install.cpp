@@ -1,5 +1,6 @@
 #include "cmd_install.h"
 
+#include "activation.h"
 #include "engine.h"
 #include "manifest.h"
 #include "pkg_key.h"
@@ -38,6 +39,7 @@ void cmd_install::execute() {
                                       cli_cache_root_,
                                       false,
                                       cfg_.project_dir) };
+  activation_refresh_guard const refresh{ c->root(), m->manifest_path };
 
   auto const targets{ [&] {
     std::vector<pkg_cfg const *> t;

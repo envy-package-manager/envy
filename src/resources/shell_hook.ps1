@@ -53,69 +53,119 @@ function _envy_parse_bin($manifestDir) {
     return (_envy_header_directive (Join-Path $manifestDir "envy.lua") "bin")
 }
 
+# The project's bin-dir envy prints the activate/deactivate script and its status lines.
+# It writes UTF-8; an OEM console code page would mangle every non-ASCII path in it.
+function _envy_native_utf8($exe) {
+    $saved = [Console]::OutputEncoding
+    try {
+        try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new() } catch {}
+        & $exe @args
+    } finally {
+        try { [Console]::OutputEncoding = $saved } catch {}
+    }
+}
+
+function _envy_activate($manifestDir, $binDir) {
+    $launcher = Join-Path $binDir $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'envy.bat' } else { 'envy' })
+    if (-not (Test-Path $launcher -PathType Leaf)) { return $false }
+    $out = _envy_native_utf8 $launcher activate powershell
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $false }
+    ($out -join "`n") | Invoke-Expression
+    $env:ENVY_ACTIVATE_KEY = $manifestDir
+    return $true
+}
+
+function _envy_deactivate {
+    $exe = $env:ENVY_ACTIVATE_EXE
+    $out = $null
+    if ($exe -and (Test-Path $exe -PathType Leaf)) { $out = _envy_native_utf8 $exe deactivate powershell }
+    if ($exe -and $LASTEXITCODE -eq 0 -and $null -ne $out) {
+        ($out -join "`n") | Invoke-Expression
+    } else {
+        [Console]::Error.WriteLine("envy: cannot restore the environment ($exe is gone); restart your shell")
+        Get-ChildItem Env:ENVY_ACTIVATE_* | Remove-Item -ErrorAction SilentlyContinue
+    }
+    Remove-Item Env:\ENVY_ACTIVATE_KEY -ErrorAction SilentlyContinue
+}
+
+# A project pinned to an envy without `activate` just gets its bin dir on PATH.
+function _envy_legacy_enter($manifestDir, $binDir) {
+    $sep = [System.IO.Path]::PathSeparator
+    if ($binDir -ne $global:_ENVY_BIN_DIR) {
+        $env:PATH = "$binDir$sep$env:PATH"
+        $global:_ENVY_BIN_DIR = $binDir
+        if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
+            $newName = Split-Path $manifestDir -Leaf
+            [Console]::Error.WriteLine("envy: entering $newName $($global:_ENVY_DASH) tools added to PATH")
+        }
+    }
+    $env:ENVY_PROJECT_ROOT = $manifestDir
+}
+
+function _envy_legacy_leave {
+    $sep = [System.IO.Path]::PathSeparator
+    if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
+        $oldName = Split-Path $env:ENVY_PROJECT_ROOT -Leaf
+        [Console]::Error.WriteLine("envy: leaving $oldName $($global:_ENVY_DASH) PATH restored")
+    }
+    $parts = $env:PATH -split [regex]::Escape($sep)
+    $parts = $parts | Where-Object { $_ -ne $global:_ENVY_BIN_DIR }
+    $env:PATH = $parts -join $sep
+    $global:_ENVY_BIN_DIR = $null
+    Remove-Item Env:\ENVY_PROJECT_ROOT -ErrorAction SilentlyContinue
+}
+
 function _envy_hook {
     if ($env:ENVY_SHELL_HOOK_DISABLE -eq "1") { return }
 
     _envy_detect_utf8
 
+    # `envy install` bumps the project's generation file; the next prompt re-activates.
+    $refresh = $false
+    if ($env:ENVY_ACTIVATE_KEY -and $env:ENVY_ACTIVATE_GENFILE -and
+        (Test-Path $env:ENVY_ACTIVATE_GENFILE -PathType Leaf)) {
+        $gen = (Get-Content -LiteralPath $env:ENVY_ACTIVATE_GENFILE -TotalCount 1 -ErrorAction SilentlyContinue)
+        if (-not $gen) { $gen = "0" }
+        $refresh = ($gen -ne $env:ENVY_ACTIVATE_GEN)
+    }
+
     $currentDir = (Get-Location).Path
-    if ($currentDir -eq $global:_ENVY_LAST_PWD) { return }
+    if (-not $refresh -and $currentDir -eq $global:_ENVY_LAST_PWD) { return }
     $global:_ENVY_LAST_PWD = $currentDir
 
-    $sep = [System.IO.Path]::PathSeparator
-
+    $binDir = $null
     $manifestDir = _envy_find_manifest
     if ($manifestDir) {
         $binVal = _envy_parse_bin $manifestDir
         if ($binVal) {
-            $binDir = Join-Path $manifestDir $binVal
-            if (Test-Path $binDir -PathType Container) {
-                $binDir = (Resolve-Path $binDir).Path
-                if ($binDir -ne $global:_ENVY_BIN_DIR) {
-                    # Leaving the old project (switching)?
-                    if ($global:_ENVY_BIN_DIR) {
-                        $oldName = Split-Path $env:ENVY_PROJECT_ROOT -Leaf
-                        if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
-                            [Console]::Error.WriteLine("envy: leaving $oldName $($global:_ENVY_DASH) PATH restored")
-                        }
-                        $parts = $env:PATH -split [regex]::Escape($sep)
-                        $parts = $parts | Where-Object { $_ -ne $global:_ENVY_BIN_DIR }
-                        $env:PATH = $parts -join $sep
-                    }
-                    $env:PATH = "$binDir$sep$env:PATH"
-                    $global:_ENVY_BIN_DIR = $binDir
-                    $newName = Split-Path $manifestDir -Leaf
-                    if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
-                        [Console]::Error.WriteLine("envy: entering $newName $($global:_ENVY_DASH) tools added to PATH")
-                    }
-                    $global:_ENVY_PROMPT_ACTIVE = $true
-                    # One-time nudge: the icon is wanted but the console can't render it.
-                    if (-not $global:_ENVY_UTF8 -and
-                        $env:ENVY_SHELL_NO_ICON -ne "1" -and
-                        -not $global:_ENVY_UTF8_HINTED) {
-                        $global:_ENVY_UTF8_HINTED = $true
-                        [Console]::Error.WriteLine("envy: raccoon icon hidden -- console is not UTF-8. Add [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new() above the hook line in your profile, or set ENVY_SHELL_NO_ICON=1 to silence.")
-                    }
-                }
-                $env:ENVY_PROJECT_ROOT = $manifestDir
-                return
-            }
+            $candidate = Join-Path $manifestDir $binVal
+            if (Test-Path $candidate -PathType Container) { $binDir = (Resolve-Path $candidate).Path }
         }
     }
 
-    # Left all projects or no bin — clean up
-    if ($global:_ENVY_BIN_DIR) {
-        $oldName = Split-Path $env:ENVY_PROJECT_ROOT -Leaf
-        if ($env:ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE -ne "1") {
-            [Console]::Error.WriteLine("envy: leaving $oldName $($global:_ENVY_DASH) PATH restored")
+    if ($binDir) {
+        if ($refresh -or ($manifestDir -ne $env:ENVY_ACTIVATE_KEY -and $binDir -ne $global:_ENVY_BIN_DIR)) {
+            if ($global:_ENVY_BIN_DIR) { _envy_legacy_leave }
+            if (-not (_envy_activate $manifestDir $binDir)) {
+                if ($env:ENVY_ACTIVATE_KEY) { _envy_deactivate }
+                _envy_legacy_enter $manifestDir $binDir
+            }
+            # One-time nudge: the icon is wanted but the console can't render it.
+            if (-not $global:_ENVY_UTF8 -and
+                $env:ENVY_SHELL_NO_ICON -ne "1" -and
+                -not $global:_ENVY_UTF8_HINTED) {
+                $global:_ENVY_UTF8_HINTED = $true
+                [Console]::Error.WriteLine("envy: raccoon icon hidden -- console is not UTF-8. Add [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new() above the hook line in your profile, or set ENVY_SHELL_NO_ICON=1 to silence.")
+            }
         }
-        $parts = $env:PATH -split [regex]::Escape($sep)
-        $parts = $parts | Where-Object { $_ -ne $global:_ENVY_BIN_DIR }
-        $env:PATH = $parts -join $sep
-        $global:_ENVY_BIN_DIR = $null
-        $global:_ENVY_PROMPT_ACTIVE = $false
+        $global:_ENVY_PROMPT_ACTIVE = $true
+        return
     }
-    Remove-Item Env:\ENVY_PROJECT_ROOT -ErrorAction SilentlyContinue
+
+    # Left all projects or no bin -- clean up
+    if ($env:ENVY_ACTIVATE_KEY) { _envy_deactivate }
+    if ($global:_ENVY_BIN_DIR) { _envy_legacy_leave }
+    $global:_ENVY_PROMPT_ACTIVE = $false
 }
 
 $global:_ENVY_LAST_PWD = $null

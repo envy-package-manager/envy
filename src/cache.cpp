@@ -281,6 +281,7 @@ std::vector<path> envy_binary_candidates(cache_root_resolution const &resolved,
 
 struct cache_impl {
   path root_;
+  bool read_only_{ false };
 
   path specs_dir() const { return root_ / "specs"; }
   path packages_dir() const { return root_ / "packages"; }
@@ -331,6 +332,10 @@ envy::cache::ensure_result ensure_entry(
                .pkg_path = result.pkg_path.string(),
                .fast_path = true);
     return result;
+  }
+
+  if (impl.read_only_) {  // never fetch, never wait on another envy's lock
+    throw envy::cache_read_only_miss{ std::string{ pkg_identity } };
   }
 
   std::filesystem::create_directories(impl.locks_dir());
@@ -519,6 +524,12 @@ cache::cache(std::optional<path> root) : m{ std::make_unique<impl>() } {
 cache::~cache() = default;
 
 path const &cache::root() const { return m->root_; }
+
+void cache::set_read_only(bool read_only) { m->read_only_ = read_only; }
+
+cache_read_only_miss::cache_read_only_miss(std::string identity)
+    : std::runtime_error{ "'" + identity + "' " + kCacheReadOnlyMissText },
+      identity_{ std::move(identity) } {}
 
 bool cache::is_entry_complete(path const &entry_dir) {
   return platform::file_exists(entry_dir / "envy-complete");

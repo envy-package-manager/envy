@@ -654,11 +654,11 @@ void run_phase_shell_script(std::string_view script,
                             std::string const &identity,
                             resolved_shell shell,
                             tui::section_handle section,
-                            std::filesystem::path const &cache_root) {
+                            std::filesystem::path const &cache_root,
+                            shell_env_t env) {
   std::ostringstream stdout_capture;
   std::ostringstream stderr_capture;
 
-  shell_env_t env{ shell_getenv() };
   shell_run_cfg cfg{
     .on_stdout_line = [&](std::string_view line) { stdout_capture << line << '\n'; },
     .on_stderr_line = [&](std::string_view line) { stderr_capture << line << '\n'; },

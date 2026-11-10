@@ -1,5 +1,6 @@
 #include "cmd_sync.h"
 
+#include "activation.h"
 #include "deploy.h"
 #include "engine.h"
 #include "luarc.h"
@@ -49,6 +50,7 @@ void cmd_sync::execute() {
                                    cli_cache_root_,
                                    cfg_.subproject,
                                    subproject_anchor(cfg_.subproject, cfg_.project_dir)) };
+  activation_refresh_guard const refresh{ c->root(), m->manifest_path };
 
   if (!m->meta.bin) {
     throw_runtime_error(

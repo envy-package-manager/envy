@@ -26,12 +26,14 @@ struct cmd_startup {
 
 // Anchor precedence: manifest_path, then project_dir (the global --project, which a bin
 // dir's launcher injects so its own project outranks the caller's CWD), then the CWD.
+// read_only_cache: activation's prompt path, which must neither fetch nor announce a tree.
 cmd_startup cmd_startup_load(
     std::string_view cmd_name,
     std::optional<std::filesystem::path> const &manifest_path,
     std::optional<std::filesystem::path> const &cli_cache_root,
     bool subproject = false,
-    std::optional<std::filesystem::path> const &project_dir = std::nullopt);
+    std::optional<std::filesystem::path> const &project_dir = std::nullopt,
+    bool read_only_cache = false);
 
 // --subproject means "the manifest nearest to where I stand", so it anchors on the CWD
 // even under an injected --project -- a launcher's bin dir is the wrong "here".

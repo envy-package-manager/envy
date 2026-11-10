@@ -84,7 +84,7 @@ TEST_CASE("cli_parse: help lists subcommands in sorted order") {
 
   REQUIRE(names.size() >= 20);
   CHECK(std::ranges::is_sorted(names));
-  CHECK(names.front() == "cache");
+  CHECK(names.front() == "activate");
   CHECK(names.back() == "version");
 }
 
@@ -4154,3 +4154,50 @@ TEST_CASE("cli_parse: cache-test parent and children") {
 }
 
 #endif  // ENVY_FUNCTIONAL_TESTER
+
+TEST_CASE("cli_parse: cmd_activate") {
+  for (char const *sh : { "bash", "zsh", "fish", "powershell" }) {
+    auto const cfg{ accepts<envy::cmd_activate::cfg>({ "envy", "activate", sh }) };
+    CHECK(cfg.shell == sh);
+    CHECK_FALSE(cfg.project_dir.has_value());
+  }
+
+  SUBCASE("the launcher's --project anchors it") {
+    auto const cfg{ accepts<envy::cmd_activate::cfg>(
+        { "envy", "--project", ".", "activate", "zsh" }) };
+    REQUIRE(cfg.project_dir.has_value());
+    CHECK(*cfg.project_dir == std::filesystem::path{ "." });
+  }
+
+  SUBCASE("the shell is required and validated") {
+    rejects({ "envy", "activate" });
+    rejects({ "envy", "activate", "cmd" });
+  }
+}
+
+TEST_CASE("cli_parse: cmd_deactivate") {
+  for (char const *sh : { "bash", "zsh", "fish", "powershell" }) {
+    CHECK(accepts<envy::cmd_deactivate::cfg>({ "envy", "deactivate", sh }).shell == sh);
+  }
+  rejects({ "envy", "deactivate" });
+  rejects({ "envy", "deactivate", "tcsh" });
+}
+
+TEST_CASE("cli_parse: cmd_run --activate") {
+  SUBCASE("before the command it is run's own flag") {
+    auto const cfg{ accepts<envy::cmd_run::cfg>(
+        { "envy", "run", "--activate", "make", "-j" }) };
+    CHECK(cfg.activate);
+    CHECK(cfg.command == std::vector<std::string>{ "make", "-j" });
+  }
+
+  SUBCASE("after the command it belongs to the command") {
+    auto const cfg{ accepts<envy::cmd_run::cfg>({ "envy", "run", "make", "--activate" }) };
+    CHECK_FALSE(cfg.activate);
+    CHECK(cfg.command == std::vector<std::string>{ "make", "--activate" });
+  }
+
+  SUBCASE("absent by default") {
+    CHECK_FALSE(accepts<envy::cmd_run::cfg>({ "envy", "run", "ls" }).activate);
+  }
+}

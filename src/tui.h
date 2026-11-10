@@ -138,6 +138,9 @@ bool section_has_content(section_handle h);
 // over output that is no longer ours. Pair with interactive_mode_guard to erase the area.
 void sections_clear();
 
+// Write every queued line now, on the caller's thread: an exec next would drop them.
+void flush();
+
 // Interactive mode API
 void acquire_interactive_mode();
 void release_interactive_mode();

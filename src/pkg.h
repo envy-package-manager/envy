@@ -144,6 +144,7 @@ struct pkg {
   std::string result_hash;
   pkg_type type;
   int schema{ 0 };
+  bool has_env{ false };  // spec declares ENV; written by spec_fetch, read once satisfied
 
   // SETUP pairs declared by the spec. Sorted map gives deterministic node
   // creation order. Written once during spec_fetch, read by the setup phase.

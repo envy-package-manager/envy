@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -116,6 +117,18 @@ char const *cache_root_tier_name(cache_root_tier tier);
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir);
 
+// What a read-only cache throws instead of locking an incomplete entry to fill it; the
+// message carries kCacheReadOnlyMissText through the engine's string-only failure path.
+inline constexpr char kCacheReadOnlyMissText[]{ "is not in the cache" };
+class cache_read_only_miss : public std::runtime_error {
+ public:
+  explicit cache_read_only_miss(std::string identity);
+  std::string const &identity() const { return identity_; }
+
+ private:
+  std::string identity_;
+};
+
 class cache : unmovable {
  public:
   using path = std::filesystem::path;
@@ -159,6 +172,10 @@ class cache : unmovable {
   ~cache();
 
   path const &root() const;
+
+  // A read-only cache answers hits and throws cache_read_only_miss for anything else, so
+  // a caller on the prompt path (activation) never fetches and never blocks on a lock.
+  void set_read_only(bool read_only);
 
   struct ensure_result {
     path entry_path;                // entry directory containing metadata and pkg/

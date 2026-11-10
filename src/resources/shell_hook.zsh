@@ -85,6 +85,7 @@ _envy_unset_prompt() {
 # precmds re-prepend a mark ahead of it, which an anchored test reads as "icon gone".
 _envy_precmd() {
   emulate -L zsh
+  _envy_refresh
   if [ "${ENVY_SHELL_NO_ICON:-}" = "1" ] || [ "${_ENVY_UTF8:-}" != "1" ]; then
     _envy_unset_prompt
     return
@@ -100,55 +101,105 @@ _envy_precmd() {
   fi
 }
 
+# The project's bin-dir envy prints the activate/deactivate script and its status lines.
+# Locals on the eval's stack are ENVY_-prefixed: scoping is dynamic and ENV can't use one.
+_envy_activate() {
+  emulate -L zsh
+  local ENVY_HOOK_OUT=""
+  [[ -x "$2/envy" ]] || return 1
+  ENVY_HOOK_OUT="$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
+                   "$2/envy" activate zsh)" || return 1
+  [[ -n "$ENVY_HOOK_OUT" ]] || return 1
+  eval "$ENVY_HOOK_OUT"
+  export ENVY_ACTIVATE_KEY="$1"
+}
+
+_envy_deactivate() {
+  emulate -L zsh
+  local ENVY_HOOK_OUT=""
+  if [[ -x "${ENVY_ACTIVATE_EXE:-}" ]] &&
+     ENVY_HOOK_OUT="$(ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE="${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" \
+                      "$ENVY_ACTIVATE_EXE" deactivate zsh)"; then
+    eval "$ENVY_HOOK_OUT"
+  else
+    printf 'envy: cannot restore the environment (%s is gone); restart your shell\n' \
+      "${ENVY_ACTIVATE_EXE:-envy}" >&2
+    unset -m 'ENVY_ACTIVATE_*'
+  fi
+  unset ENVY_ACTIVATE_KEY
+}
+
+# A project pinned to an envy without `activate` just gets its bin dir on PATH.
+_envy_legacy_enter() {
+  emulate -L zsh
+  if [ "$2" != "${_ENVY_BIN_DIR:-}" ]; then
+    path=("$2" "${path[@]}")  # prepend via zsh path array -- no subshell
+    export PATH
+    _ENVY_BIN_DIR="$2"
+    if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
+      printf 'envy: entering %s %s tools added to PATH\n' "${1##*/}" "$_ENVY_DASH" >&2
+    fi
+  fi
+  export ENVY_PROJECT_ROOT="$1"
+}
+
+_envy_legacy_leave() {
+  emulate -L zsh
+  if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
+    printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
+  fi
+  _envy_remove_from_path "$_ENVY_BIN_DIR"
+  export PATH
+  unset _ENVY_BIN_DIR
+  unset ENVY_PROJECT_ROOT
+}
+
+# $1 = "refresh": `envy install` bumped the generation file, so re-activate in place.
 _envy_hook() {
   emulate -L zsh
   if [ "${ENVY_SHELL_HOOK_DISABLE:-}" = "1" ]; then return; fi
-  if [ -n "${_ENVY_HOOK_ACTIVE:-}" ]; then return; fi  # chpwd recursion via $(cd ...)
-  local _ENVY_HOOK_ACTIVE=1
+  if [ -n "${ENVY_HOOK_ACTIVE:-}" ]; then return; fi  # chpwd recursion via $(cd ...)
+  local ENVY_HOOK_ACTIVE=1
 
-  local manifest_dir bin_val bin_dir
+  local ENVY_HOOK_MANIFEST="" ENVY_HOOK_BIN_VAL="" ENVY_HOOK_BIN=""
   if _envy_find_manifest 2>/dev/null; then
-    manifest_dir="$REPLY"
-    _envy_parse_bin "$manifest_dir"
-    bin_val="$REPLY"
-    if [ -n "$bin_val" ]; then
-      bin_dir="${manifest_dir}/${bin_val}"
-      bin_dir="${bin_dir:A}"  # realpath via :A, no subshell
-      if [ -d "$bin_dir" ]; then
-        if [ "$bin_dir" != "${_ENVY_BIN_DIR:-}" ]; then
-          # Leaving the old project (switching)?
-          if [ -n "${_ENVY_BIN_DIR:-}" ]; then
-            if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-              printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
-            fi
-            _envy_remove_from_path "$_ENVY_BIN_DIR"
-          fi
-          path=("$bin_dir" "${path[@]}")  # prepend via zsh path array — no subshell
-          export PATH
-          _ENVY_BIN_DIR="$bin_dir"
-          if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-            printf 'envy: entering %s %s tools added to PATH\n' "${manifest_dir##*/}" "$_ENVY_DASH" >&2
-          fi
-          _envy_set_prompt
-        fi
-        ENVY_PROJECT_ROOT="$manifest_dir"
-        export ENVY_PROJECT_ROOT
-        return
+    ENVY_HOOK_MANIFEST="$REPLY"
+    _envy_parse_bin "$ENVY_HOOK_MANIFEST"
+    ENVY_HOOK_BIN_VAL="$REPLY"
+    if [ -n "$ENVY_HOOK_BIN_VAL" ]; then
+      ENVY_HOOK_BIN="${ENVY_HOOK_MANIFEST}/${ENVY_HOOK_BIN_VAL}"
+      ENVY_HOOK_BIN="${ENVY_HOOK_BIN:A}"  # realpath via :A, no subshell
+      [ -d "$ENVY_HOOK_BIN" ] || ENVY_HOOK_BIN=""
+    fi
+  fi
+
+  if [ -n "$ENVY_HOOK_BIN" ]; then
+    if [ "${1:-}" = "refresh" ] ||
+       { [ "$ENVY_HOOK_MANIFEST" != "${ENVY_ACTIVATE_KEY:-}" ] &&
+         [ "$ENVY_HOOK_BIN" != "${_ENVY_BIN_DIR:-}" ]; }; then
+      if [ -n "${_ENVY_BIN_DIR:-}" ]; then _envy_legacy_leave; fi
+      if ! _envy_activate "$ENVY_HOOK_MANIFEST" "$ENVY_HOOK_BIN"; then
+        if [ -n "${ENVY_ACTIVATE_KEY:-}" ]; then _envy_deactivate; fi
+        _envy_legacy_enter "$ENVY_HOOK_MANIFEST" "$ENVY_HOOK_BIN"
       fi
     fi
+    _envy_set_prompt
+    return
   fi
 
-  # Left all projects or no bin — clean up
-  if [ -n "${_ENVY_BIN_DIR:-}" ]; then
-    if [ "${ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE:-}" != "1" ]; then
-      printf 'envy: leaving %s %s PATH restored\n' "${ENVY_PROJECT_ROOT##*/}" "$_ENVY_DASH" >&2
-    fi
-    _envy_remove_from_path "$_ENVY_BIN_DIR"
-    export PATH
-    unset _ENVY_BIN_DIR
-    _envy_unset_prompt
-  fi
-  unset ENVY_PROJECT_ROOT
+  # Left all projects or no bin -- clean up
+  if [ -n "${ENVY_ACTIVATE_KEY:-}" ]; then _envy_deactivate; fi
+  if [ -n "${_ENVY_BIN_DIR:-}" ]; then _envy_legacy_leave; fi
+  _envy_unset_prompt
+}
+
+# Per prompt, no fork: re-activate when `envy install` bumped this project's generation.
+_envy_refresh() {
+  emulate -L zsh
+  [ -n "${ENVY_ACTIVATE_KEY:-}" ] && [ -f "${ENVY_ACTIVATE_GENFILE:-}" ] || return 0
+  local ENVY_HOOK_GEN=""
+  read -r ENVY_HOOK_GEN < "$ENVY_ACTIVATE_GENFILE" || :  # `||`: no final newline
+  if [ "${ENVY_HOOK_GEN:-0}" != "${ENVY_ACTIVATE_GEN:-}" ]; then _envy_hook refresh; fi
 }
 
 # chpwd fires only on a directory change; cheaper than precmd.
