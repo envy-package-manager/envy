@@ -63,8 +63,10 @@ jobs:
             build_args: --sanitizer=ubsan -DENVY_VERSION=0.3.0
             cache_group: linux-x64-ubsan
             cache_writer: true
+          # Pinned: on ubuntu-26.04 TSan aborts at startup ("incompatible memory layout")
+          # and the container's seccomp blocks the ASLR-off re-exec it falls back on.
           - name: linux-x64-tsan
-            os: ubuntu-latest
+            os: ubuntu-24.04
             shard: func-tsan
             build_args: --sanitizer=tsan
             cache_group: linux-x64-tsan
