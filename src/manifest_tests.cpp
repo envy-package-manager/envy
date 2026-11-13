@@ -2307,7 +2307,8 @@ fs::path fixture_path(fs::path const &relative) {
 
 }  // namespace
 
-TEST_CASE("envy.subproject anchors a subproject entry's relative source on the subproject") {
+TEST_CASE(
+    "envy.subproject anchors a subproject entry's relative source on the subproject") {
   auto m{ load_super(R"(
     local sub = envy.subproject("sub")
     PACKAGES = envy.extend({ { spec = "root.tool@r1", source = "root_spec.lua" } },
@@ -2592,7 +2593,8 @@ TEST_CASE("a superproject merges its own PACKAGE_DEPOTS with two subprojects'") 
 
 TEST_CASE("envy.subproject works from a manifest path with no directory component") {
   std::string const script{ "-- @envy bin \"tools\"\nPACKAGES = envy.subproject(\"" +
-                            (subproject_root() / "sub").generic_string() + "\").PACKAGES" };
+                            (subproject_root() / "sub").generic_string() +
+                            "\").PACKAGES" };
 
   auto m{ envy::manifest::load(script.c_str(), fs::path{ "envy.lua" }) };
 
@@ -2814,7 +2816,8 @@ TEST_CASE("envy.loadenv reads the globals and envy of the subproject that called
 
   REQUIRE(m->packages.size() == 1);
   CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
-  CHECK(local_path(m->packages[0]) == fixture_path(fs::path{ "loadenv_globals" } / "r.lua"));
+  CHECK(local_path(m->packages[0]) ==
+        fixture_path(fs::path{ "loadenv_globals" } / "r.lua"));
 }
 
 TEST_CASE("envy.loadenv out of a bundled module resolves no bundle of its own") {

@@ -149,8 +149,9 @@ void lua_envy_subproject_install(sol::state &lua,
         // Sandbox with the stdlib visible, as envy.loadenv builds: assigned globals land
         // here rather than in the superproject's. Its own envy carries what differs.
         sol::table const shared_envy = lua_view.globals()["envy"];
-        sol::table own_envy{ lua_view.create_table_with(
-            "IS_SUBPROJECT", true, kProjectRootKey, project_root) };
+        sol::table own_envy{
+          lua_view.create_table_with("IS_SUBPROJECT", true, kProjectRootKey, project_root)
+        };
         own_envy[sol::metatable_key] = lua_view.create_table_with("__index", shared_envy);
         sol::table env{ lua_view.create_table() };
         env[sol::metatable_key] =
