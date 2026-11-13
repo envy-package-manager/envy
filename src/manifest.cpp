@@ -3,8 +3,8 @@
 #include "bundle.h"
 #include "engine.h"
 #include "envy_release.h"
-#include "lua_ctx/lua_envy_import.h"
 #include "lua_ctx/lua_envy_loadenv_bundle.h"
+#include "lua_ctx/lua_envy_subproject.h"
 #include "lua_envy.h"
 #include "lua_shell.h"
 #include "platform.h"
@@ -144,31 +144,31 @@ void scan_envy_header(std::string_view content, fn const &on_directive) {
 using bundle_alias_map = std::unordered_map<std::string, pkg_cfg::bundle_source>;
 using bundle_pkg_map = std::unordered_map<std::string, pkg_cfg *>;
 
-// What every PACKAGES entry of one manifest is parsed against. An imported entry
+// What every PACKAGES entry of one manifest is parsed against. A subproject's entry
 // carries its own anchor and alias table, so both maps are keyed per entry, not global.
 struct manifest_parse_ctx {
   std::filesystem::path const &root_path;
   bundle_alias_map const &root_bundles;
   bundle_pkg_map &bundle_pkgs;
-  // Aliases of an imported BUNDLES table, parsed once per table rather than per entry.
-  std::unordered_map<void const *, bundle_alias_map> imported_bundles{};
+  // Aliases of a subproject's BUNDLES table, parsed once per table rather than per entry.
+  std::unordered_map<void const *, bundle_alias_map> subproject_bundles{};
 
-  // An imported entry's provenance is the file that wrote it, not the root that spliced
+  // A subproject entry's provenance is the file that wrote it, not the root that spliced
   // it in: that file is what a conflict message must name and what keys a custom fetch.
   pkg_decl_origin origin_for(sol::table const &entry) const {
     auto base{ sol_util_get_optional<std::string>(entry, kEnvyBaseKey, "Package") };
     return base ? pkg_decl_origin{ std::move(*base) } : pkg_decl_origin{ root_path };
   }
 
-  // An imported entry's own aliases win: its manifest wrote the reference. Falls back
-  // to the root map, so a superproject can still name a bundle for an imported entry.
+  // A subproject entry's own aliases win: its manifest wrote the reference. Falls back
+  // to the root map, so a superproject can still name a bundle for a subproject's entry.
   pkg_cfg::bundle_source const *find_alias(sol::table const &entry,
                                            std::string const &alias,
                                            pkg_decl_origin const &origin) {
     if (sol::object const tbl{ entry[kEnvyBundlesKey] }; tbl.is<sol::table>()) {
-      sol::table const imported{ tbl.as<sol::table>() };
-      auto const [it, inserted]{ imported_bundles.try_emplace(imported.pointer()) };
-      if (inserted) { it->second = bundle::parse_aliases(imported, origin); }
+      sol::table const sub{ tbl.as<sol::table>() };
+      auto const [it, inserted]{ subproject_bundles.try_emplace(sub.pointer()) };
+      if (inserted) { it->second = bundle::parse_aliases(sub, origin); }
       if (auto const found{ it->second.find(alias) }; found != it->second.end()) {
         return &found->second;
       }
@@ -718,7 +718,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
                                : util_canonical_path(manifest_path).parent_path() };
   auto state{ sol_util_make_lua_state() };
   lua_envy_install(*state, project_root);
-  lua_envy_import_install(*state, meta.version, manifest_path);
+  lua_envy_subproject_install(*state, meta.version, manifest_path);
   // Replaces the refusal every other Lua state carries: this is manifest scope.
   lua_envy_loadenv_bundle_install(*state, c, manifest_path, project_root);
 
@@ -731,7 +731,7 @@ std::unique_ptr<manifest> manifest::load(std::vector<unsigned char> const &conte
     throw_runtime_error({ "Failed to execute manifest script: ", err.what() });
   }
 
-  lua_envy_import_validate_root_globals(*state);
+  lua_envy_subproject_validate_root_globals(*state);
 
   auto m{ std::make_unique<manifest>() };
   m->manifest_path = manifest_path;

@@ -1,7 +1,8 @@
-"""envy.PROJECT_ROOT: the root manifest's directory, identical in every Lua state of a run.
+"""envy.PROJECT_ROOT: the root manifest's directory in every spec state of a run.
 
 Covers manifest scope, spec top level, SETUP pair functions, bundle validation (both the
-engine's and envy.loadenv_bundle's), and its absence outside a project (`envy lua`).
+engine's and envy.loadenv_bundle's), a subproject's manifest (its own directory) against
+the specs it declares (still the run's), and its absence outside a project (`envy lua`).
 """
 
 import unittest
@@ -21,6 +22,7 @@ SETUP = {
       local f = assert(io.open(envy.path.join(envy.PROJECT_ROOT, "roots.txt"), "w"))
       f:write(options.from_manifest, "\\n", at_load, "\\n", envy.PROJECT_ROOT, "\\n")
       f:close()
+      envy.run("echo x > cwd.txt")  -- relative: lands in SETUP's cwd
     end,
   },
 }
@@ -73,6 +75,28 @@ class TestProjectRoot(EnvyTestCase):
         self.assertEqual(3, len(roots), roots)
         self.assertEqual(1, len(set(roots)), f"scopes disagree: {roots}")
         self.assertEqual(self.project.resolve(), Path(roots[0]))
+
+    def test_a_subproject_manifest_sees_its_own_root_and_its_specs_the_runs(self):
+        spec = self.write_spec("root_probe.lua", PROBE_SPEC)
+        sub = self.project / "sub"
+        sub.mkdir()
+        (sub / "envy.lua").write_text(
+            f'PACKAGES = {{ {{ spec = "local.root_probe@v1", '
+            f'source = "{self.lua_path(spec)}", setup = {{ "main" }}, '
+            f"options = {{ from_manifest = envy.PROJECT_ROOT }} }} }}\n",
+            encoding="utf-8",
+        )
+        manifest = self.write_manifest(
+            'PACKAGES = envy.subproject("sub").PACKAGES\n', directory=self.project
+        )
+
+        run = self.install(manifest, cwd=self.elsewhere)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        roots = (self.project / "roots.txt").read_text(encoding="utf-8").splitlines()
+        project = self.project.resolve()
+        self.assertEqual([sub.resolve(), project, project], [Path(r) for r in roots])
+        self.assertTrue((self.project / "cwd.txt").exists(), "SETUP ran outside the root")
 
     def test_bundle_validation_sees_it_when_a_package_pulls_the_bundle(self):
         manifest = self.write_manifest(

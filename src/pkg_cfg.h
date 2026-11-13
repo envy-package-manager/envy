@@ -22,18 +22,18 @@ namespace envy {
 class pkg_cfg_pool;
 
 // What declared an entry, and what its relative paths resolve against: the two differ
-// only for an imported manifest, whose paths were written relative to itself.
+// only for a subproject's manifest, whose paths were written relative to itself.
 struct pkg_decl_origin {
   std::filesystem::path declaring_file;  // provenance, project root, custom-fetch key
   std::filesystem::path anchor;          // relative-path base; its parent dir is used
 
-  // Implicit on purpose: every declaration but an imported one anchors on its declarer.
+  // Implicit on purpose: every declaration but a subproject's anchors on its declarer.
   pkg_decl_origin(std::filesystem::path p) : declaring_file{ p }, anchor{ std::move(p) } {}
   pkg_decl_origin(std::filesystem::path declarer, std::filesystem::path base)
       : declaring_file{ std::move(declarer) }, anchor{ std::move(base) } {}
 };
 
-// Reserved keys an imported manifest's entries carry: the file their relative paths
+// Reserved keys a subproject's entries carry: the file their relative paths
 // anchor on, and the BUNDLES table their aliases resolve against.
 inline constexpr char kEnvyBaseKey[]{ "ENVY_BASE" };
 inline constexpr char kEnvyBundlesKey[]{ "ENVY_BUNDLES" };
@@ -283,7 +283,7 @@ struct fetch_fn_query {
 
 // The `source.fetch` closure `query` names, wherever this state declares it: a spec's
 // DEPENDENCIES entry, an inline `bundle = {...}` table on a DEPENDENCIES or PACKAGES
-// entry, a BUNDLES alias, or an imported manifest's BUNDLES. One scan for every
+// entry, a BUNDLES alias, or a subproject's BUNDLES. One scan for every
 // documented shape; an entry that does not match is skipped, never an answer.
 std::optional<sol::protected_function> find_fetch_function(sol::state_view lua,
                                                            fetch_fn_query const &query);

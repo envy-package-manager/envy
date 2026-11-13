@@ -2275,17 +2275,17 @@ TEST_CASE("DEFAULT_SHELL: a failing function reports the Lua error") {
                        std::runtime_error);
 }
 
-// envy.import ------------------------------------------------------------
+// envy.subproject -------------------------------------------------------
 
 namespace {
 
-fs::path import_root() { return test_data_root() / "import"; }
+fs::path subproject_root() { return test_data_root() / "subproject"; }
 
-// A superproject manifest runs from a string but must report a real path: import
+// A superproject manifest runs from a string but must report a real path: a subproject
 // anchors on its caller's chunk name, and the fixtures sit next to that path.
 std::unique_ptr<envy::manifest> load_super(std::string const &body) {
   std::string const script{ "-- @envy bin \"tools\"\n" + body };
-  return envy::manifest::load(script.c_str(), import_root() / "envy.lua");
+  return envy::manifest::load(script.c_str(), subproject_root() / "envy.lua");
 }
 
 envy::pkg_cfg const *find_pkg(envy::manifest const &m, std::string_view identity) {
@@ -2302,14 +2302,14 @@ fs::path local_path(envy::pkg_cfg const *cfg) {
 }
 
 fs::path fixture_path(fs::path const &relative) {
-  return envy::util_canonical_path(import_root() / relative);
+  return envy::util_canonical_path(subproject_root() / relative);
 }
 
 }  // namespace
 
-TEST_CASE("envy.import anchors an imported entry's relative source on the imported file") {
+TEST_CASE("envy.subproject anchors relative sources on the subproject") {
   auto m{ load_super(R"(
-    local sub = envy.import("sub")
+    local sub = envy.subproject("sub")
     PACKAGES = envy.extend({ { spec = "root.tool@r1", source = "root_spec.lua" } },
                            sub.PACKAGES)
   )") };
@@ -2323,12 +2323,11 @@ TEST_CASE("envy.import anchors an imported entry's relative source on the import
   CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
 }
 
-TEST_CASE("envy.import takes a manifest file path as well as a directory") {
-  auto m{ load_super(R"(PACKAGES = envy.import("sub/envy.lua").PACKAGES)") };
-
-  auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
-  REQUIRE(sub_tool != nullptr);
-  CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
+TEST_CASE("envy.subproject refuses a manifest file path") {
+  CHECK_THROWS_WITH_AS(
+      load_super(R"(PACKAGES = envy.subproject("sub/envy.lua").PACKAGES)"),
+      doctest::Contains("'sub/envy.lua' is not a directory"),
+      std::runtime_error);
 }
 
 // -- entry-shape key sets and parse-error context --------------------------
@@ -2400,19 +2399,19 @@ TEST_CASE("manifest::load prefixes a PACKAGES parse error with file and index") 
                        std::runtime_error);
 }
 
-TEST_CASE("envy.import names the imported manifest as the declarer") {
+TEST_CASE("envy.subproject names the subproject manifest as the declarer") {
   // Provenance follows the file that wrote the entry: that is what a conflicting-source
   // message must name, and what keys a custom fetch. The project root is a property of
   // the run, taken from the resolved manifest rather than from here.
-  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+  auto m{ load_super(R"(PACKAGES = envy.subproject("sub").PACKAGES)") };
 
   auto const *sub_tool{ find_pkg(*m, "sub.tool@r1") };
   REQUIRE(sub_tool != nullptr);
-  CHECK(sub_tool->declaring_file_path == import_root() / "sub" / "envy.lua");
+  CHECK(sub_tool->declaring_file_path == subproject_root() / "sub" / "envy.lua");
 }
 
-TEST_CASE("envy.import resolves an imported bundle alias with no root BUNDLES") {
-  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+TEST_CASE("envy.subproject resolves a subproject bundle alias with no root BUNDLES") {
+  auto m{ load_super(R"(PACKAGES = envy.subproject("sub").PACKAGES)") };
 
   auto const *bundled{ find_pkg(*m, "sub.bundled@r1") };
   REQUIRE(bundled != nullptr);
@@ -2428,33 +2427,158 @@ TEST_CASE("envy.import resolves an imported bundle alias with no root BUNDLES") 
         fixture_path(fs::path{ "sub" } / "bundles" / "tools"));
 }
 
-TEST_CASE("envy.import tags stay out of an imported entry's package key") {
-  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+TEST_CASE("envy.subproject tags stay out of a subproject entry's package key") {
+  auto m{ load_super(R"(PACKAGES = envy.subproject("sub").PACKAGES)") };
 
   auto const *opt{ find_pkg(*m, "sub.opt@r1") };
   REQUIRE(opt != nullptr);
   CHECK(opt->format_key() == "sub.opt@r1{[\"version\"]=\"1.0\"}");
 }
 
-TEST_CASE("envy.import errors on an unknown bundle alias naming both manifests") {
+TEST_CASE("manifest::load errors on an unknown bundle alias, naming where it looked") {
   CHECK_THROWS_WITH_AS(
       load_super(R"(PACKAGES = { { spec = "a.b@r1", bundle = "missing" } })"),
       doctest::Contains("or of the manifest that declared it"),
       std::runtime_error);
 }
 
-TEST_CASE("envy.import sets ENVY_IMPORTER in the imported manifest") {
-  auto m{ load_super(R"(PACKAGES = envy.import("sub").PACKAGES)") };
+TEST_CASE("envy.IS_SUBPROJECT is true in a subproject and false in the root") {
+  auto m{ load_super(R"(
+    PACKAGES = envy.extend({ { spec = "root.tool@r1", source = "root_spec.lua",
+                               options = { sub = envy.IS_SUBPROJECT } } },
+                           envy.subproject("sub").PACKAGES)
+  )") };
+
   CHECK(find_pkg(*m, "sub.standalone@r1") == nullptr);
+  auto const *root_tool{ find_pkg(*m, "root.tool@r1") };
+  REQUIRE(root_tool != nullptr);
+  CHECK(root_tool->serialized_options == R"({["sub"]=false})");
 }
 
-TEST_CASE("a manifest loaded on its own sees no ENVY_IMPORTER") {
-  auto m{ envy::manifest::load(import_root() / "sub" / "envy.lua") };
-  CHECK(find_pkg(*m, "sub.standalone@r1") != nullptr);
+TEST_CASE("a manifest loaded on its own is no subproject") {
+  auto m{ envy::manifest::load(subproject_root() / "sub" / "envy.lua") };
+  auto const *standalone{ find_pkg(*m, "sub.standalone@r1") };
+  REQUIRE(standalone != nullptr);
+  CHECK(standalone->serialized_options == R"({["sub"]=false})");
 }
 
-TEST_CASE("envy.import keeps a nested import's own anchor") {
-  auto m{ load_super(R"(PACKAGES = envy.import("nested").PACKAGES)") };
+TEST_CASE("a subproject sees its own directory as envy.PROJECT_ROOT") {
+  auto m{ load_super(R"(
+    local sub = envy.subproject("sub")
+    PACKAGES = {
+      { spec = "seen.sub@r1", source = sub.ROOT_SEEN .. "/seen.lua" },
+      { spec = "seen.root@r1", source = envy.PROJECT_ROOT .. "/seen.lua" },
+    }
+  )") };
+
+  auto const *sub_seen{ find_pkg(*m, "seen.sub@r1") };
+  REQUIRE(sub_seen != nullptr);
+  CHECK(local_path(sub_seen) == fixture_path(fs::path{ "sub" } / "seen.lua"));
+
+  auto const *root_seen{ find_pkg(*m, "seen.root@r1") };
+  REQUIRE(root_seen != nullptr);
+  CHECK(local_path(root_seen) == fixture_path("seen.lua"));
+}
+
+TEST_CASE("a subproject's table carries its PROJECT_ROOT") {
+  // A spec the subproject hosts but never declares: reachable only through its root.
+  auto m{ load_super(R"(
+    local sub = envy.subproject("sub")
+    PACKAGES = {
+      { spec = "sub.hosted@r1", source = sub.PROJECT_ROOT .. "/specs/hosted.lua" },
+    }
+  )") };
+
+  auto const *hosted{ find_pkg(*m, "sub.hosted@r1") };
+  REQUIRE(hosted != nullptr);
+  CHECK(local_path(hosted) == fixture_path(fs::path{ "sub" } / "specs" / "hosted.lua"));
+}
+
+TEST_CASE("a subproject's function sees its envy when the superproject calls it") {
+  auto m{ load_super(R"(PACKAGES = { envy.subproject("sub").probe() })") };
+
+  auto const *probe{ find_pkg(*m, "sub.probe@r1") };
+  REQUIRE(probe != nullptr);
+  CHECK(local_path(probe) == fixture_path(fs::path{ "sub" } / "specs" / "probe.lua"));
+  CHECK(probe->serialized_options == R"({["sub"]=true})");
+}
+
+TEST_CASE("a nested subproject sees its own PROJECT_ROOT") {
+  auto m{ load_super(R"(
+    local n = envy.subproject("nested")
+    PACKAGES = {
+      { spec = "n.seen@r1", source = n.ROOT_SEEN .. "/a.lua" },
+      { spec = "n.field@r1", source = n.PROJECT_ROOT .. "/b.lua" },
+      { spec = "sub.seen@r1", source = n.SUB_ROOT_SEEN .. "/c.lua" },
+      { spec = "sub.field@r1", source = n.SUB_FIELD .. "/d.lua" },
+    }
+  )") };
+
+  CHECK(find_pkg(*m, "sub.standalone@r1") == nullptr);  // nested twice, still a subproject
+  for (auto const &[identity, expected] :
+       { std::pair{ "n.seen@r1", fs::path{ "nested" } / "a.lua" },
+         std::pair{ "n.field@r1", fs::path{ "nested" } / "b.lua" },
+         std::pair{ "sub.seen@r1", fs::path{ "sub" } / "c.lua" },
+         std::pair{ "sub.field@r1", fs::path{ "sub" } / "d.lua" } }) {
+    auto const *cfg{ find_pkg(*m, identity) };
+    REQUIRE(cfg != nullptr);
+    CHECK(local_path(cfg) == fixture_path(expected));
+  }
+}
+
+TEST_CASE("envy.subproject refuses a subproject that assigns PROJECT_ROOT") {
+  try {
+    load_super(R"(PACKAGES = envy.subproject("reserved").PACKAGES)");
+    CHECK_MESSAGE(false, "expected a reserved-name error");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("assigns PROJECT_ROOT") != std::string::npos);
+    CHECK(msg.find(fixture_path(fs::path{ "reserved" } / "envy.lua").string()) !=
+          std::string::npos);
+  }
+}
+
+TEST_CASE("a superproject copying a subproject's globals keeps its own envy") {
+  auto m{ load_super(R"(
+    for k, v in pairs(envy.subproject("sub")) do _ENV[k] = v end
+    PACKAGES = { { spec = "root.tool@r1", source = envy.PROJECT_ROOT .. "/seen.lua",
+                   options = { sub = envy.IS_SUBPROJECT } } }
+  )") };
+
+  auto const *root_tool{ find_pkg(*m, "root.tool@r1") };
+  REQUIRE(root_tool != nullptr);
+  CHECK(local_path(root_tool) == fixture_path("seen.lua"));
+  CHECK(root_tool->serialized_options == R"({["sub"]=false})");
+}
+
+TEST_CASE("a subproject re-exporting a nested one wholesale keeps its own root") {
+  auto m{ load_super(R"(
+    local r = envy.subproject("reexport")
+    PACKAGES = {
+      { spec = "r.field@r1", source = r.PROJECT_ROOT .. "/a.lua" },
+      { spec = "r.seen@r1", source = r.ROOT_SEEN_HERE .. "/b.lua" },
+    }
+  )") };
+
+  auto const *field{ find_pkg(*m, "r.field@r1") };
+  REQUIRE(field != nullptr);
+  CHECK(local_path(field) == fixture_path(fs::path{ "reexport" } / "a.lua"));
+  auto const *seen{ find_pkg(*m, "r.seen@r1") };
+  REQUIRE(seen != nullptr);
+  CHECK(local_path(seen) == fixture_path(fs::path{ "reexport" } / "b.lua"));
+}
+
+TEST_CASE("one subproject reached twice in a run is no cycle") {
+  auto m{ load_super(R"(
+    PACKAGES = envy.extend(envy.subproject("nested").PACKAGES,
+                           envy.subproject("sub").PACKAGES)
+  )") };
+  CHECK(find_pkg(*m, "nested.tool@r1") != nullptr);
+  CHECK(find_pkg(*m, "sub.tool@r1") != nullptr);
+}
+
+TEST_CASE("envy.subproject keeps a nested subproject's own anchor") {
+  auto m{ load_super(R"(PACKAGES = envy.subproject("nested").PACKAGES)") };
 
   auto const *nested_tool{ find_pkg(*m, "nested.tool@r1") };
   REQUIRE(nested_tool != nullptr);
@@ -2465,16 +2589,16 @@ TEST_CASE("envy.import keeps a nested import's own anchor") {
   CHECK(local_path(sub_tool) == fixture_path(fs::path{ "sub" } / "specs" / "tool.lua"));
 }
 
-TEST_CASE("envy.import never stamps the importing manifest's own declarations") {
-  // The sandbox reads globals through __index, so a fragment that assigns no PACKAGES
-  // or BUNDLES must not resolve to -- and get tagged with -- the importer's.
+TEST_CASE("envy.subproject never stamps the superproject's own declarations") {
+  // The sandbox reads globals through __index, so a subproject that assigns no PACKAGES
+  // or BUNDLES must not resolve to -- and get tagged with -- the superproject's.
   auto m{ load_super(R"(
     BUNDLES = { tools = { identity = "root.bundle@r1", source = "bundles/tools" } }
     PACKAGES = {
       { spec = "root.tool@r1", source = "root_spec.lua" },
       { spec = "root.bundled@r1", bundle = "tools" },
     }
-    PACKAGE_DEPOTS = envy.import("depots_only").PACKAGE_DEPOTS
+    PACKAGE_DEPOTS = envy.subproject("depots_only").PACKAGE_DEPOTS
   )") };
 
   auto const *root_tool{ find_pkg(*m, "root.tool@r1") };
@@ -2497,8 +2621,8 @@ TEST_CASE("a superproject merges its own PACKAGE_DEPOTS with two subprojects'") 
   auto m{ load_super(R"(
     PACKAGES = {}
     PACKAGE_DEPOTS = envy.extend({ "https://root.invalid/index.txt" },
-                                 envy.import("depots_only").PACKAGE_DEPOTS,
-                                 envy.import("depots_fetch").PACKAGE_DEPOTS)
+                                 envy.subproject("depots_only").PACKAGE_DEPOTS,
+                                 envy.subproject("depots_fetch").PACKAGE_DEPOTS)
   )") };
 
   REQUIRE(m->package_depots.size() == 3);
@@ -2513,49 +2637,66 @@ TEST_CASE("a superproject merges its own PACKAGE_DEPOTS with two subprojects'") 
   };
   auto const *text{ std::get_if<std::string>(&result) };
   REQUIRE(text);
-  CHECK(*text == "depots_fetch");  // read from the subproject's own globals
+  CHECK(*text == "depots_fetch|true|" +  // the subproject's own globals and envy
+                     envy::util_normalized_path(fixture_path("depots_fetch")));
 }
 
-TEST_CASE("envy.import works from a manifest path with no directory component") {
-  std::string const script{ "-- @envy bin \"tools\"\nPACKAGES = envy.import(\"" +
-                            (import_root() / "sub").generic_string() + "\").PACKAGES" };
+TEST_CASE("envy.subproject works from a manifest path with no directory component") {
+  std::string const script{ "-- @envy bin \"tools\"\nPACKAGES = envy.subproject(\"" +
+                            (subproject_root() / "sub").generic_string() +
+                            "\").PACKAGES" };
 
   auto m{ envy::manifest::load(script.c_str(), fs::path{ "envy.lua" }) };
 
   CHECK(find_pkg(*m, "sub.tool@r1") != nullptr);
 }
 
-TEST_CASE("envy.import rejects an import cycle") {
-  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.import("cycle_a").PACKAGES)"),
-                       doctest::Contains("import cycle"),
-                       std::runtime_error);
+TEST_CASE("envy.subproject rejects a subproject cycle, listing the chain") {
+  try {
+    load_super(R"(PACKAGES = envy.subproject("cycle_a").PACKAGES)");
+    CHECK_MESSAGE(false, "expected a cycle error");
+  } catch (std::runtime_error const &e) {
+    std::string const msg{ e.what() };
+    CHECK(msg.find("subproject cycle") != std::string::npos);
+    CHECK(msg.find("cycle_a") != std::string::npos);
+    CHECK(msg.find("cycle_b") != std::string::npos);
+  }
 }
 
-TEST_CASE("envy.import names both the argument and the resolved path when absent") {
-  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.import("nope").PACKAGES)"),
+TEST_CASE("envy.subproject names both the argument and the resolved path when absent") {
+  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.subproject("nope").PACKAGES)"),
                        doctest::Contains("'nope' not found (resolved to "),
                        std::runtime_error);
+  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.subproject("..").PACKAGES)"),
+                       doctest::Contains("'..' not found (resolved to "),
+                       std::runtime_error);  // a directory, but no envy.lua in it
 }
 
-TEST_CASE("envy.import errors when the imported manifest requires a newer envy") {
+TEST_CASE("envy.subproject refuses a directory named envy.lua") {
+  CHECK_THROWS_WITH_AS(load_super(R"(PACKAGES = envy.subproject("dirmanifest").PACKAGES)"),
+                       doctest::Contains("envy.subproject: 'dirmanifest' not found"),
+                       std::runtime_error);
+}
+
+TEST_CASE("envy.subproject errors when a subproject requires a newer envy") {
   std::string const script{
     "-- @envy bin \"tools\"\n-- @envy version \"1.0.0\"\n"
-    "PACKAGES = envy.import(\"version_newer\").PACKAGES"
+    "PACKAGES = envy.subproject(\"version_newer\").PACKAGES"
   };
 
   CHECK_THROWS_WITH_AS(
-      envy::manifest::load(script.c_str(), import_root() / "envy.lua"),
+      envy::manifest::load(script.c_str(), subproject_root() / "envy.lua"),
       doctest::Contains("requires envy 9.9.9, but the root manifest pins 1.0.0"),
       std::runtime_error);
 }
 
-TEST_CASE("envy.import accepts an imported manifest pinning an older envy") {
+TEST_CASE("envy.subproject accepts a subproject pinning an older envy") {
   std::string const script{
     "-- @envy bin \"tools\"\n-- @envy version \"1.0.0\"\n"
-    "PACKAGES = envy.import(\"version_older\").PACKAGES"
+    "PACKAGES = envy.subproject(\"version_older\").PACKAGES"
   };
 
-  auto m{ envy::manifest::load(script.c_str(), import_root() / "envy.lua") };
+  auto m{ envy::manifest::load(script.c_str(), subproject_root() / "envy.lua") };
 
   auto const *tool{ find_pkg(*m, "old.tool@r1") };
   REQUIRE(tool != nullptr);
@@ -2721,25 +2862,33 @@ TEST_CASE("a bundled module reads the manifest's own globals") {
   CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
 }
 
-TEST_CASE("a bundled module reads an importing fragment's globals") {
-  // A fragment assigns into its import sandbox; _G alone would leave VENDOR_ROOT nil.
+TEST_CASE("a bundled module reads a subproject's globals and envy") {
+  // A subproject assigns into its sandbox; _G alone would leave VENDOR_ROOT nil.
   auto m{ load_super(
-      "local deps = envy.import(\"bundle_globals\")\n"
+      "local deps = envy.subproject(\"bundle_globals\")\n"
       "VENDOR_ROOT = deps.VENDOR_ROOT\n"
       "PACKAGES = deps.PACKAGES") };
 
-  REQUIRE(m->packages.size() == 1);
-  CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+  auto const *generic{ find_pkg(*m, "local.generic@r1") };
+  REQUIRE(generic != nullptr);
+  CHECK(generic->serialized_options == R"({["seen"]="third_party"})");
+
+  auto const *probe{ find_pkg(*m, "local.envy_probe@r1") };
+  REQUIRE(probe != nullptr);
+  CHECK(probe->serialized_options == R"({["sub"]=true})");
+  CHECK(local_path(probe) == fixture_path(fs::path{ "bundle_globals" } / "probe.lua"));
 }
 
-TEST_CASE("envy.loadenv reads the globals of the fragment that called it") {
+TEST_CASE("envy.loadenv reads the globals and envy of the subproject that called it") {
   auto m{ load_super(
-      "local deps = envy.import(\"loadenv_globals\")\n"
+      "local deps = envy.subproject(\"loadenv_globals\")\n"
       "VENDOR_ROOT = deps.VENDOR_ROOT\n"
       "PACKAGES = deps.PACKAGES") };
 
   REQUIRE(m->packages.size() == 1);
   CHECK(m->packages[0]->serialized_options == R"({["seen"]="third_party"})");
+  CHECK(local_path(m->packages[0]) ==
+        fixture_path(fs::path{ "loadenv_globals" } / "r.lua"));
 }
 
 TEST_CASE("envy.loadenv out of a bundled module resolves no bundle of its own") {

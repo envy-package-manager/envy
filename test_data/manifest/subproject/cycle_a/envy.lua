@@ -1,3 +1,3 @@
 -- @envy bin "tools"
-local b = envy.import("../cycle_b")
+local b = envy.subproject("../cycle_b")
 PACKAGES = b.PACKAGES

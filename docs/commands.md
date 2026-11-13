@@ -45,11 +45,11 @@ Because those scripts resolve their project by walking up from the bin dir, `dep
 
 ### Bootstrap boundary
 
-The root manifest's header is the sole bootstrap authority. A manifest pulled in with `envy.import` is a file the root *reads*, not a project envy joins: its `version`, `sha256sums`, `mirror`, `cache-local`, `cache-mode`, `state-dir`, `bin`, `deploy` and `root` are inert—never read by the launchers, never re-exec, never pick a cache tree, never deploy. One tree, one cache root, one envy binary per run, all decided from the root header before any Lua runs.
+The root manifest's header is the sole bootstrap authority. A subproject pulled in with `envy.subproject` is a manifest the root *reads*, not a project envy joins: its `version`, `sha256sums`, `mirror`, `cache-local`, `cache-mode`, `state-dir`, `bin`, `deploy` and `root` are inert—never read by the launchers, never re-exec, never pick a cache tree, never deploy. One tree, one cache root, one envy binary per run, all decided from the root header before any Lua runs.
 
-The one exception is advisory and in-binary: an imported `@envy version` above the root pin is an error (bootstrap already chose the binary from the root header), and any other mismatch warns. Imports are visible as `manifest_imported{path, importer}`; discovery never sees the file, so no `manifest_resolved` names it.
+The one exception is advisory and in-binary: a subproject's `@envy version` above the root pin is an error (bootstrap already chose the binary from the root header), and any other mismatch warns. Subprojects are visible as `subproject_loaded{path, parent}`; discovery never sees the file, so no `manifest_resolved` names it.
 
-Globals follow the same rule. `PACKAGES` and `BUNDLES` are read back out of an import; `DEFAULT_SHELL` and `VENDOR_ROOT` are read only from the root state, so an imported manifest that sets one must have the root adopt it (`DEFAULT_SHELL = envy.import("sub").DEFAULT_SHELL`) or the declaration is an error naming the file—never a silent drop. `PACKAGE_DEPOTS` is also root-only but exempt: a depot only accelerates, so an imported one sits inert in the import table—never fetched—until the root adopts or merges it.
+Globals follow the same rule. `PACKAGES` and `BUNDLES` are read back out of a subproject; `DEFAULT_SHELL` and `VENDOR_ROOT` are read only from the root state, so a subproject that sets one must have the root adopt it (`DEFAULT_SHELL = envy.subproject("sub").DEFAULT_SHELL`) or the declaration is an error naming the file—never a silent drop. `PACKAGE_DEPOTS` is also root-only but exempt: a depot only accelerates, so a subproject's sits inert in its table—never fetched—until the root adopts or merges it.
 
 ## Subcommands
 

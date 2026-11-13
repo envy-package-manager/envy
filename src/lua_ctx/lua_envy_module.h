@@ -30,7 +30,7 @@ struct lua_module_bundle {
   std::filesystem::path root;
 };
 
-// The globals the calling file writes to: an imported fragment assigns into its own
+// The globals the calling file writes to: a subproject assigns into its own
 // sandbox, not _G, and every sandbox chains to _G anyway.
 sol::table lua_module_caller_scope(sol::this_environment const &te, sol::state_view lua);
 

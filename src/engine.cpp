@@ -1286,7 +1286,7 @@ void engine::run_default_shell_step() {
 
   // The manifest's directory, not the CWD: DEFAULT_SHELL belongs to the project, and a
   // command anchored elsewhere (--project, --manifest) would otherwise run it in the
-  // caller's tree -- the same cwd SETUP verbs get, and what envy.PROJECT_ROOT names.
+  // caller's tree -- the same cwd SETUP verbs get, and the root's envy.PROJECT_ROOT.
   phase_context ctx{ .eng = this,
                      .p = default_shell_consumer_.get(),
                      .run_dir = manifest_->project_root,
@@ -1390,7 +1390,7 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
 
   std::vector<pkg_cfg const *> targets;
   for (auto const &query : queries) {
-    // Distinct packages, not entries: envy.import can splice two declarations of one
+    // Distinct packages, not entries: envy.subproject can splice two declarations of one
     // key, which ensure_pkg treats as one package. Sorted so the message is reproducible.
     std::map<std::string, pkg_cfg const *> matches;
     for (auto const *pkg : packages) {

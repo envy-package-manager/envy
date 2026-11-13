@@ -7,10 +7,9 @@
 namespace envy {
 
 // Lua registry indices for envy runtime state
-inline constexpr int ENVY_OPTIONS_RIDX = 100;      // Options table for phase execution
-inline constexpr int ENVY_PHASE_CTX_RIDX = 103;    // Phase context pointer for envy.* APIs
-inline constexpr int ENVY_IMPORTS_RIDX = 104;      // BUNDLES tables of imported manifests
-inline constexpr int ENVY_IMPORT_ENVS_RIDX = 105;  // {path, env} of every import
+inline constexpr int ENVY_OPTIONS_RIDX = 100;    // Options table for phase execution
+inline constexpr int ENVY_PHASE_CTX_RIDX = 103;  // Phase context pointer for envy.* APIs
+inline constexpr int ENVY_SUBPROJECT_ENVS_RIDX = 105;  // {path, env} of every subproject
 
 // Install envy globals, platform constants, and custom functions into Lua state.
 // project_root becomes envy.PROJECT_ROOT; empty leaves it nil (no project: `envy lua`).

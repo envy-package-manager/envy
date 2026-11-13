@@ -11,7 +11,8 @@
 ---@field ARCH "arm64"|"x86_64" CPU architecture
 ---@field PLATFORM_ARCH string Platform-architecture pair (e.g., "darwin-arm64")
 ---@field EXE_EXT ""|".exe" Executable extension ("" on Unix, ".exe" on Windows)
----@field PROJECT_ROOT string? Root manifest's directory, symlinks resolved; nil outside a project (`envy lua`)
+---@field PROJECT_ROOT string? This project's directory, symlinks resolved: in a subproject's manifest its own, elsewhere the root manifest's; nil outside a project (`envy lua`)
+---@field IS_SUBPROJECT boolean? Manifest scope: true in a manifest loaded by envy.subproject, false in the root
 envy = {}
 
 --------------------------------------------------------------------------------
@@ -256,17 +257,18 @@ function envy.loadenv_bundle(alias, module) end
 ---@type ENVY_BUNDLE|nil
 ENVY_BUNDLE = nil
 
----Import another project's manifest into a sandboxed environment (manifest scope only)
----Path is relative to the calling manifest; a directory argument appends envy.lua
----Imported entries keep resolving their relative paths and bundle aliases against the
----imported manifest, so a superproject can splice them into PACKAGES untouched
----@param path string Manifest file or directory, relative to the calling manifest
----@return table env Table containing globals defined in the imported manifest
-function envy.import(path) end
+---@class envy.subproject_table
+---@field PROJECT_ROOT string The subproject's directory, symlinks resolved
+---@field PACKAGES table? The subproject's PACKAGES, entries anchored on the subproject
+---@field BUNDLES table? The subproject's BUNDLES
+---@field [string] any Every other global the subproject assigned
 
----Absolute path of the manifest that imported this one; nil when run standalone
----@type string|nil
-ENVY_IMPORTER = nil
+---Load a subproject's envy.lua into a sandboxed environment (manifest scope only)
+---Its entries keep resolving their relative paths and bundle aliases against the
+---subproject, so a superproject can splice them into PACKAGES untouched
+---@param dir string Directory holding the subproject's envy.lua, relative to the caller
+---@return envy.subproject_table sub The globals the subproject assigned, plus PROJECT_ROOT
+function envy.subproject(dir) end
 
 ---Validate current options against a declarative schema.
 ---Checks required, type (incl. semver), range, choices, then custom validators.
@@ -461,7 +463,7 @@ BUNDLES = nil
 ---Default shell configuration for all phases. DEPENDS lists PACKAGES identities,
 ---installed lazily on the first string verb that needs a shell and before it runs;
 ---the table form requires SHELL to be a function, since only a function can name a
----package that does not exist yet. Root manifest only: an imported manifest that
+---package that does not exist yet. Root manifest only: a subproject that
 ---declares DEFAULT_SHELL is an error unless the root adopts the value.
 ---Bootstrap code always gets the platform built-in instead: anything in a DEPENDS or
 ---source.dependencies closure, and Lua running in the manifest itself (a manifest
