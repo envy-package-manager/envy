@@ -9,8 +9,8 @@
 
 namespace envy {
 
-// Install envy.subproject into a manifest Lua state. Manifest scope only: composing
-// manifests is a load-time act, so no spec state gets it.
+// Install envy.subproject, and envy.IS_SUBPROJECT = false, into the root manifest's Lua
+// state. Manifest scope only: composing manifests is a load-time act.
 //
 // Bootstrap boundary: the root manifest's header is the sole bootstrap authority.
 // `root_version` is compared against a subproject's '@envy version' and nothing else is

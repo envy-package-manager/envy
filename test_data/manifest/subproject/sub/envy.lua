@@ -13,7 +13,8 @@ PACKAGES = {
 }
 
 if not envy.IS_SUBPROJECT then
-  PACKAGES[#PACKAGES + 1] = { spec = "sub.standalone@r1", source = "specs/standalone.lua" }
+  PACKAGES[#PACKAGES + 1] = { spec = "sub.standalone@r1", source = "specs/standalone.lua",
+                              options = { sub = envy.IS_SUBPROJECT } }
 end
 
 ROOT_SEEN = envy.PROJECT_ROOT -- read while this file runs

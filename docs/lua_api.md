@@ -10,15 +10,17 @@ envy.ARCH          -- "arm64" | "x86_64"
 envy.PLATFORM_ARCH -- e.g., "darwin-arm64", "linux-x86_64"
 envy.EXE_EXT       -- "" on Unix, ".exe" on Windows
 envy.PROJECT_ROOT  -- this project's dir, symlinks resolved; nil under `envy lua`
-envy.IS_SUBPROJECT -- manifest scope: true when loaded by envy.subproject, false in the root
+envy.IS_SUBPROJECT -- manifest scope: true when loaded by envy.subproject; false in the root,
+                   -- --subproject included (that manifest is the root)
 ```
 
 `PROJECT_ROOT` is the root of the project the code is written for. A manifest writes for its
-own: a subproject's sees its own directory however the run was anchored, and so do the
-functions and modules it defines. A spec writes for the project being installed: spec top
-level, every phase and bundle validation see the root manifest's directory—the cwd SETUP
-verbs and `DEFAULT_SHELL` run in. Keep it out of `options` and cache-managed payloads: cache
-entries are shared across projects.
+own: a subproject's sees its own directory however the run was anchored, and so does the Lua
+it defines—functions, modules it loads, a `source.fetch` or depot `FETCH` envy runs later.
+A spec writes for the project being installed: spec top level, every phase and bundle
+validation see the root manifest's directory—the cwd SETUP verbs and `DEFAULT_SHELL` run
+in. Keep it out of `options` and cache-managed payloads: cache entries are shared across
+projects.
 
 ## Shell Constants
 
@@ -542,15 +544,18 @@ Load a subproject's `envy.lua` into a sandboxed environment. Manifest scope only
 **Arguments:**
 - `dir` — the directory holding the subproject's `envy.lua`, relative to the calling manifest
 
-**Returns:** Table of all globals the subproject assigned, `PACKAGES` and `BUNDLES` included,
-plus `PROJECT_ROOT`: the subproject's directory.
+**Returns:** Table of all globals the subproject assigned, `PACKAGES` and `BUNDLES` included.
+`sub.PROJECT_ROOT` reads the subproject's directory without being one of them, so copying the
+table with `pairs` takes only what the subproject wrote.
 
 Unlike `envy.loadenv`, a subproject's declarations stay tied to the file that wrote them:
 relative `source` paths resolve against its directory, and a `bundle = "alias"` resolves
 against *its* `BUNDLES` — so re-exporting `BUNDLES` is unnecessary. Inside, `envy.PROJECT_ROOT`
 is the subproject's own directory and `envy.IS_SUBPROJECT` is true; functions it defines keep
-both when the superproject calls them. A spec the subproject hosts but never declares is
-reached through `sub.PROJECT_ROOT`.
+both when the superproject calls them. Its `envy` is its own: writes to it stay in the
+subproject. A spec it hosts but never declares is reached through `sub.PROJECT_ROOT`. Entries
+a helper returns belong to whoever splices them in—relative paths and bundle aliases resolve
+there—so a helper builds its paths from `envy.PROJECT_ROOT`.
 
 ```lua
 -- superproject envy.lua

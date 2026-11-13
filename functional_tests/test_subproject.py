@@ -126,15 +126,30 @@ class TestSubproject(EnvyTestCase):
         self.assertIn("local.standalone@v1", run.outcomes())
 
     def test_subproject_loaded_names_the_file_and_its_parent(self):
+        """Two deep: each event names the manifest that called envy.subproject."""
         self.write_sub()
-        super_manifest = self.write_super()
-        run = self.sync(super_manifest)
+        mid = self.tree / "mid"
+        mid.mkdir()
+        (mid / "envy.lua").write_text(
+            'PACKAGES = envy.subproject("../sub").PACKAGES\n', encoding="utf-8"
+        )
+        top = self.tree / "envy.lua"
+        top.write_text(
+            '-- @envy bin "envy-bin"\n'
+            f'-- @envy version "{PINNED_VERSION}"\n'
+            'PACKAGES = envy.subproject("mid").PACKAGES\n',
+            encoding="utf-8",
+        )
+        run = self.sync(top)
 
         self.assertEqual(0, run.returncode, run.stderr)
-        events = run.events("subproject_loaded")
-        self.assertEqual(1, len(events), f"expected one subproject: {events}")
-        self.assertPathEndsWith(events[0].raw["path"], "sub/envy.lua")
-        self.assertPathEndsWith(events[0].raw["parent"], super_manifest.name)
+        parents = {
+            Path(e.raw["path"]).resolve(): Path(e.raw["parent"]).resolve()
+            for e in run.events("subproject_loaded")
+        }
+        self.assertEqual(
+            {self.sub / "envy.lua": mid / "envy.lua", mid / "envy.lua": top}, parents
+        )
 
     def test_discovery_never_resolves_the_subproject_manifest(self):
         self.write_sub()

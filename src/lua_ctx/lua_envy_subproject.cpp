@@ -62,13 +62,28 @@ void tag_declarations(sol::table const &env, std::string const &base) {
 // sandbox; PACKAGE_DEPOTS only accelerates, so leaving one unadopted is harmless.
 constexpr char const *kRootOnlyGlobals[]{ "DEFAULT_SHELL", "VENDOR_ROOT" };
 
-sol::table registry_list(sol::state_view lua, int ridx) {
-  if (sol::object const obj{ lua.registry()[ridx] }; obj.is<sol::table>()) {
+sol::table subproject_list(sol::state_view lua) {
+  if (sol::object const obj{ lua.registry()[ENVY_SUBPROJECT_ENVS_RIDX] };
+      obj.is<sol::table>()) {
     return obj.as<sol::table>();
   }
   sol::table const list{ lua.create_table() };
-  lua.registry()[ridx] = list;
+  lua.registry()[ENVY_SUBPROJECT_ENVS_RIDX] = list;
   return list;
+}
+
+// Every subproject loaded so far, in load order: its manifest's path and its globals.
+void for_each_subproject(sol::state_view lua,
+                         function_ref<void(std::string const &, sol::table const &)> fn) {
+  sol::object const obj{ lua.registry()[ENVY_SUBPROJECT_ENVS_RIDX] };
+  if (!obj.is<sol::table>()) { return; }
+  sol::table const list{ obj.as<sol::table>() };
+  for (size_t i{ 1 }, n{ list.size() }; i <= n; ++i) {
+    if (sol::object const e{ list[i] }; e.is<sol::table>()) {
+      sol::table const entry{ e.as<sol::table>() };
+      fn(entry.get<std::string>("path"), entry.get<sol::table>("env"));
+    }
+  }
 }
 
 // Advisory only, and only against the root pin: a subproject asking for a newer envy
@@ -125,7 +140,7 @@ void lua_envy_subproject_install(sol::state &lua,
                 { kFn, ": '", arg, "' is not a directory holding an envy.lua" });
           }
           fs::path const manifest{ dir / "envy.lua" };
-          if (!fs::exists(manifest)) {
+          if (!fs::is_regular_file(manifest)) {
             throw_runtime_error(
                 { kFn, ": '", arg, "' not found (resolved to ", manifest, ")" });
           }
@@ -146,17 +161,15 @@ void lua_envy_subproject_install(sol::state &lua,
                 { reinterpret_cast<char const *>(content.data()), content.size() }),
             resolved);
 
-        // Sandbox with the stdlib visible, as envy.loadenv builds: assigned globals land
-        // here rather than in the superproject's. Its own envy carries what differs.
+        // Sandbox over _G, as envy.loadenv builds: assigned globals land here. Its envy
+        // and later PROJECT_ROOT sit on a layer between, so pairs() never yields them.
         sol::table const shared_envy = lua_view.globals()["envy"];
-        sol::table own_envy{
-          lua_view.create_table_with("IS_SUBPROJECT", true, kProjectRootKey, project_root)
-        };
-        own_envy[sol::metatable_key] = lua_view.create_table_with("__index", shared_envy);
-        sol::table env{ lua_view.create_table() };
-        env[sol::metatable_key] =
-            lua_view.create_table_with("__index", lua_view.globals());
-        env["envy"] = own_envy;
+        sol::environment own_envy{ lua_view, sol::create, shared_envy };
+        own_envy["IS_SUBPROJECT"] = true;
+        own_envy[kProjectRootKey] = project_root;
+        sol::environment scope{ lua_view, sol::create, lua_view.globals() };
+        scope["envy"] = own_envy;
+        sol::environment const env{ lua_view, sol::create, scope };
 
         sol::protected_function const loadfile{ lua_view["loadfile"] };
         sol::protected_function_result load_res{ loadfile(resolved.string(), "t", env) };
@@ -196,20 +209,15 @@ void lua_envy_subproject_install(sol::state &lua,
                                 resolved,
                                 " assigns PROJECT_ROOT, which envy sets on its table" });
         }
-        env.raw_set(kProjectRootKey, project_root);
+        scope[kProjectRootKey] = project_root;
 
-        // Every subproject is remembered, so the root-only globals it declared can be
-        // matched against the root's once the root chunk has finished assigning.
-        sol::table envs{ registry_list(lua_view, ENVY_SUBPROJECT_ENVS_RIDX) };
-        envs[envs.size() + 1] =
+        // Remembered for the root-only-globals check once the root chunk has finished,
+        // and for the fetch-function lookup into this subproject's BUNDLES.
+        sol::table list{ subproject_list(lua_view) };
+        list[list.size() + 1] =
             lua_view.create_table_with("path", resolved.string(), "env", env);
 
         tag_declarations(env, util_normalized_path(resolved));
-        if (sol::object const bundles{ env.raw_get<sol::object>("BUNDLES") };
-            bundles.is<sol::table>()) {
-          sol::table list{ registry_list(lua_view, ENVY_SUBPROJECT_BUNDLES_RIDX) };
-          list[list.size() + 1] = bundles;
-        }
 
         ENVY_TRACE(subproject_loaded,
                    "",
@@ -220,17 +228,7 @@ void lua_envy_subproject_install(sol::state &lua,
 }
 
 void lua_envy_subproject_validate_root_globals(sol::state_view lua) {
-  sol::object const obj{ lua.registry()[ENVY_SUBPROJECT_ENVS_RIDX] };
-  if (!obj.is<sol::table>()) { return; }
-
-  sol::table const list{ obj.as<sol::table>() };
-  for (size_t i{ 1 }, n{ list.size() }; i <= n; ++i) {
-    sol::object const e{ list[i] };
-    if (!e.is<sol::table>()) { continue; }
-    sol::table const entry{ e.as<sol::table>() };
-    sol::table const env{ entry.get<sol::table>(
-        "env") };  // MSVC: proxy brace-init is ambiguous
-
+  for_each_subproject(lua, [&](std::string const &path, sol::table const &env) {
     for (char const *name : kRootOnlyGlobals) {
       sol::object const declared{ env.raw_get<sol::object>(name) };
       if (!declared.valid() || declared.get_type() == sol::type::lua_nil) { continue; }
@@ -240,7 +238,7 @@ void lua_envy_subproject_validate_root_globals(sol::state_view lua) {
       throw_runtime_error(
           { kFn,
             ": ",
-            entry.get<std::string>("path"),
+            path,
             " sets ",
             name,
             ", which is read only from the root manifest; assign it there (e.g. ",
@@ -249,20 +247,16 @@ void lua_envy_subproject_validate_root_globals(sol::state_view lua) {
             name,
             ")" });
     }
-  }
+  });
 }
 
 std::vector<sol::table> lua_envy_subproject_bundle_tables(sol::state_view lua) {
   std::vector<sol::table> tables;
-  if (sol::object const obj{ lua.registry()[ENVY_SUBPROJECT_BUNDLES_RIDX] };
-      obj.is<sol::table>()) {
-    sol::table const list{ obj.as<sol::table>() };
-    for (size_t i{ 1 }, n{ list.size() }; i <= n; ++i) {
-      if (sol::object const e{ list[i] }; e.is<sol::table>()) {
-        tables.push_back(e.as<sol::table>());
-      }
+  for_each_subproject(lua, [&](std::string const &, sol::table const &env) {
+    if (sol::object const b{ env.raw_get<sol::object>("BUNDLES") }; b.is<sol::table>()) {
+      tables.push_back(b.as<sol::table>());
     }
-  }
+  });
   return tables;
 }
 

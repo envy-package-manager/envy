@@ -1286,7 +1286,7 @@ void engine::run_default_shell_step() {
 
   // The manifest's directory, not the CWD: DEFAULT_SHELL belongs to the project, and a
   // command anchored elsewhere (--project, --manifest) would otherwise run it in the
-  // caller's tree -- the same cwd SETUP verbs get, and what envy.PROJECT_ROOT names.
+  // caller's tree -- the same cwd SETUP verbs get, and the root's envy.PROJECT_ROOT.
   phase_context ctx{ .eng = this,
                      .p = default_shell_consumer_.get(),
                      .run_dir = manifest_->project_root,
