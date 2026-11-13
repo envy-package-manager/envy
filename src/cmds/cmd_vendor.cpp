@@ -66,7 +66,7 @@ void cmd_vendor::execute() {
     throw_runtime_error({ "vendor: no package in this manifest asks to be vendored" });
   }
 
-  // One entry per package however it was reached: envy.import can splice two
+  // One entry per package however it was reached: envy.subproject can splice two
   // declarations of one key, and two queries can resolve to one package. The engine
   // treats those as one package, so the report must not name it twice.
   auto const targets{ [&] {

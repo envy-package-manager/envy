@@ -277,7 +277,6 @@ set(ENVY_BASE_SOURCES
     src/lua_ctx/lua_envy_extract.cpp
     src/lua_ctx/lua_envy_fetch.cpp
     src/lua_ctx/lua_envy_file_ops.cpp
-    src/lua_ctx/lua_envy_import.cpp
     src/lua_ctx/lua_envy_loadenv_bundle.cpp
     src/lua_ctx/lua_envy_loadenv_spec.cpp
     src/lua_ctx/lua_envy_module.cpp
@@ -286,6 +285,7 @@ set(ENVY_BASE_SOURCES
     src/lua_ctx/lua_envy_path.cpp
     src/lua_ctx/lua_envy_product.cpp
     src/lua_ctx/lua_envy_run.cpp
+    src/lua_ctx/lua_envy_subproject.cpp
     src/lua_ctx/lua_phase_context.cpp
     src/product_util.cpp
     src/reexec.cpp

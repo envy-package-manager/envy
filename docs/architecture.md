@@ -8,7 +8,7 @@ All script-global variables are uppercase: manifests export `PACKAGES`, plus opt
 
 **Platform-specific packages:** Manifests are Lua scripts—use conditionals and `envy.extend()` to combine common and OS-specific package lists.
 
-**Composition:** `envy.import(path)` runs a subproject's manifest in a sandbox and returns its globals; its entries keep anchoring relative paths and bundle aliases on the imported manifest's directory, and it sees `ENVY_IMPORTER` so a standalone-only branch can gate on it. Imported headers are inert—see the bootstrap boundary in `docs/commands.md`.
+**Composition:** `envy.subproject(dir)` runs a subproject's `envy.lua` in a sandbox and returns its globals plus `PROJECT_ROOT`; its entries keep anchoring relative paths and bundle aliases on the subproject's directory, and inside it `envy.PROJECT_ROOT` is that directory and `envy.IS_SUBPROJECT` is true, so a standalone-only branch can gate on it. Subproject headers are inert—see the bootstrap boundary in `docs/commands.md`.
 
 ```lua
 -- project/envy.lua
@@ -109,7 +109,7 @@ PACKAGE_DEPOTS = {
 
 Semantics: all depot manifests merge into one flat index before any import proceeds (order irrelevant—cache keys are hash-unique; duplicate keys keep the first, differing SHA256 warns). Fetching is lazy: a single-step `#depot` engine task starts on first import that needs it; `DEPENDS` closures are flagged depot-bootstrap—they always source-build (breaks circularity) and must use strong dependencies only. URI download failures warn and degrade to source builds; a failed `DEPENDS` build or throwing `FETCH` is fatal. `--ignore-depot`/`ENVY_IGNORE_DEPOT` skips the task entirely (no deps spawn). Depot config is never hashed.
 
-Root manifest only, but never an error: an imported manifest's `PACKAGE_DEPOTS` is inert—never fetched, its `DEPENDS` never built—until the root adopts it. Adopting trusts the depot's artifacts; merge freely (`PACKAGE_DEPOTS = envy.extend({}, a.PACKAGE_DEPOTS, b.PACKAGE_DEPOTS)`).
+Root manifest only, but never an error: a subproject's `PACKAGE_DEPOTS` is inert—never fetched, its `DEPENDS` never built—until the root adopts it. Adopting trusts the depot's artifacts; merge freely (`PACKAGE_DEPOTS = envy.extend({}, a.PACKAGE_DEPOTS, b.PACKAGE_DEPOTS)`).
 
 ## Shell Configuration
 
@@ -144,7 +144,7 @@ DEFAULT_SHELL = {
 - **Bootstrap-shell rule:** the platform built-in is used wherever the manifest shell cannot exist yet—no package context at all, a package in *any* bootstrap closure (`DEFAULT_SHELL` `DEPENDS`, `PACKAGE_DEPOTS` `DEPENDS`, `source.dependencies`), and any Lua running in the manifest state (a manifest bundle's `source.fetch`, a depot `FETCH`, the `SHELL` function itself). One rule, not three carve-outs: bootstrap work runs before the shell exists, and evaluating the shell needs the manifest's single non-recursive Lua lock, so it can never nest inside itself. Bootstrap specs need no annotation—membership is enough.
 - Lazy: `DEPENDS` starts on the first request for a shell, so a run that executes no string verb never fetches the interpreter—`envy deploy` and a bare `envy product` listing resolve only, and ask for one just if a custom fetch runs a string verb. `DEPENDS` is interned during resolution regardless, so a bad identity still fails early.
 - `DEPENDS` is a strong-only closure, like `source.dependencies`; a weak reference in it is an error. `DEPENDS` without a function `SHELL` is rejected.
-- Root manifest only: an imported manifest that declares `DEFAULT_SHELL` is an error unless the root adopts the value—see the bootstrap boundary in `docs/commands.md`.
+- Root manifest only: a subproject that declares `DEFAULT_SHELL` is an error unless the root adopts the value—see the bootstrap boundary in `docs/commands.md`.
 - The function authorizes against a synthetic consumer, `envy.DEFAULT_SHELL@v1`, holding one edge per `DEPENDS` entry—wired through the same `wire_dependency` path as every other edge, so it appears in the access traces and in errors.
 - Traced as `default_shell_resolving{depends}` then `default_shell_resolved{shell}`; a package's block on the depot is `depot_wait{duration_ms, result}`.
 
@@ -661,9 +661,10 @@ Specs run only on host platform—no cross-deployment. Single spec file adapts v
 - `envy.ARCH` — `"arm64"`, `"x86_64"`
 - `envy.PLATFORM_ARCH` — combined: `"darwin-arm64"`, `"linux-x86_64"`
 - `envy.EXE_EXT` — `""`, or `".exe"` on Windows
-- `envy.PROJECT_ROOT` — root manifest's directory; nil when there is no project (`envy lua`)
+- `envy.PROJECT_ROOT` — this project's directory: a subproject's own in its manifest, the root manifest's everywhere else; nil when there is no project (`envy lua`)
+- `envy.IS_SUBPROJECT` — manifest scope: true in a manifest loaded by `envy.subproject`, false in the root
 
-`ENVY_SHELL` (the shell constants), `ENVY_IMPORTER` and `ENVY_BUNDLE` are the only bare
+`ENVY_SHELL` (the shell constants) and `ENVY_BUNDLE` are the only bare
 globals envy installs.
 
 **Single-file with conditionals:**
@@ -794,7 +795,7 @@ end
 All three hand back the module's return value when it returned a table, the globals it
 assigned when it returned nothing — the rule `require` already teaches. Anything else is
 an error naming the module. The sandbox falls through to the globals of the file that
-loaded it, so a module reads an importing fragment's `VENDOR_ROOT`, not only `_G`'s. A module out of a bundle sees `ENVY_BUNDLE` (`identity`, `root`,
+loaded it, so a module reads a subproject's `VENDOR_ROOT` and `envy`, not only `_G`'s. A module out of a bundle sees `ENVY_BUNDLE` (`identity`, `root`,
 and the `alias` the caller reached it by — `nil` when resolved by identity), so a helper can
 name its own bundle without being handed the name; `nil` where no bundle is involved.
 

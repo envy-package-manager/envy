@@ -9,12 +9,16 @@ envy.PLATFORM      -- "darwin" | "linux" | "windows"
 envy.ARCH          -- "arm64" | "x86_64"
 envy.PLATFORM_ARCH -- e.g., "darwin-arm64", "linux-x86_64"
 envy.EXE_EXT       -- "" on Unix, ".exe" on Windows
-envy.PROJECT_ROOT  -- root manifest's dir, symlinks resolved; nil under `envy lua`
+envy.PROJECT_ROOT  -- this project's dir, symlinks resolved; nil under `envy lua`
+envy.IS_SUBPROJECT -- manifest scope: true when loaded by envy.subproject, false in the root
 ```
 
-`PROJECT_ROOT` is fixed per run—manifest, spec top level, every phase and bundle validation
-all see one value—and is the cwd SETUP verbs and `DEFAULT_SHELL` run in. Don't bake it into
-a cache-managed payload: cache entries are shared across projects.
+`PROJECT_ROOT` is the root of the project the code is written for. A manifest writes for its
+own: a subproject's sees its own directory however the run was anchored, and so do the
+functions and modules it defines. A spec writes for the project being installed: spec top
+level, every phase and bundle validation see the root manifest's directory—the cwd SETUP
+verbs and `DEFAULT_SHELL` run in. Keep it out of `options` and cache-managed payloads: cache
+entries are shared across projects.
 
 ## Shell Constants
 
@@ -455,12 +459,12 @@ Load Lua from a bundle at manifest scope, materializing the bundle first. Manife
 only — a spec reaches a bundle it declared with `envy.loadenv_spec`.
 
 **Arguments:**
-- `alias` — key of the `BUNDLES` table of the calling file; an imported fragment resolves its own
+- `alias` — key of the `BUNDLES` table of the calling file; a subproject resolves its own
 - `module` — module path using Lua dot syntax, same rules as `envy.loadenv_spec`
 
 **Returns:** the module, same rule as `envy.loadenv_spec`. The module sees `ENVY_BUNDLE`,
-`alias` included, and reads the globals of the file that loaded it — an imported fragment's
-`VENDOR_ROOT` included, not only `_G`'s.
+`alias` included, and reads the globals of the file that loaded it — a subproject's
+`VENDOR_ROOT` and `envy` included, not only `_G`'s.
 
 The bundle is fetched during the manifest's own global scope, earlier than the engine
 fetches bundles, so a helper's entries can go straight into `PACKAGES`. Declare the alias
@@ -531,47 +535,57 @@ local version = helpers.DEFAULT_VERSION
 local utils = envy.loadenv("lib.utils")
 ```
 
-### envy.import(path) → table
+### envy.subproject(dir) → table
 
-Import another project's manifest into a sandboxed environment. Manifest scope only.
+Load a subproject's `envy.lua` into a sandboxed environment. Manifest scope only.
 
 **Arguments:**
-- `path` — manifest file or directory (a directory appends `envy.lua`), relative to the calling manifest
+- `dir` — the directory holding the subproject's `envy.lua`, relative to the calling manifest
 
-**Returns:** Table of all globals the imported manifest assigned, `PACKAGES` and `BUNDLES` included.
+**Returns:** Table of all globals the subproject assigned, `PACKAGES` and `BUNDLES` included,
+plus `PROJECT_ROOT`: the subproject's directory.
 
-Unlike `envy.loadenv`, imported declarations stay tied to the file that wrote them: relative
-`source` paths resolve against the imported manifest's directory, and a `bundle = "alias"`
-resolves against *its* `BUNDLES` — so re-exporting `BUNDLES` is unnecessary. The imported file
-sees `ENVY_IMPORTER` (the importing manifest's absolute path); standalone it is `nil`.
+Unlike `envy.loadenv`, a subproject's declarations stay tied to the file that wrote them:
+relative `source` paths resolve against its directory, and a `bundle = "alias"` resolves
+against *its* `BUNDLES` — so re-exporting `BUNDLES` is unnecessary. Inside, `envy.PROJECT_ROOT`
+is the subproject's own directory and `envy.IS_SUBPROJECT` is true; functions it defines keep
+both when the superproject calls them. A spec the subproject hosts but never declares is
+reached through `sub.PROJECT_ROOT`.
 
 ```lua
 -- superproject envy.lua
-local sub = envy.import("src/firmware-common")
+local sub = envy.subproject("src/firmware-common")
 PACKAGE_DEPOTS = sub.PACKAGE_DEPOTS                  -- other globals are yours to merge
 PACKAGES = envy.extend(sub.PACKAGES, {
-  { spec = "fi.armgcc@r1", source = "vendor/armgcc.lua",   -- anchored on *this* manifest
+  sub.nodejs{ version = "24.22.3" },                 -- a helper the subproject offers
+  { spec = "fi.armgcc@r1", source = sub.PROJECT_ROOT .. "/envy/fi.armgcc.lua",
     options = { version = "15.2.rel1" } },
 })
 
--- imported envy.lua
-if not ENVY_IMPORTER then                            -- the superproject pins its own
-  envy.extend(PACKAGES, { { spec = "fi.armgcc@r1", source = "envy/armgcc.lua" } })
+-- src/firmware-common/envy.lua
+function nodejs(options)                             -- PROJECT_ROOT: this file's, always
+  return { spec = "fi.nodejs@r0", source = envy.PROJECT_ROOT .. "/envy/fi.nodejs.lua",
+           options = options }
+end
+if not envy.IS_SUBPROJECT then                       -- the superproject pins its own
+  envy.extend(PACKAGES, { { spec = "fi.armgcc@r1", source = "envy/fi.armgcc.lua" } })
 end
 ```
 
-The imported header is inert but for one check: pinning a newer `@envy version` than the root
-manifest is an error (bootstrap already chose the binary), any other mismatch warns. See the
-bootstrap boundary in `docs/commands.md`. Cycles error; nesting is fine.
+The subproject's header is inert but for one check: pinning a newer `@envy version` than the
+root manifest is an error (bootstrap already chose the binary), any other mismatch warns. See
+the bootstrap boundary in `docs/commands.md`. Cycles error; nesting is fine. Splitting one
+project across files is `envy.loadenv`'s job.
 
 **Error conditions:**
-- Called from a spec (not a manifest) → error (`envy.import` is not installed there)
-- Path missing → error naming both the argument and the resolved path
-- Import cycle → error listing the chain
-- Imported manifest requires a newer envy than the root pin → error
+- Called from a spec (not a manifest) → error (`envy.subproject` is not installed there)
+- `dir` is a file → error; no `envy.lua` in it → error naming both the argument and the resolved path
+- Subproject cycle → error listing the chain
+- Subproject requires a newer envy than the root pin → error
+- Subproject assigns a global `PROJECT_ROOT` → error; envy sets it on the returned table
 
 **When to use which:**
-- `envy.import(path)` — Compose a manifest from a subproject's manifest (paths and aliases follow the imported file)
+- `envy.subproject(dir)` — Compose a manifest from a subproject's (paths and aliases follow the subproject)
 - `envy.loadenv(module)` — Load helpers from same project/bundle (relative to current file)
 - `envy.loadenv_spec(identity, module)` — Load from declared dependency bundle (validates dependency graph)
 - `envy.loadenv_bundle(alias, module)` — Manifest scope: load from a `BUNDLES` alias, materializing it first

@@ -79,7 +79,7 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
 
   bundle_decl decl;
 
-  // An imported manifest's BUNDLES entry carries its own anchor; every other one
+  // A subproject's BUNDLES entry carries its own anchor; every other one
   // resolves against whatever declared it.
   pkg_decl_origin const origin{ [&] {
     auto tag{ sol_util_get_optional<std::string>(table, kEnvyBaseKey, "Bundle") };
@@ -363,7 +363,7 @@ pkg_cfg *bundle::ensure_pkg_cfg(pkg_cfg::bundle_source const &src,
     // still catches the cross-scope case (manifest versus spec, spec versus spec).
     auto const &existing{ std::get<pkg_cfg::bundle_source>(it->second->source) };
 
-    // Both declaring files, so an author composing imported manifests can see which
+    // Both declaring files, so an author composing subprojects can see which
     // two disagree; one name when a single file declared it twice.
     std::string const sites{ [&] {
       auto const where{ [](std::filesystem::path const &p) {

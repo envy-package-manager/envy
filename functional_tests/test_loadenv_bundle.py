@@ -222,7 +222,7 @@ end
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(2, len(run.events("pkg_outcome", spec="test.generic@r1")))
 
-    def test_a_relative_source_in_a_fragment_anchors_on_the_fragment(self):
+    def test_a_relative_source_in_a_subproject_anchors_on_the_subproject(self):
         sub = self.project / "sub"
         self.make_bundle(root=sub / "bundles" / "tools")
         (sub / "envy.lua").write_text(
@@ -234,14 +234,14 @@ end
             encoding="utf-8",
         )
         manifest = self.manifest(
-            'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+            'local sub = envy.subproject("sub")\nPACKAGES = sub.PACKAGES\n'
         )
 
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
 
-    def test_a_root_alias_reached_from_a_fragment_anchors_on_the_root(self):
-        """A fragment with no BUNDLES of its own sees the root's, written over there,
+    def test_a_root_alias_reached_from_a_subproject_anchors_on_the_root(self):
+        """A subproject with no BUNDLES of its own sees the root's, written over there,
         so its relative `source` resolves over there too."""
         self.make_bundle(root=self.project / "bundles" / "tools")
         sub = self.project / "sub"
@@ -255,13 +255,13 @@ end
         )
         manifest = self.manifest(
             self.bundles_table("bundles/tools")
-            + 'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+            + 'local sub = envy.subproject("sub")\nPACKAGES = sub.PACKAGES\n'
         )
 
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
 
-    def test_a_fragment_alias_wins_over_the_root_one(self):
+    def test_a_subproject_alias_wins_over_the_root_one(self):
         self.make_bundle(root=self.project / "bundles" / "tools")  # never reached
         sub = self.project / "sub"
         self.make_bundle(root=sub / "bundles" / "tools", identity="test.own@r1")
@@ -275,7 +275,7 @@ end
         )
         manifest = self.manifest(
             self.bundles_table("bundles/tools")
-            + 'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+            + 'local sub = envy.subproject("sub")\nPACKAGES = sub.PACKAGES\n'
         )
 
         run = self.install(manifest)
@@ -283,7 +283,7 @@ end
         self.assertTrue(self.spec_complete("test.own@r1"))
         self.assertEqual([], self.spec_entries("test.tools@r1"))
 
-    def test_an_imported_fragment_resolves_its_own_alias(self):
+    def test_a_subproject_resolves_its_own_alias(self):
         root = self.make_bundle()
         sub = self.project / "sub"
         sub.mkdir()
@@ -296,7 +296,7 @@ end
             encoding="utf-8",
         )
         manifest = self.manifest(
-            'local sub = envy.import("sub")\nPACKAGES = sub.PACKAGES\n'
+            'local sub = envy.subproject("sub")\nPACKAGES = sub.PACKAGES\n'
         )
 
         run = self.install(manifest)
@@ -304,8 +304,8 @@ end
         self.assertEqual(1, len(run.events("pkg_outcome", spec="test.generic@r1")))
 
 
-    def test_a_helper_reads_the_globals_of_the_fragment_that_loaded_it(self):
-        """A fragment assigns into its import sandbox, not _G; see issue #379."""
+    def test_a_helper_reads_the_globals_of_the_subproject_that_loaded_it(self):
+        """A subproject assigns into its own sandbox, not _G; see issue #379."""
         root = self.make_bundle(
             spec=VENDOR_SPEC,
             helper="""local M = {}
@@ -328,7 +328,7 @@ return M
             encoding="utf-8",
         )
         manifest = self.manifest(
-            'local sub = envy.import("sub")\n'
+            'local sub = envy.subproject("sub")\n'
             "VENDOR_ROOT = sub.VENDOR_ROOT\nPACKAGES = sub.PACKAGES\n"
         )
 

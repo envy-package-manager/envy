@@ -1390,7 +1390,7 @@ std::vector<pkg_cfg const *> engine_resolve_targets(
 
   std::vector<pkg_cfg const *> targets;
   for (auto const &query : queries) {
-    // Distinct packages, not entries: envy.import can splice two declarations of one
+    // Distinct packages, not entries: envy.subproject can splice two declarations of one
     // key, which ensure_pkg treats as one package. Sorted so the message is reproducible.
     std::map<std::string, pkg_cfg const *> matches;
     for (auto const *pkg : packages) {

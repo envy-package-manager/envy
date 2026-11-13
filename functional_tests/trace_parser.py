@@ -61,7 +61,7 @@ EVENT_REGISTRY = {
     ],
     "lua_ctx_loadenv_bundle": ["alias:str", "target:str", "subpath:str", "root:str"],
     "manifest_resolved": ["path:str", "anchor:str", "mode:str", "nearest:bool"],
-    "manifest_imported": ["path:str", "importer:str"],
+    "subproject_loaded": ["path:str", "parent:str"],
     "depot_check": ["sha:str", "result:str"],
     "depot_wait": ["duration_ms:i64", "result:str"],
     "default_shell_resolving": ["depends:i64"],

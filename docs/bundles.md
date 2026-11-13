@@ -116,8 +116,8 @@ PACKAGES = {
 
 All three hand back what the module returned — its table if it returned one, the globals it
 assigned if it returned nothing, as `require` would. A module returning anything else is an
-error naming it. A module reads the globals of the file that loaded it — an imported
-fragment's own, not just `_G`'s — so a builder sees the `VENDOR_ROOT` that file assigned;
+error naming it. A module reads the globals of the file that loaded it — a subproject's
+own, not just `_G`'s — so a builder sees the `VENDOR_ROOT` that file assigned;
 what the module assigns stays in its sandbox.
 
 **Context clarification:**
@@ -126,7 +126,7 @@ what the module assigns stays in its sandbox.
 
 - `envy.loadenv_spec(identity, module)`: **Only callable from within phase functions**. Uses Lua dot syntax (`"lib.common"` → `lib/common.lua`). Uses the `needed_by` dependency system and is runtime-verified. If called at global scope, envy throws an error because the phase context doesn't exist yet.
 
-- `envy.loadenv_bundle(alias, module)`: **Manifest scope only**; a spec reaches a bundle it declared with `envy.loadenv_spec`. `alias` is a key of the `BUNDLES` table of the calling file — assigned above the call, since a manifest is read top to bottom — and an imported fragment resolves its own. The bundle is materialized right there, before the manifest's global scope finishes, so the helper's entries can go straight into `PACKAGES`. A `local.` bundle is read where it stands; every other shape lands in the cache, where the bundle's own package finds it already complete. A custom-fetch bundle is refused: its fetch needs a phase to run in, and its `source.dependencies` cannot be ordered this early.
+- `envy.loadenv_bundle(alias, module)`: **Manifest scope only**; a spec reaches a bundle it declared with `envy.loadenv_spec`. `alias` is a key of the `BUNDLES` table of the calling file — assigned above the call, since a manifest is read top to bottom — and a subproject resolves its own. The bundle is materialized right there, before the manifest's global scope finishes, so the helper's entries can go straight into `PACKAGES`. A `local.` bundle is read where it stands; every other shape lands in the cache, where the bundle's own package finds it already complete. A custom-fetch bundle is refused: its fetch needs a phase to run in, and its `source.dependencies` cannot be ordered this early.
 
 ### A Bundle That Ships Its Own Entry Builder
 
@@ -203,21 +203,21 @@ end
 
 The subpath is relative to the spec/bundle root, without the `.lua` extension.
 
-**Manifest composition** (`envy.import()`):
+**Manifest composition** (`envy.subproject()`):
 
-For composing manifests from subprojects, use `envy.import()` at manifest load time:
+For composing manifests from subprojects, use `envy.subproject()` at manifest load time:
 
 ```lua
-local sub = envy.import("libs/subproject")   -- directory or manifest path
+local sub = envy.subproject("libs/subproject")   -- the directory holding its envy.lua
 PACKAGES = envy.extend(sub.PACKAGES, {
   -- additional packages...
 })
 ```
 
-Bundle aliases are scoped to the manifest that wrote them: an imported entry's `bundle = "x"`
-resolves against the imported `BUNDLES` first, then the root's. Re-exporting `BUNDLES` is
+Bundle aliases are scoped to the manifest that wrote them: a subproject entry's `bundle = "x"`
+resolves against the subproject's `BUNDLES` first, then the root's. Re-exporting `BUNDLES` is
 unnecessary, and two projects may use the same alias for different bundles. See
-`docs/lua_api.md` for `envy.import` versus `envy.loadenv`.
+`docs/lua_api.md` for `envy.subproject` versus `envy.loadenv`.
 
 ### Bundle Dependencies vs Spec-from-Bundle Dependencies
 

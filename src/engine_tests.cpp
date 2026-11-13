@@ -1357,7 +1357,7 @@ TEST_CASE("engine_resolve_targets: an ambiguous query names its candidates") {
 }
 
 TEST_CASE("engine_resolve_targets: duplicate declarations of one key are one target") {
-  // envy.import splices subprojects' PACKAGES; two of them pinning the same shared
+  // envy.subproject splices subprojects' PACKAGES; two of them pinning the same shared
   // dependency collapse onto one pkg_key in ensure_pkg, so they are one package here too.
   std::vector<pkg_cfg *> const packages{
     make_local_cfg("local.tool@v1", "dummy.lua"),

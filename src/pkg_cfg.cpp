@@ -1,6 +1,6 @@
 #include "pkg_cfg.h"
 
-#include "lua_ctx/lua_envy_import.h"
+#include "lua_ctx/lua_envy_subproject.h"
 #include "sol_util.h"
 #include "uri.h"
 #include "util.h"
@@ -618,16 +618,16 @@ std::optional<sol::protected_function> find_fetch_function(sol::state_view lua,
 
   if (!want_bundle) { return std::nullopt; }
 
-  // BUNDLES aliases: this state's own, then every manifest imported into it -- an
-  // imported declaration never lands in the root table. The registry key the second
+  // BUNDLES aliases: this state's own, then every subproject's -- a subproject's
+  // declaration never lands in the root table. The registry key the second
   // reads is absent in a spec state, so the loop is simply empty there.
   if (sol::object const own{ lua["BUNDLES"] }; own.is<sol::table>()) {
     if (auto fn{ bundles_table_fetch(own.as<sol::table>(), query.identity) }) {
       return fn;
     }
   }
-  for (sol::table const &imported : lua_envy_import_bundle_tables(lua)) {
-    if (auto fn{ bundles_table_fetch(imported, query.identity) }) { return fn; }
+  for (sol::table const &sub : lua_envy_subproject_bundle_tables(lua)) {
+    if (auto fn{ bundles_table_fetch(sub, query.identity) }) { return fn; }
   }
 
   return std::nullopt;

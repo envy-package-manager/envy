@@ -596,6 +596,7 @@ Types and binary are co-located so each version is self-contained. Deleting a ve
 ---@field PLATFORM_ARCH string
 ---@field EXE_EXT string
 ---@field PROJECT_ROOT string?
+---@field IS_SUBPROJECT boolean?
 envy = {}
 
 ---@class envy.path

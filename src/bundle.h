@@ -41,7 +41,7 @@ struct bundle {
   // Returns empty map if bundles_obj is nil or missing
   // Throws on invalid format
   // A declaration tagged 'ENVY_BASE' anchors on that file instead of `origin`, which
-  // is how an imported manifest's BUNDLES keep resolving against their own directory.
+  // is how a subproject's BUNDLES keep resolving against their own directory.
   static std::unordered_map<std::string, pkg_cfg::bundle_source> parse_aliases(
       sol::object const &bundles_obj,
       pkg_decl_origin const &origin);
