@@ -33,13 +33,17 @@ constexpr char kArchivesEntry[]{ "'archives' entry" };
 constexpr char kOnlyUnmatched[]{ ": 'only' entries matched no archive contents:" };
 
 struct archive_reader : unmovable {
-  explicit archive_reader(bool enable_raw_format = false) : handle(archive_read_new()) {
+  // A bare compressed stream reads as raw alone: its suffix already decided, and the
+  // format bidders would claim payloads (mtree takes any file of one-word lines). Anything
+  // else never reads as raw, so an unknown blob errors instead of copying.
+  explicit archive_reader(bool bare_stream = false) : handle(archive_read_new()) {
     if (!handle) { throw_runtime_error({ "archive_read_new failed" }); }
     archive_read_support_filter_all(handle);
-    archive_read_support_format_all(handle);
-    // libarchive matches raw last; opt in only when we expect a bare compressed
-    // stream so unknown binary blobs don't silently "extract" as a copy.
-    if (enable_raw_format) { archive_read_support_format_raw(handle); }
+    if (bare_stream) {
+      archive_read_support_format_raw(handle);
+    } else {
+      archive_read_support_format_all(handle);
+    }
   }
 
   ~archive_reader() {

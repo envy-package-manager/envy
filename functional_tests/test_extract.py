@@ -446,6 +446,35 @@ class EnvyExtractTests(unittest.TestCase):
         """Bare .xz extracts to stem-named file."""
         self._verify_bare_extraction(self._archives_dir / "hello.txt.xz")
 
+    def test_extract_bare_payload_is_never_read_as_an_archive(self) -> None:
+        """The suffix says bare stream, so the payload comes out whole whatever it holds:
+        libarchive's mtree heuristic would claim any file of one-word lines."""
+        # Detection runs after decompression, so every payload under one compressor, and
+        # one payload under the rest; a run per case, kept few for loaded CI runners.
+        payloads = {
+            "word": b"hello\n",
+            "names": b"alpha\nbeta\ngamma\n",
+            "keyword": b"bin size=3\n",
+            "mtree": b"#mtree\n./x type=file\n",
+        }
+        compressors = {
+            ".gz": gzip.compress,
+            ".bz2": bz2.compress,
+            ".xz": lzma.compress,
+            ".lzma": lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE),
+        }
+        cases = [(n, ".gz") for n in payloads] + [("word", s) for s in compressors if s != ".gz"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, suffix in cases:
+                with self.subTest(payload=name, suffix=suffix):
+                    archive = Path(tmpdir) / f"{name}.txt{suffix}"
+                    archive.write_bytes(compressors[suffix](payloads[name]))
+                    dest = Path(tmpdir) / f"out-{name}{suffix}"
+                    result = self._run_envy("extract", str(archive), str(dest))
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual([f"{name}.txt"], [p.name for p in dest.iterdir()])
+                    self.assertEqual(payloads[name], (dest / f"{name}.txt").read_bytes())
+
     def test_extract_bare_to_default_dest(self) -> None:
         """Bare-compressed extracts to cwd when destination is omitted."""
         archive = self._archives_dir / "hello.txt.gz"
