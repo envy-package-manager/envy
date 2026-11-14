@@ -74,8 +74,14 @@ if(NOT EXISTS "${aws_sdk_SOURCE_DIR}/CMakeLists.txt")
     file(REMOVE_RECURSE "${_stage_dir}" "${aws_sdk_SOURCE_DIR}")
     file(MAKE_DIRECTORY "${_stage_dir}")
 
+    # Only 3 of ~430 generated clients are built; the rest, codegen, and tests are ~165k
+    # files never written, which matters most on the cold path: Windows writes them slowly.
+    string(REPLACE ";" "|" _aws_keep "${BUILD_ONLY}")
+    set(_aws_skip "^[^/]+/(tools/|tests/|generated/(tests|protocol-tests|smoke-tests)/")
+    string(APPEND _aws_skip "|generated/src/aws-cpp-sdk-(?!(${_aws_keep})/))")
     execute_process(
-        COMMAND ${_unzip_cmd} -q "${_aws_sdk_archive}" -d "${_stage_dir}"
+        COMMAND ${_unzip_cmd} -q --exclude-regex "${_aws_skip}"
+                "${_aws_sdk_archive}" -d "${_stage_dir}"
         RESULT_VARIABLE _unzip_rv
         COMMAND_ERROR_IS_FATAL ANY)
     if(NOT _unzip_rv EQUAL 0)
@@ -93,6 +99,8 @@ if(NOT EXISTS "${aws_sdk_SOURCE_DIR}/CMakeLists.txt")
     file(REMOVE_RECURSE "${_stage_dir}")
 
     unset(_aws_dirs)
+    unset(_aws_keep)
+    unset(_aws_skip)
     unset(_extracted_dir)
     unset(_stage_dir)
     unset(_unzip_cmd)

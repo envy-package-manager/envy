@@ -4,9 +4,12 @@
 This script intentionally supports the limited flag set used by
 AWS's prefetch_crt_dependency.sh: `-d` for the destination directory,
 optional `-o` to overwrite (silently accepted), and quiet flags `-q`/`-qq`.
-All other flags result in an error so unexpected usage surfaces quickly.
+One envy extension, `--exclude-regex RE`, skips members whose names match RE (re.search),
+so a large archive's unused trees are never written. All other flags result in an error
+so unexpected usage surfaces quickly.
 """
 import os
+import re
 import sys
 import zipfile
 from typing import List
@@ -22,12 +25,14 @@ def _resolve_archive(path: str) -> str:
     raise FileNotFoundError(path)
 
 
-def _extract(archive: str, dest: str, quiet: bool) -> None:
+def _extract(archive: str, dest: str, quiet: bool, exclude: "re.Pattern | None") -> None:
     # zipfile obeys UTF-8 file names and handles creating directories.
     with zipfile.ZipFile(archive, "r") as zf:
         # Ensure destination exists before extraction.
         os.makedirs(dest, exist_ok=True)
         for member in zf.infolist():
+            if exclude and exclude.search(member.filename):
+                continue
             if not quiet:
                 sys.stdout.write(f"  inflating: {member.filename}\n")
             zf.extract(member, path=dest)
@@ -36,6 +41,7 @@ def _extract(archive: str, dest: str, quiet: bool) -> None:
 def main(argv: List[str]) -> int:
     dest = os.curdir
     quiet = False
+    exclude = None
     archive = None
     i = 0
     argc = len(argv)
@@ -53,6 +59,13 @@ def main(argv: List[str]) -> int:
                 sys.stderr.write("unzip shim: `-d` requires a parameter\n")
                 return 1
             dest = argv[i + 1]
+            i += 2
+            continue
+        if arg == "--exclude-regex":
+            if i + 1 >= argc:
+                sys.stderr.write("unzip shim: `--exclude-regex` requires a parameter\n")
+                return 1
+            exclude = re.compile(argv[i + 1])
             i += 2
             continue
         if arg.startswith("-"):
@@ -78,7 +91,7 @@ def main(argv: List[str]) -> int:
         return 1
 
     try:
-        _extract(resolved, dest, quiet)
+        _extract(resolved, dest, quiet, exclude)
     except zipfile.BadZipFile as exc:
         sys.stderr.write(f"unzip shim: bad zip file: {exc}\n")
         return 1

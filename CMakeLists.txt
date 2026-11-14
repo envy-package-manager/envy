@@ -655,10 +655,13 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
     COMMAND ${Python3_EXECUTABLE}
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
+    COMMAND ${Python3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
     COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
     DEPENDS "${PROJECT_SOURCE_DIR}/cmake/scripts/embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
+            "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
+            "${PROJECT_SOURCE_DIR}/tools/unzip"
             ${_envy_shell_lint_inputs}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     COMMENT "Running build-script tests"
