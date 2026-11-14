@@ -3,18 +3,20 @@
 #include "glob.h"
 #include "trace.h"
 #include "tui.h"
+#include "tui_actions.h"
 #include "util.h"
 
 #include "archive.h"
 #include "archive_entry.h"
 
-#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -104,78 +106,18 @@ std::optional<std::string> strip_path_components(char const *path, int strip_cou
   return std::string(p);
 }
 
-// The path extract() would write, canonicalized for selector matching: derived name for a
-// raw stream, else the stripped entry path. nullopt when strip drops the entry.
-std::optional<std::string> selector_match_path(
-    archive_entry *entry,
-    bool is_raw_stream,
-    std::optional<std::filesystem::path> const &bare_name,
-    int strip_components) {
-  if (is_raw_stream && bare_name) { return bare_name->generic_string(); }
-  auto const stripped{ strip_path_components(archive_entry_pathname(entry),
-                                             strip_components) };
-  if (!stripped) { return std::nullopt; }
-  return glob_canonical_path(*stripped);
-}
+// Trailing, not leading: tools that sniff a file's first bytes for zstd still see it.
+constexpr std::uint32_t kTrailerMagic{ 0x184D2A55 };  // zstd's skippable range: 0x184D2A5?
 
-// Add the file count and uncompressed bytes of the entries `selectors` selects (all when
-// empty) to totals, flagging selectors that matched. context prefixes errors.
-void accumulate_archive_totals(std::filesystem::path const &archive_path,
-                               glob_filter const &selectors,
-                               int strip_components,
-                               std::string_view context,
-                               extract_totals &totals,
-                               glob_match_flags &selector_matched) {
-  auto const bare_name{ extract_bare_compressed_output_name(archive_path) };
-  archive_reader reader{ bare_name.has_value() };
-  if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
-      ARCHIVE_OK) {
-    throw_runtime_error({ context,
-                          ": failed to open ",
-                          archive_path,
-                          ": ",
-                          archive_error_string(reader.handle) });
+// The totals an archive's trailer states, if it ends in one.
+std::optional<extract_totals> trailer_read(std::filesystem::path const &archive_path) {
+  extract_trailer bytes{};
+  if (std::ifstream in{ archive_path, std::ios::binary };
+      !in.seekg(-static_cast<std::streamoff>(bytes.size()), std::ios::end) ||
+      !in.read(reinterpret_cast<char *>(bytes.data()), bytes.size())) {
+    return std::nullopt;
   }
-
-  archive_entry *entry{ nullptr };
-  while (true) {
-    int const r{ archive_read_next_header(reader.handle, &entry) };
-    if (r == ARCHIVE_EOF) { break; }
-    if (r != ARCHIVE_OK) {
-      throw_runtime_error({ context,
-                            ": header error in ",
-                            archive_path,
-                            ": ",
-                            archive_error_string(reader.handle) });
-    }
-    bool const is_raw_stream{ archive_format(reader.handle) == ARCHIVE_FORMAT_RAW };
-    // Mirror extract()'s validation: if the suffix promised compression but no
-    // decompression filter actually matched, this is corrupt or misnamed input.
-    if (is_raw_stream && bare_name &&
-        archive_filter_code(reader.handle, 0) == ARCHIVE_FILTER_NONE) {
-      throw_runtime_error({ context, ": not a valid compressed stream: ", archive_path });
-    }
-
-    if (!selectors.empty()) {
-      auto const match_path{
-        selector_match_path(entry, is_raw_stream, bare_name, strip_components)
-      };
-      if (!match_path || !selectors.selects(*match_path, selector_matched)) { continue; }
-    }
-
-    if (!is_raw_stream && archive_entry_filetype(entry) != AE_IFREG) { continue; }
-    la_int64_t const size{ archive_entry_size(entry) };
-    if (size > 0) {
-      totals.bytes += static_cast<std::uint64_t>(size);
-    } else if (is_raw_stream) {
-      // Raw entries report size==-1 (unknown). Use compressed source size as an
-      // approximation for progress UI.
-      std::error_code ec;
-      auto const fsize{ std::filesystem::file_size(archive_path, ec) };
-      if (!ec) { totals.bytes += fsize; }
-    }
-    ++totals.files;
-  }
+  return extract_trailer_decode(bytes);
 }
 
 // Throws msg, each unmatched selector quoted, then note; no-op when none went unmatched.
@@ -190,6 +132,7 @@ void throw_on_unmatched(std::vector<std::string> const &unmatched,
 struct extract_item {
   std::filesystem::path path;
   bool archive;  // by extension or an 'archives' include, unless an 'archives' exclude
+  std::uint64_t size;
 };
 
 // fetch_dir's regular files bar the completion marker. Throws on an 'archives' include
@@ -207,7 +150,8 @@ std::vector<extract_item> collect_extract_items(std::filesystem::path const &fet
     bool const named{ glob_selectors_match(filter.include, name, matched) };
     items.push_back({ .path = entry.path(),
                       .archive = (named || extract_is_archive_extension(entry.path())) &&
-                                 !glob_any_match(filter.exclude, name) });
+                                 !glob_any_match(filter.exclude, name),
+                      .size = entry.file_size() });
   }
   throw_on_unmatched(glob_unmatched_selectors(filter.include, matched),
                      "extract: 'archives' entries matched no fetched file:");
@@ -234,178 +178,25 @@ std::string misnamed_archives_note(std::vector<extract_item> const &items) {
                              names;
 }
 
-// Pre-scan: archives header-scanned, loose files sized, `only` spanning the whole set.
-extract_totals compute_items_totals(std::vector<extract_item> const &items,
-                                    extract_options const &options) {
-  auto const selectors{
-    glob_parse_filter(options.selectors, "compute_extract_totals", kOnlyEntry)
-  };
-  glob_match_flags selector_matched(selectors.include.size(), 0);
-  extract_totals totals{};
-
+// A set states its contents only if every item does: a selected loose file is its own size,
+// an archive whatever extract_probe_totals finds. nullopt at the first that cannot say.
+std::optional<extract_totals> stated_totals(std::vector<extract_item> const &items,
+                                            extract_options const &options,
+                                            glob_filter const &selectors) {
+  extract_totals sum{};
   for (auto const &item : items) {
-    if (!item.archive) {
-      // Loose files are copied verbatim, so selectors match their filename.
-      if (!selectors.empty() &&
-          !selectors.selects(item.path.filename().generic_string(), selector_matched)) {
-        continue;
-      }
-      std::error_code ec;
-      totals.bytes += std::filesystem::file_size(item.path, ec);
-      if (ec) {
-        throw_runtime_error(
-            { "compute_extract_totals: failed to stat ", item.path, ": ", ec.message() });
-      }
-      ++totals.files;
-      continue;
-    }
-
-    accumulate_archive_totals(item.path,
-                              selectors,
-                              options.strip_components,
-                              "compute_extract_totals",
-                              totals,
-                              selector_matched);
+    auto const totals{
+      item.archive ? extract_probe_totals(item.path, options)
+      : selectors.empty() || selectors.selects(item.path.filename().generic_string())
+          ? std::optional{ extract_totals{ .files = 1, .bytes = item.size } }
+          : std::optional{ extract_totals{} }
+    };
+    if (!totals) { return std::nullopt; }
+    sum.files += totals->files;
+    sum.bytes += totals->bytes;
   }
-
-  totals.unmatched_selectors =
-      glob_unmatched_selectors(selectors.include, selector_matched);
-  return totals;
+  return sum;
 }
-
-// TUI progress state for extract_all_archives
-struct extract_tui_state {
-  tui::section_handle section;
-  std::string label;
-  std::vector<tui::section_frame> children;
-  bool grouped;
-  extract_totals totals;
-  std::uint64_t files_processed{ 0 };
-  std::uint64_t bytes_processed{ 0 };
-  std::filesystem::path last_file_seen;
-  std::optional<std::size_t> current_file_idx;
-  std::chrono::steady_clock::time_point start_time{ std::chrono::steady_clock::now() };
-
-  extract_tui_state(tui::section_handle s,
-                    std::string const &pkg_identity,
-                    std::vector<extract_item> const &items,
-                    extract_totals const &t)
-      : section{ s },
-        label{ "[" + pkg_identity + "]" },
-        grouped{ items.size() > 1 },
-        totals{ t } {
-    children.reserve(items.size());
-    for (auto const &item : items) {
-      children.push_back(
-          tui::section_frame{ .label = item.path.filename().string(),
-                              .content = tui::static_text_data{ .text = "pending" } });
-    }
-  }
-
-  void set_spinner(std::string const &text) {
-    tui::section_set_content(
-        section,
-        tui::section_frame{ .label = label,
-                            .content = tui::spinner_data{
-                                .text = text,
-                                .start_time = std::chrono::steady_clock::now() } });
-  }
-
-  void update_progress(bool terminal = false) {
-    bool const known{ totals.files > 0 || totals.bytes > 0 };
-    // Clamped by hand: archive.h drags in windows.h without NOMINMAX, so `min` is a macro.
-    double const percent{ [&]() -> double {
-      if (terminal) { return 100.0; }
-      double raw{ 0.0 };
-      if (totals.files > 0) {
-        raw = (files_processed / static_cast<double>(totals.files)) * 100.0;
-      } else if (totals.bytes > 0) {
-        raw = (bytes_processed / static_cast<double>(totals.bytes)) * 100.0;
-      }
-      return raw > 100.0 ? 100.0 : raw;
-    }() };
-
-    std::ostringstream status;
-    status << files_processed;
-    if (totals.files > 0) { status << "/" << totals.files; }
-    status << " files";
-    if (totals.bytes > 0) {
-      status << " " << util_format_bytes(bytes_processed) << "/"
-             << util_format_bytes(totals.bytes);
-    } else if (bytes_processed > 0) {
-      status << " " << util_format_bytes(bytes_processed);
-    }
-
-    std::string const item{ children.empty() ? "" : children.front().label };
-    std::string const text{ (grouped || item.empty()) ? status.str()
-                                                      : status.str() + " " + item };
-
-    // The pre-scan sized nothing, so there is nothing to divide by: spin on the running
-    // counts instead of a bar stuck at 0%.
-    auto const kids{ grouped ? children : std::vector<tui::section_frame>{} };
-    if (!known && !terminal) {
-      tui::section_set_content(
-          section,
-          tui::section_frame{
-              .label = label,
-              .content = tui::spinner_data{ .text = text, .start_time = start_time },
-              .children = kids });
-      return;
-    }
-
-    tui::section_set_content(
-        section,
-        tui::section_frame{ .label = label,
-                            .content =
-                                tui::progress_data{ .percent = percent, .status = text },
-                            .children = kids,
-                            .terminal = terminal });
-  }
-
-  void on_file_start(std::string const &name) {
-    // Mark previous file as done
-    if (current_file_idx && *current_file_idx < children.size()) {
-      children[*current_file_idx].content = tui::static_text_data{ .text = "done" };
-    }
-
-    // Find and mark current file as in-progress
-    if (auto it{ std::find_if(children.begin(),
-                              children.end(),
-                              [&](auto const &c) { return c.label == name; }) };
-        it != children.end()) {
-      auto idx{ static_cast<std::size_t>(std::distance(children.begin(), it)) };
-      current_file_idx = idx;
-      children[idx].content =
-          tui::spinner_data{ .text = "extracting",
-                             .start_time = std::chrono::steady_clock::now() };
-    }
-    update_progress();
-  }
-
-  bool on_progress(std::uint64_t bytes,
-                   std::filesystem::path const &entry,
-                   bool is_regular_file) {
-    bytes_processed = bytes;
-    if (is_regular_file && entry != last_file_seen) {
-      ++files_processed;
-      last_file_seen = entry;
-    }
-    update_progress();
-    return true;
-  }
-
-  // Everything is out, but the counters trail the pre-scan totals (a directory entry is
-  // not a counted file) and the last archive still reads in-flight.
-  void finish() {
-    if (current_file_idx && *current_file_idx < children.size()) {
-      children[*current_file_idx].content = tui::static_text_data{ .text = "done" };
-      current_file_idx.reset();
-    }
-    files_processed = totals.files;
-    bytes_processed = totals.bytes;
-    update_progress(true);
-  }
-};
 
 }  // namespace
 
@@ -413,6 +204,26 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
                                      std::filesystem::path const &source_dir,
                                      std::string const &prefix,
                                      extract_progress_cb_t const &progress) {
+  // One walk: its totals ride on every progress call and land in the trailer.
+  struct planned {
+    std::filesystem::directory_entry entry;
+    unsigned type;  // AE_IFLNK, AE_IFDIR or AE_IFREG; a symlink is never followed
+    std::uint64_t size;
+  };
+  std::vector<planned> plan;
+  extract_totals totals{};
+  for (auto const &e : std::filesystem::recursive_directory_iterator(source_dir)) {
+    if (e.is_symlink()) {
+      plan.push_back({ e, AE_IFLNK, 0 });
+    } else if (e.is_directory()) {
+      plan.push_back({ e, AE_IFDIR, 0 });
+    } else if (e.is_regular_file()) {
+      plan.push_back({ e, AE_IFREG, e.file_size() });
+      ++totals.files;
+      totals.bytes += plan.back().size;
+    }
+  }
+
   archive *a{ archive_write_new() };
   if (!a) { throw_runtime_error({ "archive_write_new failed" }); }
 
@@ -432,29 +243,29 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
   std::uint64_t bytes_processed{ 0 };
   std::vector<char> buffer(1024 * 1024);
 
-  for (auto const &dir_entry : std::filesystem::recursive_directory_iterator(source_dir)) {
+  auto const report{ [&](std::filesystem::path const &rel, bool is_regular) {
+    if (progress) {
+      progress({ .bytes_processed = bytes_processed,
+                 .files_processed = files_archived,
+                 .totals = totals,
+                 .current_entry = rel,
+                 .is_regular_file = is_regular });
+    }
+  } };
+
+  for (auto const &[dir_entry, type, size] : plan) {
     std::filesystem::path const rel{ dir_entry.path().lexically_relative(source_dir) };
     std::string const archived_path{ prefix + "/" + rel.generic_string() };
+    bool const is_regular{ type == AE_IFREG };
 
     archive_entry_clear(entry);
     archive_entry_set_pathname(entry, archived_path.c_str());
-
-    bool const is_regular{ dir_entry.is_regular_file() };
-
-    if (dir_entry.is_symlink()) {
-      archive_entry_set_filetype(entry, AE_IFLNK);
-      auto const target{ std::filesystem::read_symlink(dir_entry.path()) };
-      archive_entry_set_symlink(entry, target.string().c_str());
-      archive_entry_set_size(entry, 0);
-    } else if (dir_entry.is_directory()) {
-      archive_entry_set_filetype(entry, AE_IFDIR);
-      archive_entry_set_size(entry, 0);
-    } else if (is_regular) {
-      archive_entry_set_filetype(entry, AE_IFREG);
-      auto const sz{ std::filesystem::file_size(dir_entry.path()) };
-      archive_entry_set_size(entry, static_cast<la_int64_t>(sz));
-    } else {
-      continue;
+    archive_entry_set_filetype(entry, type);
+    archive_entry_set_size(entry, static_cast<la_int64_t>(size));
+    if (type == AE_IFLNK) {
+      archive_entry_set_symlink(
+          entry,
+          std::filesystem::read_symlink(dir_entry.path()).string().c_str());
     }
 
     // Preserve permissions
@@ -462,12 +273,8 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
     auto const perms{ std::filesystem::status(dir_entry.path(), ec).permissions() };
     if (!ec) { archive_entry_set_perm(entry, static_cast<__LA_MODE_T>(perms)); }
 
-    if (progress) {
-      progress({ .bytes_processed = bytes_processed,
-                 .files_processed = files_archived,
-                 .current_entry = rel,
-                 .is_regular_file = is_regular });
-    }
+    if (is_regular) { ++files_archived; }  // begun, as extract() counts
+    report(rel, is_regular);
 
     if (archive_write_header(a, entry) != ARCHIVE_OK) {
       std::string msg{ std::string("Failed to write header: ") + archive_error_string(a) };
@@ -499,21 +306,23 @@ std::uint64_t archive_create_tar_zst(std::filesystem::path const &output_path,
             throw_runtime_error({ msg });
           }
           bytes_processed += static_cast<std::uint64_t>(bytes_read);
-          if (progress) {
-            progress({ .bytes_processed = bytes_processed,
-                       .files_processed = files_archived,
-                       .current_entry = rel,
-                       .is_regular_file = true });
-          }
+          report(rel, true);
         }
       }
-      ++files_archived;
     }
   }
 
   archive_entry_free(entry);
   archive_write_close(a);
   archive_write_free(a);
+
+  // Header sizes, not bytes read: libarchive wrote exactly what each header promised.
+  if (auto const trailer{ extract_trailer_encode(totals) };
+      !std::ofstream{ output_path, std::ios::binary | std::ios::app }
+           .write(reinterpret_cast<char const *>(trailer.data()), trailer.size())
+           .flush()) {
+    throw_runtime_error({ "Failed to write archive trailer: ", output_path });
+  }
   return files_archived;
 }
 
@@ -547,7 +356,24 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   archive_entry *entry{ nullptr };
   std::uint64_t processed{ 0 };
   std::uint64_t files_extracted{ 0 };
-  glob_match_flags selector_matched(selectors.include.size(), 0);
+  glob_match_flags own_matched;
+  glob_match_flags &selector_matched{ options.selector_matched ? *options.selector_matched
+                                                                : own_matched };
+
+  // The header and every chunk after it report alike; the archive's read position is the
+  // only progress measure an archive that states no totals has.
+  auto const report{ [&](std::filesystem::path const &current, bool is_regular_file) {
+    if (la_int64_t const read{ archive_filter_bytes(reader.handle, -1) };
+        options.progress &&
+        !options.progress({ .bytes_processed = processed,
+                            .files_processed = files_extracted,
+                            .input_bytes_processed =
+                                read > 0 ? static_cast<std::uint64_t>(read) : 0,
+                            .current_entry = current,
+                            .is_regular_file = is_regular_file })) {
+      throw_runtime_error({ "extract: aborted by progress callback" });
+    }
+  } };
 
   while (true) {
     int const r{ archive_read_next_header(reader.handle, &entry) };
@@ -643,15 +469,8 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       archive_entry_copy_hardlink(entry, hardlink_full.c_str());
     }
 
-    if (options.progress &&
-        !options.progress(extract_progress{ .bytes_processed = processed,
-                                            .total_bytes = std::nullopt,
-                                            .files_processed = 0,
-                                            .total_files = std::nullopt,
-                                            .current_entry = full_path,
-                                            .is_regular_file = is_regular_file })) {
-      throw_runtime_error({ "extract: aborted by progress callback" });
-    }
+    if (is_regular_file) { ++files_extracted; }
+    report(full_path, is_regular_file);
 
     if (int const write_header_result{ archive_write_header(writer.handle, entry) };
         write_header_result != ARCHIVE_OK && write_header_result != ARCHIVE_WARN) {
@@ -676,16 +495,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
         }
 
         processed += static_cast<std::uint64_t>(bytes_read);
-
-        if (options.progress &&
-            !options.progress(extract_progress{ .bytes_processed = processed,
-                                                .total_bytes = std::nullopt,
-                                                .files_processed = 0,
-                                                .total_files = std::nullopt,
-                                                .current_entry = full_path,
-                                                .is_regular_file = is_regular_file })) {
-          throw_runtime_error({ "extract: aborted by progress callback" });
-        }
+        report(full_path, is_regular_file);
       }
 
       if (bytes_read < 0) {
@@ -698,11 +508,9 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
       throw_runtime_error(
           { "Failed to finish entry: ", archive_error_string(writer.handle) });
     }
-
-    if (is_regular_file) { ++files_extracted; }
   }
 
-  if (options.require_all_selectors) {
+  if (!options.selector_matched) {
     throw_on_unmatched(glob_unmatched_selectors(selectors.include, selector_matched),
                        "extract " + archive_path.filename().string() + kOnlyUnmatched);
   }
@@ -757,30 +565,71 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
   return stem;
 }
 
-extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
-                                      extract_options const &options) {
-  auto const selectors{
-    glob_parse_filter(options.selectors, "compute_archive_totals", kOnlyEntry)
-  };
-  glob_match_flags selector_matched(selectors.include.size(), 0);
-  extract_totals totals{};
-  accumulate_archive_totals(archive_path,
-                            selectors,
-                            options.strip_components,
-                            "compute_archive_totals",
-                            totals,
-                            selector_matched);
-  totals.unmatched_selectors =
-      glob_unmatched_selectors(selectors.include, selector_matched);
-  return totals;
+extract_trailer extract_trailer_encode(extract_totals const &totals) {
+  extract_trailer b{};
+  auto const put{ [&](std::size_t at, std::uint64_t v, std::size_t n) {
+    for (std::size_t i{ 0 }; i < n; ++i) { b[at + i] = static_cast<std::uint8_t>(v >> 8 * i); }
+  } };
+  put(0, kTrailerMagic, 4);
+  put(4, b.size() - 8, 4);  // payload: files, bytes, tag
+  put(8, totals.files, 8);
+  put(16, totals.bytes, 8);
+  std::memcpy(b.data() + 24, "envytot1", 8);
+  return b;
 }
 
-#ifdef ENVY_UNIT_TEST
-extract_totals compute_extract_totals(std::filesystem::path const &fetch_dir,
-                                      extract_options const &options) {
-  return compute_items_totals(collect_extract_items(fetch_dir, options.archives), options);
+std::optional<extract_totals> extract_trailer_decode(extract_trailer const &bytes) {
+  auto const get{ [&](std::size_t at) {
+    std::uint64_t v{ 0 };
+    for (std::size_t i{ 8 }; i-- > 0;) { v = v << 8 | bytes[at + i]; }
+    return v;
+  } };
+  extract_totals const totals{ .files = get(8), .bytes = get(16) };
+  return extract_trailer_encode(totals) == bytes ? std::optional{ totals } : std::nullopt;
 }
-#endif
+
+std::optional<extract_totals> extract_probe_totals(std::filesystem::path const &archive_path,
+                                                   extract_options const &options) {
+  if (options.selectors.empty() && options.strip_components == 0) {  // whole archive only
+    if (auto const stated{ trailer_read(archive_path) }) { return stated; }
+  }
+
+  auto const selectors{ glob_parse_filter(options.selectors, "extract", kOnlyEntry) };
+  archive_reader reader;
+  if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
+      ARCHIVE_OK) {
+    return std::nullopt;
+  }
+
+  extract_totals totals{};
+  archive_entry *entry{ nullptr };
+  for (bool first{ true };; first = false) {
+    if (int const r{ archive_read_next_header(reader.handle, &entry) }; r != ARCHIVE_OK) {
+      // EOF ends the count; an error is extract()'s to report.
+      return r == ARCHIVE_EOF ? std::optional{ totals } : std::nullopt;
+    }
+
+    // Skipping an entry is a seek only with no decompression filter, in a format whose
+    // entries lie whole in the file; anywhere else, counting decompresses everything.
+    if (int const format{ archive_format(reader.handle) & ARCHIVE_FORMAT_BASE_MASK };
+        first && (archive_filter_code(reader.handle, 0) != ARCHIVE_FILTER_NONE ||
+                  (format != ARCHIVE_FORMAT_TAR && format != ARCHIVE_FORMAT_ZIP))) {
+      return std::nullopt;
+    }
+
+    // Exactly what extract() would write: strip, then 'only', then regular files.
+    if (auto const stripped{
+          strip_path_components(archive_entry_pathname(entry), options.strip_components) };
+        !stripped ||
+        (!selectors.empty() && !selectors.selects(glob_canonical_path(*stripped))) ||
+        archive_entry_filetype(entry) != AE_IFREG) {
+      continue;
+    }
+    la_int64_t const size{ archive_entry_size(entry) };
+    ++totals.files;
+    totals.bytes += size > 0 ? static_cast<std::uint64_t>(size) : 0;
+  }
+}
 
 void extract_all_archives(std::filesystem::path const &fetch_dir,
                           std::filesystem::path const &dest_dir,
@@ -793,118 +642,85 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
                                                                options.archives) };
   if (items.empty()) { return; }
 
-  int const strip_components{ options.strip_components };
-  // For this function's loose-file matching; the nested options below carry the raw
-  // list, which each archive parses for itself.
+  // 'only' holds for the set, not each item: every archive and loose file flags the same
+  // includes. Loose files are copied whole, so selectors match their filename.
   auto const selectors{ glob_parse_filter(options.selectors, "extract", kOnlyEntry) };
-  auto const &raw_selectors{ options.selectors };
+  glob_match_flags selector_matched(selectors.include.size(), 0);
 
-  // Compute totals (with spinner if TUI enabled)
-  std::optional<extract_tui_state> tui_state;
+  std::optional<tui_actions::extract_progress_tracker> tracker;
   if (section != tui::kInvalidSection) {
-    std::string const label{ "[" + pkg_identity + "]" };
-    tui::section_set_content(
-        section,
-        tui::section_frame{ .label = label,
-                            .content = tui::spinner_data{
-                                .text = "analyzing archive...",
-                                .start_time = std::chrono::steady_clock::now() } });
-  }
-
-  // The pre-scan spans every archive — it, not the per-archive extract below, is where
-  // a selector that nothing in the fetch dir provides gets caught.
-  extract_totals const totals{ compute_items_totals(items, options) };
-  if (!totals.unmatched_selectors.empty()) {
-    throw_on_unmatched(totals.unmatched_selectors,
-                       std::string{ "extract" } + kOnlyUnmatched,
-                       misnamed_archives_note(items));
-  }
-
-  // Set up TUI state for extraction progress
-  if (section != tui::kInvalidSection) {
-    tui_state.emplace(section, pkg_identity, items, totals);
-    tui_state->update_progress();
+    std::vector<std::string> names;
+    std::uint64_t input_total{ 0 };
+    for (auto const &item : items) {
+      names.push_back(item.path.filename().string());
+      input_total += item.size;
+    }
+    tracker.emplace(section,
+                    pkg_identity,
+                    std::move(names),
+                    input_total,
+                    stated_totals(items, options, selectors));
   }
 
   std::uint64_t total_files_extracted{ 0 };
   std::uint64_t total_files_copied{ 0 };
-  std::uint64_t processed_bytes{ 0 };
-  // Scratch for the loose-file check below; the pre-scan owns selector validation.
-  glob_match_flags loose_selector_matched;
 
-  for (auto const &item : items) {
-    auto const &path{ item.path };
+  for (std::size_t i{ 0 }; i < items.size(); ++i) {
+    auto const &[path, archive, size]{ items[i] };
     std::string const filename{ path.filename().string() };
+    if (tracker) { tracker->begin(i); }
 
-    if (tui_state && items.size() > 1) { tui_state->on_file_start(filename); }
-
-    if (item.archive) {
+    if (archive) {
       auto const start{ std::chrono::steady_clock::now() };
-
       ENVY_TRACE(extract_start,
                  pkg_identity,
                  .archive = path.string(),
                  .destination = dest_dir.string(),
-                 .strip_components = strip_components);
+                 .strip_components = options.strip_components);
 
-      auto const archive_base{ processed_bytes };
-      std::uint64_t last_archive_bytes{ 0 };
-
-      extract_options opts{ .strip_components = strip_components,
-                            .selectors = raw_selectors,
-                            // The pre-scan already validated the selectors against
-                            // every archive; one archive alone need not satisfy it.
-                            .require_all_selectors = false,
-                            .progress = [&](extract_progress const &p) -> bool {
-                              last_archive_bytes = p.bytes_processed;
-                              if (tui_state) {
-                                return tui_state->on_progress(
-                                    archive_base + p.bytes_processed,
-                                    p.current_entry,
-                                    p.is_regular_file);
-                              }
-                              return true;
-                            } };
-
-      std::uint64_t const files{ extract(path, dest_dir, opts) };
+      std::uint64_t const files{ extract(
+          path,
+          dest_dir,
+          { .strip_components = options.strip_components,
+            .selectors = options.selectors,
+            .selector_matched = &selector_matched,
+            .progress = tracker ? extract_progress_cb_t{ std::ref(*tracker) }
+                                : extract_progress_cb_t{} }) };
       total_files_extracted += files;
-      processed_bytes = archive_base + last_archive_bytes;
-
-      auto const duration{ std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - start)
-                               .count() };
 
       ENVY_TRACE(extract_complete,
                  pkg_identity,
                  .archive = path.string(),
                  .files_extracted = static_cast<std::int64_t>(files),
-                 .duration_ms = duration);
-
-      if (tui_state) { tui_state->on_progress(processed_bytes, {}, false); }
-    } else {
-      // Loose files are copied whole, so selectors match their filename.
-      if (!selectors.empty() && !selectors.selects(filename, loose_selector_matched)) {
-        continue;
-      }
-
+                 .duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count());
+    } else if (selectors.empty() || selectors.selects(filename, selector_matched)) {
       std::filesystem::path const dest_path{ dest_dir / filename };
       std::filesystem::copy_file(path,
                                  dest_path,
                                  std::filesystem::copy_options::overwrite_existing);
-
-      std::error_code ec;
-      processed_bytes += std::filesystem::file_size(path, ec);
-      if (ec) {
-        throw_runtime_error(
-            { "extract_all_archives: failed to stat ", path, ": ", ec.message() });
-      }
-
       ++total_files_copied;
-      if (tui_state) { tui_state->on_progress(processed_bytes, dest_path, true); }
+      if (tracker) {
+        (*tracker)({ .bytes_processed = size,
+                     .files_processed = 1,
+                     .input_bytes_processed = size,
+                     .current_entry = dest_path,
+                     .is_regular_file = true });
+      }
     }
+
+    if (tracker) { tracker->end(size); }
   }
 
-  if (tui_state) { tui_state->finish(); }
+  if (auto const unmatched{ glob_unmatched_selectors(selectors.include, selector_matched) };
+      !unmatched.empty()) {
+    throw_on_unmatched(unmatched,
+                       std::string{ "extract" } + kOnlyUnmatched,
+                       misnamed_archives_note(items));
+  }
+
+  if (tracker) { tracker->finish(); }
 
   tui::debug("stage: extracted %llu file(s) from archives, copied %llu",
              static_cast<unsigned long long>(total_files_extracted),

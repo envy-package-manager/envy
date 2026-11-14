@@ -304,6 +304,54 @@ STAGE = {{ only = {{}} }}
 
         self.assertIn("'only' must list at least one entry", result.stdout + result.stderr)
 
+    def _write_union_spec(self, name: str, only: list[str]) -> str:
+        """A spec fetching a tarball, a bare .gz and a loose file, staging `only`."""
+        fixtures = Path(__file__).resolve().parent.parent / "test_data" / "archives"
+        sources = {
+            "hello.txt.gz": (fixtures / "hello.txt.gz").read_bytes(),
+            "readme.md": b"readme\n",
+        }
+        fetch = [f'{{ source = "{self.archive_path.as_posix()}", sha256 = "{self.archive_hash}" }}']
+        for file_name, data in sources.items():
+            path = self.test_dir / file_name
+            path.write_bytes(data)
+            digest = hashlib.sha256(data).hexdigest()
+            fetch.append(f'{{ source = "{path.as_posix()}", sha256 = "{digest}" }}')
+        only_lua = ", ".join(f'"{o}"' for o in only)
+        (self.test_dir / f"{name}.lua").write_text(
+            f'IDENTITY = "local.{name}@v1"\n'
+            f"FETCH = {{ {', '.join(fetch)} }}\n"
+            f"STAGE = {{ only = {{ {only_lua} }} }}\n",
+            encoding="utf-8",
+        )
+        return f"local.{name}@v1"
+
+    def test_declarative_only_holds_for_the_fetched_set(self):
+        """'only' spans every fetched item: each entry need match in just one of them."""
+        identity = self._write_union_spec(
+            "stage_only_union", ["root/file1.txt", "hello.txt", "readme.md"]
+        )
+        self.run_spec("stage_only_union", identity)
+
+        pkg_path = self.get_pkg_path(identity)
+        assert pkg_path
+        self.assertEqual(
+            {"root/file1.txt", "hello.txt", "readme.md"},
+            {p.relative_to(pkg_path).as_posix() for p in pkg_path.rglob("*") if p.is_file()},
+        )
+
+    def test_declarative_only_union_names_just_the_unmatched(self):
+        """An entry no fetched item provides fails the stage, named alone."""
+        identity = self._write_union_spec(
+            "stage_only_union_bad", ["root/file1.txt", "hello.txt", "nope"]
+        )
+        result = self.run_spec("stage_only_union_bad", identity, should_succeed=False)
+
+        output = result.stdout + result.stderr
+        self.assertIn('"nope"', output)
+        self.assertNotIn('"hello.txt"', output)
+        self.assertNotIn('"root/file1.txt"', output)
+
     def test_declarative_archives_unpacks_misnamed_archive(self):
         """STAGE archives unpacks a zip whose name carries no archive extension."""
         spec = """IDENTITY = "local.stage_archives@v1"

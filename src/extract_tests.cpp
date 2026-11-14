@@ -175,49 +175,83 @@ TEST_CASE("extract flat archive with strip=1 throws error") {
   std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("compute_extract_totals counts uncompressed archive bytes and plain files") {
-  auto const fetch_dir{ make_temp_dir() };
-  auto const archive_src{ std::filesystem::path("test_data/archives/test.tar.gz") };
-  auto const archive_dest{ fetch_dir / "test.tar.gz" };
-  std::filesystem::copy_file(archive_src, archive_dest);
-
-  // Add a plain file (11 bytes)
-  auto const plain{ fetch_dir / "plain.txt" };
-  {
-    std::ofstream out{ plain, std::ios::binary };
-    out << "hello world";
+TEST_CASE("extract_probe_totals counts plain tar and zip headers, strip and 'only' applied") {
+  // source/root: file1.txt, file2.txt, subdir1/file3.txt (18B each),
+  // subdir1/nested/file4.txt (20B), subdir2/file5.txt (19B).
+  struct row {
+    envy::extract_options opts;
+    envy::extract_totals want;
+  };
+  std::vector<row> const rows{
+    { {}, { .files = 5, .bytes = 93 } },
+    { { .strip_components = 1 }, { .files = 5, .bytes = 93 } },
+    { { .strip_components = 3 }, { .files = 1, .bytes = 20 } },
+    { { .strip_components = 4 }, { .files = 0, .bytes = 0 } },
+    { { .selectors = { "root/*.txt" } }, { .files = 2, .bytes = 36 } },
+    { { .selectors = { "**/*.txt" } }, { .files = 5, .bytes = 93 } },
+    { { .selectors = { "root/subdir?" } }, { .files = 3, .bytes = 57 } },
+    { { .selectors = { "root/**", "!root/subdir1/**" } }, { .files = 3, .bytes = 55 } },
+    { { .strip_components = 1, .selectors = { "subdir1" } }, { .files = 2, .bytes = 38 } },
+    { { .selectors = { "root/nope" } }, { .files = 0, .bytes = 0 } },
+  };
+  for (auto const *name : { "test.tar", "test.zip" }) {
+    for (std::size_t i{ 0 }; i < rows.size(); ++i) {
+      CHECK_MESSAGE(
+          envy::extract_probe_totals(std::filesystem::path("test_data/archives") / name,
+                                     rows[i].opts) == rows[i].want,
+          name,
+          " row ",
+          i);
+    }
   }
-
-  // Ground truth: extract archive and sum uncompressed bytes
-  auto const dest{ make_temp_dir() };
-  envy::extract_options opts{ .strip_components = 0 };
-  auto const files_in_archive{ envy::extract(archive_dest, dest, opts) };
-  REQUIRE(files_in_archive == 5);
-  std::uint64_t const archive_bytes{ sum_file_sizes(dest) };
-
-  envy::extract_totals const totals{ envy::compute_extract_totals(fetch_dir) };
-
-  CHECK(totals.files == 6);  // 5 from archive + 1 plain
-  CHECK(totals.bytes == archive_bytes + 11);
-
-  std::filesystem::remove_all(fetch_dir);
-  std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("compute_archive_totals counts files and bytes in a single archive") {
-  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
+TEST_CASE("extract_probe_totals will not decompress an archive to count it") {
+  for (auto const *name : { "test.tar.gz",
+                            "test.tar.bz2",
+                            "test.tar.xz",
+                            "test.tar.zst",
+                            "hello.txt.gz",
+                            "corrupt.gz" }) {
+    CHECK_MESSAGE(
+        !envy::extract_probe_totals(std::filesystem::path("test_data/archives") / name),
+        name);
+  }
+}
 
-  // Ground truth: extract and sum uncompressed regular file sizes
-  auto const dest{ make_temp_dir() };
-  auto const files_extracted{ envy::extract(archive, dest) };
-  REQUIRE(files_extracted == 5);
-  std::uint64_t const expected_bytes{ sum_file_sizes(dest) };
+TEST_CASE("extract_probe_totals reads envy's trailer, for the whole archive only") {
+  // test.tar compressed, then trailed as archive_create_tar_zst trails its output.
+  auto const stated{ std::filesystem::path("test_data/archives/stated.tar.zst") };
+  CHECK(envy::extract_probe_totals(stated) == envy::extract_totals{ .files = 5, .bytes = 93 });
 
-  envy::extract_totals const totals{ envy::compute_archive_totals(archive) };
-  CHECK(totals.files == 5);
-  CHECK(totals.bytes == expected_bytes);
+  // A selection is a subset the trailer cannot speak for, and the payload is compressed.
+  CHECK_FALSE(envy::extract_probe_totals(stated, { .selectors = { "root/subdir1" } }));
+  CHECK_FALSE(envy::extract_probe_totals(stated, { .strip_components = 1 }));
+}
 
-  std::filesystem::remove_all(dest);
+TEST_CASE("extract trailer: a zstd skippable frame stating files and bytes") {
+  envy::extract_trailer const want{
+    0x55, 0x2A, 0x4D, 0x18,                // skippable-frame magic, little-endian
+    24,   0,    0,    0,                   // payload size
+    5,    0,    0,    0,    0, 0, 0, 0,    // files
+    93,   0,    0,    0,    0, 0, 0, 0,    // bytes
+    'e',  'n',  'v',  'y',  't', 'o', 't', '1'
+  };
+  CHECK(envy::extract_trailer_encode({ .files = 5, .bytes = 93 }) == want);
+  CHECK(envy::extract_trailer_decode(want) == envy::extract_totals{ .files = 5, .bytes = 93 });
+
+  envy::extract_totals const wide{ .files = 0x0102030405060708, .bytes = UINT64_MAX };
+  CHECK(envy::extract_trailer_decode(envy::extract_trailer_encode(wide)) == wide);
+}
+
+TEST_CASE("extract trailer: damage to its frame or tag reads as no trailer") {
+  auto const good{ envy::extract_trailer_encode({ .files = 5, .bytes = 93 }) };
+  for (std::size_t i{ 0 }; i < good.size(); ++i) {
+    auto bad{ good };
+    bad[i] ^= 0x01;
+    bool const counted{ i >= 8 && i < 24 };  // files and bytes: any value is a value
+    CHECK_MESSAGE(envy::extract_trailer_decode(bad).has_value() == counted, "byte ", i);
+  }
 }
 
 TEST_CASE("extract different archive formats with strip") {
@@ -431,23 +465,6 @@ TEST_CASE("extract unrecognized suffix is not silently raw-decoded") {
   std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("compute_archive_totals on bare .gz reports one file with bytes") {
-  auto const archive{ std::filesystem::path("test_data/archives/hello.txt.gz") };
-  envy::extract_totals const totals{ envy::compute_archive_totals(archive) };
-  CHECK(totals.files == 1);
-  CHECK(totals.bytes > 0);
-}
-
-TEST_CASE("compute_archive_totals on corrupt .gz throws") {
-  // Mirror extract()'s validation: prescan must not silently report a corrupt
-  // bare-compressed file as a valid 1-file archive.
-  auto const archive{ std::filesystem::path("test_data/archives/corrupt.gz") };
-  try {
-    envy::compute_archive_totals(archive);
-    FAIL("Expected exception for corrupt .gz");
-  } catch (std::runtime_error const &e) { CHECK(std::string{ e.what() }.size() > 0); }
-}
-
 TEST_CASE("archive_create_tar_zst with fetch prefix") {
   auto const source{ make_temp_dir() };
   auto const dest{ make_temp_dir() };
@@ -648,22 +665,6 @@ TEST_CASE("extract_all_archives with glob only spans archive and loose files") {
   std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("compute_archive_totals with a glob counts only matching entries") {
-  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
-
-  CHECK(envy::compute_archive_totals(archive, { .selectors = { "root/*.txt" } }).files ==
-        2);
-  CHECK(envy::compute_archive_totals(archive, { .selectors = { "**/*.txt" } }).files == 5);
-  CHECK(envy::compute_archive_totals(archive, { .selectors = { "root/subdir?" } }).files ==
-        3);
-
-  auto const missing{ envy::compute_archive_totals(archive,
-                                                   { .selectors = { "root/*.md" } }) };
-  CHECK(missing.files == 0);
-  REQUIRE(missing.unmatched_selectors.size() == 1);
-  CHECK(missing.unmatched_selectors[0] == "root/*.md");
-}
-
 TEST_CASE("extract throws when an only entry matches nothing") {
   auto const dest{ make_temp_dir() };
   auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
@@ -698,50 +699,6 @@ TEST_CASE("extract rejects an unusable only entry") {
 
   CHECK(collect_files_recursive(dest).empty());
   std::filesystem::remove_all(dest);
-}
-
-TEST_CASE("compute_archive_totals with only counts only selected entries") {
-  auto const archive{ std::filesystem::path("test_data/archives/test.tar.gz") };
-
-  envy::extract_totals const all{ envy::compute_archive_totals(archive) };
-  envy::extract_totals const subtree{
-    envy::compute_archive_totals(archive, { .selectors = { "root/subdir1" } })
-  };
-
-  CHECK(all.files == 5);
-  CHECK(subtree.files == 2);
-  CHECK(subtree.bytes < all.bytes);
-  CHECK(subtree.unmatched_selectors.empty());
-
-  envy::extract_totals const missing{ envy::compute_archive_totals(
-      archive,
-      { .selectors = { "root/subdir1", "root/nope" } }) };
-  REQUIRE(missing.unmatched_selectors.size() == 1);
-  CHECK(missing.unmatched_selectors[0] == "root/nope");
-}
-
-TEST_CASE("compute_extract_totals only spans archives and loose files") {
-  auto const fetch_dir{ make_temp_dir() };
-  std::filesystem::copy_file(std::filesystem::path("test_data/archives/test.tar.gz"),
-                             fetch_dir / "test.tar.gz");
-  { std::ofstream{ fetch_dir / "plain.txt", std::ios::binary } << "hello world"; }
-
-  // "plain.txt" comes from the loose file, "root/subdir2" from inside the archive:
-  // neither alone satisfies the list, so the union is what gets validated.
-  envy::extract_totals const totals{ envy::compute_extract_totals(
-      fetch_dir,
-      { .selectors = { "plain.txt", "root/subdir2" } }) };
-
-  CHECK(totals.files == 2);
-  CHECK(totals.unmatched_selectors.empty());
-
-  envy::extract_totals const missing{
-    envy::compute_extract_totals(fetch_dir, { .selectors = { "plain.txt", "nope" } })
-  };
-  REQUIRE(missing.unmatched_selectors.size() == 1);
-  CHECK(missing.unmatched_selectors[0] == "nope");
-
-  std::filesystem::remove_all(fetch_dir);
 }
 
 TEST_CASE("extract_all_archives with only copies loose files and archive subsets") {

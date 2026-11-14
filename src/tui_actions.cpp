@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -54,89 +55,113 @@ void run_progress::on_output_line(std::string_view line) {
 
 // ==== extract_progress_tracker ====
 
-extract_progress_tracker::extract_progress_tracker(tui::section_handle section,
-                                                   std::string const &pkg_identity,
-                                                   std::string const &filename)
-    : section_{ section },
-      label_{ "[" + pkg_identity + "]" },
-      filename_{ filename },
-      start_time_{ std::chrono::steady_clock::now() } {
-  // Show initial spinner
-  tui::section_set_content(
-      section_,
-      tui::section_frame{ .label = label_,
-                          .content = tui::spinner_data{ .text = "extracting " + filename_,
-                                                        .start_time = start_time_ } });
+tui::section_frame archive_progress_frame(std::string const &label,
+                                          extract_progress const &prog,
+                                          std::string_view suffix,
+                                          bool terminal) {
+  auto const percent_of{ [](std::uint64_t n, std::uint64_t d) {
+    return d ? std::min(100.0, 100.0 * static_cast<double>(n) / static_cast<double>(d))
+             : 0.0;
+  } };
+  std::string status{ std::to_string(prog.files_processed) };
+  status += prog.totals ? "/" + std::to_string(prog.totals->files) + " files " +
+                              util_format_bytes(prog.bytes_processed) + "/" +
+                              util_format_bytes(prog.totals->bytes)
+                        : std::string{ " files" };
+  if (!suffix.empty()) { status.append(" ").append(suffix); }
+
+  double const percent{
+    terminal      ? 100.0
+    : prog.totals ? prog.totals->bytes
+                        ? percent_of(prog.bytes_processed, prog.totals->bytes)
+                        : percent_of(prog.files_processed, prog.totals->files)
+                  : percent_of(prog.input_bytes_processed, prog.input_bytes_total)
+  };
+  return { .label = label,
+           .content = tui::progress_data{ .percent = percent, .status = std::move(status) },
+           .terminal = terminal };
 }
 
-bool extract_progress_tracker::operator()(extract_progress const &prog) {
-  if (!section_) { return true; }
-
-  if (prog.is_regular_file && prog.current_entry != last_entry_) {
-    ++files_seen_;
-    last_entry_ = prog.current_entry;
+extract_progress_tracker::extract_progress_tracker(tui::section_handle section,
+                                                   std::string const &pkg_identity,
+                                                   std::vector<std::string> items,
+                                                   std::uint64_t input_total,
+                                                   std::optional<extract_totals> totals)
+    : section_{ section },
+      label_{ "[" + pkg_identity + "]" },
+      suffix_{ items.size() == 1 ? std::move(items.front()) : std::string{} },
+      done_{ .input_bytes_total = input_total, .totals = totals } {
+  if (items.size() > 1) {
+    for (auto &name : items) {
+      children_.push_back({ .label = std::move(name),
+                            .content = tui::static_text_data{ .text = "pending" } });
+    }
   }
+  publish(false);
+}
 
-  last_ = prog;
-  publish(prog, false);
+bool extract_progress_tracker::operator()(extract_progress const &item) {
+  item_ = item;
+  publish(false);
   return true;
 }
 
-void extract_progress_tracker::publish(extract_progress const &prog, bool terminal) {
-  auto const files{ std::max(prog.files_processed, files_seen_) };
-  auto const total_known{ (prog.total_files && *prog.total_files > 0) ||
-                          (prog.total_bytes && *prog.total_bytes > 0) };
-
-  std::ostringstream status;
-  status << files;
-  if (total_known && prog.total_files) { status << "/" << *prog.total_files; }
-  status << " files";
-  if (total_known && prog.total_bytes) {
-    status << " " << util_format_bytes(prog.bytes_processed) << "/"
-           << util_format_bytes(*prog.total_bytes);
-  } else if (prog.bytes_processed > 0) {
-    status << " " << util_format_bytes(prog.bytes_processed);
-  }
-  status << " " << filename_;
-
-  // No total to divide by: an animated spinner carrying the running counts says "working"
-  // where a bar pinned at 0% would say "stuck".
-  if (!total_known && !terminal) {
-    tui::section_set_content(
-        section_,
-        tui::section_frame{ .label = label_,
-                            .content = tui::spinner_data{ .text = status.str(),
-                                                          .start_time = start_time_ },
-                            .terminal = terminal });
-    return;
-  }
-
-  double const percent{ [&] {
-    if (terminal) { return 100.0; }
-    if (prog.total_files && *prog.total_files > 0) {
-      return std::min(100.0, (files / static_cast<double>(*prog.total_files)) * 100.0);
-    }
-    return std::min(
-        100.0,
-        (prog.bytes_processed / static_cast<double>(*prog.total_bytes)) * 100.0);
-  }() };
-
-  tui::section_set_content(
-      section_,
-      tui::section_frame{
-          .label = label_,
-          .content = tui::progress_data{ .percent = percent, .status = status.str() },
-          .terminal = terminal });
+void extract_progress_tracker::begin(std::size_t idx) {
+  if (idx >= children_.size()) { return; }
+  current_ = idx;
+  children_[idx].content = tui::spinner_data{ .text = "extracting",
+                                              .start_time = std::chrono::steady_clock::now() };
+  publish(false);
 }
 
-void extract_progress_tracker::finish() {
-  // Nothing was ever reported, so there is nothing to land — leave the row as it stands.
-  if (!section_ || (files_seen_ == 0 && last_.bytes_processed == 0)) { return; }
+void extract_progress_tracker::end(std::uint64_t item_size) {
+  done_.files_processed += item_.files_processed;
+  done_.bytes_processed += item_.bytes_processed;
+  done_.input_bytes_processed += item_size;  // the last read trails the archive's end
+  item_ = {};
+  if (current_) { children_[*current_].content = tui::static_text_data{ .text = "done" }; }
+  current_.reset();
+}
 
-  extract_progress done{ last_ };
-  if (done.total_files) { done.files_processed = *done.total_files; }
-  if (done.total_bytes) { done.bytes_processed = *done.total_bytes; }
-  publish(done, true);  // the archive is unpacked, so the row lands on a full bar
+void extract_progress_tracker::finish() { publish(true); }
+
+tui::section_frame extract_progress_tracker::frame(bool terminal) const {
+  extract_progress p{ done_ };
+  p.files_processed += item_.files_processed;
+  p.bytes_processed += item_.bytes_processed;
+  p.input_bytes_processed += item_.input_bytes_processed;
+  if (terminal && p.totals) {  // everything is out, so what the archive stated is the count
+    p.files_processed = p.totals->files;
+    p.bytes_processed = p.totals->bytes;
+  }
+  auto f{ archive_progress_frame(label_, p, suffix_, terminal) };
+  f.children = children_;
+  return f;
+}
+
+void extract_progress_tracker::publish(bool terminal) const {
+  if (section_) { tui::section_set_content(section_, frame(terminal)); }
+}
+
+std::uint64_t extract_tracked(std::filesystem::path const &archive_path,
+                              std::filesystem::path const &destination,
+                              extract_options options,
+                              tui::section_handle section,
+                              std::string const &pkg_identity,
+                              std::string const &name) {
+  if (!section) { return extract(archive_path, destination, options); }
+
+  std::error_code ec;
+  auto const size{ std::filesystem::file_size(archive_path, ec) };
+  extract_progress_tracker tracker{ section,
+                                    pkg_identity,
+                                    { name },
+                                    ec ? 0 : size,
+                                    extract_probe_totals(archive_path, options) };
+  options.progress = std::ref(tracker);
+  auto const files{ extract(archive_path, destination, options) };
+  tracker.finish();
+  return files;
 }
 
 // ==== fetch_all_progress_tracker ====

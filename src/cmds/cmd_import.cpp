@@ -18,7 +18,6 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -113,17 +112,12 @@ import_result import_one_archive(cache &c,
     return { parsed->identity, result.pkg_path, true, false };
   }
 
-  // No pre-scan for a lone archive, so no total: the tracker spins on the running counts
-  // and lands on a full bar once the archive is out.
-  std::optional<tui_actions::extract_progress_tracker> tracker;
-  if (section) {
-    tracker.emplace(section, parsed->identity, archive_path.filename().string());
-  }
-
-  extract_options opts;
-  if (tracker) { opts.progress = std::ref(*tracker); }
-  extract(archive_path, result.entry_path, opts);
-  if (tracker) { tracker->finish(); }
+  tui_actions::extract_tracked(archive_path,
+                               result.entry_path,
+                               {},
+                               section,
+                               parsed->identity,
+                               archive_path.filename().string());
 
   if (directory_has_entries(result.lock->install_dir())) {
     result.lock->mark_install_complete();

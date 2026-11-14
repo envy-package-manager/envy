@@ -109,6 +109,8 @@ PACKAGE_DEPOTS = {
 
 Semantics: all depot manifests merge into one flat index before any import proceeds (order irrelevant—cache keys are hash-unique; duplicate keys keep the first, differing SHA256 warns). Fetching is lazy: a single-step `#depot` engine task starts on first import that needs it; `DEPENDS` closures are flagged depot-bootstrap—they always source-build (breaks circularity) and must use strong dependencies only. URI download failures warn and degrade to source builds; a failed `DEPENDS` build or throwing `FETCH` is fatal. `--ignore-depot`/`ENVY_IGNORE_DEPOT` skips the task entirely (no deps spawn). Depot config is never hashed.
 
+**Archive trailer:** every `.tar.zst` envy writes (`envy export`) ends in a 32-byte zstd skippable frame stating its regular files and their bytes—little-endian magic `0x184D2A55`, payload size 24, files, bytes, tag `envytot1`. zstd decoders step over it; trailing, so magic sniffers (GNU tar) still see zstd. Extraction reads it to count against known totals without decompressing.
+
 Root manifest only, but never an error: a subproject's `PACKAGE_DEPOTS` is inert—never fetched, its `DEPENDS` never built—until the root adopts it. Adopting trusts the depot's artifacts; merge freely (`PACKAGE_DEPOTS = envy.extend({}, a.PACKAGE_DEPOTS, b.PACKAGE_DEPOTS)`).
 
 ## Shell Configuration

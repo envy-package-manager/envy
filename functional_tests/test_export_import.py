@@ -163,6 +163,70 @@ PACKAGES = {{
             f"Expected .tar.zst extension: {archive_path.name}",
         )
 
+    def test_exported_archive_states_its_totals(self):
+        """Export counts against the totals it walked its source for, then ends the archive
+        in a trailer stating them, so extracting it counts against them too; any zstd
+        decoder steps over the trailer."""
+        manifest = self.create_manifest(
+            f'''
+PACKAGES = {{
+    {{ spec = "local.exportable_pkg@v1", source = "{self.lua_path(self.test_dir)}/exportable_pkg.lua" }}
+}}
+'''
+        )
+        install = self.run_envy("install", "--manifest", str(manifest))
+        self.assertEqual(install.returncode, 0, f"install failed: {install.stderr}")
+
+        env = os.environ.copy()
+        env["TERM"] = "dumb"
+        env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+        export = test_config.run(
+            [
+                str(self.envy),
+                "--cache-root",
+                str(self.cache_root),
+                "export",
+                "local.exportable_pkg@v1",
+                "-o",
+                str(self.output_dir),
+                "--manifest",
+                str(manifest),
+            ],
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(export.returncode, 0, f"export failed: {export.stderr}")
+        _, archive_path = parse_export_line(export.stdout)
+        export_rows = [
+            ln.strip()
+            for ln in export.stderr.splitlines()
+            if "[local.exportable_pkg@v1]" in ln and " files" in ln
+        ]
+        self.assertTrue(export_rows, f"export drew no archive row: {export.stderr}")
+        for row in export_rows:
+            self.assertRegex(row, r" \d/4 files \S+/\S+")
+        self.assertRegex(export_rows[-1], r" 4/4 files (\S+)/\1: 100\.0%$")
+
+        dest = self.make_temp_dir("extracted")
+        result = test_config.run(
+            [str(self.envy), "extract", str(archive_path), str(dest)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, f"extract failed: {result.stderr}")
+        rows = [ln.strip() for ln in result.stderr.splitlines() if "[extract]" in ln]
+        self.assertTrue(rows, f"extract drew no progress row: {result.stderr}")
+        files = [p for p in dest.rglob("*") if p.is_file()]
+        self.assertEqual(4, len(files), files)  # three staged files and built.txt
+        self.assertIn("4/4 files", rows[-1])
+
+        if zstd := shutil.which("zstd"):
+            check = test_config.run([zstd, "-tq", str(archive_path)], capture_output=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+
     def test_export_default_package(self):
         """Export a default (non-EXPORTABLE) package produces fetch archive."""
         manifest = self.create_manifest(

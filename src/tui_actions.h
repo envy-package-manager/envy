@@ -40,33 +40,52 @@ class run_progress {
   std::string header_text_;
 };
 
-// Single-file extraction progress tracker
-// Lifetime: matches extract() blocking call
+// An archive row. Stated totals: "3/12 files 1.00KB/4.00KB" over a bar on bytes (files
+// when there are none). Otherwise "3 files" over a bar on the archive bytes read.
+tui::section_frame archive_progress_frame(std::string const &label,
+                                          extract_progress const &prog,
+                                          std::string_view suffix,
+                                          bool terminal);
+
+// The row for extracting one archive, or a set of items with a child row each. totals:
+// the set's contents, when every item states its own; input_total: their bytes on disk.
 class extract_progress_tracker {
  public:
   extract_progress_tracker(tui::section_handle section,
                            std::string const &pkg_identity,
-                           std::string const &filename);
+                           std::vector<std::string> items,
+                           std::uint64_t input_total,
+                           std::optional<extract_totals> totals);
 
-  bool operator()(extract_progress const &prog);
+  bool operator()(extract_progress const &item);  // the item in flight
+  void begin(std::size_t idx);                    // a set's item idx starts
+  void end(std::uint64_t item_size);              // the item in flight is fully read
 
   // Land the row on a full bar: the last callback fires before the archive is closed out,
   // so the row would otherwise keep whatever partial frame it ended on.
   void finish();
 
+  tui::section_frame frame(bool terminal) const;
+
  private:
-  void publish(extract_progress const &prog, bool terminal);
+  void publish(bool terminal) const;
 
   tui::section_handle section_;
   std::string label_;
-  std::string filename_;
-  std::chrono::steady_clock::time_point start_time_;
-  extract_progress last_;
-  // extract() reports bytes but no file count and no total, so the tracker tallies its own
-  // and spins rather than draw a bar stuck at 0%.
-  std::uint64_t files_seen_{ 0 };
-  std::filesystem::path last_entry_;
+  std::vector<tui::section_frame> children_;  // empty for a lone item
+  std::string suffix_;                        // a lone item's name
+  std::optional<std::size_t> current_;
+  extract_progress done_;  // finished items, plus the set's input total and totals
+  extract_progress item_;  // the item in flight
 };
+
+// extract() under an extract_progress_tracker row; kInvalidSection extracts silently.
+std::uint64_t extract_tracked(std::filesystem::path const &archive_path,
+                              std::filesystem::path const &destination,
+                              extract_options options,
+                              tui::section_handle section,
+                              std::string const &pkg_identity,
+                              std::string const &name);
 
 // A git fetch's row once its submodules have started: X/Y submodules over the whole
 // tree's bytes, one child row per repository in flight. `suffix` trails the status, as a
