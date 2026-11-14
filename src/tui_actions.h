@@ -90,9 +90,9 @@ class fetch_all_progress_tracker {
   fetch_progress_cb_t make_callback(std::size_t slot);
 
   // Land every row on its terminal frame: callbacks stop firing before teardown, so the
-  // last frame the renderer sees is otherwise mid-flight. `ok` is by slot and empty means
-  // all ok; a failed slot keeps its last frame.
-  void finish(std::vector<bool> const &ok = {});
+  // last frame the renderer sees is otherwise mid-flight. `results` is by slot and empty
+  // means all ok; a failed slot keeps its last frame.
+  void finish(std::vector<fetch_result_t> const &results = {});
 
  private:
   // A clone reports two phases through one callback: objects arriving, then deltas

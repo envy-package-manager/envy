@@ -482,11 +482,13 @@ tui::section_frame fetch_all_progress_tracker::final_frame_unlocked(
   };
 }
 
-void fetch_all_progress_tracker::finish(std::vector<bool> const &ok) {
+void fetch_all_progress_tracker::finish(std::vector<fetch_result_t> const &results) {
   std::lock_guard const lock{ mutex_ };
 
   for (std::size_t slot{ 0 }; slot < children_.size(); ++slot) {
-    if (slot < ok.size() && !ok[slot]) { continue; }
+    if (slot < results.size() && !std::holds_alternative<fetch_result>(results[slot])) {
+      continue;
+    }
     children_[slot] = final_frame_unlocked(slot);
   }
   publish_unlocked(true);

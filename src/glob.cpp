@@ -218,12 +218,12 @@ bool glob_any_match(std::vector<std::string> const &selectors, std::string_view 
 
 bool glob_selectors_match(std::vector<std::string> const &selectors,
                           std::string_view path,
-                          std::vector<bool> &matched) {
-  matched.resize(selectors.size(), false);
+                          glob_match_flags &matched) {
+  matched.resize(selectors.size(), 0);
   bool selected{ false };
   for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
     if (glob_match(selectors[i], path)) {
-      matched[i] = true;
+      matched[i] = 1;
       selected = true;
     }
   }
@@ -236,7 +236,7 @@ bool glob_filter::selects(std::string_view path) const {
 }
 
 bool glob_filter::selects(std::string_view path,
-                          std::vector<bool> &include_matched) const {
+                          glob_match_flags &include_matched) const {
   if (!include.empty() && !glob_selectors_match(include, path, include_matched)) {
     return false;
   }
@@ -282,7 +282,7 @@ glob_filter glob_parse_filter(std::vector<std::string> const &selectors,
 
 std::vector<std::string> glob_unmatched_selectors(
     std::vector<std::string> const &selectors,
-    std::vector<bool> const &matched) {
+    glob_match_flags const &matched) {
   std::vector<std::string> unmatched;
   for (std::size_t i{ 0 }; i < selectors.size(); ++i) {
     if (i >= matched.size() || !matched[i]) { unmatched.push_back(selectors[i]); }

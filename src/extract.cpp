@@ -125,7 +125,7 @@ void accumulate_archive_totals(std::filesystem::path const &archive_path,
                                int strip_components,
                                std::string_view context,
                                extract_totals &totals,
-                               std::vector<bool> &selector_matched) {
+                               glob_match_flags &selector_matched) {
   auto const bare_name{ extract_bare_compressed_output_name(archive_path) };
   archive_reader reader{ bare_name.has_value() };
   if (archive_read_open_filename(reader.handle, archive_path.string().c_str(), 10240) !=
@@ -197,7 +197,7 @@ struct extract_item {
 std::vector<extract_item> collect_extract_items(std::filesystem::path const &fetch_dir,
                                                 std::vector<std::string> const &archives) {
   auto const filter{ glob_parse_filter(archives, "extract", kArchivesEntry) };
-  std::vector<bool> matched(filter.include.size(), false);
+  glob_match_flags matched(filter.include.size(), 0);
   std::vector<extract_item> items;
   for (auto const &entry : std::filesystem::directory_iterator(fetch_dir)) {
     if (!entry.is_regular_file() || entry.path().filename() == "envy-complete") {
@@ -240,7 +240,7 @@ extract_totals compute_items_totals(std::vector<extract_item> const &items,
   auto const selectors{
     glob_parse_filter(options.selectors, "compute_extract_totals", kOnlyEntry)
   };
-  std::vector<bool> selector_matched(selectors.include.size(), false);
+  glob_match_flags selector_matched(selectors.include.size(), 0);
   extract_totals totals{};
 
   for (auto const &item : items) {
@@ -547,7 +547,7 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   archive_entry *entry{ nullptr };
   std::uint64_t processed{ 0 };
   std::uint64_t files_extracted{ 0 };
-  std::vector<bool> selector_matched(selectors.include.size(), false);
+  glob_match_flags selector_matched(selectors.include.size(), 0);
 
   while (true) {
     int const r{ archive_read_next_header(reader.handle, &entry) };
@@ -762,7 +762,7 @@ extract_totals compute_archive_totals(std::filesystem::path const &archive_path,
   auto const selectors{
     glob_parse_filter(options.selectors, "compute_archive_totals", kOnlyEntry)
   };
-  std::vector<bool> selector_matched(selectors.include.size(), false);
+  glob_match_flags selector_matched(selectors.include.size(), 0);
   extract_totals totals{};
   accumulate_archive_totals(archive_path,
                             selectors,
@@ -830,7 +830,7 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
   std::uint64_t total_files_copied{ 0 };
   std::uint64_t processed_bytes{ 0 };
   // Scratch for the loose-file check below; the pre-scan owns selector validation.
-  std::vector<bool> loose_selector_matched;
+  glob_match_flags loose_selector_matched;
 
   for (auto const &item : items) {
     auto const &path{ item.path };
