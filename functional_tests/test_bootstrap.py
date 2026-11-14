@@ -270,9 +270,7 @@ class EnvyServer:
 
         self.server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
+        self.thread = test_config.serve_in_thread(self.server)
         return self.port
 
     def stop(self) -> None:
@@ -325,9 +323,7 @@ class RedirectChainServer:
 
         self.server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
+        self.thread = test_config.serve_in_thread(self.server)
         return self.port
 
     def url_for(self, path: str) -> str:

@@ -27,7 +27,6 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-import threading
 import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -224,8 +223,7 @@ class EnvyTestCase(unittest.TestCase):
             ("127.0.0.1", 0),
             partial(QuietHTTPHandler, directory=str(directory), requests=requests),
         )
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = test_config.serve_in_thread(server)
 
         def stop():
             # One cleanup rather than three, so the order is stated instead of

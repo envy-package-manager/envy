@@ -24,11 +24,12 @@ _default_watchdog_timeout: float = 5.0
 
 
 def _resolve_timeout(test: unittest.TestCase, default: float) -> float:
+    """An override only raises the budget; a slow runner's ENVY_TEST_TIMEOUT floors it."""
     method = getattr(test, test._testMethodName, None)
     override = getattr(method, "envy_watchdog_timeout", None)
     if override is None:
         override = getattr(test, "envy_watchdog_timeout", None)
-    return float(override) if override is not None else default
+    return max(float(override), default) if override is not None else default
 
 
 def _watchdog_loop() -> None:

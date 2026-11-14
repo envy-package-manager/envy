@@ -4,9 +4,11 @@ import os
 import shlex
 import shutil
 import signal
+import socketserver
 import stat
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -41,6 +43,19 @@ def run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     if args and not kwargs.get("shell"):
         args[0] = _wrap_cmd(args[0])
     return subprocess.run(*args, **kwargs)
+
+
+def serve_in_thread(server: socketserver.BaseServer) -> threading.Thread:
+    """Run `server.serve_forever` on a started daemon thread and return the thread.
+
+    shutdown() waits for the loop's next poll; at the 0.5s default, every stub server's
+    teardown cost the suite half a second.
+    """
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    return thread
 
 
 def describe_exit(result: subprocess.CompletedProcess) -> str:

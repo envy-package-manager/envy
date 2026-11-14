@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import tarfile
-import threading
 import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -716,10 +715,7 @@ class TestBundleFetchRemote(EnvyTestCase):
 
         handler = partial(_QuietHandler, directory=str(self.serve_dir))
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self.server_thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
-        self.server_thread.start()
+        self.server_thread = test_config.serve_in_thread(self.server)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/bundle.tar.gz"
 
     def tearDown(self):

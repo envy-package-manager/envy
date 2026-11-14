@@ -142,6 +142,11 @@ include("${CMAKE_CURRENT_LIST_DIR}/deps/Nanosemver.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Picojson.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Doctest.cmake")
 
+# libgit2 caches CMAKE_C_STANDARD=90 and CMAKE_C_EXTENSIONS=OFF partway through, so a
+# reconfigure would apply them to deps it never touched; dropping them keeps it fresh-identical.
+unset(CMAKE_C_STANDARD CACHE)
+unset(CMAKE_C_EXTENSIONS CACHE)
+
 # Aggregate -----------------------------------------------------------------
 add_library(envy_thirdparty INTERFACE)
 add_library(envy::thirdparty ALIAS envy_thirdparty)

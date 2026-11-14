@@ -2,6 +2,7 @@
 #include "doctest.h"
 
 #include "tui.h"
+#include "util.h"
 
 #include <algorithm>
 #include <atomic>
@@ -12,6 +13,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -45,23 +48,14 @@ bool is_stress_test(std::string_view name) {
          name.find("stress - ") != std::string_view::npos;
 }
 
-// A pwsh test pays for a cold .NET start, and on an arm64 Windows runner that start is
-// emulated. `fails on nonexistent command` is the worst of them: PowerShell answers an
-// unresolved name by searching the whole PATH for suggestions. Observed exceeding 30s
-// there while passing in seconds on x64, so the bound is per-class rather than global --
-// a genuine hang in a pwsh test still aborts, just later.
-constexpr std::chrono::seconds kPowershellTimeout{ 120 };
-
-bool is_powershell_test(std::string_view name) {
-  return name.find("powershell") != std::string_view::npos ||
-         name.find("pwsh") != std::string_view::npos;
-}
-
 std::chrono::seconds timeout_for(std::string_view name, std::chrono::seconds fallback) {
-  if (is_stress_test(name)) { return std::max(fallback, kStressTimeout); }
-  if (is_powershell_test(name)) { return std::max(fallback, kPowershellTimeout); }
-  return fallback;
+  return is_stress_test(name) ? std::max(fallback, kStressTimeout) : fallback;
 }
+
+// Cases at or over this are listed after the run: the suite is sub-second on POSIX, so a
+// platform-only slowdown (pwsh's cold start on Windows) would otherwise hide in the total.
+constexpr double kSlowTestSeconds{ 0.5 };
+constexpr std::size_t kSlowTestsShown{ 12 };
 
 std::mutex g_watchdog_mutex;
 std::string g_current_test;                          // guarded by g_watchdog_mutex
@@ -76,18 +70,30 @@ struct watchdog_listener : doctest::IReporter {
   void test_case_start(doctest::TestCaseData const &data) override {
     std::lock_guard const lock(g_watchdog_mutex);
     g_current_test = data.m_name ? data.m_name : "<unnamed>";
+    name_ = g_current_test;
     g_test_start = std::chrono::steady_clock::now();
     g_effective_timeout = timeout_for(g_current_test, g_default_timeout);
     g_test_running = true;
   }
 
-  void test_case_end(doctest::CurrentTestCaseStats const &) override {
+  void test_case_end(doctest::CurrentTestCaseStats const &stats) override {
     g_test_running = false;
+    if (stats.seconds >= kSlowTestSeconds) { slow_.emplace_back(stats.seconds, name_); }
   }
 
   void report_query(doctest::QueryData const &) override {}
   void test_run_start() override {}
-  void test_run_end(doctest::TestRunStats const &) override {}
+  void test_run_end(doctest::TestRunStats const &) override {
+    if (slow_.empty()) { return; }
+    envy::util_sort(slow_, [](auto const &a, auto const &b) { return a.first > b.first; });
+    std::printf("unit tests taking %.1fs or more (%zu):\n",
+                kSlowTestSeconds,
+                slow_.size());
+    for (std::size_t i{ 0 }; i < std::min(slow_.size(), kSlowTestsShown); ++i) {
+      std::printf("  %7.2fs  %s\n", slow_[i].first, slow_[i].second.c_str());
+    }
+    std::fflush(stdout);
+  }
   void test_case_reenter(doctest::TestCaseData const &) override {}
   void test_case_exception(doctest::TestCaseException const &) override {}
   void subcase_start(doctest::SubcaseSignature const &) override {}
@@ -95,6 +101,10 @@ struct watchdog_listener : doctest::IReporter {
   void log_assert(doctest::AssertData const &) override {}
   void log_message(doctest::MessageData const &) override {}
   void test_case_skipped(doctest::TestCaseData const &) override {}
+
+ private:
+  std::string name_;
+  std::vector<std::pair<double, std::string>> slow_;
 };
 
 void watchdog_thread_main() {

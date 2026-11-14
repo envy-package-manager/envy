@@ -19,9 +19,19 @@ TEST_CASE("fetch rejects empty sources") {
   CHECK(std::get<std::string>(results[0]).find("empty") != std::string::npos);
 }
 
-TEST_CASE("fetch rejects unsupported schemes") {
-  envy::fetch_request_http request{ .source = "foo://bucket/object",
-                                    .destination = std::filesystem::path("ignored") };
+TEST_CASE("fetch rejects unsupported schemes without retrying") {
+  // No retry makes a scheme supported; WinINet's code for one once fell through to CONNECT
+  // and spent the whole 5s connect budget before reporting it.
+  bool retried{ false };  // written on fetch's worker thread, read after fetch joins it
+  envy::fetch_request_http request{
+    .source = "foo://bucket/object",
+    .destination = std::filesystem::path("ignored"),
+    .progress =
+        [&](envy::fetch_progress_t const &p) {
+          retried = retried || std::holds_alternative<envy::fetch_retry_progress>(p);
+          return true;
+        }
+  };
 
   auto const results{ envy::fetch({ request }) };
   REQUIRE(results.size() == 1);
@@ -30,6 +40,7 @@ TEST_CASE("fetch rejects unsupported schemes") {
   auto const &error = std::get<std::string>(results[0]);
   INFO("Actual error message: ", error);
   CHECK(!error.empty());
+  CHECK_FALSE(retried);
 }
 
 TEST_CASE("fetch batch download multiple files") {

@@ -141,8 +141,7 @@ class FetchRetryTest(EnvyTestCase):
         server.user_agents = set()
         self.origin = server
 
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = test_config.serve_in_thread(server)
 
         def stop():
             server.shutdown()

@@ -25,6 +25,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++20 modules here; scanning adds a pass per TU and GCC's -fmodules-ts defeats sccache
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -388,8 +390,8 @@ set(ENVY_COMMON_COMPILE_OPTIONS
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-Wno-deprecated-declarations>
 )
 
-# Function to configure an envy executable (base configuration, no sanitizers)
-function(configure_envy_executable TARGET_NAME)
+# Compile configuration for any target that builds envy's sources (no sanitizers)
+function(configure_envy_compile TARGET_NAME)
     target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
     target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -397,16 +399,19 @@ function(configure_envy_executable TARGET_NAME)
     )
     add_dependencies(${TARGET_NAME} envy_embedded_resources envy_embedded_licenses)
     target_compile_options(${TARGET_NAME} PRIVATE ${ENVY_COMMON_COMPILE_OPTIONS})
-    # Warnings are errors in envy's code and at its link, where GCC's LTO checks (-Wodr) run
-    set_target_properties(${TARGET_NAME} PROPERTIES
-        COMPILE_WARNING_AS_ERROR ON
-        LINK_WARNING_AS_ERROR ON
-    )
+    set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+    target_link_libraries(${TARGET_NAME} PRIVATE envy::thirdparty)
+endfunction()
+
+# Function to configure an envy executable (base configuration, no sanitizers)
+function(configure_envy_executable TARGET_NAME)
+    configure_envy_compile(${TARGET_NAME})
+    # Warnings are errors at the link too, where GCC's LTO checks (-Wodr) run
+    set_target_properties(${TARGET_NAME} PROPERTIES LINK_WARNING_AS_ERROR ON)
     target_link_options(${TARGET_NAME} PRIVATE
         $<$<PLATFORM_ID:Darwin>:-Wl,-dead_strip>
         $<$<PLATFORM_ID:Linux>:-Wl,--gc-sections>
     )
-    target_link_libraries(${TARGET_NAME} PRIVATE envy::thirdparty)
 
     # Add noexecstack for all GCC builds (security hardening)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -457,10 +462,24 @@ function(apply_sanitizers TARGET_NAME)
     endif()
 endfunction()
 
+# envy and the tester differ only in TUs that see ENVY_FUNCTIONAL_TESTER; the rest compile
+# once, linked straight into each single-file executable. Built only when one links it.
+set(ENVY_TESTER_VARIANT_SOURCES src/cli.cpp src/main.cpp src/tui.cpp)
+set(ENVY_SHARED_SOURCES ${ENVY_COMMON_SOURCES})
+list(REMOVE_ITEM ENVY_SHARED_SOURCES ${ENVY_TESTER_VARIANT_SOURCES})
+add_library(envy_shared_objects OBJECT EXCLUDE_FROM_ALL ${ENVY_SHARED_SOURCES})
+target_compile_definitions(envy_shared_objects PRIVATE
+    ENVY_VERSION_STR=\"${PROJECT_VERSION}\")
+configure_envy_compile(envy_shared_objects)
+# PIE like the executables these objects only ever join, not the PIC CMake gives libraries
+set_target_properties(envy_shared_objects PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+target_compile_options(envy_shared_objects PRIVATE ${CMAKE_CXX_COMPILE_OPTIONS_PIE})
+
 # Production executable -------------------------------------------------------
 if(ENVY_BUILD_ENVY)
 add_executable(envy)
-target_sources(envy PRIVATE ${ENVY_COMMON_SOURCES})
+target_sources(envy PRIVATE ${ENVY_TESTER_VARIANT_SOURCES})
+target_link_libraries(envy PRIVATE envy_shared_objects)
 target_compile_definitions(envy PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\")
 configure_envy_executable(envy)
 
@@ -504,7 +523,14 @@ endif() # ENVY_BUILD_ENVY
 # Functional tester executable ------------------------------------------------
 if(ENVY_BUILD_FUNCTIONAL_TESTER)
 add_executable(envy_functional_tester)
-target_sources(envy_functional_tester PRIVATE ${ENVY_COMMON_SOURCES} ${ENVY_FUNCTIONAL_TEST_SOURCES})
+target_sources(envy_functional_tester PRIVATE ${ENVY_FUNCTIONAL_TEST_SOURCES})
+# A sanitized tester needs instrumented objects of its own; envy's stay uninstrumented
+if(ENVY_SANITIZER STREQUAL "NONE")
+    target_sources(envy_functional_tester PRIVATE ${ENVY_TESTER_VARIANT_SOURCES})
+    target_link_libraries(envy_functional_tester PRIVATE envy_shared_objects)
+else()
+    target_sources(envy_functional_tester PRIVATE ${ENVY_COMMON_SOURCES})
+endif()
 target_compile_definitions(envy_functional_tester PRIVATE
     ENVY_VERSION_STR=\"${PROJECT_VERSION}\"
     ENVY_FUNCTIONAL_TESTER=1
@@ -629,10 +655,13 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
     COMMAND ${Python3_EXECUTABLE}
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
+    COMMAND ${Python3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
     COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
     DEPENDS "${PROJECT_SOURCE_DIR}/cmake/scripts/embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
+            "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
+            "${PROJECT_SOURCE_DIR}/tools/unzip"
             ${_envy_shell_lint_inputs}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     COMMENT "Running build-script tests"
