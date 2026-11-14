@@ -10,7 +10,6 @@ cannot be compared — warn instead of failing.
 import hashlib
 import subprocess
 import tarfile
-import threading
 import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -94,8 +93,7 @@ class TestBundleRedeclaration(EnvyTestCase):
 
         handler = partial(_QuietHandler, directory=str(self.serve_dir))
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
+        self.thread = test_config.serve_in_thread(self.server)
         port = self.server.server_address[1]
         self.url_a = f"http://127.0.0.1:{port}/bundle-a.tar.gz"
         self.url_b = f"http://127.0.0.1:{port}/bundle-b.tar.gz"

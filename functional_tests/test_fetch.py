@@ -4,7 +4,6 @@ import os
 import re
 import subprocess
 import tempfile
-import threading
 import time
 from functools import partial
 from http.server import (
@@ -141,8 +140,7 @@ class FetchCommandFunctionalTest(unittest.TestCase):
 
             handler = partial(_QuietHandler, directory=str(serve_dir))
             server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-            server_thread.start()
+            server_thread = test_config.serve_in_thread(server)
             try:
                 port = server.server_address[1]
                 url = f"http://127.0.0.1:{port}/{payload_name}"
@@ -197,8 +195,7 @@ class FetchCommandFunctionalTest(unittest.TestCase):
                     time.sleep(0.25)
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = test_config.serve_in_thread(server)
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"
@@ -265,8 +262,7 @@ class FetchCommandFunctionalTest(unittest.TestCase):
                 self.wfile.flush()
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), _ChunkedHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = test_config.serve_in_thread(server)
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"
@@ -327,8 +323,7 @@ class FetchCommandFunctionalTest(unittest.TestCase):
                 self.wfile.write(payload)
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = test_config.serve_in_thread(server)
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 url = f"http://127.0.0.1:{server.server_address[1]}/payload.bin"

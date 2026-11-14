@@ -2,7 +2,6 @@
 
 import shutil
 import tempfile
-import threading
 import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -297,8 +296,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/existing.txt"
@@ -329,8 +327,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/existing.txt"
@@ -359,8 +356,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/existing.txt"
@@ -504,8 +500,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/retain.txt"
@@ -655,8 +650,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/retain.txt"
@@ -845,8 +839,7 @@ class TestMergeDepot(EnvyTestCase):
 
         handler = partial(_QuietHTTPHandler, directory=str(serve_dir))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
+        server_thread = test_config.serve_in_thread(server)
         try:
             port = server.server_address[1]
             url = f"http://127.0.0.1:{port}/s3ls.txt"

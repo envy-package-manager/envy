@@ -11,7 +11,6 @@ import shutil
 import socket
 import tarfile
 import tempfile
-import threading
 import time
 import unittest
 from functools import partial
@@ -266,7 +265,7 @@ class TestPackageDepot(EnvyTestCase):
         """Start HTTP server on self.serve_dir. Returns (server, port)."""
         handler = partial(_QuietHandler, directory=str(self.serve_dir))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
         return srv, srv.server_address[1]
 
     def _make_depot_manifest(self, archive_paths, port, name="depot.txt"):
@@ -776,7 +775,7 @@ class TestIgnoreDepot(EnvyTestCase):
     def _start_server(self):
         handler = partial(_QuietHandler, directory=str(self.serve_dir))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
         return srv, srv.server_address[1]
 
     def _make_depot_manifest(self, archive_paths, port, name="depot.txt"):
@@ -1317,7 +1316,7 @@ class TestImportManifest(EnvyTestCase):
         handler = partial(_QuietHandler, directory=str(self.output_dir))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         port = srv.server_address[1]
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
 
         try:
             h = hashlib.sha256(archives[0].read_bytes()).hexdigest()
@@ -1371,7 +1370,7 @@ class TestImportManifest(EnvyTestCase):
 
         srv = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
         port = srv.server_address[1]
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
 
         try:
             url = f"http://127.0.0.1:{port}/{archive_name}"
@@ -1552,7 +1551,7 @@ class TestUserManagedSkipsDepot(EnvyTestCase):
     def _start_tracking_server(self):
         handler = _make_tracking_handler(self.requests, str(self.serve_dir))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
         return srv, srv.server_address[1]
 
     def _write_user_managed_spec(self, name, identity, marker_path):
@@ -1769,7 +1768,7 @@ end
         shutil.copy2(archive, self.serve_dir / archive.name)
         handler = partial(_QuietHandler, directory=str(self.serve_dir))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test_config.serve_in_thread(srv)
         port = srv.server_address[1]
         url = f"http://127.0.0.1:{port}/{archive.name}"
         sha = hashlib.sha256(archive.read_bytes()).hexdigest()
