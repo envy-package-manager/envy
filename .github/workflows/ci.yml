@@ -535,7 +535,16 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
           if (-not $vsPath) { throw "Visual Studio installation not found via vswhere" }
-          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch ${{ matrix.arch }} -HostArch amd64
+          # Host = target: an amd64 host on the arm64 runner ran the toolchain emulated.
+          # The check fails the job rather than let a non-native cl.exe build quietly.
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
+            -DevCmdArguments "-arch=${{ matrix.arch }} -host_arch=${{ matrix.arch }} -no_logo"
+          $cl = (Get-Command cl).Source
+          $native = @{ amd64 = 'Hostx64\x64'; arm64 = 'Hostarm64\arm64' }
+          $want = $native['${{ matrix.arch }}']
+          if ($cl -notlike "*\$want\cl.exe") { throw "expected a native toolset, got $cl" }
+          Write-Output "cl: $cl"
           $BuildArgs = "${{ matrix.build_args }}"
           $Arguments = @()
           if (-not [string]::IsNullOrWhiteSpace($BuildArgs)) {
