@@ -91,11 +91,12 @@ jobs:
             cache_group: linux-arm64-tsan
             cache_writer: true
           # Unsanitized build that also produces envy_functional_tester, so it is the
-          # superset writer for linux-arm64-none rather than linux-arm64-main.
+          # superset writer for linux-arm64-none rather than linux-arm64-main. A worker per
+          # core: memcheck pins each envy to one, so serial runs left three of four idle.
           - name: linux-arm64-valgrind
             os: ubuntu-24.04-arm
             shard: func-valgrind
-            test_jobs: 1
+            test_jobs: 4
             test_timeout: 300
             cache_group: linux-arm64-none
             cache_writer: true
