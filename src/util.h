@@ -271,13 +271,15 @@ bool util_platform_matches(std::vector<std::string> const &constraints,
                            std::string_view target_os,
                            std::string_view target_arch);
 
-// Empty = "all"; two non-empty lists yield set intersection.
+// Sentinel platform constraint that matches nothing: what disjoint lists intersect to,
+// since an empty list reads as "all".
+inline constexpr char const *kPlatformNone = "__none__";
+
+// The hosts both lists match, as util_platform_matches reads them: empty is "all", and an
+// OS entry covers its arches, so "linux" & "linux-x86_64" keep the latter. Disjoint
+// non-empty lists yield { kPlatformNone }.
 std::vector<std::string> util_platform_intersect(std::vector<std::string> const &a,
                                                  std::vector<std::string> const &b);
-
-// Sentinel platform constraint that matches nothing; used when disjoint
-// non-empty platform lists intersect to an empty set (empty = "all").
-inline constexpr char const *kPlatformNone = "__none__";
 
 // Does constraint list produce scripts for this platform_id?
 // POSIX covers "darwin" and "linux"; WINDOWS covers "windows".

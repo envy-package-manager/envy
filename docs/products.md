@@ -18,7 +18,10 @@ PRODUCTS = {                        -- or function(options) returning the same t
 Keys are printable ASCII minus shell metacharacters (`" ' $ \` % \ !`) — they become
 deployed script names. Values are non-empty, and for a cache-managed spec must be a
 relative path with no `..` component. `platforms` narrows one product; the effective
-constraint is its intersection with the spec's resolved platforms. `script = false`
+constraint is its intersection with the spec's resolved platforms (spec `PLATFORMS` and
+the manifest entry's `platforms`). An OS covers its arches, so granularity may differ:
+`{ "linux" }` and `{ "linux-x86_64" }` meet at `linux-x86_64`; disjoint lists deploy no
+script. `script = false`
 suppresses the deployed wrapper (see `docs/commands.md` for `deploy`).
 
 ## Depending on a product
