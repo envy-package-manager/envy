@@ -1496,15 +1496,16 @@ TEST_CASE("archive_progress_frame: stated totals count against them, the bar on 
 
 TEST_CASE("archive_progress_frame: stated totals with no bytes put the bar on files") {
   envy::extract_progress const prog{ .files_processed = 1,
-                                     .totals = envy::extract_totals{ .files = 4,
-                                                                     .bytes = 0 } };
+                                     .totals =
+                                         envy::extract_totals{ .files = 4, .bytes = 0 } };
   auto const frame{ envy::tui_actions::archive_progress_frame("[pkg]", prog, {}, false) };
   auto const &bar{ std::get<envy::tui::progress_data>(frame.content) };
   CHECK(bar.percent == doctest::Approx(25.0));
   CHECK(bar.status == "1/4 files 0B/0B");
 }
 
-TEST_CASE("archive_progress_frame: unstated totals count files over the archive bytes read") {
+TEST_CASE(
+    "archive_progress_frame: unstated totals count files over the archive bytes read") {
   envy::extract_progress const prog{ .bytes_processed = 999,
                                      .files_processed = 7,
                                      .input_bytes_processed = 300,
@@ -1517,7 +1518,8 @@ TEST_CASE("archive_progress_frame: unstated totals count files over the archive 
   CHECK(bar.status == "7 files sdk.tar.xz");
 }
 
-TEST_CASE("archive_progress_frame: terminal is a full bar; nothing known divides nothing") {
+TEST_CASE(
+    "archive_progress_frame: terminal is a full bar; nothing known divides nothing") {
   auto const done{ envy::tui_actions::archive_progress_frame(
       "[pkg]",
       { .files_processed = 2, .input_bytes_processed = 1, .input_bytes_total = 9 },
@@ -1532,7 +1534,8 @@ TEST_CASE("archive_progress_frame: terminal is a full bar; nothing known divides
   CHECK(std::get<envy::tui::progress_data>(empty.content).status == "0 files");
 }
 
-TEST_CASE("extract_progress_tracker: a set's row sums finished items and the one in flight") {
+TEST_CASE(
+    "extract_progress_tracker: a set's row sums finished items and the one in flight") {
   envy::tui_actions::extract_progress_tracker t{ envy::tui::kInvalidSection,
                                                  "pkg",
                                                  { "sdk.tar.xz", "notes.txt" },
@@ -1552,7 +1555,8 @@ TEST_CASE("extract_progress_tracker: a set's row sums finished items and the one
   t({ .bytes_processed = 50, .files_processed = 3, .input_bytes_processed = 200 });
   auto const first{ t.frame(false) };
   CHECK(first.label == "[pkg]");
-  CHECK(std::get<envy::tui::progress_data>(first.content).percent == doctest::Approx(20.0));
+  CHECK(std::get<envy::tui::progress_data>(first.content).percent ==
+        doctest::Approx(20.0));
   CHECK(std::get<envy::tui::progress_data>(first.content).status == "3 files");
   REQUIRE(first.children.size() == 2);
   CHECK(child_text(first.children[0]) == "extracting");
@@ -1564,7 +1568,8 @@ TEST_CASE("extract_progress_tracker: a set's row sums finished items and the one
   t.begin(1);
   t({ .bytes_processed = 11, .files_processed = 1, .input_bytes_processed = 100 });
   auto const second{ t.frame(false) };
-  CHECK(std::get<envy::tui::progress_data>(second.content).percent == doctest::Approx(70.0));
+  CHECK(std::get<envy::tui::progress_data>(second.content).percent ==
+        doctest::Approx(70.0));
   CHECK(std::get<envy::tui::progress_data>(second.content).status == "5 files");
   CHECK(child_text(second.children[0]) == "done");
   CHECK(child_text(second.children[1]) == "extracting");
@@ -1577,13 +1582,12 @@ TEST_CASE("extract_progress_tracker: a set's row sums finished items and the one
 }
 
 TEST_CASE("extract_progress_tracker: stated totals land the finished row on them") {
-  envy::tui_actions::extract_progress_tracker t{
-    envy::tui::kInvalidSection,
-    "pkg",
-    { "sdk.zip" },
-    500,
-    envy::extract_totals{ .files = 10, .bytes = 4096 }
-  };
+  envy::tui_actions::extract_progress_tracker t{ envy::tui::kInvalidSection,
+                                                 "pkg",
+                                                 { "sdk.zip" },
+                                                 500,
+                                                 envy::extract_totals{ .files = 10,
+                                                                       .bytes = 4096 } };
   t({ .bytes_processed = 1024, .files_processed = 5, .input_bytes_processed = 250 });
 
   auto const mid{ t.frame(false) };

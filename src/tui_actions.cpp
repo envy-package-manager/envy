@@ -78,7 +78,8 @@ tui::section_frame archive_progress_frame(std::string const &label,
                   : percent_of(prog.input_bytes_processed, prog.input_bytes_total)
   };
   return { .label = label,
-           .content = tui::progress_data{ .percent = percent, .status = std::move(status) },
+           .content =
+               tui::progress_data{ .percent = percent, .status = std::move(status) },
            .terminal = terminal };
 }
 
@@ -109,8 +110,9 @@ bool extract_progress_tracker::operator()(extract_progress const &item) {
 void extract_progress_tracker::begin(std::size_t idx) {
   if (idx >= children_.size()) { return; }
   current_ = idx;
-  children_[idx].content = tui::spinner_data{ .text = "extracting",
-                                              .start_time = std::chrono::steady_clock::now() };
+  children_[idx].content =
+      tui::spinner_data{ .text = "extracting",
+                         .start_time = std::chrono::steady_clock::now() };
   publish(false);
 }
 
@@ -130,7 +132,8 @@ tui::section_frame extract_progress_tracker::frame(bool terminal) const {
   p.files_processed += item_.files_processed;
   p.bytes_processed += item_.bytes_processed;
   p.input_bytes_processed += item_.input_bytes_processed;
-  if (terminal && p.totals) {  // everything is out, so what the archive stated is the count
+  if (terminal &&
+      p.totals) {  // everything is out, so what the archive stated is the count
     p.files_processed = p.totals->files;
     p.bytes_processed = p.totals->bytes;
   }

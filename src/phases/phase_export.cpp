@@ -74,14 +74,19 @@ void run_export_phase(pkg *p, engine &eng) {
   try {
     // The archive walks its source first, so every call carries the totals.
     extract_progress last;
-    archive_create_tar_zst(output_path, source_dir, prefix, [&](extract_progress const &ep) {
-      last = ep;
-      if (p->tui_section) {
-        tui::section_set_content(p->tui_section,
-                                 tui_actions::archive_progress_frame(label, ep, {}, false));
-      }
-      return true;
-    });
+    archive_create_tar_zst(
+        output_path,
+        source_dir,
+        prefix,
+        [&](extract_progress const &ep) {
+          last = ep;
+          if (p->tui_section) {
+            tui::section_set_content(
+                p->tui_section,
+                tui_actions::archive_progress_frame(label, ep, {}, false));
+          }
+          return true;
+        });
     if (p->tui_section) {  // land the bar, as hashing does, so a finished row is not lost
       tui::section_set_content(p->tui_section,
                                tui_actions::archive_progress_frame(label, last, {}, true));

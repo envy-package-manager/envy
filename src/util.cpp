@@ -554,8 +554,8 @@ std::vector<std::string> util_platform_intersect(std::vector<std::string> const 
                                                  std::vector<std::string> const &b) {
   if (a.empty()) { return b; }
   if (b.empty()) { return a; }
-  // An OS entry (no '-') covers "os-<arch>"; an OS-arch entry covers only itself, since its
-  // arch is everything after the '-'.
+  // An OS entry (no '-') covers "os-<arch>"; an OS-arch entry covers only itself, since
+  // its arch is everything after the '-'.
   auto const covers{ [](std::string const &broad, std::string const &narrow) {
     return narrow == broad || (broad.find('-') == std::string::npos &&
                                narrow.starts_with(broad) && narrow[broad.size()] == '-');
@@ -563,7 +563,9 @@ std::vector<std::string> util_platform_intersect(std::vector<std::string> const 
   std::vector<std::string> result;
   for (auto const &v : a) {
     for (auto const &w : b) {
-      if (std::string const *const kept{ covers(v, w) ? &w : covers(w, v) ? &v : nullptr };
+      if (std::string const *const kept{ covers(v, w)   ? &w
+                                         : covers(w, v) ? &v
+                                                        : nullptr };
           kept && std::ranges::find(result, *kept) == result.end()) {
         result.push_back(*kept);
       }

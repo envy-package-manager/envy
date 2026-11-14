@@ -175,7 +175,8 @@ TEST_CASE("extract flat archive with strip=1 throws error") {
   std::filesystem::remove_all(dest);
 }
 
-TEST_CASE("extract_probe_totals counts plain tar and zip headers, strip and 'only' applied") {
+TEST_CASE(
+    "extract_probe_totals counts plain tar and zip headers, strip and 'only' applied") {
   // source/root: file1.txt, file2.txt, subdir1/file3.txt (18B each),
   // subdir1/nested/file4.txt (20B), subdir2/file5.txt (19B).
   struct row {
@@ -222,7 +223,8 @@ TEST_CASE("extract_probe_totals will not decompress an archive to count it") {
 TEST_CASE("extract_probe_totals reads envy's trailer, for the whole archive only") {
   // test.tar compressed, then trailed as archive_create_tar_zst trails its output.
   auto const stated{ std::filesystem::path("test_data/archives/stated.tar.zst") };
-  CHECK(envy::extract_probe_totals(stated) == envy::extract_totals{ .files = 5, .bytes = 93 });
+  CHECK(envy::extract_probe_totals(stated) ==
+        envy::extract_totals{ .files = 5, .bytes = 93 });
 
   // A selection is a subset the trailer cannot speak for, and the payload is compressed.
   CHECK_FALSE(envy::extract_probe_totals(stated, { .selectors = { "root/subdir1" } }));
@@ -231,14 +233,15 @@ TEST_CASE("extract_probe_totals reads envy's trailer, for the whole archive only
 
 TEST_CASE("extract trailer: a zstd skippable frame stating files and bytes") {
   envy::extract_trailer const want{
-    0x55, 0x2A, 0x4D, 0x18,                // skippable-frame magic, little-endian
-    24,   0,    0,    0,                   // payload size
-    5,    0,    0,    0,    0, 0, 0, 0,    // files
-    93,   0,    0,    0,    0, 0, 0, 0,    // bytes
+    0x55, 0x2A, 0x4D, 0x18,                    // skippable-frame magic, little-endian
+    24,   0,    0,    0,                       // payload size
+    5,    0,    0,    0,    0,   0,   0,   0,  // files
+    93,   0,    0,    0,    0,   0,   0,   0,  // bytes
     'e',  'n',  'v',  'y',  't', 'o', 't', '1'
   };
   CHECK(envy::extract_trailer_encode({ .files = 5, .bytes = 93 }) == want);
-  CHECK(envy::extract_trailer_decode(want) == envy::extract_totals{ .files = 5, .bytes = 93 });
+  CHECK(envy::extract_trailer_decode(want) ==
+        envy::extract_totals{ .files = 5, .bytes = 93 });
 
   envy::extract_totals const wide{ .files = 0x0102030405060708, .bytes = UINT64_MAX };
   CHECK(envy::extract_trailer_decode(envy::extract_trailer_encode(wide)) == wide);

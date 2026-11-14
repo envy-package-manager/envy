@@ -701,8 +701,8 @@ std::vector<product_info> engine::collect_all_products() const {
             .type = type,
             .pkg_path = pkg_path,
             .script = prod_entry.script,
-            .platforms = util_platform_intersect(prod_entry.platforms,
-                                                 package->resolved_platforms),
+            .platforms =
+                util_platform_intersect(prod_entry.platforms, package->resolved_platforms),
         });
       }
     }

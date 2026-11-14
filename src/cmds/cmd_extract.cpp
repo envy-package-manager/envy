@@ -61,12 +61,13 @@ void cmd_extract::execute() {
 
   // The row lands on a full bar, committed above the file count below.
   auto const section{ tui::section_create() };
-  auto const file_count{ tui_actions::extract_tracked(cfg_.archive_path,
-                                                      destination,
-                                                      { .selectors = cfg_.only },
-                                                      section,
-                                                      "extract",
-                                                      cfg_.archive_path.filename().string()) };
+  auto const file_count{ tui_actions::extract_tracked(
+      cfg_.archive_path,
+      destination,
+      { .selectors = cfg_.only },
+      section,
+      "extract",
+      cfg_.archive_path.filename().string()) };
   tui::section_commit(section);
   tui::info("Extracted %llu files", static_cast<unsigned long long>(file_count));
 }

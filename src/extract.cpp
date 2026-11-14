@@ -182,8 +182,9 @@ std::string misnamed_archives_note(std::vector<extract_item> const &items) {
                              names;
 }
 
-// A set states its contents only if every item does: a selected loose file is its own size,
-// an archive whatever extract_probe_totals finds. nullopt at the first that cannot say.
+// A set states its contents only if every item does: a selected loose file is its own
+// size, an archive whatever extract_probe_totals finds. nullopt at the first that cannot
+// say.
 std::optional<extract_totals> stated_totals(std::vector<extract_item> const &items,
                                             extract_options const &options,
                                             glob_filter const &selectors) {
@@ -362,19 +363,19 @@ std::uint64_t extract(std::filesystem::path const &archive_path,
   std::uint64_t files_extracted{ 0 };
   glob_match_flags own_matched;
   glob_match_flags &selector_matched{ options.selector_matched ? *options.selector_matched
-                                                                : own_matched };
+                                                               : own_matched };
 
   // The header and every chunk after it report alike; the archive's read position is the
   // only progress measure an archive that states no totals has.
   auto const report{ [&](std::filesystem::path const &current, bool is_regular_file) {
     if (la_int64_t const read{ archive_filter_bytes(reader.handle, -1) };
         options.progress &&
-        !options.progress({ .bytes_processed = processed,
-                            .files_processed = files_extracted,
-                            .input_bytes_processed =
-                                read > 0 ? static_cast<std::uint64_t>(read) : 0,
-                            .current_entry = current,
-                            .is_regular_file = is_regular_file })) {
+        !options.progress(
+            { .bytes_processed = processed,
+              .files_processed = files_extracted,
+              .input_bytes_processed = read > 0 ? static_cast<std::uint64_t>(read) : 0,
+              .current_entry = current,
+              .is_regular_file = is_regular_file })) {
       throw_runtime_error({ "extract: aborted by progress callback" });
     }
   } };
@@ -572,7 +573,9 @@ std::optional<std::filesystem::path> extract_bare_compressed_output_name(
 extract_trailer extract_trailer_encode(extract_totals const &totals) {
   extract_trailer b{};
   auto const put{ [&](std::size_t at, std::uint64_t v, std::size_t n) {
-    for (std::size_t i{ 0 }; i < n; ++i) { b[at + i] = static_cast<std::uint8_t>(v >> 8 * i); }
+    for (std::size_t i{ 0 }; i < n; ++i) {
+      b[at + i] = static_cast<std::uint8_t>(v >> 8 * i);
+    }
   } };
   put(0, kTrailerMagic, 4);
   put(4, b.size() - 8, 4);  // payload: files, bytes, tag
@@ -592,8 +595,9 @@ std::optional<extract_totals> extract_trailer_decode(extract_trailer const &byte
   return extract_trailer_encode(totals) == bytes ? std::optional{ totals } : std::nullopt;
 }
 
-std::optional<extract_totals> extract_probe_totals(std::filesystem::path const &archive_path,
-                                                   extract_options const &options) {
+std::optional<extract_totals> extract_probe_totals(
+    std::filesystem::path const &archive_path,
+    extract_options const &options) {
   if (options.selectors.empty() && options.strip_components == 0) {  // whole archive only
     if (auto const stated{ trailer_read(archive_path) }) { return stated; }
   }
@@ -622,8 +626,8 @@ std::optional<extract_totals> extract_probe_totals(std::filesystem::path const &
     }
 
     // Exactly what extract() would write: strip, then 'only', then regular files.
-    if (auto const stripped{
-          strip_path_components(archive_entry_pathname(entry), options.strip_components) };
+    if (auto const stripped{ strip_path_components(archive_entry_pathname(entry),
+                                                   options.strip_components) };
         !stripped ||
         (!selectors.empty() && !selectors.selects(glob_canonical_path(*stripped))) ||
         archive_entry_filetype(entry) != AE_IFREG) {
@@ -717,7 +721,8 @@ void extract_all_archives(std::filesystem::path const &fetch_dir,
     if (tracker) { tracker->end(size); }
   }
 
-  if (auto const unmatched{ glob_unmatched_selectors(selectors.include, selector_matched) };
+  if (auto const unmatched{
+          glob_unmatched_selectors(selectors.include, selector_matched) };
       !unmatched.empty()) {
     throw_on_unmatched(unmatched,
                        std::string{ "extract" } + kOnlyUnmatched,

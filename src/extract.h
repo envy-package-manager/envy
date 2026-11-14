@@ -92,7 +92,8 @@ std::optional<extract_totals> extract_trailer_decode(extract_trailer const &byte
 
 // The totals options would extract, if the archive states them without decompressing:
 // envy's trailer, or a header scan where skipping an entry is a seek (plain tar, zip).
-std::optional<extract_totals> extract_probe_totals(std::filesystem::path const &archive_path,
-                                                   extract_options const &options = {});
+std::optional<extract_totals> extract_probe_totals(
+    std::filesystem::path const &archive_path,
+    extract_options const &options = {});
 
 }  // namespace envy

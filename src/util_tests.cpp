@@ -1497,11 +1497,11 @@ std::vector<std::vector<std::string>> platform_lists(
   std::vector<std::vector<std::string>> out{ {} };
   for (std::size_t i{ 0 }; i < out.size(); ++i) {
     if (out[i].size() == max) { continue; }
-    for (auto j{ out[i].empty() ? std::size_t{ 0 }
-                                : static_cast<std::size_t>(
-                                      std::ranges::find(alphabet, out[i].back()) -
-                                      alphabet.begin()) +
-                                      1 };
+    for (auto j{ out[i].empty()
+                     ? std::size_t{ 0 }
+                     : static_cast<std::size_t>(
+                           std::ranges::find(alphabet, out[i].back()) - alphabet.begin()) +
+                           1 };
          j < alphabet.size();
          ++j) {
       auto grown{ out[i] };
@@ -1526,7 +1526,8 @@ std::vector<platform_host> platform_hosts(std::vector<std::string> const &alphab
       oses.push_back(os);
     }
     if (dash == std::string::npos) { continue; }
-    if (auto const arch{ t.substr(dash + 1) }; std::ranges::find(arches, arch) == arches.end()) {
+    if (auto const arch{ t.substr(dash + 1) };
+        std::ranges::find(arches, arch) == arches.end()) {
       arches.push_back(arch);
     }
   }
@@ -1582,9 +1583,10 @@ std::optional<std::string> platform_violation(
   }
   // Empty reads as every platform: a constrained set must never come out empty.
   if (bool const constrained{
-        std::ranges::any_of(inputs, [](auto const &in) { return !in.empty(); }) };
+          std::ranges::any_of(inputs, [](auto const &in) { return !in.empty(); }) };
       constrained == result.empty()) {
-    return where + (constrained ? " reads as every platform" : " constrains an unconstrained set");
+    return where +
+           (constrained ? " reads as every platform" : " constrains an unconstrained set");
   }
   for (std::size_t i{ 0 }; i < result.size(); ++i) {
     if (std::ranges::count(result, result[i]) > 1) {
@@ -1625,7 +1627,7 @@ TEST_CASE("util_platform_intersect: an OS covers its arches; the more specific s
            { { "linux" }, { "darwin-arm64" }, { none } },
            { { "linux-x86_64" }, { "linux-arm64" }, { none } },
            { { "linux-x86" }, { "linux-x86-musl" }, { none } },  // arch: all after the '-'
-           { { "lin" }, { "linux-x86_64" }, { none } },          // a name's prefix is no OS
+           { { "lin" }, { "linux-x86_64" }, { none } },  // a name's prefix is no OS
            { { none }, { "linux" }, { none } },
            { { none }, {}, { none } },
        }) {
@@ -1636,11 +1638,12 @@ TEST_CASE("util_platform_intersect: an OS covers its arches; the more specific s
   }
 }
 
-TEST_CASE("util_platform_intersect: every pair of lists matches exactly the hosts both do") {
-  std::vector<std::string> const alphabet{ "darwin",       "linux",          "windows",
-                                           "darwin-arm64", "linux-x86_64",   "linux-arm64",
-                                           "windows-x86_64", "linux-x86",    "linux-x86-musl",
-                                           "lin" };
+TEST_CASE(
+    "util_platform_intersect: every pair of lists matches exactly the hosts both do") {
+  std::vector<std::string> const alphabet{
+    "darwin",      "linux",          "windows",   "darwin-arm64",   "linux-x86_64",
+    "linux-arm64", "windows-x86_64", "linux-x86", "linux-x86-musl", "lin"
+  };
   auto const lists{ platform_lists(alphabet, 3) };
   auto const hosts{ platform_hosts(alphabet) };
   REQUIRE(lists.size() == 176);  // 1 + 10 + 45 + 120
@@ -1649,7 +1652,8 @@ TEST_CASE("util_platform_intersect: every pair of lists matches exactly the host
   std::optional<std::string> first;
   for (auto const &a : lists) {
     for (auto const &b : lists) {
-      if (auto v{ platform_violation({ a, b }, envy::util_platform_intersect(a, b), hosts) }) {
+      if (auto v{
+              platform_violation({ a, b }, envy::util_platform_intersect(a, b), hosts) }) {
         ++violations;
         if (!first) { first = std::move(v); }
       }
@@ -1658,9 +1662,11 @@ TEST_CASE("util_platform_intersect: every pair of lists matches exactly the host
   CHECK_MESSAGE(violations == 0, violations, " violations; first: ", first.value_or(""));
 }
 
-TEST_CASE("util_platform_intersect: manifest, spec and product chain as deploy chains them") {
-  // engine: product & (manifest & spec). Chaining feeds a result, sentinel included, back in.
-  std::vector<std::string> const alphabet{ "darwin",       "linux",       "windows",
+TEST_CASE(
+    "util_platform_intersect: manifest, spec and product chain as deploy chains them") {
+  // engine: product & (manifest & spec). Chaining feeds a result, sentinel included, back
+  // in.
+  std::vector<std::string> const alphabet{ "darwin",       "linux",        "windows",
                                            "darwin-arm64", "linux-x86_64", "linux-arm64" };
   auto const lists{ platform_lists(alphabet, 2) };
   auto const hosts{ platform_hosts(alphabet) };

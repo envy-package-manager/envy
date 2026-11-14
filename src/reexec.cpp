@@ -274,7 +274,12 @@ void reexec_if_needed(envy_meta const &meta,
                std::string{ kEnvyReleaseSumsFile }.c_str());
   }
 
-  tui_actions::extract_tracked(archive_path, tmp_dir, {}, section, "envy " + version, archive_name);
+  tui_actions::extract_tracked(archive_path,
+                               tmp_dir,
+                               {},
+                               section,
+                               "envy " + version,
+                               archive_name);
 
   std::error_code ec;
   std::filesystem::remove(archive_path, ec);

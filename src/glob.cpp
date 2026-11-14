@@ -235,8 +235,7 @@ bool glob_filter::selects(std::string_view path) const {
   return exclude.empty() || !glob_any_match(exclude, path);
 }
 
-bool glob_filter::selects(std::string_view path,
-                          glob_match_flags &include_matched) const {
+bool glob_filter::selects(std::string_view path, glob_match_flags &include_matched) const {
   if (!include.empty() && !glob_selectors_match(include, path, include_matched)) {
     return false;
   }
