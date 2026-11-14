@@ -116,6 +116,10 @@ fetch_error_kind classify_wininet_error(DWORD err, fetch_error_kind fallback) {
 
     case ERROR_INTERNET_OPERATION_CANCELLED: return fetch_error_kind::ABORTED;
 
+    // No retry fixes these; curl's UNSUPPORTED_PROTOCOL and URL_MALFORMAT map here too
+    case ERROR_INTERNET_UNRECOGNIZED_SCHEME:
+    case ERROR_INTERNET_INVALID_URL: return fetch_error_kind::PROTOCOL;
+
     default: return fallback;
   }
 }
