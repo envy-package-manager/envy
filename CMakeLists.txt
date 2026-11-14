@@ -25,6 +25,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++20 modules here; scanning adds a pass per TU and GCC's -fmodules-ts defeats sccache
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
