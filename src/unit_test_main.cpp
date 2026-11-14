@@ -48,22 +48,8 @@ bool is_stress_test(std::string_view name) {
          name.find("stress - ") != std::string_view::npos;
 }
 
-// A pwsh test pays for a cold .NET start, and on an arm64 Windows runner that start is
-// emulated. `fails on nonexistent command` is the worst of them: PowerShell answers an
-// unresolved name by searching the whole PATH for suggestions. Observed exceeding 30s
-// there while passing in seconds on x64, so the bound is per-class rather than global --
-// a genuine hang in a pwsh test still aborts, just later.
-constexpr std::chrono::seconds kPowershellTimeout{ 120 };
-
-bool is_powershell_test(std::string_view name) {
-  return name.find("powershell") != std::string_view::npos ||
-         name.find("pwsh") != std::string_view::npos;
-}
-
 std::chrono::seconds timeout_for(std::string_view name, std::chrono::seconds fallback) {
-  if (is_stress_test(name)) { return std::max(fallback, kStressTimeout); }
-  if (is_powershell_test(name)) { return std::max(fallback, kPowershellTimeout); }
-  return fallback;
+  return is_stress_test(name) ? std::max(fallback, kStressTimeout) : fallback;
 }
 
 // Cases at or over this are listed after the run: the suite is sub-second on POSIX, so a

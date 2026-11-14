@@ -139,9 +139,10 @@ TEST_CASE("shell_run powershell fails on nonexistent command") {
                            .cwd = std::nullopt,
                            .env = envy::shell_getenv(),
                            .shell = envy::shell_choice::powershell };
-  // Nonexistent command should fail
+  // A path, not a bare name: PowerShell searches PATH and its modules twice for an unknown
+  // bare name (30s on the arm64 runner); a missing path fails the same way at once.
   auto const result{ envy::shell_run(
-      "Write-Output 'before'\nnonexistent_command_xyz_12345\nWrite-Output 'after'",
+      "Write-Output 'before'\n.\\nonexistent_command_xyz_12345\nWrite-Output 'after'",
       inv) };
   CHECK(result.exit_code != 0);
   // "after" should NOT appear because fail-fast should stop execution
