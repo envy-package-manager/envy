@@ -34,7 +34,7 @@ On every directory change:
 4. Entering a project (or switching to another): eval `<bin>/envy activate <shell>`—the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV` (see `docs/architecture.md`)
 5. Leaving all projects: eval `envy deactivate <shell>`, which restores every variable activation touched
 
-`envy install` bumps a per-project generation file; at the next prompt every shell activated in that project re-activates, picking up what was just installed. The check is a builtin `read`, no fork.
+`envy install` bumps a per-project generation file, as does any package a shim installs lazily (a cache hit bumps nothing); at the next prompt every shell activated in that project re-activates, picking up what was just installed. The check is a builtin `read`, no fork.
 
 A project whose `@envy version` predates `activate` (below 0.6.0) falls back to the old behavior without running its launcher: the bin dir on `PATH` and `ENVY_PROJECT_ROOT`, managed by the hook itself. A launcher that fails falls back the same way.
 
@@ -50,7 +50,7 @@ Activation is modal and lives in exported variables, so nested shells, tmux pane
 | `ENVY_ACTIVATE_ORIG__<NAME>` | `<NAME>`'s value before activation; absent means it was unset |
 | `ENVY_ACTIVATE_ROOT` | Activated project (canonical); `ENVY_ACTIVATE_KEY` is the hook's spelling of it |
 | `ENVY_ACTIVATE_EXE` | Binary that wrote the state; the hook deactivates with it |
-| `ENVY_ACTIVATE_GEN` / `_GENFILE` | Generation in effect / the file `envy install` bumps |
+| `ENVY_ACTIVATE_GEN` / `_GENFILE` | Generation in effect / the file installs bump |
 | `ENVY_ACTIVATE_SCHEMA` | State format; a mismatch says to restart the shell |
 
 Restore is wholesale: a variable activation touched goes back to its pre-activate value on leave, including edits you made to it inside the project. Envy never applies activation to its own phases—`envy install` from an activated shell builds exactly what it builds in CI.

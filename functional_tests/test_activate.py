@@ -149,6 +149,24 @@ class TestActivateBash(_ActivateBase):
         self.assertIn(f"AFTER={self.rust.resolve()}/.cargo", result.stdout)
         self.assertIn("envy: refreshed rusty", result.stderr)
 
+    def test_lazy_install_refreshes_and_cache_hit_does_not(self) -> None:
+        lazy = self.project(
+            "lazy",
+            {"z.lua": 'IDENTITY = "local.z@r0"\nFETCH = function() end\n'
+             'INSTALL = function() end\nPRODUCTS = { zed = "zed" }\nENV = { LAZY = "1" }\n'},
+            ['  { spec = "local.z@r0", source = "z.lua" },'],
+        )
+        shim = f'"{lazy}/tools/envy" product zed >/dev/null\n_envy_hook\n'  # a product shim
+        result = self.bash(
+            f'source "{self.hook}"\n'
+            f'cd "{lazy}"; _envy_hook\n'
+            f'{shim}echo "LAZY=${{LAZY-unset}}"\n'
+            f'{shim}'  # installs nothing: no refresh
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("LAZY=1", result.stdout)
+        self.assertEqual(1, result.stderr.count("envy: refreshed lazy"), result.stderr)
+
     def test_switching_projects_leaves_nothing_of_the_first(self) -> None:
         other = self.project(
             "other",
@@ -375,7 +393,7 @@ class TestActivateBash(_ActivateBase):
         lines = self.activate_stderr(orphan)  # the engine's error runs on for a line
         self.assertEqual("warning: activate: skipping local.brotli@r0: Product 'cmake' in "
                          "spec 'local.brotli@r0' was not found", lines[0])
-        self.assertFalse(any("not installed" in l for l in lines), lines)
+        self.assertEqual(1, sum(l.startswith("warning:") for l in lines), lines)
         self.assertRegex(lines[-1], r"^envy: entering orphan ")
 
     def test_install_during_activation_still_refreshes(self) -> None:

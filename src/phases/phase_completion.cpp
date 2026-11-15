@@ -1,5 +1,6 @@
 #include "phase_completion.h"
 
+#include "activation.h"
 #include "engine.h"
 #include "pkg.h"
 #include "trace.h"
@@ -65,13 +66,14 @@ void run_completion_phase(pkg *p, engine &eng) {
              .outcome = kind,
              .duration_ms = static_cast<std::int64_t>(duration_ms));
 
-  // A row is earned: `timed` is the outcomes that moved bytes, the two flags the rest.
-  // None of them, and the package leaves nothing on screen -- a no-work run is silent.
-  tui_actions::report_outcome(p->tui_section,
-                              p->cfg->identity,
-                              section_text,
-                              timed || p->setup_ran || p->vendor_wrote,
-                              p->display);
+  // `timed` is the outcomes that moved bytes, the two flags the rest. Work earns a row and
+  // re-activates the project's shells -- a lazy install by a shim included.
+  bool const did_work{ timed || p->setup_ran || p->vendor_wrote };
+  if (auto const root{ eng.project_root() }; did_work && !root.empty()) {
+    activation_gen_bump(activation_genfile(eng.cache_root(), root));
+  }
+  tui_actions::report_outcome(
+      p->tui_section, p->cfg->identity, section_text, did_work, p->display);
 }
 
 }  // namespace envy

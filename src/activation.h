@@ -19,19 +19,20 @@ struct activation {
 };
 
 // Built-ins (bin dir on PATH, ENVY_PROJECT_ROOT) always apply; installed packages' ENV is
-// best-effort over a read-only cache, so a Lua error or uncached spec only warns.
+// best-effort over a read-only cache: the uninstalled are skipped, a Lua error warns.
 activation activation_compute(std::optional<std::filesystem::path> const &project_dir,
                               std::optional<std::filesystem::path> const &cli_cache_root,
                               shell_env_t const &live);
 
-// `<cache root>/activate/<root digest>`: bumped by every `envy install`, so an activated
-// shell in that project re-activates at its next prompt.
+// `<cache root>/activate/<root digest>`: bumped by every package that does work and every
+// `envy install`, so an activated shell in that project re-activates at its next prompt.
 std::filesystem::path activation_genfile(std::filesystem::path const &cache_root,
                                          std::filesystem::path const &project_root);
 std::string activation_gen_read(std::filesystem::path const &genfile);
+void activation_gen_bump(std::filesystem::path const &genfile);  // best-effort
 
-// Bumps the project's generation file on scope exit, success or failure: a partial
-// install still installed something.
+// Bumps the project's generation file on scope exit, even if every package was a cache
+// hit: an explicit install is how a shell picks up manifest and ENV edits.
 class activation_refresh_guard : unmovable {
  public:
   activation_refresh_guard(std::filesystem::path const &cache_root,

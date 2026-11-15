@@ -256,21 +256,23 @@ std::string activation_gen_read(std::filesystem::path const &genfile) {
   } catch (std::exception const &) { return "0"; }
 }
 
+void activation_gen_bump(std::filesystem::path const &genfile) {
+  try {  // a fresh token, never a counter: two racing installs still both change it
+    auto const now{ std::chrono::system_clock::now().time_since_epoch().count() };
+    std::filesystem::create_directories(genfile.parent_path());
+    util_write_file(genfile, std::to_string(now) + "\n");
+  } catch (std::exception const &e) {
+    tui::debug("activate: could not bump %s: %s", genfile.string().c_str(), e.what());
+  }
+}
+
 activation_refresh_guard::activation_refresh_guard(
     std::filesystem::path const &cache_root,
     std::filesystem::path const &manifest_path)
     : genfile_{ activation_genfile(cache_root,
                                    util_canonical_path(manifest_path).parent_path()) } {}
 
-activation_refresh_guard::~activation_refresh_guard() {
-  try {  // a fresh token, never a counter: two racing installs still both change it
-    auto const now{ std::chrono::system_clock::now().time_since_epoch().count() };
-    std::filesystem::create_directories(genfile_.parent_path());
-    util_write_file(genfile_, std::to_string(now) + "\n");
-  } catch (std::exception const &e) {
-    tui::debug("activate: could not bump %s: %s", genfile_.string().c_str(), e.what());
-  }
-}
+activation_refresh_guard::~activation_refresh_guard() { activation_gen_bump(genfile_); }
 
 env_shell activation_shell(std::string_view name, std::string_view cmd) {
   auto const sh{ env_shell_parse(name) };
