@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "doctest.h"
+#include "platform.h"
 #include "shell.h"
 
 namespace fs = std::filesystem;
@@ -68,6 +69,39 @@ TEST_CASE("shell_run executes with empty environment (powershell)") {
                   envy::shell_env_t{});
   REQUIRE(lines.size() == 1);
   CHECK(lines[0] == "blank");
+}
+
+TEST_CASE("shell_run child inherits no handle beyond stdio") {
+  // An inheritable pipe stands in for another worker's in-flight download (#401). Once the
+  // parent closes its write end the pipe is broken -- unless the child holds a copy.
+  SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+  HANDLE read_end{ nullptr };
+  HANDLE write_end{ nullptr };
+  REQUIRE(::CreatePipe(&read_end, &write_end, &sa, 0));
+
+  std::optional<bool> broken;
+  envy::shell_run_cfg inv{
+    .on_output_line =
+        [&](std::string_view line) {
+          if (line != "ready" || broken) { return; }
+          ::CloseHandle(write_end);
+          write_end = nullptr;
+          DWORD avail{ 0 };
+          broken = !::PeekNamedPipe(read_end, nullptr, 0, nullptr, &avail, nullptr) &&
+                   ::GetLastError() == ERROR_BROKEN_PIPE;
+        },
+    .env = envy::shell_getenv(),
+    .shell = envy::shell_choice::cmd
+  };
+  // The child outlives the check by a second: ping waits that long between echoes.
+  auto const result{ envy::shell_run("@echo off\necho ready\nping -n 2 127.0.0.1 > nul",
+                                     inv) };
+  if (write_end) { ::CloseHandle(write_end); }
+  ::CloseHandle(read_end);
+
+  CHECK(result.exit_code == 0);
+  REQUIRE(broken.has_value());
+  CHECK(*broken);
 }
 
 TEST_CASE("shell_run supports cmd shell option") {
