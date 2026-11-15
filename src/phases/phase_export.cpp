@@ -9,11 +9,8 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <sstream>
-#include <utility>
 
 namespace envy {
 
@@ -65,7 +62,6 @@ void run_export_phase(pkg *p, engine &eng) {
 
   std::string const label{ "[" + std::string(p->key.identity()) + "]" };
 
-  // Scan source to compute totals
   if (p->tui_section) {
     tui::section_set_content(
         p->tui_section,
@@ -75,53 +71,26 @@ void run_export_phase(pkg *p, engine &eng) {
                                 .start_time = std::chrono::steady_clock::now() } });
   }
 
-  auto const [total_bytes, total_files]{ [&] {
-    std::uint64_t bytes{ 0 }, files{ 0 };
-    for (auto const &e : std::filesystem::recursive_directory_iterator(source_dir)) {
-      if (e.is_regular_file()) {
-        bytes += e.file_size();
-        ++files;
-      }
-    }
-    return std::pair{ bytes, files };
-  }() };
-
   try {
-    // Compress with progress
+    // The archive walks its source first, so every call carries the totals.
+    extract_progress last;
     archive_create_tar_zst(
         output_path,
         source_dir,
         prefix,
-        [&](extract_progress const &ep) -> bool {
-          if (!p->tui_section) { return true; }
-
-          double percent{ 0.0 };
-          if (total_bytes > 0) {
-            percent =
-                std::min(100.0,
-                         (ep.bytes_processed / static_cast<double>(total_bytes)) * 100.0);
-          } else if (total_files > 0) {
-            percent =
-                std::min(100.0,
-                         (ep.files_processed / static_cast<double>(total_files)) * 100.0);
+        [&](extract_progress const &ep) {
+          last = ep;
+          if (p->tui_section) {
+            tui::section_set_content(
+                p->tui_section,
+                tui_actions::archive_progress_frame(label, ep, {}, false));
           }
-
-          std::ostringstream status;
-          status << ep.files_processed;
-          if (total_files > 0) { status << "/" << total_files; }
-          status << " files";
-          if (total_bytes > 0) {
-            status << " " << util_format_bytes(ep.bytes_processed) << "/"
-                   << util_format_bytes(total_bytes);
-          }
-
-          tui::section_set_content(p->tui_section,
-                                   tui::section_frame{ .label = label,
-                                                       .content = tui::progress_data{
-                                                           .percent = percent,
-                                                           .status = status.str() } });
           return true;
         });
+    if (p->tui_section) {  // land the bar, as hashing does, so a finished row is not lost
+      tui::section_set_content(p->tui_section,
+                               tui_actions::archive_progress_frame(label, last, {}, true));
+    }
 
     // Hash the archive. Its size is known, so this is a bar, not a spinner.
     auto const hash{ tui_actions::sha256_tracked(output_path,

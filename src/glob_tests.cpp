@@ -214,7 +214,7 @@ TEST_CASE("glob_normalize_selectors rejects malformed glob patterns") {
 
 TEST_CASE("glob_selectors_match flags every matching pattern") {
   std::vector<std::string> const selectors{ "bin/*", "**/*.h", "share" };
-  std::vector<bool> matched;
+  envy::glob_match_flags matched;
 
   CHECK(envy::glob_selectors_match(selectors, "bin/clang", matched));
   CHECK(envy::glob_selectors_match(selectors, "lib/clang/20/x.h", matched));
@@ -226,14 +226,14 @@ TEST_CASE("glob_selectors_match flags every matching pattern") {
 
   // One entry satisfying two patterns marks both.
   std::vector<std::string> const overlap{ "bin/*", "bin/clang" };
-  std::vector<bool> overlap_matched;
+  envy::glob_match_flags overlap_matched;
   CHECK(envy::glob_selectors_match(overlap, "bin/clang", overlap_matched));
   CHECK(envy::glob_unmatched_selectors(overlap, overlap_matched).empty());
 }
 
 TEST_CASE("glob_selectors_match matches files exactly and directories by subtree") {
   std::vector<std::string> const selectors{ "bin/clang-format", "lib/clang" };
-  std::vector<bool> matched;
+  envy::glob_match_flags matched;
 
   CHECK(envy::glob_selectors_match(selectors, "bin/clang-format", matched));
   CHECK(envy::glob_selectors_match(selectors, "lib/clang", matched));
@@ -253,7 +253,7 @@ TEST_CASE("glob_selectors_match flags every matching entry, not just the first")
   // Overlapping entries must all count as matched, else a redundant-but-valid selector
   // list would look unsatisfied.
   std::vector<std::string> const selectors{ "bin", "bin/clang", "share" };
-  std::vector<bool> matched;
+  envy::glob_match_flags matched;
 
   CHECK(envy::glob_selectors_match(selectors, "bin/clang", matched));
 
@@ -328,7 +328,7 @@ TEST_CASE("glob_filter exclude alone subtracts from everything") {
 TEST_CASE("glob_filter flags which include patterns matched") {
   envy::glob_filter const f{ .include = { "bin/**", "share/**" },
                              .exclude = { "bin/secret" } };
-  std::vector<bool> matched;
+  envy::glob_match_flags matched;
 
   CHECK(f.selects("bin/clang", matched));
   CHECK_FALSE(f.selects("bin/secret", matched));  // excluded, but the include did match
@@ -342,7 +342,7 @@ TEST_CASE("glob_filter flags which include patterns matched") {
 
 TEST_CASE("glob_filter both selects() overloads agree") {
   envy::glob_filter const f{ .include = { "a/**", "b/*.h" }, .exclude = { "a/skip" } };
-  std::vector<bool> matched;
+  envy::glob_match_flags matched;
   for (auto const *path :
        { "a/x", "a/skip", "a/skip/deep", "b/x.h", "b/x.c", "c/y", "a", "b" }) {
     CHECK(f.selects(path) == f.selects(path, matched));

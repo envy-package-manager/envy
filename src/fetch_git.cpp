@@ -507,7 +507,7 @@ class git_tree : unmovable {
   std::deque<git_job> queue_;
   std::size_t busy_{ 0 };
   std::exception_ptr error_;
-  std::vector<bool> matched_;  // per include selector, across the whole tree
+  glob_match_flags matched_;  // per include selector, across the whole tree
 };
 
 }  // namespace

@@ -5,6 +5,8 @@ import gzip
 import io
 import lzma
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -14,6 +16,11 @@ import zipfile
 from pathlib import Path
 
 from . import test_config
+
+FIXTURES = Path(__file__).resolve().parent.parent / "test_data" / "archives"
+
+# "[extract] 3/12 files 1.00KB/4.00KB name: 25.0%" with stated totals, else "3 files name".
+ROW = re.compile(r"\[extract\] (\d+)(?:/(\d+))? files(?: (\S+)/(\S+))? \S+: ([\d.]+)%$")
 
 # Test file structure: root/{file1.txt, file2.txt, subdir1/{file3.txt, nested/file4.txt}, subdir2/file5.txt}
 TEST_FILES = {
@@ -142,21 +149,25 @@ class EnvyExtractTests(unittest.TestCase):
             cwd=cwd,
         )
 
-    def test_extract_reports_progress_and_finishes_on_a_full_bar(self) -> None:
-        """Unpacking is a wait, so it draws: a lone archive has no pre-scanned total, so
-        the row spins on running counts and lands on a full bar when the archive is out."""
+    def _extract_rows(
+        self, archive: str | Path, tmpdir: str, *args: str
+    ) -> tuple[list[str], str]:
+        """The [extract] progress rows of one extraction, off a TTY, and its stderr."""
         env = os.environ.copy()
         env["TERM"] = "dumb"
         env["ENVY_TEST_FALLBACK_THROTTLE_MS"] = "0"
+        path = archive if isinstance(archive, Path) else self._archives_dir / archive
+        result = self._run_envy("extract", str(path), tmpdir, *args, env=env)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        rows = [ln.strip() for ln in result.stderr.splitlines() if "[extract]" in ln]
+        self.assertTrue(rows, f"extract drew no progress row: {result.stderr}")
+        return rows, result.stderr
 
+    def test_extract_reports_progress_and_finishes_on_a_full_bar(self) -> None:
+        """Unpacking is a wait, so it draws, and lands on a full bar when the archive is
+        out."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = self._run_envy(
-                "extract", str(self._archives_dir / "test.tar"), tmpdir, env=env
-            )
-            self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
-
-            rows = [ln.strip() for ln in result.stderr.splitlines() if "[extract]" in ln]
-            self.assertTrue(rows, f"extract drew no progress row: {result.stderr}")
+            rows, stderr = self._extract_rows("test.tar", tmpdir)
             self.assertTrue(
                 rows[-1].endswith(": 100.0%"),
                 f"extract did not finish on a full bar: {rows}",
@@ -166,7 +177,7 @@ class EnvyExtractTests(unittest.TestCase):
             )
 
             # The bar reports work the count below has already summarized: it lands above.
-            lines = result.stderr.splitlines()
+            lines = stderr.splitlines()
             row_idx = max(i for i, ln in enumerate(lines) if "[extract]" in ln)
             count_idx = min(i for i, ln in enumerate(lines) if "Extracted" in ln)
             self.assertLess(
@@ -174,6 +185,76 @@ class EnvyExtractTests(unittest.TestCase):
                 count_idx,
                 f"finished bar landed below the extraction count: {lines}",
             )
+
+    def test_extract_counts_against_totals_an_archive_states(self) -> None:
+        """A plain tar or a zip states its contents in headers a seek apart, so the row
+        counts against them; nothing was decompressed to learn them."""
+        for archive in ("test.tar", "test.zip"):
+            with self.subTest(archive=archive), tempfile.TemporaryDirectory() as tmpdir:
+                rows, _ = self._extract_rows(archive, tmpdir)
+                self.assertIn("5/5 files 93B/93B", rows[-1])
+
+    def test_extract_counts_files_over_bytes_read_when_totals_are_unstated(self) -> None:
+        """A compressed tar states nothing short of decompressing it: the row counts files
+        with no total, its bar riding the archive bytes read."""
+        for archive in ("test.tar.gz", "test.tar.xz", "test.tar.bz2"):
+            with self.subTest(archive=archive), tempfile.TemporaryDirectory() as tmpdir:
+                rows, _ = self._extract_rows(archive, tmpdir)
+                self.assertIn(f"5 files {archive}", rows[-1])
+                self.assertNotIn("/5", rows[-1])
+                self.assertTrue(rows[-1].endswith(": 100.0%"), rows)
+
+    def test_extract_stated_totals_match_what_extraction_writes(self) -> None:
+        """The totals a plain tar or zip states for a selection are exactly the files and
+        bytes extraction then writes."""
+        for archive in ("test.tar", "test.zip"):
+            for only in ([], ["root/*.txt"], ["root/subdir?"], ["root/**", "!root/subdir1/**"]):
+                with self.subTest(archive=archive, only=only):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        args = [arg for o in only for arg in ("--only", o)]
+                        rows, stderr = self._extract_rows(FIXTURES / archive, tmpdir, *args)
+                        written = [p for p in Path(tmpdir).rglob("*") if p.is_file()]
+                        size = f"{sum(p.stat().st_size for p in written)}B"
+                        self.assertIn(f"Extracted {len(written)} files", stderr)
+                        self.assertIn(
+                            f"{len(written)}/{len(written)} files {size}/{size}", rows[-1]
+                        )
+
+    def test_extract_progress_only_climbs(self) -> None:
+        """Counts and percentages never step back, and land on the extracted count: by
+        archive bytes read when totals are unstated, by content bytes when stated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, mode in (("many.tar.gz", "w:gz"), ("many.tar", "w")):
+                archive = Path(tmpdir) / name
+                with tarfile.open(archive, mode) as tar:
+                    for i in range(150):
+                        data = os.urandom(1024)
+                        info = tarfile.TarInfo(name=f"root/f{i:03}.bin")
+                        info.size = len(data)
+                        tar.addfile(info, io.BytesIO(data))
+                with self.subTest(archive=name):
+                    rows, _ = self._extract_rows(archive, str(Path(tmpdir) / f"out-{name}"))
+                    parsed = [ROW.search(r) for r in rows]
+                    self.assertTrue(all(parsed), rows)
+                    files = [int(m.group(1)) for m in parsed]
+                    percents = [float(m.group(5)) for m in parsed]
+                    self.assertEqual(sorted(files), files, rows)
+                    self.assertEqual(sorted(percents), percents, rows)
+                    self.assertEqual((150, 100.0), (files[-1], percents[-1]), rows)
+                    stated = {m.group(2) for m in parsed}
+                    self.assertEqual({"150"} if name == "many.tar" else {None}, stated, rows)
+
+    def test_extract_reads_envys_trailer(self) -> None:
+        """A .tar.zst carrying envy's trailer counts against it, and still decodes
+        everywhere: zstd steps over the skippable frame."""
+        stated = FIXTURES / "stated.tar.zst"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rows, stderr = self._extract_rows(stated, tmpdir)
+            self.assertIn("5/5 files 93B/93B", rows[-1])
+            self.assertIn("Extracted 5 files", stderr)
+        if zstd := shutil.which("zstd"):
+            check = test_config.run([zstd, "-tq", str(stated)], capture_output=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
 
     def _verify_extracted_structure(self, extract_dir: Path) -> None:
         """Verify the expected directory structure and file contents after extraction."""
@@ -364,6 +445,35 @@ class EnvyExtractTests(unittest.TestCase):
     def test_extract_bare_xz(self) -> None:
         """Bare .xz extracts to stem-named file."""
         self._verify_bare_extraction(self._archives_dir / "hello.txt.xz")
+
+    def test_extract_bare_payload_is_never_read_as_an_archive(self) -> None:
+        """The suffix says bare stream, so the payload comes out whole whatever it holds:
+        libarchive's mtree heuristic would claim any file of one-word lines."""
+        # Detection runs after decompression, so every payload under one compressor, and
+        # one payload under the rest; a run per case, kept few for loaded CI runners.
+        payloads = {
+            "word": b"hello\n",
+            "names": b"alpha\nbeta\ngamma\n",
+            "keyword": b"bin size=3\n",
+            "mtree": b"#mtree\n./x type=file\n",
+        }
+        compressors = {
+            ".gz": gzip.compress,
+            ".bz2": bz2.compress,
+            ".xz": lzma.compress,
+            ".lzma": lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE),
+        }
+        cases = [(n, ".gz") for n in payloads] + [("word", s) for s in compressors if s != ".gz"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, suffix in cases:
+                with self.subTest(payload=name, suffix=suffix):
+                    archive = Path(tmpdir) / f"{name}.txt{suffix}"
+                    archive.write_bytes(compressors[suffix](payloads[name]))
+                    dest = Path(tmpdir) / f"out-{name}{suffix}"
+                    result = self._run_envy("extract", str(archive), str(dest))
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual([f"{name}.txt"], [p.name for p in dest.iterdir()])
+                    self.assertEqual(payloads[name], (dest / f"{name}.txt").read_bytes())
 
     def test_extract_bare_to_default_dest(self) -> None:
         """Bare-compressed extracts to cwd when destination is omitted."""

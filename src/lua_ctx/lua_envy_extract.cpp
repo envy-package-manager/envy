@@ -65,19 +65,16 @@ void lua_envy_extract_install(sol::table &envy_table) {
       throw_runtime_error({ "envy.extract: file not found: ", archive_path });
     }
 
-    // Set up progress tracking if in phase context
+    // A row only in a phase context; elsewhere there is no package to draw it under.
     phase_context const *ctx{ lua_phase_context_get(L) };
-    pkg *p{ ctx ? ctx->p : nullptr };
-    std::optional<tui_actions::extract_progress_tracker> tracker;
-    if (p && p->tui_section) {
-      tracker.emplace(p->tui_section, p->cfg->identity, archive_path.filename().string());
-    }
-
-    if (tracker) { opts.progress = std::ref(*tracker); }
-
-    auto const count{ extract(archive_path, dest_dir, opts) };
-    if (tracker) { tracker->finish(); }
-    return static_cast<int>(count);
+    pkg const *p{ ctx ? ctx->p : nullptr };
+    return static_cast<int>(
+        tui_actions::extract_tracked(archive_path,
+                                     dest_dir,
+                                     opts,
+                                     p ? p->tui_section : tui::kInvalidSection,
+                                     p ? p->cfg->identity : std::string{},
+                                     archive_path.filename().string()));
   };
 
   // envy.extract_all(src_dir, dest_dir, opts?) - Extract all archives in directory

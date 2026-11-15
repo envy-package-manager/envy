@@ -10,6 +10,7 @@ This directory contains test archives used by extract unit tests and stage phase
 - `test.zip` - ZIP archive format
 - `hello.txt.{gz,bz2,xz,zst,lzma}` - Bare single-stream compressed fixtures
 - `corrupt.gz` - Garbage bytes with .gz suffix; used by error-path tests
+- `stated.tar.zst` - `test.tar.zst` plus envy's totals trailer (5 files, 93 bytes)
 
 ## Regenerating Archives
 

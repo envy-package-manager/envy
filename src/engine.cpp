@@ -694,12 +694,6 @@ std::vector<product_info> engine::collect_all_products() const {
       // matches the resolution loop's order.
       std::lock_guard const deps_lock(package->deps_mutex);
       for (auto const &[prod_name, prod_entry] : package->products) {
-        auto plats{ util_platform_intersect(prod_entry.platforms,
-                                            package->resolved_platforms) };
-        if (plats.empty() && !prod_entry.platforms.empty() &&
-            !package->resolved_platforms.empty()) {
-          plats.emplace_back(kPlatformNone);
-        }
         infos.push_back({
             .product_name = prod_name,
             .value = prod_entry.value,
@@ -707,7 +701,8 @@ std::vector<product_info> engine::collect_all_products() const {
             .type = type,
             .pkg_path = pkg_path,
             .script = prod_entry.script,
-            .platforms = std::move(plats),
+            .platforms =
+                util_platform_intersect(prod_entry.platforms, package->resolved_platforms),
         });
       }
     }

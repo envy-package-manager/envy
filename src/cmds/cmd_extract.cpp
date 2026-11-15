@@ -8,7 +8,6 @@
 #include "cli_parse.h"
 
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <string>
 
@@ -60,18 +59,15 @@ void cmd_extract::execute() {
             cfg_.archive_path.filename().string().c_str(),
             destination.string().c_str());
 
-  // No pre-scan, so no total: the row spins on running counts, then lands on a full bar,
-  // committed above the file count below.
+  // The row lands on a full bar, committed above the file count below.
   auto const section{ tui::section_create() };
-  tui_actions::extract_progress_tracker tracker{ section,
-                                                 "extract",
-                                                 cfg_.archive_path.filename().string() };
-
-  auto const file_count{ extract(
+  auto const file_count{ tui_actions::extract_tracked(
       cfg_.archive_path,
       destination,
-      { .selectors = cfg_.only, .progress = std::ref(tracker) }) };
-  tracker.finish();
+      { .selectors = cfg_.only },
+      section,
+      "extract",
+      cfg_.archive_path.filename().string()) };
   tui::section_commit(section);
   tui::info("Extracted %llu files", static_cast<unsigned long long>(file_count));
 }

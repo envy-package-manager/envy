@@ -1476,6 +1476,130 @@ TEST_CASE("fetch_git_tree_frame: nothing found yet is an empty bar, not a divisi
   CHECK(frame.children.empty());
 }
 
+TEST_CASE("archive_progress_frame: stated totals count against them, the bar on bytes") {
+  // Files and bytes at different ratios: one large file must not pin the bar at its count.
+  envy::extract_progress const prog{ .bytes_processed = 2048,
+                                     .files_processed = 3,
+                                     .input_bytes_processed = 10,
+                                     .input_bytes_total = 100,
+                                     .totals = envy::extract_totals{ .files = 12,
+                                                                     .bytes = 4096 } };
+  auto const frame{
+    envy::tui_actions::archive_progress_frame("[pkg]", prog, "sdk.tar.zst", false)
+  };
+  CHECK(frame.label == "[pkg]");
+  auto const &bar{ std::get<envy::tui::progress_data>(frame.content) };
+  CHECK(bar.percent == doctest::Approx(50.0));
+  CHECK(bar.status == "3/12 files 2.00KB/4.00KB sdk.tar.zst");
+  CHECK_FALSE(frame.terminal);
+}
+
+TEST_CASE("archive_progress_frame: stated totals with no bytes put the bar on files") {
+  envy::extract_progress const prog{ .files_processed = 1,
+                                     .totals =
+                                         envy::extract_totals{ .files = 4, .bytes = 0 } };
+  auto const frame{ envy::tui_actions::archive_progress_frame("[pkg]", prog, {}, false) };
+  auto const &bar{ std::get<envy::tui::progress_data>(frame.content) };
+  CHECK(bar.percent == doctest::Approx(25.0));
+  CHECK(bar.status == "1/4 files 0B/0B");
+}
+
+TEST_CASE(
+    "archive_progress_frame: unstated totals count files over the archive bytes read") {
+  envy::extract_progress const prog{ .bytes_processed = 999,
+                                     .files_processed = 7,
+                                     .input_bytes_processed = 300,
+                                     .input_bytes_total = 1200 };
+  auto const frame{
+    envy::tui_actions::archive_progress_frame("[pkg]", prog, "sdk.tar.xz", false)
+  };
+  auto const &bar{ std::get<envy::tui::progress_data>(frame.content) };
+  CHECK(bar.percent == doctest::Approx(25.0));
+  CHECK(bar.status == "7 files sdk.tar.xz");
+}
+
+TEST_CASE(
+    "archive_progress_frame: terminal is a full bar; nothing known divides nothing") {
+  auto const done{ envy::tui_actions::archive_progress_frame(
+      "[pkg]",
+      { .files_processed = 2, .input_bytes_processed = 1, .input_bytes_total = 9 },
+      {},
+      true) };
+  CHECK(std::get<envy::tui::progress_data>(done.content).percent == 100.0);
+  CHECK(std::get<envy::tui::progress_data>(done.content).status == "2 files");
+  CHECK(done.terminal);
+
+  auto const empty{ envy::tui_actions::archive_progress_frame("[pkg]", {}, {}, false) };
+  CHECK(std::get<envy::tui::progress_data>(empty.content).percent == 0.0);
+  CHECK(std::get<envy::tui::progress_data>(empty.content).status == "0 files");
+}
+
+TEST_CASE(
+    "extract_progress_tracker: a set's row sums finished items and the one in flight") {
+  envy::tui_actions::extract_progress_tracker t{ envy::tui::kInvalidSection,
+                                                 "pkg",
+                                                 { "sdk.tar.xz", "notes.txt" },
+                                                 1000,
+                                                 std::nullopt };
+  auto const child_text{ [](envy::tui::section_frame const &child) -> std::string {
+    if (auto const *t{ std::get_if<envy::tui::static_text_data>(&child.content) }) {
+      return t->text;
+    }
+    if (auto const *s{ std::get_if<envy::tui::spinner_data>(&child.content) }) {
+      return s->text;
+    }
+    return {};
+  } };
+
+  t.begin(0);
+  t({ .bytes_processed = 50, .files_processed = 3, .input_bytes_processed = 200 });
+  auto const first{ t.frame(false) };
+  CHECK(first.label == "[pkg]");
+  CHECK(std::get<envy::tui::progress_data>(first.content).percent ==
+        doctest::Approx(20.0));
+  CHECK(std::get<envy::tui::progress_data>(first.content).status == "3 files");
+  REQUIRE(first.children.size() == 2);
+  CHECK(child_text(first.children[0]) == "extracting");
+  CHECK(child_text(first.children[1]) == "pending");
+
+  // The archive's last read trails its size; the item ends having consumed all of it.
+  t({ .bytes_processed = 90, .files_processed = 4, .input_bytes_processed = 590 });
+  t.end(600);
+  t.begin(1);
+  t({ .bytes_processed = 11, .files_processed = 1, .input_bytes_processed = 100 });
+  auto const second{ t.frame(false) };
+  CHECK(std::get<envy::tui::progress_data>(second.content).percent ==
+        doctest::Approx(70.0));
+  CHECK(std::get<envy::tui::progress_data>(second.content).status == "5 files");
+  CHECK(child_text(second.children[0]) == "done");
+  CHECK(child_text(second.children[1]) == "extracting");
+
+  t.end(400);
+  auto const last{ t.frame(true) };
+  CHECK(std::get<envy::tui::progress_data>(last.content).percent == 100.0);
+  CHECK(std::get<envy::tui::progress_data>(last.content).status == "5 files");
+  CHECK(last.terminal);
+}
+
+TEST_CASE("extract_progress_tracker: stated totals land the finished row on them") {
+  envy::tui_actions::extract_progress_tracker t{ envy::tui::kInvalidSection,
+                                                 "pkg",
+                                                 { "sdk.zip" },
+                                                 500,
+                                                 envy::extract_totals{ .files = 10,
+                                                                       .bytes = 4096 } };
+  t({ .bytes_processed = 1024, .files_processed = 5, .input_bytes_processed = 250 });
+
+  auto const mid{ t.frame(false) };
+  CHECK(std::get<envy::tui::progress_data>(mid.content).percent == doctest::Approx(25.0));
+  CHECK(std::get<envy::tui::progress_data>(mid.content).status ==
+        "5/10 files 1.00KB/4.00KB sdk.zip");
+  CHECK(mid.children.empty());
+
+  CHECK(std::get<envy::tui::progress_data>(t.frame(true).content).status ==
+        "10/10 files 4.00KB/4.00KB sdk.zip");
+}
+
 #endif  // ENVY_UNIT_TEST
 
 TEST_CASE("fetch_all_progress_tracker: race - one slot reported from several threads") {

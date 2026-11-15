@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,10 +31,13 @@ std::vector<std::string> glob_normalize_selectors(
 // Stops at the first hit and allocates nothing, for callers that only need the answer.
 bool glob_any_match(std::vector<std::string> const &selectors, std::string_view path);
 
+// One flag per selector, set once it matches. Bytes: vector<bool>'s proxy references bite.
+using glob_match_flags = std::vector<std::uint8_t>;
+
 // Also flags each selector that matched, so a caller can report the ones that did not.
 bool glob_selectors_match(std::vector<std::string> const &selectors,
                           std::string_view path,
-                          std::vector<bool> &matched);
+                          glob_match_flags &matched);
 
 // Take an entry when `include` is empty or one include matches, and no exclude does.
 struct glob_filter {
@@ -46,7 +50,7 @@ struct glob_filter {
 
   // Flags matching includes. Excludes are not tracked: an exclude naming nothing is a
   // set that lacked it, while an include naming nothing is a typo.
-  bool selects(std::string_view path, std::vector<bool> &include_matched) const;
+  bool selects(std::string_view path, glob_match_flags &include_matched) const;
 
   // `path` is not excluded and an include could match something beneath it: a walk that
   // learns what a directory holds only by entering it must enter this one.
@@ -62,6 +66,6 @@ glob_filter glob_parse_filter(std::vector<std::string> const &selectors,
 // Selectors never flagged in `matched`, in declaration order.
 std::vector<std::string> glob_unmatched_selectors(
     std::vector<std::string> const &selectors,
-    std::vector<bool> const &matched);
+    glob_match_flags const &matched);
 
 }  // namespace envy

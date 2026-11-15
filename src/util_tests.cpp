@@ -4,12 +4,14 @@
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1486,25 +1488,206 @@ TEST_CASE("util_platform_matches: multiple constraints") {
 
 // --- util_platform_intersect ---
 
-TEST_CASE("util_platform_intersect: both empty yields empty") {
-  CHECK(envy::util_platform_intersect({}, {}).empty());
+namespace {
+
+// Every list of up to `max` distinct tokens, in alphabet order: the inputs a sweep tries.
+std::vector<std::vector<std::string>> platform_lists(
+    std::vector<std::string> const &alphabet,
+    std::size_t max) {
+  std::vector<std::vector<std::string>> out{ {} };
+  for (std::size_t i{ 0 }; i < out.size(); ++i) {
+    if (out[i].size() == max) { continue; }
+    for (auto j{ out[i].empty()
+                     ? std::size_t{ 0 }
+                     : static_cast<std::size_t>(
+                           std::ranges::find(alphabet, out[i].back()) - alphabet.begin()) +
+                           1 };
+         j < alphabet.size();
+         ++j) {
+      auto grown{ out[i] };
+      grown.push_back(alphabet[j]);
+      out.push_back(std::move(grown));
+    }
+  }
+  return out;
 }
 
-TEST_CASE("util_platform_intersect: one empty returns the other") {
-  std::vector<std::string> const v{ "linux", "darwin" };
-  CHECK(envy::util_platform_intersect(v, {}) == v);
-  CHECK(envy::util_platform_intersect({}, v) == v);
+struct platform_host {
+  std::string os, arch;
+};
+
+// Every host a token can single out: each OS named (and the real three) under each arch
+// named, plus one nobody named. A token's arch is everything after its first '-'.
+std::vector<platform_host> platform_hosts(std::vector<std::string> const &alphabet) {
+  std::vector<std::string> oses{ "darwin", "linux", "windows" }, arches{ "unnamed" };
+  for (auto const &t : alphabet) {
+    auto const dash{ t.find('-') };
+    if (auto const os{ t.substr(0, dash) }; std::ranges::find(oses, os) == oses.end()) {
+      oses.push_back(os);
+    }
+    if (dash == std::string::npos) { continue; }
+    if (auto const arch{ t.substr(dash + 1) };
+        std::ranges::find(arches, arch) == arches.end()) {
+      arches.push_back(arch);
+    }
+  }
+  std::vector<platform_host> hosts;
+  for (auto const &os : oses) {
+    for (auto const &arch : arches) { hosts.push_back({ os, arch }); }
+  }
+  return hosts;
 }
 
-TEST_CASE("util_platform_intersect: disjoint yields empty") {
-  CHECK(envy::util_platform_intersect({ "linux" }, { "darwin" }).empty());
+std::string platform_list_str(std::vector<std::string> const &v) {
+  std::string s{ "{" };
+  for (auto const &t : v) { s += (s.size() > 1 ? "," : "") + t; }
+  return s + "}";
 }
 
-TEST_CASE("util_platform_intersect: overlapping yields intersection") {
-  auto const result{ envy::util_platform_intersect({ "linux", "darwin" },
-                                                   { "darwin", "windows" }) };
-  CHECK(result.size() == 1);
-  CHECK(result[0] == "darwin");
+std::optional<envy::platform_id> platform_family(std::string const &os) {
+  if (os == "darwin" || os == "linux") { return envy::platform_id::POSIX; }
+  if (os == "windows") { return envy::platform_id::WINDOWS; }
+  return std::nullopt;
+}
+
+// What deploy builds on: the hosts a list matches, and the script families it yields. A
+// result must match exactly the hosts every input matches, and yield a family's script
+// exactly when one of that family's hosts is among them. Returns the first violation.
+std::optional<std::string> platform_violation(
+    std::vector<std::vector<std::string>> const &inputs,
+    std::vector<std::string> const &result,
+    std::vector<platform_host> const &hosts) {
+  std::string const where{ [&] {
+    std::string w;
+    for (auto const &in : inputs) { w += platform_list_str(in) + " "; }
+    return w + "-> " + platform_list_str(result);
+  }() };
+  bool family_hit[2]{ false, false };
+  for (auto const &[os, arch] : hosts) {
+    bool const want{ std::ranges::all_of(inputs, [&](auto const &in) {
+      return envy::util_platform_matches(in, os, arch);
+    }) };
+    if (envy::util_platform_matches(result, os, arch) != want) {
+      return where + (want ? " misses " : " admits ") + os + "-" + arch;
+    }
+    if (auto const fam{ platform_family(os) }; want && fam) {
+      family_hit[*fam == envy::platform_id::POSIX ? 0 : 1] = true;
+    }
+  }
+  for (auto const fam : { envy::platform_id::POSIX, envy::platform_id::WINDOWS }) {
+    if (bool const want{ family_hit[fam == envy::platform_id::POSIX ? 0 : 1] };
+        envy::util_platform_matches_platform_id(result, fam) != want) {
+      return where + (want ? " drops the " : " adds a ") +
+             (fam == envy::platform_id::POSIX ? "posix" : "windows") + " script";
+    }
+  }
+  // Empty reads as every platform: a constrained set must never come out empty.
+  if (bool const constrained{
+          std::ranges::any_of(inputs, [](auto const &in) { return !in.empty(); }) };
+      constrained == result.empty()) {
+    return where +
+           (constrained ? " reads as every platform" : " constrains an unconstrained set");
+  }
+  for (std::size_t i{ 0 }; i < result.size(); ++i) {
+    if (std::ranges::count(result, result[i]) > 1) {
+      return where + " repeats " + result[i];
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+TEST_CASE("util_platform_intersect: an OS covers its arches; the more specific survives") {
+  struct row {
+    std::vector<std::string> a, b, want;
+  };
+  std::string const none{ envy::kPlatformNone };
+  for (auto const &[a, b, want] : std::vector<row>{
+           { {}, {}, {} },
+           { { "linux", "darwin" }, {}, { "linux", "darwin" } },
+           { {}, { "linux", "darwin" }, { "linux", "darwin" } },
+           { { "linux" }, { "linux" }, { "linux" } },
+           { { "linux-x86_64" }, { "linux-x86_64" }, { "linux-x86_64" } },
+           { { "linux" }, { "linux-x86_64" }, { "linux-x86_64" } },
+           { { "linux-x86_64" }, { "linux" }, { "linux-x86_64" } },
+           { { "linux" },
+             { "linux-x86_64", "linux-arm64" },
+             { "linux-x86_64", "linux-arm64" } },
+           { { "darwin", "linux" },
+             { "darwin-arm64", "linux-x86_64" },
+             { "darwin-arm64", "linux-x86_64" } },
+           { { "darwin", "linux-x86_64" },
+             { "darwin-arm64", "linux" },
+             { "darwin-arm64", "linux-x86_64" } },
+           { { "linux", "darwin" }, { "darwin", "windows" }, { "darwin" } },
+           { { "linux", "linux-x86_64" }, { "linux-x86_64" }, { "linux-x86_64" } },
+           { { "linux", "linux" }, { "linux" }, { "linux" } },
+           { { "linux" }, { "darwin" }, { none } },
+           { { "linux" }, { "darwin-arm64" }, { none } },
+           { { "linux-x86_64" }, { "linux-arm64" }, { none } },
+           { { "linux-x86" }, { "linux-x86-musl" }, { none } },  // arch: all after the '-'
+           { { "lin" }, { "linux-x86_64" }, { none } },  // a name's prefix is no OS
+           { { none }, { "linux" }, { none } },
+           { { none }, {}, { none } },
+       }) {
+    CHECK_MESSAGE(envy::util_platform_intersect(a, b) == want,
+                  platform_list_str(a),
+                  " & ",
+                  platform_list_str(b));
+  }
+}
+
+TEST_CASE(
+    "util_platform_intersect: every pair of lists matches exactly the hosts both do") {
+  std::vector<std::string> const alphabet{
+    "darwin",      "linux",          "windows",   "darwin-arm64",   "linux-x86_64",
+    "linux-arm64", "windows-x86_64", "linux-x86", "linux-x86-musl", "lin"
+  };
+  auto const lists{ platform_lists(alphabet, 3) };
+  auto const hosts{ platform_hosts(alphabet) };
+  REQUIRE(lists.size() == 176);  // 1 + 10 + 45 + 120
+
+  std::size_t violations{ 0 };
+  std::optional<std::string> first;
+  for (auto const &a : lists) {
+    for (auto const &b : lists) {
+      if (auto v{
+              platform_violation({ a, b }, envy::util_platform_intersect(a, b), hosts) }) {
+        ++violations;
+        if (!first) { first = std::move(v); }
+      }
+    }
+  }
+  CHECK_MESSAGE(violations == 0, violations, " violations; first: ", first.value_or(""));
+}
+
+TEST_CASE(
+    "util_platform_intersect: manifest, spec and product chain as deploy chains them") {
+  // engine: product & (manifest & spec). Chaining feeds a result, sentinel included, back
+  // in.
+  std::vector<std::string> const alphabet{ "darwin",       "linux",        "windows",
+                                           "darwin-arm64", "linux-x86_64", "linux-arm64" };
+  auto const lists{ platform_lists(alphabet, 2) };
+  auto const hosts{ platform_hosts(alphabet) };
+  REQUIRE(lists.size() == 22);  // 1 + 6 + 15
+
+  std::size_t violations{ 0 };
+  std::optional<std::string> first;
+  for (auto const &manifest : lists) {
+    for (auto const &spec : lists) {
+      auto const resolved{ envy::util_platform_intersect(manifest, spec) };
+      for (auto const &product : lists) {
+        if (auto v{ platform_violation({ manifest, spec, product },
+                                       envy::util_platform_intersect(product, resolved),
+                                       hosts) }) {
+          ++violations;
+          if (!first) { first = std::move(v); }
+        }
+      }
+    }
+  }
+  CHECK_MESSAGE(violations == 0, violations, " violations; first: ", first.value_or(""));
 }
 
 // --- util_platform_matches_platform_id ---

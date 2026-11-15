@@ -442,11 +442,7 @@ void execute_downloads(std::vector<fetch_spec> const &specs,
 
   auto const results{ fetch(requests, key) };
 
-  std::vector<bool> ok(results.size());
-  for (size_t i{ 0 }; i < results.size(); ++i) {
-    ok[i] = std::holds_alternative<fetch_result>(results[i]);
-  }
-  tracker.finish(ok);
+  tracker.finish(results);
 
   std::vector<std::string> errors;
   for (size_t i = 0; i < results.size(); ++i) {

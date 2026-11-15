@@ -1539,11 +1539,6 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
       }
     }
     auto intersected{ util_platform_intersect(cfg.platforms, spec_platforms) };
-    // Disjoint non-empty inputs yield empty, but empty = "all platforms" elsewhere.
-    // Use a sentinel that matches nothing so scripts are never generated.
-    if (intersected.empty() && !cfg.platforms.empty() && !spec_platforms.empty()) {
-      intersected.emplace_back(kPlatformNone);
-    }
     std::lock_guard const deps_lock(p->deps_mutex);  // guards resolved_platforms
     p->resolved_platforms = std::move(intersected);
   }

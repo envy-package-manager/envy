@@ -13,7 +13,6 @@
 #include "tui_actions.h"
 #include "util.h"
 
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -126,71 +125,13 @@ void run_import_phase(pkg *p, engine &eng) {
     // entry_path is lock->install_dir().parent_path()
     fs::path const entry_path{ p->lock->install_dir().parent_path() };
 
-    // Pre-scan archive for totals, then extract with progress bar.
-    tui::section_set_content(
-        p->tui_section,
-        tui::section_frame{ .label = label,
-                            .content = tui::spinner_data{
-                                .text = "analyzing archive...",
-                                .start_time = std::chrono::steady_clock::now() } });
-
-    auto const totals{ compute_archive_totals(archive_path) };
-
-    std::uint64_t files_done{ 0 };
-    std::uint64_t bytes_done{ 0 };
-    fs::path last_file;
-    auto const extract_start{ std::chrono::steady_clock::now() };
-
-    extract_options opts{ .progress = [&](extract_progress const &ep) -> bool {
-      bytes_done = ep.bytes_processed;
-      if (ep.is_regular_file && ep.current_entry != last_file) {
-        ++files_done;
-        last_file = ep.current_entry;
-      }
-
-      std::string status;
-      status.reserve(64);
-      status += std::to_string(files_done);
-      if (totals.files > 0) {
-        status += "/";
-        status += std::to_string(totals.files);
-      }
-      status += " files";
-      if (totals.bytes > 0) {
-        status += " ";
-        status += util_format_bytes(bytes_done);
-        status += "/";
-        status += util_format_bytes(totals.bytes);
-      } else if (bytes_done > 0) {
-        status += " ";
-        status += util_format_bytes(bytes_done);
-      }
-
-      // The pre-scan sized nothing, so there is nothing to divide by: spin on the running
-      // counts rather than draw a bar that never leaves 0%.
-      if (totals.files == 0 && totals.bytes == 0) {
-        tui::section_set_content(p->tui_section,
-                                 tui::section_frame{ .label = label,
-                                                     .content = tui::spinner_data{
-                                                         .text = status,
-                                                         .start_time = extract_start } });
-        return true;
-      }
-
-      double const percent{
-        totals.files > 0
-            ? std::min(100.0, (files_done / static_cast<double>(totals.files)) * 100.0)
-            : std::min(100.0, (bytes_done / static_cast<double>(totals.bytes)) * 100.0)
-      };
-      tui::section_set_content(
-          p->tui_section,
-          tui::section_frame{
-              .label = label,
-              .content = tui::progress_data{ .percent = percent, .status = status } });
-      return true;
-    } };
-
-    extract(archive_path, entry_path, opts);
+    // No suffix: every remote depot archive lands on the same fixed temp name.
+    tui_actions::extract_tracked(archive_path,
+                                 entry_path,
+                                 {},
+                                 p->tui_section,
+                                 p->cfg->identity,
+                                 {});
 
     bool const has_install{ directory_has_entries(p->lock->install_dir()) };
     bool const has_fetch{ directory_has_entries(p->lock->fetch_dir()) };
