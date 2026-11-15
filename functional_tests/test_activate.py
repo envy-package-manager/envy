@@ -336,26 +336,34 @@ class TestActivateBash(_ActivateBase):
                          lines[0])
         self.assertRegex(lines[1], r"^envy: entering codec .+ 2 variables set$")
 
-    def test_cached_provider_resolves_despite_uncached_sibling(self) -> None:
-        mixed = self.project(
-            "mixed",
-            {"cmake.lua": 'IDENTITY = "local.cmake@r0"\nFETCH = function() end\n'
-             'INSTALL = function() end\nPRODUCTS = { cmake = "cmake" }\n',
-             "brotli.lua": 'IDENTITY = "local.brotli@r0"\n'
-             'DEPENDENCIES = { { product = "cmake" } }\n'
-             'FETCH = function() end\nINSTALL = function() end\nENV = { BROTLI = "1" }\n'},
-            ['  { spec = "local.brotli@r0", source = "brotli.lua" },',
-             '  { spec = "local.cmake@r0", source = "cmake.lua" },'],
+    def test_cached_product_chain_resolves_despite_uncached_sibling(self) -> None:
+        # brotli -> ninja -> cmake by product, listed so brotli retries before ninja resolves.
+        def spec(name: str, deps: str, rest: str) -> str:
+            return (f'IDENTITY = "local.{name}@r0"\nDEPENDENCIES = {{ {deps} }}\n'
+                    f'FETCH = function() end\nINSTALL = function() end\n{rest}\n')
+
+        chain = self.project(
+            "chain",
+            {"brotli.lua": spec("brotli", '{ product = "ninja" }', 'ENV = { BROTLI = "1" }'),
+             "ninja.lua": spec("ninja", '{ product = "cmake" }',
+                               'PRODUCTS = { ninja = "ninja" }\nENV = { NINJA = "1" }'),
+             "cmake.lua": spec("cmake", "", 'PRODUCTS = { cmake = "cmake" }')},
+            [f'  {{ spec = "local.{n}@r0", source = "{n}.lua" }},'
+             for n in ("brotli", "ninja", "cmake")],
         )
-        self.install(mixed)
-        manifest = mixed / "envy.lua"
+        self.install(chain)
+        served = self.make_temp_dir("served")
+        (served / "r.lua").write_text('IDENTITY = "remote.r@r0"\nFETCH = function() end\n')
+        url = self.serve_directory(served)
+        manifest = chain / "envy.lua"
         manifest.write_text(manifest.read_text().replace(
-            "PACKAGES = {\n", f'PACKAGES = {{\n  {{ spec = "envy.ninja@r0", {self.tools_bundle()} }},\n'))
+            "PACKAGES = {\n", f'PACKAGES = {{\n  {{ spec = "remote.r@r0", source = "{url}/r.lua" }},\n'))
         result = self.bash(
-            f'eval "$("{mixed}/tools/envy" activate bash)"\n' 'echo "BROTLI=${BROTLI-unset}"\n'
+            f'eval "$("{chain}/tools/envy" activate bash)"\n'
+            'echo "BROTLI=${BROTLI-unset} NINJA=${NINJA-unset}"\n'
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("BROTLI=1", result.stdout)
+        self.assertIn("BROTLI=1 NINJA=1", result.stdout)
         self.assertIn("activate: 1 package not installed", result.stderr)
         self.assertNotIn("skipping", result.stderr)
 

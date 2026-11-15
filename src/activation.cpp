@@ -127,11 +127,12 @@ size_t package_layers(cmd_startup const &startup,
   // One unresolvable root (an uncached spec, a Lua error) must not cost the others their
   // ENV: resolve each alone, keeping what resolves, in root order.
   std::vector<std::vector<keyed_layer>> found(roots.size());
-  std::vector<pkg_cfg const *> resolved;  // roots that resolve alone: candidate providers
+  std::vector<pkg_cfg const *> resolved;  // roots that resolved: candidate providers
   std::vector<size_t> deferred;           // roots whose weak references name another root
+  std::vector<std::string> why(roots.size());  // a deferred root's latest failure
   bool any_uncached{ false };
-  auto const skip{ [&](size_t i, std::exception const &e) {
-    tui::warn("activate: skipping %s: %s", roots[i]->identity.c_str(), e.what());
+  auto const skip{ [&](size_t i, char const *what) {
+    tui::warn("activate: skipping %s: %s", roots[i]->identity.c_str(), what);
   } };
   auto const not_installed{ [&](size_t i) {
     uninstalled.insert(pkg_key{ *roots[i] }.canonical());
@@ -148,19 +149,31 @@ size_t package_layers(cmd_startup const &startup,
         not_installed(i);
         any_uncached = true;
       } else {
-        skip(i, e);
+        skip(i, e.what());
       }
     }
   }
 
-  // Retry those with every root that resolved. Still unresolved while a root is uncached,
-  // the provider may be that root: not installed, not a failure.
+  // Retry those with every root that resolved, each success joining the providers, until a
+  // pass resolves none: a chain of product dependencies resolves link by link.
+  for (size_t n{ 0 }; n != deferred.size();) {
+    n = deferred.size();
+    std::erase_if(deferred, [&](size_t i) {
+      try {
+        found[i] = resolve_layers(startup, { roots[i] }, resolved, root, uninstalled);
+        resolved.push_back(roots[i]);
+      } catch (unresolved_reference_error const &e) {
+        why[i] = e.what();
+        return false;
+      } catch (std::exception const &e) { skip(i, e.what()); }
+      return true;
+    });
+  }
+
+  // Still unresolved while a root is uncached, the provider may be that root: not
+  // installed, not a failure.
   for (size_t const i : deferred) {
-    try {
-      found[i] = resolve_layers(startup, { roots[i] }, resolved, root, uninstalled);
-    } catch (unresolved_reference_error const &e) {
-      any_uncached ? not_installed(i) : skip(i, e);
-    } catch (std::exception const &e) { skip(i, e); }
+    any_uncached ? not_installed(i) : skip(i, why[i].c_str());
   }
 
   for (auto &f : found) { keep(std::move(f)); }
