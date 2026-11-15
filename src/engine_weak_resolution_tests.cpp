@@ -107,7 +107,7 @@ TEST_CASE("reference-only dependency reports error when graph makes no progress"
   try {
     run_pkg_from_file("local.weak_missing_ref@v1", spec_path, {});
     CHECK(false);
-  } catch (std::runtime_error const &e) {
+  } catch (unresolved_reference_error const &e) {  // activation catches the type
     std::string const msg{ e.what() };
     CHECK(msg.find("local.never_provided") != std::string::npos);
     CHECK(msg.find("no progress") != std::string::npos);

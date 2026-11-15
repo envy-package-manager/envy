@@ -63,15 +63,20 @@ struct keyed_layer {
   env_ops ops;
 };
 
-// The graph under `roots`, resolved by one engine and walked into ENV layers in priority
-// order; `uninstalled` counts ENV-bearing packages not in the cache. Throws if
-// unresolvable.
+// The graph under `roots` -- plus `providers`, which may satisfy their weak references --
+// resolved by one engine and walked from `roots` into ENV layers in priority order. Adds
+// ENV-bearing packages not in the cache to `uninstalled`. Throws if unresolvable.
 std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
                                         std::vector<pkg_cfg const *> const &roots,
+                                        std::vector<pkg_cfg const *> const &providers,
                                         std::filesystem::path const &root,
-                                        size_t &uninstalled) {
+                                        std::unordered_set<std::string> &uninstalled) {
   engine eng{ *startup.c, startup.m.get() };
-  eng.resolve_graph(roots);
+  eng.resolve_graph([&] {
+    auto all{ providers };
+    all.insert(all.end(), roots.begin(), roots.end());
+    return all;
+  }());
 
   std::vector<keyed_layer> layers;
   for (pkg *p : walk_graph(eng, roots)) {
@@ -80,7 +85,7 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
     if (p->type == pkg_type::CACHE_MANAGED) {
       pkg_path = pkg_predicted_path(p);
       if (!cache::is_entry_complete(pkg_path->parent_path())) {
-        ++uninstalled;
+        uninstalled.insert(p->key.canonical());
         continue;
       }
     } else if (p->type != pkg_type::USER_MANAGED) {
@@ -99,13 +104,14 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
 }
 
 // Every installed package's ENV with root = the project root, highest priority first.
-// Returns the count of packages declaring ENV that are not installed yet.
+// Returns the count not installed yet: ENV-bearing packages of graphs that resolve, plus
+// every root whose graph needs a spec the cache lacks (its ENV is unknowable until then).
 size_t package_layers(cmd_startup const &startup,
                       std::filesystem::path const &root,
                       std::vector<env_ops> &layers) {
   auto const roots{ engine_filter_host_platform(
       { startup.m->packages.begin(), startup.m->packages.end() }) };
-  size_t uninstalled{ 0 };
+  std::unordered_set<std::string> uninstalled;  // keys: a shared dependency counts once
   std::unordered_set<std::string> seen;  // a dependency shared by two roots applies once
   auto const keep{ [&](std::vector<keyed_layer> found) {
     for (auto &l : found) {
@@ -114,25 +120,51 @@ size_t package_layers(cmd_startup const &startup,
   } };
 
   try {
-    keep(resolve_layers(startup, roots, root, uninstalled));
-    return uninstalled;
+    keep(resolve_layers(startup, roots, {}, root, uninstalled));
+    return uninstalled.size();
   } catch (std::exception const &) {}
 
   // One unresolvable root (an uncached spec, a Lua error) must not cost the others their
-  // ENV: resolve each alone, in order, keeping what resolves.
-  for (auto const *cfg : roots) {
+  // ENV: resolve each alone, keeping what resolves, in root order.
+  std::vector<std::vector<keyed_layer>> found(roots.size());
+  std::vector<pkg_cfg const *> resolved;  // roots that resolve alone: candidate providers
+  std::vector<size_t> deferred;           // roots whose weak references name another root
+  bool any_uncached{ false };
+  auto const skip{ [&](size_t i, std::exception const &e) {
+    tui::warn("activate: skipping %s: %s", roots[i]->identity.c_str(), e.what());
+  } };
+  auto const not_installed{ [&](size_t i) {
+    uninstalled.insert(pkg_key{ *roots[i] }.canonical());
+  } };
+  for (size_t i{ 0 }; i < roots.size(); ++i) {
     try {
-      keep(resolve_layers(startup, { cfg }, root, uninstalled));
+      found[i] = resolve_layers(startup, { roots[i] }, {}, root, uninstalled);
+      resolved.push_back(roots[i]);
+    } catch (unresolved_reference_error const &) {
+      deferred.push_back(i);
     } catch (std::exception const &e) {
       if (std::string_view{ e.what() }.find(kCacheReadOnlyMissText) !=
           std::string_view::npos) {
-        ++uninstalled;
+        not_installed(i);
+        any_uncached = true;
       } else {
-        tui::warn("activate: skipping %s: %s", cfg->identity.c_str(), e.what());
+        skip(i, e);
       }
     }
   }
-  return uninstalled;
+
+  // Retry those with every root that resolved. Still unresolved while a root is uncached,
+  // the provider may be that root: not installed, not a failure.
+  for (size_t const i : deferred) {
+    try {
+      found[i] = resolve_layers(startup, { roots[i] }, resolved, root, uninstalled);
+    } catch (unresolved_reference_error const &e) {
+      any_uncached ? not_installed(i) : skip(i, e);
+    } catch (std::exception const &e) { skip(i, e); }
+  }
+
+  for (auto &f : found) { keep(std::move(f)); }
+  return uninstalled.size();
 }
 
 }  // namespace

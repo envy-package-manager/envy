@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -52,6 +53,13 @@ struct product_info {
   std::filesystem::path pkg_path;
   bool script = true;
   std::vector<std::string> platforms;  // Effective constraint (empty = all)
+};
+
+// resolve_graph found no package for a weak reference. A resolution of some roots throws it
+// when the provider is a root it left out, so callers resolving subsets catch it by type.
+class unresolved_reference_error : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
 };
 
 // Domain adapter over task_engine: packages are tasks whose steps are the

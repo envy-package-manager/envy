@@ -1682,7 +1682,7 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
     for (auto const &msg : resolution.missing_without_fallback) { oss << msg << "\n"; }
     oss << "Dependency resolution made no progress at iteration " << iteration << " with "
         << resolution.unresolved << " unresolved references";
-    throw_runtime_error({ oss.str() });
+    throw unresolved_reference_error{ oss.str() };
   }
 
   validate_product_fallbacks();
