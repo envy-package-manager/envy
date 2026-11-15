@@ -610,17 +610,6 @@ jobs:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
 
-      # TEMPORARY (#401): repeat the release tests, then A/B released envy vs this build
-      # on the x.jlink shape with fresh caches. Diagnostic; never fails the job.
-      - name: Diag fetch release (temporary)
-        if: ${{ !cancelled() && startsWith(matrix.shard, 'func-') }}
-        continue-on-error: true
-        run: |
-          for ($i = 0; $i -lt 5; $i++) {
-            py -3.13 -m unittest functional_tests.test_fetch_release 2>&1 | Select-Object -Last 3
-          }
-          py -3.13 .github/scripts/diag_fetch_release.py --candidate out/build/envy.exe --runs 3
-
       - name: Save sccache cache
         id: sccache-save
         uses: actions/cache/save@v6
