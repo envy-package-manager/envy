@@ -1,5 +1,10 @@
 if(WIN32)
     set(USE_HTTPS WinHTTP CACHE STRING "" FORCE)
+    # SelectHTTPSBackend probes both regardless of USE_HTTPS; on case-insensitive
+    # filesystems find_package(mbedTLS) resolves to our FindMbedTLS.cmake, whose
+    # fallback trips a package-name-mismatch dev warning.
+    set(CMAKE_DISABLE_FIND_PACKAGE_OpenSSL ON)
+    set(CMAKE_DISABLE_FIND_PACKAGE_mbedTLS ON)
 else()
     set(USE_HTTPS mbedTLS CACHE STRING "" FORCE)
 endif()
@@ -152,3 +157,5 @@ unset(_libgit2_url)
 unset(_libgit2_target)
 unset(_envy_libgit2_warning_silencers)
 unset(CMAKE_DISABLE_FIND_PACKAGE_PkgConfig)
+unset(CMAKE_DISABLE_FIND_PACKAGE_OpenSSL)
+unset(CMAKE_DISABLE_FIND_PACKAGE_mbedTLS)
