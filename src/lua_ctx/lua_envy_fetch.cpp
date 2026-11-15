@@ -116,8 +116,10 @@ std::vector<commit_entry> parse_commit_fetch_args(sol::object const &arg) {
 
 void commit_files(std::vector<commit_entry> const &entries,
                   std::filesystem::path const &tmp_dir,
-                  std::filesystem::path const &fetch_dir) {
+                  std::filesystem::path const &fetch_dir,
+                  pkg const *p) {
   std::vector<std::string> errors;
+  std::string const identity{ p ? p->cfg->identity : std::string{} };
 
   for (auto const &entry : entries) {
     std::filesystem::path const src{ tmp_dir / entry.filename };
@@ -125,6 +127,20 @@ void commit_files(std::vector<commit_entry> const &entries,
 
     if (!std::filesystem::exists(src)) {
       errors.push_back(entry.filename + ": file not found in tmp directory");
+      continue;
+    }
+
+    // Whatever wrote it -- an envy.run tool, a download -- a fetch dir holds only
+    // released files, and the rename below needs every handle to share delete.
+    try {
+      fetch_await_release(
+          src,
+          tui_actions::release_wait_spinner(p ? p->tui_section : tui::kInvalidSection,
+                                            identity,
+                                            entry.filename),
+          identity);
+    } catch (std::exception const &e) {
+      errors.push_back(entry.filename + ": " + e.what());
       continue;
     }
 
@@ -282,7 +298,8 @@ void lua_envy_fetch_install(sol::table &envy_table) {
     }
     commit_files(parse_commit_fetch_args(arg),
                  ctx->lock->tmp_dir(),
-                 ctx->lock->fetch_dir());
+                 ctx->lock->fetch_dir(),
+                 ctx->p);
   };
 
   // envy.verify_hash(file_path, expected_sha256) - Verify file hash

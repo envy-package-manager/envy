@@ -8,7 +8,6 @@
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "pkg_env.h"
-#include "platform.h"
 #include "shell.h"
 #include "trace.h"
 #include "tree_hash.h"
@@ -157,8 +156,6 @@ void run_install_phase(pkg *p, engine &eng) {
 
   cache::scoped_entry_lock::ptr_t lock{ std::move(p->lock) };
   std::filesystem::path const final_pkg_path{ lock->install_dir() };
-
-  platform::await_files_accessible(lock->fetch_dir());
 
   auto const lua_acc{ p->lua.lock() };
   sol::state_view lua_view{ *lua_acc };

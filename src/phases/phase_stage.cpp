@@ -9,7 +9,6 @@
 #include "lua_error_formatter.h"
 #include "pkg.h"
 #include "pkg_env.h"
-#include "platform.h"
 #include "shell.h"
 #include "trace.h"
 #include "tui.h"
@@ -113,8 +112,6 @@ void run_stage_phase(pkg *p, engine &eng) {
   sol::object stage_obj{ lua_view["STAGE"] };
 
   if (!fetch_dir_has_files(lock->fetch_dir())) { return; }
-
-  platform::await_files_accessible(lock->fetch_dir());
 
   if (!stage_obj.valid()) {
     extract_all_archives(lock->fetch_dir(), stage_dir, {}, identity, p->tui_section);

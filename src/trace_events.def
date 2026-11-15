@@ -178,6 +178,12 @@ ENVY_TRACE_EVENT(download_skipped,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(reason))
 
+// A fetched file another process held past its transfer (Windows only), once released.
+ENVY_TRACE_EVENT(fetch_release_wait,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_I64(duration_ms)
+                 ENVY_TRACE_FIELD_STR(holders))   // platform::file_holders; may be empty
+
 ENVY_TRACE_EVENT(git_resolve,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(ref)

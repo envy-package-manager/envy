@@ -1,7 +1,7 @@
 #include "platform.h"
 #include "util.h"
 
-#include "tui.h"
+#include <restartmanager.h>
 
 #include <atomic>
 #include <cstdint>
@@ -403,14 +403,15 @@ std::error_code remove_all_with_retry(std::filesystem::path const &target) {
   return ec;
 }
 
-namespace {
-
-// Probe whether a file can be opened for reading.  Detects Defender's
-// on-access scan lock (ERROR_SHARING_VIOLATION at the file-handle level).
-bool probe_file_readable(std::filesystem::path const &path) {
+bool file_released(std::filesystem::path const &path) {
+  // Asking for DELETE fails against any handle that does not share delete; sharing only
+  // read fails against any handle with write or delete access. Together: exactly the
+  // holders that break 7-Zip (read, sharing read), CreateProcess (no writers) and a
+  // rename or delete. A benign share-everything reader passes, as it should. Reading no
+  // data, the probe should not set off an on-access scan of its own.
   HANDLE const h{ ::CreateFileW(path.c_str(),
-                                GENERIC_READ,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                DELETE | FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ,
                                 nullptr,
                                 OPEN_EXISTING,
                                 FILE_ATTRIBUTE_NORMAL,
@@ -419,79 +420,73 @@ bool probe_file_readable(std::filesystem::path const &path) {
     ::CloseHandle(h);
     return true;
   }
-  return false;
+  DWORD const err{ ::GetLastError() };
+  return err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION;
 }
 
-// Probe whether an executable can be launched.  Defender's on-execution scan
-// (WdFilter.sys) hooks NtCreateSection(SEC_IMAGE) inside CreateProcess —
-// a level that CreateFileW cannot reach regardless of access flags.  The only
-// reliable probe is to actually call CreateProcess with CREATE_SUSPENDED,
-// which exercises the full image-mapping path without running any user code.
-bool probe_exe_launchable(std::filesystem::path const &path) {
-  STARTUPINFOW si{};
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi{};
+std::string file_holders(std::filesystem::path const &path) {
+  DWORD session{ 0 };
+  WCHAR key[CCH_RM_SESSION_KEY + 1]{};
+  if (::RmStartSession(&session, 0, key) != ERROR_SUCCESS) { return {}; }
 
-  if (!::CreateProcessW(path.c_str(),
-                        nullptr,
-                        nullptr,
-                        nullptr,
-                        FALSE,
-                        CREATE_SUSPENDED,
-                        nullptr,
-                        nullptr,
-                        &si,
-                        &pi)) {
-    return false;
-  }
-
-  ::TerminateProcess(pi.hProcess, 0);
-  ::WaitForSingleObject(pi.hProcess, 1000);
-  ::CloseHandle(pi.hProcess);
-  ::CloseHandle(pi.hThread);
-  return true;
-}
-
-}  // namespace
-
-void await_files_accessible(std::filesystem::path const &dir) {
-  std::error_code ec;
-  std::filesystem::directory_iterator it{ dir, ec };
-  if (ec) { return; }
-
-  constexpr int kMaxRetries{ 10 };
-  constexpr int kInitialDelayMs{ 100 };
-  constexpr int kMaxDelayMs{ 1500 };
-
-  for (auto const &entry : it) {
-    if (!entry.is_regular_file(ec) || ec) { continue; }
-
-    bool const is_exe{ ::_wcsicmp(entry.path().extension().c_str(), L".exe") == 0 };
-
-    for (int attempt{ 0 }; attempt < kMaxRetries; ++attempt) {
-      bool const ok{ is_exe ? probe_exe_launchable(entry.path())
-                            : probe_file_readable(entry.path()) };
-      if (ok) { break; }
-
-      DWORD const err{ ::GetLastError() };
-      if (err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION) { break; }
-
-      if (attempt == 0) {
-        tui::debug("await_files_accessible: %s locked, waiting",
-                   entry.path().filename().string().c_str());
-      }
-
-      if (attempt + 1 == kMaxRetries) {
-        tui::warn("await_files_accessible: %s still locked after retries, proceeding",
-                  entry.path().filename().string().c_str());
-        break;
-      }
-
-      int delay_ms{ kInitialDelayMs << attempt };
-      if (delay_ms > kMaxDelayMs) { delay_ms = kMaxDelayMs; }
-      ::Sleep(static_cast<DWORD>(delay_ms));
+  std::vector<RM_PROCESS_INFO> infos;
+  LPCWSTR files[]{ path.c_str() };
+  if (::RmRegisterResources(session, 1, files, 0, nullptr, 0, nullptr) == ERROR_SUCCESS) {
+    UINT needed{ 0 };
+    DWORD reasons{ 0 };
+    DWORD rc{ ERROR_MORE_DATA };
+    for (int tries{ 0 }; rc == ERROR_MORE_DATA && tries < 4; ++tries) {  // list may grow
+      UINT count{ static_cast<UINT>(infos.size()) };
+      rc = ::RmGetList(session, &needed, &count, infos.data(), &reasons);
+      infos.resize(rc == ERROR_SUCCESS ? count : needed);
     }
+    if (rc != ERROR_SUCCESS) { infos.clear(); }
   }
+  ::RmEndSession(session);
+
+  // UTF-8 by hand: path::string() throws on what the ANSI code page cannot map, and this
+  // runs on the way to reporting some other failure.
+  auto const utf8{ [](std::wstring_view w) {
+    int const n{ ::WideCharToMultiByte(CP_UTF8,
+                                       0,
+                                       w.data(),
+                                       static_cast<int>(w.size()),
+                                       nullptr,
+                                       0,
+                                       nullptr,
+                                       nullptr) };
+    std::string s(static_cast<std::size_t>(n > 0 ? n : 0), '\0');
+    ::WideCharToMultiByte(CP_UTF8,
+                          0,
+                          w.data(),
+                          static_cast<int>(w.size()),
+                          s.data(),
+                          n,
+                          nullptr,
+                          nullptr);
+    return s;
+  } };
+
+  std::string out;
+  for (auto const &info : infos) {
+    DWORD const pid{ info.Process.dwProcessId };
+    // The image name says more than RM's display name ("Antimalware Service Executable"),
+    // and PROCESS_QUERY_LIMITED_INFORMATION opens even a protected process like MsMpEng.
+    std::wstring name{ info.strAppName };
+    if (HANDLE const proc{
+            ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) }) {
+      WCHAR image[MAX_PATH]{};
+      DWORD len{ MAX_PATH };
+      if (::QueryFullProcessImageNameW(proc, 0, image, &len)) {
+        std::wstring_view const full{ image, len };
+        name = full.substr(full.find_last_of(L'\\') + 1);  // npos + 1 == 0: all of it
+      }
+      ::CloseHandle(proc);
+    }
+    if (!out.empty()) { out += ", "; }
+    out += utf8(name) + " (pid " + std::to_string(pid) + ")";
+  }
+  return out;
 }
 
 void mark_not_indexed(std::filesystem::path const &dir) {

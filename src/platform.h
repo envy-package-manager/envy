@@ -146,11 +146,15 @@ bool make_dir(std::filesystem::path const &path);
 // copy the bytes instead. `dst` must not exist; on false nothing is left behind.
 bool clone_file(std::filesystem::path const &src, std::filesystem::path const &dst);
 
-// Wait until all regular files in dir are readable (no sharing violations).
-// On Windows, probes each file with CreateFileW and, for ".exe" files,
-// with CreateProcessW(CREATE_SUSPENDED); retries with backoff on
-// ERROR_SHARING_VIOLATION (Defender/SmartScreen/Indexer).  POSIX: no-op.
-void await_files_accessible(std::filesystem::path const &dir);
+// True unless another handle on `path` could fail a reader, a launch, or a rename or
+// delete: one open for write or delete, or not sharing read and delete (an antivirus
+// scan, an indexer). Any other probe failure is true too -- the consumer's to report.
+// POSIX enforces no share modes: always true.
+bool file_released(std::filesystem::path const &path);
+
+// Who holds `path` open, best effort: "MsMpEng.exe (pid 4321), ..." via Restart Manager.
+// Empty when nobody does, it cannot tell, or on POSIX.
+std::string file_holders(std::filesystem::path const &path);
 
 // Mark a directory as not interesting to the Windows Search Indexer
 // (FILE_ATTRIBUTE_NOT_CONTENT_INDEXED).  Children inherit the attribute.

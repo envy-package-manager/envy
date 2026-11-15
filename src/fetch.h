@@ -58,10 +58,18 @@ struct fetch_git_tree_progress {
   std::vector<fetch_git_repo_progress> in_flight;
 };
 
+// A finished transfer another process still holds (an antivirus scan, an indexer): nothing
+// to count, so the row names what it waits on rather than freezing on a full bar.
+struct fetch_release_progress {
+  std::chrono::milliseconds elapsed{ 0 };
+  std::string holders;  // platform::file_holders; empty when unknown
+};
+
 using fetch_progress_t = std::variant<fetch_transfer_progress,
                                       fetch_git_progress,
                                       fetch_git_tree_progress,
-                                      fetch_retry_progress>;
+                                      fetch_retry_progress,
+                                      fetch_release_progress>;
 using fetch_progress_cb_t = std::function<bool(fetch_progress_t const &)>;
 
 struct http_tag {};
@@ -159,6 +167,14 @@ void fetch_retrying(function_ref<void()> once,
                     fetch_progress_cb_t const &progress,
                     std::string const &trace_spec,
                     std::string const &url);
+
+// Block until `file` is released (platform::file_released), reporting the wait through
+// `progress`; throws fetch_error, holder named, once ENVY_FETCH_RELEASE_BUDGET_MS (2 min)
+// is spent. One probe and no wait when nothing holds it -- always, on POSIX. fetch() runs
+// it on every file it lands, so a file in a fetch dir is fetched *and* released.
+void fetch_await_release(std::filesystem::path const &file,
+                         fetch_progress_cb_t const &progress,
+                         std::string const &trace_spec);
 
 // Build a fetch_request from a URL + destination. Handles HTTP, HTTPS, FTP, FTPS, S3,
 // and local files. Throws on git, SSH, or unknown schemes.

@@ -66,6 +66,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `download_failed` | url:str, error:str |
 | `download_retry` | url:str, attempt:i64, delay_ms:i64, reason:str (connect\|transfer\|timeout\|http_status), error:str |
 | `download_skipped` | url:str, reason:str |
+| `fetch_release_wait` | path:str, duration_ms:i64, holders:str (`name.exe (pid N), ...`; may be empty) — Windows: a fetched file another process held past its transfer |
 | `git_resolve` | url:str, ref:str, sha:str, method:str (sha\|ls-remote) |
 | `git_fetch` | url:str, path:str (from the root; "" = root), sha:str, strategy:str (local\|tip\|oid\|full), depth:i64 (0 = full) |
 | `extract_start` | archive:str, destination:str, strip_components:i64 |

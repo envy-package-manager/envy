@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cwchar>
 #include <filesystem>
 #include <memory>
@@ -54,6 +55,33 @@ class handle_closer {
 
  private:
   HANDLE handle_{ nullptr };
+};
+
+// A PROC_THREAD_ATTRIBUTE_LIST with room for `count` attributes. The values it is
+// updated with are stored by pointer and must outlive it.
+class proc_attribute_list {
+ public:
+  explicit proc_attribute_list(DWORD count) {
+    SIZE_T size{ 0 };
+    ::InitializeProcThreadAttributeList(nullptr, count, 0, &size);  // sizes; "fails"
+    storage_ = std::make_unique<std::byte[]>(size);
+    if (!::InitializeProcThreadAttributeList(get(), count, 0, &size)) {
+      throw_system_error(::GetLastError(),
+                         std::system_category(),
+                         { "InitializeProcThreadAttributeList failed" });
+    }
+  }
+  ~proc_attribute_list() { ::DeleteProcThreadAttributeList(get()); }
+
+  proc_attribute_list(proc_attribute_list const &) = delete;
+  proc_attribute_list &operator=(proc_attribute_list const &) = delete;
+
+  LPPROC_THREAD_ATTRIBUTE_LIST get() const {
+    return reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.get());
+  }
+
+ private:
+  std::unique_ptr<std::byte[]> storage_;
 };
 
 std::wstring utf8_to_wstring(std::string_view input) {
@@ -800,12 +828,35 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
                        { "SetHandleInformation failed" });
   }
 
-  STARTUPINFOW si{};
-  si.cb = sizeof(si);
-  si.dwFlags |= STARTF_USESTDHANDLES;
-  si.hStdInput = stdin_handle.get();
-  si.hStdOutput = stdout_write_end.get();
-  si.hStdError = stderr_write_end.get();
+  // The child inherits its three stdio handles and nothing else, as POSIX closes every
+  // descriptor above stderr. bInheritHandles alone hands over every inheritable handle in
+  // the process -- CRT and iostream opens are inheritable, so a sibling's half-written
+  // download or an archive mid-extract goes too, as does another shell's pipe -- and the
+  // child holds them until it exits: a rename, delete or share-read open of that file
+  // fails with a sharing violation (#401), and that pipe's reader never sees EOF.
+  std::array<HANDLE, 3> inherited{ stdin_handle.get(),
+                                   stdout_write_end.get(),
+                                   stderr_write_end.get() };
+  proc_attribute_list const attrs{ 1 };
+  if (!::UpdateProcThreadAttribute(attrs.get(),
+                                   0,
+                                   PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                   inherited.data(),
+                                   sizeof(inherited),
+                                   nullptr,
+                                   nullptr)) {
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "UpdateProcThreadAttribute failed" });
+  }
+
+  STARTUPINFOEXW six{};
+  six.StartupInfo.cb = sizeof(six);
+  six.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+  six.StartupInfo.hStdInput = stdin_handle.get();
+  six.StartupInfo.hStdOutput = stdout_write_end.get();
+  six.StartupInfo.hStdError = stderr_write_end.get();
+  six.lpAttributeList = attrs.get();
 
   PROCESS_INFORMATION pi{};
 
@@ -832,16 +883,17 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
     cwd_ptr = cwd_storage.data();
   }
 
-  BOOL const created{ ::CreateProcessW(nullptr,
-                                       cmd_buffer.data(),
-                                       nullptr,
-                                       nullptr,
-                                       TRUE,
-                                       CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                                       env_block.empty() ? nullptr : env_block.data(),
-                                       cwd_ptr,
-                                       &si,
-                                       &pi) };
+  BOOL const created{ ::CreateProcessW(
+      nullptr,
+      cmd_buffer.data(),
+      nullptr,
+      nullptr,
+      TRUE,
+      CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+      env_block.empty() ? nullptr : env_block.data(),
+      cwd_ptr,
+      &six.StartupInfo,
+      &pi) };
   if (!created) {
     throw_system_error(::GetLastError(),
                        std::system_category(),

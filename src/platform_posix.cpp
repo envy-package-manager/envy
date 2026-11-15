@@ -362,7 +362,9 @@ std::vector<dir_entry> dir_list(std::filesystem::path const &dir) {
   return out;
 }
 
-void await_files_accessible(std::filesystem::path const &) {}
+bool file_released(std::filesystem::path const &) { return true; }
+
+std::string file_holders(std::filesystem::path const &) { return {}; }
 
 void mark_not_indexed(std::filesystem::path const &) {}
 
