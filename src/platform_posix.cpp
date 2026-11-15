@@ -364,7 +364,7 @@ std::vector<dir_entry> dir_list(std::filesystem::path const &dir) {
 
 bool file_released(std::filesystem::path const &) { return true; }
 
-std::string file_holders(std::filesystem::path const &) { return {}; }
+std::vector<file_holder> file_holders(std::filesystem::path const &) { return {}; }
 
 void mark_not_indexed(std::filesystem::path const &) {}
 

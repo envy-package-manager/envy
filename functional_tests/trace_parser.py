@@ -80,7 +80,12 @@ EVENT_REGISTRY = {
         "error:str",
     ],
     "download_skipped": ["url:str", "reason:str"],
-    "fetch_release_wait": ["path:str", "duration_ms:i64", "holders:str"],
+    "fetch_release_wait": [
+        "path:str",
+        "duration_ms:i64",
+        "holders:str",
+        "released:bool",
+    ],
     "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
     "git_fetch": ["url:str", "path:str", "sha:str", "strategy:str", "depth:i64"],
     "extract_start": ["archive:str", "destination:str", "strip_components:i64"],

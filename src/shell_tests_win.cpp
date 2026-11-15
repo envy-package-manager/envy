@@ -72,8 +72,8 @@ TEST_CASE("shell_run executes with empty environment (powershell)") {
 }
 
 TEST_CASE("shell_run child inherits no handle beyond stdio") {
-  // An inheritable pipe stands in for another worker's in-flight download (#401). Once the
-  // parent closes its write end the pipe is broken -- unless the child holds a copy.
+  // An inheritable pipe models another worker's in-flight download (#401). After the
+  // parent closes its write end, the pipe stays open only if the child inherited a copy.
   SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
   HANDLE read_end{ nullptr };
   HANDLE write_end{ nullptr };
@@ -93,7 +93,7 @@ TEST_CASE("shell_run child inherits no handle beyond stdio") {
     .env = envy::shell_getenv(),
     .shell = envy::shell_choice::cmd
   };
-  // The child outlives the check by a second: ping waits that long between echoes.
+  // ping -n 2 keeps the child alive about a second after "ready", past the check.
   auto const result{ envy::shell_run("@echo off\necho ready\nping -n 2 127.0.0.1 > nul",
                                      inv) };
   if (write_end) { ::CloseHandle(write_end); }

@@ -140,7 +140,6 @@ class fetch_all_progress_tracker {
   void update_git(std::size_t slot, fetch_git_progress const &prog);
   void update_tree(std::size_t slot, fetch_git_tree_progress const &prog);
   void update_retry(std::size_t slot, fetch_retry_progress const &prog);
-  void update_release(std::size_t slot, fetch_release_progress const &prog);
   void set_frame(std::size_t slot, tui::section_frame child_frame);
   void publish_unlocked(bool terminal);  // push children_ out; caller holds mutex_
   tui::section_frame final_frame_unlocked(std::size_t slot) const;
@@ -157,14 +156,14 @@ class fetch_all_progress_tracker {
   bool grouped_;
 };
 
-// "awaiting release 3s from MsMpEng.exe (pid 4321)": a fetched file's wait on a holder.
+// Formats a release wait, e.g. "awaiting release 3s from MsMpEng.exe (pid 4321)".
 std::string release_text(fetch_release_progress const &prog);
 
-// fetch_await_release's progress as a spinner on a package's row, for files that land
-// outside fetch() (envy.commit_fetch). `item` names the file.
-fetch_progress_cb_t release_wait_spinner(tui::section_handle section,
-                                         std::string const &row_label,
-                                         std::string item);
+// Calls fetch_await_release and shows the wait as a spinner on `section`, followed by
+// the held file's name.
+void await_release_tracked(std::filesystem::path const &path,
+                           tui::section_handle section,
+                           std::string const &identity);
 
 // A row for a wait with nothing to count: another envy owns the entry for as long as its
 // own work takes. Pass to cache::ensure_* as `on_lock_contended`; it names what is waited

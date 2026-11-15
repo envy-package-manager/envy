@@ -105,6 +105,11 @@ void run_stage_phase(pkg *p, engine &eng) {
   if (!lock) { return; }  // cache hit
 
   std::string const &identity{ p->cfg->identity };
+  // Every file in fetch/ is released before STAGE reads it, whichever path put it there
+  // (fetch, envy.commit_fetch, a depot import, an earlier run). This runs before the Lua
+  // lock is taken, so the package's Lua state stays free during a wait.
+  tui_actions::await_release_tracked(lock->fetch_dir(), p->tui_section, identity);
+
   auto const lua_acc{ p->lua.lock() };
   sol::state_view lua_view{ *lua_acc };
   std::filesystem::path const stage_dir{ determine_stage_destination(lua_view, lock) };

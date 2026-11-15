@@ -400,10 +400,7 @@ function(configure_envy_compile TARGET_NAME)
     add_dependencies(${TARGET_NAME} envy_embedded_resources envy_embedded_licenses)
     target_compile_options(${TARGET_NAME} PRIVATE ${ENVY_COMMON_COMPILE_OPTIONS})
     set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
-    target_link_libraries(${TARGET_NAME} PRIVATE
-        envy::thirdparty
-        $<$<PLATFORM_ID:Windows>:rstrtmgr>  # platform::file_holders
-    )
+    target_link_libraries(${TARGET_NAME} PRIVATE envy::thirdparty)
 endfunction()
 
 # Function to configure an envy executable (base configuration, no sanitizers)

@@ -1,17 +1,18 @@
 #include "platform.h"
 #include "util.h"
 
-#include <restartmanager.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <vector>
+
+#include <restartmanager.h>
 
 namespace envy::platform {
 
@@ -404,27 +405,37 @@ std::error_code remove_all_with_retry(std::filesystem::path const &target) {
 }
 
 bool file_released(std::filesystem::path const &path) {
-  // Asking for DELETE fails against any handle that does not share delete; sharing only
-  // read fails against any handle with write or delete access. Together: exactly the
-  // holders that break 7-Zip (read, sharing read), CreateProcess (no writers) and a
-  // rename or delete. A benign share-everything reader passes, as it should. Reading no
-  // data, the probe should not set off an on-access scan of its own.
-  HANDLE const h{ ::CreateFileW(path.c_str(),
-                                DELETE | FILE_READ_ATTRIBUTES,
-                                FILE_SHARE_READ,
-                                nullptr,
-                                OPEN_EXISTING,
-                                FILE_ATTRIBUTE_NORMAL,
-                                nullptr) };
-  if (h != INVALID_HANDLE_VALUE) {
+  // Share checks consider data access and delete access only. Requesting read data and
+  // delete fails against a handle that shares less than both. Sharing only read fails
+  // against a handle with write or delete access. Together these catch the holders that
+  // break 7-Zip (opens for read, sharing read), CreateProcess (fails against writers),
+  // and a rename or delete. A reader that shares everything passes. The probe only opens
+  // the file, and that open can still wait for an antivirus scan to finish.
+  auto const probe{ [&](DWORD access) -> DWORD {
+    HANDLE const h{ ::CreateFileW(path.c_str(),
+                                  access,
+                                  FILE_SHARE_READ,
+                                  nullptr,
+                                  OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL,
+                                  nullptr) };
+    if (h == INVALID_HANDLE_VALUE) { return ::GetLastError(); }
     ::CloseHandle(h);
-    return true;
-  }
-  DWORD const err{ ::GetLastError() };
-  return err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION;
+    return ERROR_SUCCESS;
+  } };
+  DWORD err{ probe(FILE_READ_DATA | DELETE | FILE_READ_ATTRIBUTES) };
+  // When delete access is denied (a read-only file, an ACL), probe for writers and for
+  // readers that deny sharing. A directory fails both opens and counts as released.
+  if (err == ERROR_ACCESS_DENIED) { err = probe(FILE_READ_DATA | FILE_READ_ATTRIBUTES); }
+  return err != ERROR_SHARING_VIOLATION;
 }
 
-std::string file_holders(std::filesystem::path const &path) {
+std::vector<file_holder> file_holders(std::filesystem::path const &path) {
+  // Queries run one at a time. Restart Manager allows a limited number of sessions per
+  // user session, shared with every other process, and this query is only a diagnostic.
+  static std::mutex query_mutex;
+  std::lock_guard const query_lock{ query_mutex };
+
   DWORD session{ 0 };
   WCHAR key[CCH_RM_SESSION_KEY + 1]{};
   if (::RmStartSession(&session, 0, key) != ERROR_SUCCESS) { return {}; }
@@ -444,49 +455,28 @@ std::string file_holders(std::filesystem::path const &path) {
   }
   ::RmEndSession(session);
 
-  // UTF-8 by hand: path::string() throws on what the ANSI code page cannot map, and this
-  // runs on the way to reporting some other failure.
-  auto const utf8{ [](std::wstring_view w) {
-    int const n{ ::WideCharToMultiByte(CP_UTF8,
-                                       0,
-                                       w.data(),
-                                       static_cast<int>(w.size()),
-                                       nullptr,
-                                       0,
-                                       nullptr,
-                                       nullptr) };
-    std::string s(static_cast<std::size_t>(n > 0 ? n : 0), '\0');
-    ::WideCharToMultiByte(CP_UTF8,
-                          0,
-                          w.data(),
-                          static_cast<int>(w.size()),
-                          s.data(),
-                          n,
-                          nullptr,
-                          nullptr);
-    return s;
-  } };
-
-  std::string out;
+  std::vector<file_holder> holders;
+  std::vector<WCHAR> image(32768);  // the longest path Windows accepts
   for (auto const &info : infos) {
     DWORD const pid{ info.Process.dwProcessId };
-    // The image name says more than RM's display name ("Antimalware Service Executable"),
-    // and PROCESS_QUERY_LIMITED_INFORMATION opens even a protected process like MsMpEng.
+    // Prefer the image name to Restart Manager's display name ("Antimalware Service
+    // Executable"). The display name stays when OpenProcess is denied.
     std::wstring name{ info.strAppName };
     if (HANDLE const proc{
             ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) }) {
-      WCHAR image[MAX_PATH]{};
-      DWORD len{ MAX_PATH };
-      if (::QueryFullProcessImageNameW(proc, 0, image, &len)) {
-        std::wstring_view const full{ image, len };
-        name = full.substr(full.find_last_of(L'\\') + 1);  // npos + 1 == 0: all of it
+      DWORD len{ static_cast<DWORD>(image.size()) };
+      if (::QueryFullProcessImageNameW(proc, 0, image.data(), &len)) {
+        std::wstring_view const full{ image.data(), len };
+        name = full.substr(full.find_last_of(L'\\') + 1);  // npos + 1 is 0, so all of it
       }
       ::CloseHandle(proc);
     }
-    if (!out.empty()) { out += ", "; }
-    out += utf8(name) + " (pid " + std::to_string(pid) + ")";
+    auto const utf8{ std::filesystem::path{ name }.u8string() };
+    holders.push_back({ .pid = pid,
+                        .name = std::string{ reinterpret_cast<char const *>(utf8.data()),
+                                             utf8.size() } });
   }
-  return out;
+  return holders;
 }
 
 void mark_not_indexed(std::filesystem::path const &dir) {

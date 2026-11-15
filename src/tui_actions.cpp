@@ -299,8 +299,7 @@ fetch_progress_cb_t fetch_all_progress_tracker::make_callback(std::size_t slot) 
         envy::match{ [&](fetch_transfer_progress const &p) { update_transfer(slot, p); },
                      [&](fetch_git_progress const &p) { update_git(slot, p); },
                      [&](fetch_git_tree_progress const &p) { update_tree(slot, p); },
-                     [&](fetch_retry_progress const &p) { update_retry(slot, p); },
-                     [&](fetch_release_progress const &p) { update_release(slot, p); } },
+                     [&](fetch_retry_progress const &p) { update_retry(slot, p); } },
         prog);
     return true;
   };
@@ -362,21 +361,6 @@ void fetch_all_progress_tracker::update_retry(std::size_t slot,
 
   std::string const &item_label{ labels_[slot] };
   std::string const text{ retry_text(prog) + (grouped_ ? "" : " " + item_label) };
-
-  set_frame(slot,
-            tui::section_frame{
-                .label = item_label,
-                .content = tui::spinner_data{ .text = text, .start_time = start_time_ } });
-}
-
-// The bytes are all in but the file is not yet ours: a full bar that will not finish reads
-// as a hang, so the row spins and names who holds it.
-void fetch_all_progress_tracker::update_release(std::size_t slot,
-                                                fetch_release_progress const &prog) {
-  if (slot >= labels_.size()) { return; }
-
-  std::string const &item_label{ labels_[slot] };
-  std::string const text{ release_text(prog) + (grouped_ ? "" : " " + item_label) };
 
   set_frame(slot,
             tui::section_frame{
@@ -544,31 +528,25 @@ std::string release_text(fetch_release_progress const &prog) {
   auto const seconds{
     std::chrono::duration_cast<std::chrono::seconds>(prog.elapsed).count()
   };
-  std::ostringstream oss;
-  oss << "awaiting release " << seconds << "s";
-  if (!prog.holders.empty()) { oss << " from " << prog.holders; }
-  return oss.str();
+  return "awaiting release " + std::to_string(seconds) + "s" +
+         (prog.holders.empty() ? "" : " from " + prog.holders);
 }
 
-fetch_progress_cb_t release_wait_spinner(tui::section_handle section,
-                                         std::string const &row_label,
-                                         std::string item) {
-  if (!section) { return {}; }
-
-  return [section,
-          label = "[" + row_label + "]",
-          item = std::move(item),
-          start = std::chrono::steady_clock::now()](fetch_progress_t const &prog) {
-    if (auto const *wait{ std::get_if<fetch_release_progress>(&prog) }) {
-      tui::section_set_content(
-          section,
-          tui::section_frame{
-              .label = label,
-              .content = tui::spinner_data{ .text = release_text(*wait) + " " + item,
-                                            .start_time = start } });
-    }
-    return true;
-  };
+void await_release_tracked(std::filesystem::path const &path,
+                           tui::section_handle section,
+                           std::string const &identity) {
+  std::string const label{ "[" + identity + "]" };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const on_wait{ [&](fetch_release_progress const &prog) {
+    if (!section) { return; }
+    tui::section_set_content(section,
+                             tui::section_frame{ .label = label,
+                                                 .content = tui::spinner_data{
+                                                     .text = release_text(prog) + " " +
+                                                             prog.file.filename().string(),
+                                                     .start_time = start } });
+  } };
+  fetch_await_release(path, on_wait, identity);
 }
 
 // ==== lock_wait_spinner ====

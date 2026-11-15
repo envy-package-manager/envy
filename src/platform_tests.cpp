@@ -328,6 +328,75 @@ TEST_CASE("remove_all_with_retry: post-loop probe detects target gone") {
   CHECK(!ec);
 }
 
+namespace {
+
+// Holds the read-only fixture open with the given access and share mode while `check`
+// runs.
+template <typename F>
+void with_holder(DWORD access, DWORD share, F &&check) {
+  std::filesystem::path const fixture{ "test_data/hash/abc.txt" };
+  HANDLE const h{ ::CreateFileW(fixture.c_str(),
+                                access,
+                                share,
+                                nullptr,
+                                OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL,
+                                nullptr) };
+  REQUIRE(h != INVALID_HANDLE_VALUE);
+  check(fixture);
+  ::CloseHandle(h);
+}
+
+}  // namespace
+
+TEST_CASE("file_released: a holder that would fail a reader, launch, or delete is held") {
+  constexpr DWORD kAll{ FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE };
+  struct row {
+    char const *what;
+    DWORD access;
+    DWORD share;
+    bool released;
+  };
+  row const rows[]{
+    { "reader sharing everything", GENERIC_READ, kAll, true },
+    { "reader sharing read (7-Zip)", GENERIC_READ, FILE_SHARE_READ, false },
+    { "reader sharing write and delete",
+      GENERIC_READ,
+      FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      false },
+    { "writer sharing read and write (CRT fopen)",
+      GENERIC_READ | GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      false },
+    { "delete access sharing everything", DELETE, kAll, false },
+    { "attributes only, sharing nothing", FILE_READ_ATTRIBUTES, 0, true },
+  };
+  for (auto const &r : rows) {
+    std::string const holder{ r.what };
+    CAPTURE(holder);
+    with_holder(r.access, r.share, [&](std::filesystem::path const &fixture) {
+      CHECK(platform::file_released(fixture) == r.released);
+    });
+  }
+  CHECK(platform::file_released("test_data/hash/abc.txt"));
+}
+
+TEST_CASE("file_released: a missing path or a directory counts as released") {
+  CHECK(platform::file_released("test_data/hash/does-not-exist"));
+  CHECK(platform::file_released("test_data/hash"));
+}
+
+TEST_CASE("file_holders: names this process while it holds the file") {
+  auto const self{ static_cast<std::uint32_t>(platform::get_process_id()) };
+  auto const holds_self{ [&](std::vector<platform::file_holder> const &holders) {
+    return std::ranges::any_of(holders, [&](auto const &h) { return h.pid == self; });
+  } };
+  with_holder(GENERIC_READ, FILE_SHARE_READ, [&](std::filesystem::path const &fixture) {
+    CHECK(holds_self(platform::file_holders(fixture)));
+  });
+  CHECK(!holds_self(platform::file_holders("test_data/hash/abc.txt")));
+}
+
 #endif  // _WIN32
 
 }  // namespace envy

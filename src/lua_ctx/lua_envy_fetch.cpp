@@ -130,17 +130,13 @@ void commit_files(std::vector<commit_entry> const &entries,
       continue;
     }
 
-    // Whatever wrote it -- an envy.run tool, a download -- a fetch dir holds only
-    // released files, and the rename below needs every handle to share delete.
+    // The rename below needs every open handle on the file to share delete.
     try {
-      fetch_await_release(
-          src,
-          tui_actions::release_wait_spinner(p ? p->tui_section : tui::kInvalidSection,
-                                            identity,
-                                            entry.filename),
-          identity);
+      tui_actions::await_release_tracked(src,
+                                         p ? p->tui_section : tui::kInvalidSection,
+                                         identity);
     } catch (std::exception const &e) {
-      errors.push_back(entry.filename + ": " + e.what());
+      errors.push_back(e.what());
       continue;
     }
 
@@ -163,10 +159,12 @@ void commit_files(std::vector<commit_entry> const &entries,
   }
 
   if (!errors.empty()) {
-    std::ostringstream oss;
-    oss << "envy.commit_fetch failed:\n";
-    for (auto const &err : errors) { oss << "  " << err << "\n"; }
-    throw_runtime_error({ oss.str() });
+    // Kept to one line because the Lua error report shows only a message's first line.
+    std::string message{ "envy.commit_fetch failed: " };
+    for (std::size_t i{ 0 }; i < errors.size(); ++i) {
+      message += (i ? "; " : "") + errors[i];
+    }
+    throw_runtime_error({ message });
   }
 }
 

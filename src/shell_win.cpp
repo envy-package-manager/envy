@@ -63,7 +63,7 @@ class proc_attribute_list {
  public:
   explicit proc_attribute_list(DWORD count) {
     SIZE_T size{ 0 };
-    ::InitializeProcThreadAttributeList(nullptr, count, 0, &size);  // sizes; "fails"
+    ::InitializeProcThreadAttributeList(nullptr, count, 0, &size);  // size query, FALSE ok
     storage_ = std::make_unique<std::byte[]>(size);
     if (!::InitializeProcThreadAttributeList(get(), count, 0, &size)) {
       throw_system_error(::GetLastError(),
@@ -828,12 +828,12 @@ shell_result shell_run(std::string_view script, shell_run_cfg const &cfg) {
                        { "SetHandleInformation failed" });
   }
 
-  // The child inherits its three stdio handles and nothing else, as POSIX closes every
-  // descriptor above stderr. bInheritHandles alone hands over every inheritable handle in
-  // the process -- CRT and iostream opens are inheritable, so a sibling's half-written
-  // download or an archive mid-extract goes too, as does another shell's pipe -- and the
-  // child holds them until it exits: a rename, delete or share-read open of that file
-  // fails with a sharing violation (#401), and that pipe's reader never sees EOF.
+  // The child inherits only its three stdio handles, matching envy's POSIX path, which
+  // closes every descriptor above stderr. bInheritHandles alone passes every inheritable
+  // handle in the process. CRT and iostream opens are inheritable, so that includes a
+  // sibling's half-written download, an archive mid-extract, and another shell's pipe.
+  // The child holds them until it exits. Until then a rename, delete, or share-read open
+  // of such a file fails with a sharing violation (#401), and the pipe stays open.
   std::array<HANDLE, 3> inherited{ stdin_handle.get(),
                                    stdout_write_end.get(),
                                    stderr_write_end.get() };
