@@ -1633,3 +1633,11 @@ TEST_CASE("fetch_all_progress_tracker: race - one slot reported from several thr
   }
   tracker.finish();
 }
+
+TEST_CASE("release_text: the wait so far, then who holds the file when known") {
+  CHECK(envy::tui_actions::release_text(
+            { .elapsed = std::chrono::milliseconds{ 3400 } }) == "awaiting release 3s");
+  CHECK(envy::tui_actions::release_text({ .elapsed = std::chrono::milliseconds{ 12000 },
+                                          .holders = "MsMpEng.exe (pid 4321)" }) ==
+        "awaiting release 12s from MsMpEng.exe (pid 4321)");
+}

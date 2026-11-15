@@ -156,6 +156,15 @@ class fetch_all_progress_tracker {
   bool grouped_;
 };
 
+// Formats a release wait, e.g. "awaiting release 3s from MsMpEng.exe (pid 4321)".
+std::string release_text(fetch_release_progress const &prog);
+
+// Calls fetch_await_release and shows the wait as a spinner on `section`, followed by
+// the held file's name.
+void await_release_tracked(std::filesystem::path const &path,
+                           tui::section_handle section,
+                           std::string const &identity);
+
 // A row for a wait with nothing to count: another envy owns the entry for as long as its
 // own work takes. Pass to cache::ensure_* as `on_lock_contended`; it names what is waited
 // for.

@@ -292,7 +292,7 @@ envy.fetch({
 
 ### envy.commit_fetch(files)
 
-Move verified files from tmp_dir to fetch_dir. FETCH phase only.
+Move verified files from tmp_dir to fetch_dir. FETCH phase only. On Windows each file must be released first (see architecture.md, fetch); one still open in this envy (an unclosed `io.open`) fails at once.
 
 **files formats:**
 - `"filename"` — single file, no hash check

@@ -4,6 +4,7 @@
 #include "fetch_error.h"
 #include "fetch_git.h"
 #include "fetch_http.h"
+#include "platform.h"
 #include "trace.h"
 #include "tree_hash.h"
 #include "tui.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -276,7 +278,119 @@ bool sleep_reporting(std::chrono::milliseconds delay,
   return true;
 }
 
+// Long enough to scan a big archive on a slow, busy runner. A holder still there after
+// that is stuck, and the error names it.
+std::chrono::milliseconds fetch_release_budget() {
+  static std::chrono::milliseconds const budget{
+    env_int("ENVY_FETCH_RELEASE_BUDGET_MS", 120000, 0, 3600000)
+  };
+  return budget;
+}
+
+std::string describe_holders(std::vector<platform::file_holder> const &holders) {
+  std::string out;
+  for (auto const &h : holders) {
+    if (!out.empty()) { out += ", "; }
+    out += h.name + " (pid " + std::to_string(h.pid) + ")";
+  }
+  return out;
+}
+
+void await_file_release(std::filesystem::path const &file,
+                        function_ref<void(fetch_release_progress const &)> on_wait,
+                        std::string const &trace_spec) {
+  if (platform::file_released(file)) { return; }
+
+  // Most holds end within a second, and Restart Manager queries are slow. The first
+  // query runs after one second and later ones every five, so holder names stay current.
+  constexpr std::chrono::milliseconds kMaxDelay{ 250 };
+  constexpr std::chrono::seconds kFirstQuery{ 1 };
+  constexpr std::chrono::seconds kRequery{ 5 };
+
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const budget{ fetch_release_budget() };
+  auto next_query{ start + kFirstQuery };
+  std::string holders;
+  tui::debug("fetch: %s held, awaiting release", file.filename().string().c_str());
+
+  auto const trace{ [&](bool released) {
+    auto const ms{ std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start) };
+    ENVY_TRACE(fetch_release_wait,
+               trace_spec,
+               .path = file.string(),
+               .duration_ms = ms.count(),
+               .holders = holders,
+               .released = released);
+    return ms;
+  } };
+
+  for (std::chrono::milliseconds delay{ 25 };; delay = std::min(delay * 2, kMaxDelay)) {
+    auto const now{ std::chrono::steady_clock::now() };
+    auto const elapsed{ std::chrono::duration_cast<std::chrono::milliseconds>(now -
+                                                                              start) };
+    bool const out_of_time{ elapsed >= budget };
+
+    if (out_of_time || now >= next_query) {
+      auto const found{ platform::file_holders(file) };
+      holders = describe_holders(found);
+      next_query = now + kRequery;
+      // A handle envy itself holds stays open for as long as this thread waits.
+      auto const self{ static_cast<std::uint32_t>(platform::get_process_id()) };
+      if (std::ranges::any_of(found, [&](auto const &h) { return h.pid == self; })) {
+        trace(false);
+        throw fetch_error(
+            fetch_error_kind::LOCAL,
+            file.string() + " is held open by this envy process (an unclosed io.open?)");
+      }
+    }
+
+    if (out_of_time) {
+      trace(false);
+      char secs[32]{};
+      std::snprintf(secs, sizeof(secs), "%.1f", elapsed.count() / 1000.0);
+      throw fetch_error(fetch_error_kind::LOCAL,
+                        file.string() + " still held" +
+                            (holders.empty() ? "" : " by " + holders) + " after " + secs +
+                            "s (ENVY_FETCH_RELEASE_BUDGET_MS)");
+    }
+
+    if (on_wait) {
+      on_wait(
+          fetch_release_progress{ .file = file, .elapsed = elapsed, .holders = holders });
+    }
+    std::this_thread::sleep_for(std::min(delay, budget - elapsed));
+
+    if (platform::file_released(file)) {
+      auto const waited{ trace(true) };
+      tui::debug("fetch: %s released after %lldms",
+                 file.filename().string().c_str(),
+                 static_cast<long long>(waited.count()));
+      return;
+    }
+  }
+}
+
 }  // namespace
+
+void fetch_await_release(std::filesystem::path const &path,
+                         function_ref<void(fetch_release_progress const &)> on_wait,
+                         std::string const &trace_spec) {
+  // For a directory (a fetch dir, a file:// copy, a committed tree), wait on each regular
+  // file in it. Only Windows enforces share modes, so other platforms skip the walk.
+  std::error_code ec;
+  if (platform::native() != platform_id::WINDOWS ||
+      !std::filesystem::is_directory(path, ec)) {
+    await_file_release(path, on_wait, trace_spec);
+    return;
+  }
+  for (std::filesystem::recursive_directory_iterator it{ path, ec }, end; !ec && it != end;
+       it.increment(ec)) {
+    if (std::error_code file_ec; it->is_regular_file(file_ec)) {
+      await_file_release(it->path(), on_wait, trace_spec);
+    }
+  }
+}
 
 // The single retry seam. Retrying here rather than inside a backend gives http, ftp
 // and git one policy; git calls in once per repository, so a tree of submodules never

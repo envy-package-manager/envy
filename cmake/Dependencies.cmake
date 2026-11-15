@@ -107,7 +107,7 @@ set(ENVY_DOCTEST_SHA256 cfd518a3ef90f67e1f3ba514df23fb3627437de1a2feeba78cf5062a
 
 set(PLATFORM_NETWORK_LIBS)
 if(WIN32)
-    set(PLATFORM_NETWORK_LIBS ws2_32 dnsapi iphlpapi advapi32 crypt32 wldap32 winhttp bcrypt wininet)
+    set(PLATFORM_NETWORK_LIBS ws2_32 dnsapi iphlpapi advapi32 crypt32 wldap32 winhttp bcrypt wininet rstrtmgr)
 else()
     find_library(RESOLV_LIBRARY resolv REQUIRED)
     set(PLATFORM_NETWORK_LIBS ${RESOLV_LIBRARY})

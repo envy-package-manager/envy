@@ -116,8 +116,10 @@ std::vector<commit_entry> parse_commit_fetch_args(sol::object const &arg) {
 
 void commit_files(std::vector<commit_entry> const &entries,
                   std::filesystem::path const &tmp_dir,
-                  std::filesystem::path const &fetch_dir) {
+                  std::filesystem::path const &fetch_dir,
+                  pkg const *p) {
   std::vector<std::string> errors;
+  std::string const identity{ p ? p->cfg->identity : std::string{} };
 
   for (auto const &entry : entries) {
     std::filesystem::path const src{ tmp_dir / entry.filename };
@@ -125,6 +127,16 @@ void commit_files(std::vector<commit_entry> const &entries,
 
     if (!std::filesystem::exists(src)) {
       errors.push_back(entry.filename + ": file not found in tmp directory");
+      continue;
+    }
+
+    // The rename below needs every open handle on the file to share delete.
+    try {
+      tui_actions::await_release_tracked(src,
+                                         p ? p->tui_section : tui::kInvalidSection,
+                                         identity);
+    } catch (std::exception const &e) {
+      errors.push_back(e.what());
       continue;
     }
 
@@ -147,10 +159,12 @@ void commit_files(std::vector<commit_entry> const &entries,
   }
 
   if (!errors.empty()) {
-    std::ostringstream oss;
-    oss << "envy.commit_fetch failed:\n";
-    for (auto const &err : errors) { oss << "  " << err << "\n"; }
-    throw_runtime_error({ oss.str() });
+    // Kept to one line because the Lua error report shows only a message's first line.
+    std::string message{ "envy.commit_fetch failed: " };
+    for (std::size_t i{ 0 }; i < errors.size(); ++i) {
+      message += (i ? "; " : "") + errors[i];
+    }
+    throw_runtime_error({ message });
   }
 }
 
@@ -282,7 +296,8 @@ void lua_envy_fetch_install(sol::table &envy_table) {
     }
     commit_files(parse_commit_fetch_args(arg),
                  ctx->lock->tmp_dir(),
-                 ctx->lock->fetch_dir());
+                 ctx->lock->fetch_dir(),
+                 ctx->p);
   };
 
   // envy.verify_hash(file_path, expected_sha256) - Verify file hash

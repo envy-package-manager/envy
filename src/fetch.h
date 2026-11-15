@@ -64,6 +64,13 @@ using fetch_progress_t = std::variant<fetch_transfer_progress,
                                       fetch_retry_progress>;
 using fetch_progress_cb_t = std::function<bool(fetch_progress_t const &)>;
 
+// A fetched file that another process (an antivirus scan, an indexer) holds open.
+struct fetch_release_progress {
+  std::filesystem::path file;
+  std::chrono::milliseconds elapsed{ 0 };
+  std::string holders;  // "name.exe (pid N), ...", empty until known
+};
+
 struct http_tag {};
 struct https_tag {};
 
@@ -159,6 +166,15 @@ void fetch_retrying(function_ref<void()> once,
                     fetch_progress_cb_t const &progress,
                     std::string const &trace_spec,
                     std::string const &url);
+
+// Waits until `path` is released (platform::file_released), or each regular file under it
+// when it is a directory, calling `on_wait` while a file is held. Throws fetch_error after
+// ENVY_FETCH_RELEASE_BUDGET_MS (default 2 min, 0 fails at the first held probe), or at
+// once when the holder is this process. A released file costs one probe. STAGE and
+// INSTALL call it on the fetch dir. envy.commit_fetch calls it on each file it moves.
+void fetch_await_release(std::filesystem::path const &path,
+                         function_ref<void(fetch_release_progress const &)> on_wait,
+                         std::string const &trace_spec);
 
 // Build a fetch_request from a URL + destination. Handles HTTP, HTTPS, FTP, FTPS, S3,
 // and local files. Throws on git, SSH, or unknown schemes.

@@ -178,6 +178,13 @@ ENVY_TRACE_EVENT(download_skipped,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(reason))
 
+// A wait for another process to release a fetched file (Windows only).
+ENVY_TRACE_EVENT(fetch_release_wait,
+                 ENVY_TRACE_FIELD_STR(path)
+                 ENVY_TRACE_FIELD_I64(duration_ms)
+                 ENVY_TRACE_FIELD_STR(holders)  // "name.exe (pid N), ...", may be empty
+                 ENVY_TRACE_FIELD_BOOL(released))  // false on timeout or a self-held file
+
 ENVY_TRACE_EVENT(git_resolve,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(ref)

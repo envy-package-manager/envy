@@ -8,7 +8,6 @@
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "pkg_env.h"
-#include "platform.h"
 #include "shell.h"
 #include "trace.h"
 #include "tree_hash.h"
@@ -158,7 +157,9 @@ void run_install_phase(pkg *p, engine &eng) {
   cache::scoped_entry_lock::ptr_t lock{ std::move(p->lock) };
   std::filesystem::path const final_pkg_path{ lock->install_dir() };
 
-  platform::await_files_accessible(lock->fetch_dir());
+  // INSTALL may read fetch/ directly, as STAGE does. The check is repeated here because a
+  // process can open the files again while STAGE runs.
+  tui_actions::await_release_tracked(lock->fetch_dir(), p->tui_section, p->cfg->identity);
 
   auto const lua_acc{ p->lua.lock() };
   sol::state_view lua_view{ *lua_acc };

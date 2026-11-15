@@ -522,6 +522,33 @@ void fetch_all_progress_tracker::finish(std::vector<fetch_result_t> const &resul
   publish_unlocked(true);
 }
 
+// ==== release waits ====
+
+std::string release_text(fetch_release_progress const &prog) {
+  auto const seconds{
+    std::chrono::duration_cast<std::chrono::seconds>(prog.elapsed).count()
+  };
+  return "awaiting release " + std::to_string(seconds) + "s" +
+         (prog.holders.empty() ? "" : " from " + prog.holders);
+}
+
+void await_release_tracked(std::filesystem::path const &path,
+                           tui::section_handle section,
+                           std::string const &identity) {
+  std::string const label{ "[" + identity + "]" };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const on_wait{ [&](fetch_release_progress const &prog) {
+    if (!section) { return; }
+    tui::section_set_content(section,
+                             tui::section_frame{ .label = label,
+                                                 .content = tui::spinner_data{
+                                                     .text = release_text(prog) + " " +
+                                                             prog.file.filename().string(),
+                                                     .start_time = start } });
+  } };
+  fetch_await_release(path, on_wait, identity);
+}
+
 // ==== lock_wait_spinner ====
 
 platform::file_lock::contended_cb_t lock_wait_spinner(tui::section_handle section,
