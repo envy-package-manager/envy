@@ -295,6 +295,92 @@ class TestActivateBash(_ActivateBase):
         self.assertIn("LOCAL_OK=1", result.stdout)
         self.assertEqual([], requests)
 
+    def activate_stderr(self, proj: Path) -> list[str]:
+        result = test_config.run(
+            [str(proj / "tools" / "envy"), "activate", "bash"],
+            capture_output=True, text=True, env=self.env, timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return result.stderr.splitlines()
+
+    def tools_bundle(self) -> str:
+        """An uncached bundle providing products cmake and ninja; returns its decl."""
+        bundle = self.root / "bundle"
+        (bundle / "specs").mkdir(parents=True)
+        (bundle / "envy-bundle.lua").write_text(
+            'BUNDLE = "test.tools@v1"\nSPECS = {\n'
+            '  ["envy.cmake@r0"] = "specs/cmake.lua",\n'
+            '  ["envy.ninja@r0"] = "specs/ninja.lua",\n}\n'
+        )
+        for name in ("cmake", "ninja"):
+            (bundle / "specs" / f"{name}.lua").write_text(
+                f'IDENTITY = "envy.{name}@r0"\nFETCH = function() end\n'
+                f'INSTALL = function() end\nPRODUCTS = {{ {name} = "{name}" }}\n'
+            )
+        return f'bundle = {{ identity = "test.tools@v1", source = "{bundle}" }}'
+
+    def test_cold_cache_product_dependency_is_not_installed(self) -> None:
+        bundle = self.tools_bundle()
+        codec = self.project(
+            "codec",
+            {"brotli.lua": 'IDENTITY = "local.brotli@r0"\n'
+             'DEPENDENCIES = { { product = "cmake" }, { product = "ninja" } }\n'
+             'FETCH = function() end\nINSTALL = function() end\nENV = { BROTLI = "1" }\n'},
+            ['  { spec = "local.brotli@r0", source = "brotli.lua" },',
+             f'  {{ spec = "envy.cmake@r0", {bundle} }},',
+             f'  {{ spec = "envy.ninja@r0", {bundle} }},'],
+        )
+        lines = self.activate_stderr(codec)
+        self.assertEqual(2, len(lines), lines)
+        self.assertEqual("warning: activate: 3 packages not installed; run 'envy install'",
+                         lines[0])
+        self.assertRegex(lines[1], r"^envy: entering codec .+ 2 variables set$")
+
+    def test_cached_product_chain_resolves_despite_uncached_sibling(self) -> None:
+        # brotli -> ninja -> cmake by product, listed so brotli retries before ninja resolves.
+        def spec(name: str, deps: str, rest: str) -> str:
+            return (f'IDENTITY = "local.{name}@r0"\nDEPENDENCIES = {{ {deps} }}\n'
+                    f'FETCH = function() end\nINSTALL = function() end\n{rest}\n')
+
+        chain = self.project(
+            "chain",
+            {"brotli.lua": spec("brotli", '{ product = "ninja" }', 'ENV = { BROTLI = "1" }'),
+             "ninja.lua": spec("ninja", '{ product = "cmake" }',
+                               'PRODUCTS = { ninja = "ninja" }\nENV = { NINJA = "1" }'),
+             "cmake.lua": spec("cmake", "", 'PRODUCTS = { cmake = "cmake" }')},
+            [f'  {{ spec = "local.{n}@r0", source = "{n}.lua" }},'
+             for n in ("brotli", "ninja", "cmake")],
+        )
+        self.install(chain)
+        served = self.make_temp_dir("served")
+        (served / "r.lua").write_text('IDENTITY = "remote.r@r0"\nFETCH = function() end\n')
+        url = self.serve_directory(served)
+        manifest = chain / "envy.lua"
+        manifest.write_text(manifest.read_text().replace(
+            "PACKAGES = {\n", f'PACKAGES = {{\n  {{ spec = "remote.r@r0", source = "{url}/r.lua" }},\n'))
+        result = self.bash(
+            f'eval "$("{chain}/tools/envy" activate bash)"\n'
+            'echo "BROTLI=${BROTLI-unset} NINJA=${NINJA-unset}"\n'
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("BROTLI=1 NINJA=1", result.stdout)
+        self.assertIn("activate: 1 package not installed", result.stderr)
+        self.assertNotIn("skipping", result.stderr)
+
+    def test_product_nobody_provides_still_warns(self) -> None:
+        orphan = self.project(
+            "orphan",
+            {"brotli.lua": 'IDENTITY = "local.brotli@r0"\n'
+             'DEPENDENCIES = { { product = "cmake" } }\n'
+             'FETCH = function() end\nINSTALL = function() end\n'},
+            ['  { spec = "local.brotli@r0", source = "brotli.lua" },'],
+        )
+        lines = self.activate_stderr(orphan)  # the engine's error runs on for a line
+        self.assertEqual("warning: activate: skipping local.brotli@r0: Product 'cmake' in "
+                         "spec 'local.brotli@r0' was not found", lines[0])
+        self.assertFalse(any("not installed" in l for l in lines), lines)
+        self.assertRegex(lines[-1], r"^envy: entering orphan ")
+
     def test_install_during_activation_still_refreshes(self) -> None:
         # The ENV function plays an install finishing mid-activation: it bumps the
         # generation file. The recorded generation must predate that, so the next prompt
