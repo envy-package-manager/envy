@@ -72,8 +72,11 @@ void run_completion_phase(pkg *p, engine &eng) {
   if (auto const root{ eng.project_root() }; did_work && !root.empty()) {
     activation_gen_bump(activation_genfile(eng.cache_root(), root));
   }
-  tui_actions::report_outcome(
-      p->tui_section, p->cfg->identity, section_text, did_work, p->display);
+  tui_actions::report_outcome(p->tui_section,
+                              p->cfg->identity,
+                              section_text,
+                              did_work,
+                              p->display);
 }
 
 }  // namespace envy
