@@ -134,7 +134,7 @@ class TestActivateBash(_ActivateBase):
         self.assertIn("envy: leaving rusty", result.stderr)
         self.assertEqual(_env_dump(before.read_bytes()), _env_dump(after.read_bytes()))
 
-    def test_uninstalled_packages_hint_then_install_refreshes(self) -> None:
+    def test_uninstalled_packages_are_silent_then_install_refreshes(self) -> None:
         result = self.bash(
             f'source "{self.hook}"\n'
             f'cd "{self.rust}"; _envy_hook\n'
@@ -144,10 +144,28 @@ class TestActivateBash(_ActivateBase):
             'echo "AFTER=${CARGO_HOME-unset}"\n'
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("run 'envy install'", result.stderr)
+        self.assertNotIn("warning", result.stderr)  # shims install lazily: nothing to nag
         self.assertIn("BEFORE=unset", result.stdout)
         self.assertIn(f"AFTER={self.rust.resolve()}/.cargo", result.stdout)
         self.assertIn("envy: refreshed rusty", result.stderr)
+
+    def test_lazy_install_refreshes_and_cache_hit_does_not(self) -> None:
+        lazy = self.project(
+            "lazy",
+            {"z.lua": 'IDENTITY = "local.z@r0"\nFETCH = function() end\n'
+             'INSTALL = function() end\nPRODUCTS = { zed = "zed" }\nENV = { LAZY = "1" }\n'},
+            ['  { spec = "local.z@r0", source = "z.lua" },'],
+        )
+        shim = f'"{lazy}/tools/envy" product zed >/dev/null\n_envy_hook\n'  # a product shim
+        result = self.bash(
+            f'source "{self.hook}"\n'
+            f'cd "{lazy}"; _envy_hook\n'
+            f'{shim}echo "LAZY=${{LAZY-unset}}"\n'
+            f'{shim}'  # installs nothing: no refresh
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("LAZY=1", result.stdout)
+        self.assertEqual(1, result.stderr.count("envy: refreshed lazy"), result.stderr)
 
     def test_switching_projects_leaves_nothing_of_the_first(self) -> None:
         other = self.project(
@@ -229,7 +247,7 @@ class TestActivateBash(_ActivateBase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([], requests)
-        self.assertIn("run 'envy install'", result.stderr)
+        self.assertNotIn("warning", result.stderr)
         self.assertIn(str((remote / "tools").resolve()), result.stdout)
 
     def test_failing_launcher_falls_back_to_bin_on_path(self) -> None:
@@ -319,7 +337,7 @@ class TestActivateBash(_ActivateBase):
             )
         return f'bundle = {{ identity = "test.tools@v1", source = "{bundle}" }}'
 
-    def test_cold_cache_product_dependency_is_not_installed(self) -> None:
+    def test_cold_cache_product_dependency_is_silent(self) -> None:
         bundle = self.tools_bundle()
         codec = self.project(
             "codec",
@@ -331,10 +349,8 @@ class TestActivateBash(_ActivateBase):
              f'  {{ spec = "envy.ninja@r0", {bundle} }},'],
         )
         lines = self.activate_stderr(codec)
-        self.assertEqual(2, len(lines), lines)
-        self.assertEqual("warning: activate: 3 packages not installed; run 'envy install'",
-                         lines[0])
-        self.assertRegex(lines[1], r"^envy: entering codec .+ 2 variables set$")
+        self.assertEqual(1, len(lines), lines)
+        self.assertRegex(lines[0], r"^envy: entering codec .+ 2 variables set$")
 
     def test_cached_product_chain_resolves_despite_uncached_sibling(self) -> None:
         # brotli -> ninja -> cmake by product, listed so brotli retries before ninja resolves.
@@ -364,8 +380,7 @@ class TestActivateBash(_ActivateBase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("BROTLI=1 NINJA=1", result.stdout)
-        self.assertIn("activate: 1 package not installed", result.stderr)
-        self.assertNotIn("skipping", result.stderr)
+        self.assertNotIn("warning", result.stderr)
 
     def test_product_nobody_provides_still_warns(self) -> None:
         orphan = self.project(
@@ -378,7 +393,7 @@ class TestActivateBash(_ActivateBase):
         lines = self.activate_stderr(orphan)  # the engine's error runs on for a line
         self.assertEqual("warning: activate: skipping local.brotli@r0: Product 'cmake' in "
                          "spec 'local.brotli@r0' was not found", lines[0])
-        self.assertFalse(any("not installed" in l for l in lines), lines)
+        self.assertEqual(1, sum(l.startswith("warning:") for l in lines), lines)
         self.assertRegex(lines[-1], r"^envy: entering orphan ")
 
     def test_install_during_activation_still_refreshes(self) -> None:
@@ -427,13 +442,19 @@ class TestActivateBash(_ActivateBase):
             self.assertIn(f"{n}=v_{n}", result.stdout)
 
     def test_run_activate_warnings_are_not_lost(self) -> None:
-        launcher = self.rust / "tools" / "envy"  # rust is not installed: activation warns
+        broken = self.project(
+            "broken",
+            {"b.lua": 'IDENTITY = "local.b@r0"\nFETCH = function() end\nINSTALL = function() end\n'
+             'ENV = function() error("boom") end\n'},
+            ['  { spec = "local.b@r0", source = "b.lua" },'],
+        )
+        self.install(broken)
         result = test_config.run(
-            [str(launcher), "run", "--activate", "true"],
+            [str(broken / "tools" / "envy"), "run", "--activate", "true"],
             capture_output=True, text=True, env=self.env, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("run 'envy install'", result.stderr)
+        self.assertIn("activate: skipping ENV of local.b@r0", result.stderr)
 
     def test_unexported_announce_switch_is_honored(self) -> None:
         self.install(self.rust)

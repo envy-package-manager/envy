@@ -64,13 +64,12 @@ struct keyed_layer {
 };
 
 // The graph under `roots` -- plus `providers`, which may satisfy their weak references --
-// resolved by one engine and walked from `roots` into ENV layers in priority order. Adds
-// ENV-bearing packages not in the cache to `uninstalled`. Throws if unresolvable.
+// resolved by one engine and walked from `roots` into ENV layers in priority order. Skips
+// packages not in the cache. Throws if unresolvable.
 std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
                                         std::vector<pkg_cfg const *> const &roots,
                                         std::vector<pkg_cfg const *> const &providers,
-                                        std::filesystem::path const &root,
-                                        std::unordered_set<std::string> &uninstalled) {
+                                        std::filesystem::path const &root) {
   engine eng{ *startup.c, startup.m.get() };
   eng.resolve_graph([&] {
     auto all{ providers };
@@ -84,10 +83,7 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
     std::optional<std::filesystem::path> pkg_path;
     if (p->type == pkg_type::CACHE_MANAGED) {
       pkg_path = pkg_predicted_path(p);
-      if (!cache::is_entry_complete(pkg_path->parent_path())) {
-        uninstalled.insert(p->key.canonical());
-        continue;
-      }
+      if (!cache::is_entry_complete(pkg_path->parent_path())) { continue; }
     } else if (p->type != pkg_type::USER_MANAGED) {
       continue;
     }
@@ -104,14 +100,12 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
 }
 
 // Every installed package's ENV with root = the project root, highest priority first.
-// Returns the count not installed yet: ENV-bearing packages of graphs that resolve, plus
-// every root whose graph needs a spec the cache lacks (its ENV is unknowable until then).
-size_t package_layers(cmd_startup const &startup,
-                      std::filesystem::path const &root,
-                      std::vector<env_ops> &layers) {
+// Uninstalled packages and uncached specs are skipped silently: shims install lazily.
+void package_layers(cmd_startup const &startup,
+                    std::filesystem::path const &root,
+                    std::vector<env_ops> &layers) {
   auto const roots{ engine_filter_host_platform(
       { startup.m->packages.begin(), startup.m->packages.end() }) };
-  std::unordered_set<std::string> uninstalled;  // keys: a shared dependency counts once
   std::unordered_set<std::string> seen;  // a dependency shared by two roots applies once
   auto const keep{ [&](std::vector<keyed_layer> found) {
     for (auto &l : found) {
@@ -120,8 +114,8 @@ size_t package_layers(cmd_startup const &startup,
   } };
 
   try {
-    keep(resolve_layers(startup, roots, {}, root, uninstalled));
-    return uninstalled.size();
+    keep(resolve_layers(startup, roots, {}, root));
+    return;
   } catch (std::exception const &) {}
 
   // One unresolvable root (an uncached spec, a Lua error) must not cost the others their
@@ -134,19 +128,15 @@ size_t package_layers(cmd_startup const &startup,
   auto const skip{ [&](size_t i, char const *what) {
     tui::warn("activate: skipping %s: %s", roots[i]->identity.c_str(), what);
   } };
-  auto const not_installed{ [&](size_t i) {
-    uninstalled.insert(pkg_key{ *roots[i] }.canonical());
-  } };
   for (size_t i{ 0 }; i < roots.size(); ++i) {
     try {
-      found[i] = resolve_layers(startup, { roots[i] }, {}, root, uninstalled);
+      found[i] = resolve_layers(startup, { roots[i] }, {}, root);
       resolved.push_back(roots[i]);
     } catch (unresolved_reference_error const &) {
       deferred.push_back(i);
     } catch (std::exception const &e) {
       if (std::string_view{ e.what() }.find(kCacheReadOnlyMissText) !=
           std::string_view::npos) {
-        not_installed(i);
         any_uncached = true;
       } else {
         skip(i, e.what());
@@ -160,7 +150,7 @@ size_t package_layers(cmd_startup const &startup,
     n = deferred.size();
     std::erase_if(deferred, [&](size_t i) {
       try {
-        found[i] = resolve_layers(startup, { roots[i] }, resolved, root, uninstalled);
+        found[i] = resolve_layers(startup, { roots[i] }, resolved, root);
         resolved.push_back(roots[i]);
       } catch (unresolved_reference_error const &e) {
         why[i] = e.what();
@@ -172,12 +162,11 @@ size_t package_layers(cmd_startup const &startup,
 
   // Still unresolved while a root is uncached, the provider may be that root: not
   // installed, not a failure.
-  for (size_t const i : deferred) {
-    any_uncached ? not_installed(i) : skip(i, why[i].c_str());
+  if (!any_uncached) {
+    for (size_t const i : deferred) { skip(i, why[i].c_str()); }
   }
 
   for (auto &f : found) { keep(std::move(f)); }
-  return uninstalled.size();
 }
 
 }  // namespace
@@ -227,11 +216,7 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
 
   if (startup) {
     try {
-      if (size_t const n{ package_layers(*startup, root, layers) }) {
-        tui::warn("activate: %zu package%s not installed; run 'envy install'",
-                  n,
-                  n == 1 ? "" : "s");
-      }
+      package_layers(*startup, root, layers);
     } catch (std::exception const &e) {
       tui::warn("activate: package ENV skipped: %s", e.what());
     }
@@ -271,21 +256,23 @@ std::string activation_gen_read(std::filesystem::path const &genfile) {
   } catch (std::exception const &) { return "0"; }
 }
 
+void activation_gen_bump(std::filesystem::path const &genfile) {
+  try {  // a fresh token, never a counter: two racing installs still both change it
+    auto const now{ std::chrono::system_clock::now().time_since_epoch().count() };
+    std::filesystem::create_directories(genfile.parent_path());
+    util_write_file(genfile, std::to_string(now) + "\n");
+  } catch (std::exception const &e) {
+    tui::debug("activate: could not bump %s: %s", genfile.string().c_str(), e.what());
+  }
+}
+
 activation_refresh_guard::activation_refresh_guard(
     std::filesystem::path const &cache_root,
     std::filesystem::path const &manifest_path)
     : genfile_{ activation_genfile(cache_root,
                                    util_canonical_path(manifest_path).parent_path()) } {}
 
-activation_refresh_guard::~activation_refresh_guard() {
-  try {  // a fresh token, never a counter: two racing installs still both change it
-    auto const now{ std::chrono::system_clock::now().time_since_epoch().count() };
-    std::filesystem::create_directories(genfile_.parent_path());
-    util_write_file(genfile_, std::to_string(now) + "\n");
-  } catch (std::exception const &e) {
-    tui::debug("activate: could not bump %s: %s", genfile_.string().c_str(), e.what());
-  }
-}
+activation_refresh_guard::~activation_refresh_guard() { activation_gen_bump(genfile_); }
 
 env_shell activation_shell(std::string_view name, std::string_view cmd) {
   auto const sh{ env_shell_parse(name) };

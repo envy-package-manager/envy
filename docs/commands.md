@@ -86,7 +86,7 @@ envy vendor patched --force         # throw away deliberate edits to an exempt c
 
 ### Shell Integration
 
-**`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell only) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is skipped with a `run 'envy install'` hint. Prints a usage hint instead of the script when stdout is a terminal.
+**`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell only) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is silently skipped; the prompt after it installs—by `envy install` or a shim—refreshes. Prints a usage hint instead of the script when stdout is a terminal.
 
 **`envy deactivate <shell>`** — Print shell code that restores every variable activation touched, byte-for-byte, from the backups activation keeps in the environment. Reads nothing but those variables: no manifest, no Lua, no network.
 
