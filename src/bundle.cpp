@@ -454,15 +454,14 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
 pkg_cfg::local_source bundle_local_source(uri_info const &info,
                                           pkg_decl_origin const &origin) {
   std::filesystem::path const written{ info.canonical };
-  bool const relative{ info.scheme == uri_scheme::LOCAL_FILE_RELATIVE };
   std::filesystem::path const resolved{
-    relative ? (origin.anchor.parent_path() / written).lexically_normal() : written
+    info.scheme == uri_scheme::LOCAL_FILE_RELATIVE
+        ? (origin.anchor.parent_path() / written).lexically_normal()
+        : written
   };
   auto const inside{ util_path_inside(resolved, origin.project_root()) };
   return { .file_path = resolved,
-           .declared = inside     ? *inside
-                       : relative ? written.lexically_normal()
-                                  : resolved };
+           .declared = inside ? *inside : util_canonical_path(resolved) };
 }
 
 std::filesystem::path const *bundle_local_dir(pkg_cfg::bundle_source const &src) {

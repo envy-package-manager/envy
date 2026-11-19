@@ -87,7 +87,7 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
 
 // A local bundle source, resolved against `origin`. Its cache key holds no checkout
 // location: inside the declaring project, the path relative to its root however written
-// (`envy.abspath` included); outside it, as written when relative, whole when absolute.
+// (`envy.abspath` included); outside it, the canonical absolute path it resolves to.
 pkg_cfg::local_source bundle_local_source(uri_info const &info,
                                           pkg_decl_origin const &origin);
 

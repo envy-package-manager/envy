@@ -87,7 +87,7 @@ struct pkg_cfg : unmovable {
 
   struct local_source {
     std::filesystem::path file_path;   // Can be file or directory
-    std::filesystem::path declared{};  // as written: relative to its declarer, or absolute
+    std::filesystem::path declared{};  // key form: project-relative, or canonical absolute
   };
 
   struct git_source {
@@ -264,7 +264,7 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 // a different entry rather than yesterday's content under today's declaration.
 //
 // No key holds where the checkout sits, so clones and worktrees share entries: a local
-// path keys as written, a file pinned by sha256 on the hash alone.
+// path inside the project keys relative to its root, a file pinned by sha256 on the hash.
 //
 // A custom fetch function is the exception -- a Lua closure has no fingerprint, so
 // its entries key on the file that declares it (project-relative when inside it), plus

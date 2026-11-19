@@ -195,12 +195,13 @@ class TestCheckoutIndependentKeys(EnvyTestCase):
 
 class TestLocalArchiveKeyLocation(EnvyTestCase):
     """A local archive bundle inside its declaring project keys relative to that project,
-    however the path is spelled, so checkouts share it; one outside keys on its whole path."""
+    however the path is spelled, so checkouts share it; one outside keys on the canonical
+    absolute path it resolves to, so one spelling reaching two archives is two entries."""
 
     IDENTITY = "test.loc-bundle@r1"
     MEMBER = "test.loc-member@r1"
 
-    def pack(self, dest: Path) -> Path:
+    def pack(self, dest: Path, marker: str = "m") -> Path:
         src = self.make_temp_dir("bundle-src")
         (src / "specs").mkdir()
         (src / "envy-bundle.lua").write_text(
@@ -208,7 +209,7 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
             encoding="utf-8",
         )
         (src / "specs" / "m.lua").write_text(
-            SPEC.format(identity=self.MEMBER, marker="m"), encoding="utf-8"
+            SPEC.format(identity=self.MEMBER, marker=marker), encoding="utf-8"
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(dest, "w:gz") as tf:
@@ -360,7 +361,7 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
             self.spec_project(self.make_temp_dir("b") / "x" / "y" / "proj", source),
         )
 
-    def test_outside_relative_from_a_spec_keys_as_written(self):
+    def test_outside_relative_from_a_spec_to_one_archive_is_shared(self):
         parent = self.make_temp_dir("parent")
         self.pack(parent / "shared" / "b.tar.gz")
         source = '"../../shared/b.tar.gz"'
@@ -387,7 +388,7 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
             manifests.append(self.project(parent / "proj", 'envy.abspath("../proj-other/b.tar.gz")'))
         self.assert_entries(2, *manifests)
 
-    def test_outside_relative_keys_as_written(self):
+    def test_outside_relative_to_one_archive_is_shared(self):
         """Sibling checkouts reaching one shared archive by the same relative path share it."""
         parent = self.make_temp_dir("parent")
         self.pack(parent / "shared" / "b.tar.gz")
@@ -396,14 +397,23 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
             1, self.project(parent / "a", source), self.project(parent / "b", source)
         )
 
-    def test_outside_relative_from_a_subproject_keys_as_written(self):
-        """`../vendor` leaves the subproject's root, so it keys as written: still shared."""
+    def test_outside_relative_from_a_subproject_keys_whole(self):
+        """`../vendor` leaves the subproject's root, so each tree's archive is its own."""
         a, b = self.make_temp_dir("a") / "tree", self.make_temp_dir("b") / "tree"
         tops = []
         for root in (a, b):
-            self.pack(root / "vendor" / "b.tar.gz")
+            self.pack(root / "vendor" / "b.tar.gz", marker=root.parent.name)
             tops.append(self.superproject(root, '"../vendor/b.tar.gz"')[0])
-        self.assert_entries(1, *tops)
+        self.assert_entries(2, *tops)
+
+    def test_outside_relative_reaching_two_archives_is_two_entries(self):
+        """`../../shared` from the manifest and from `specs/` names two archives."""
+        root = self.make_temp_dir("a") / "x" / "proj"
+        source = '"../../shared/b.tar.gz"'
+        self.pack(root.parent.parent / "shared" / "b.tar.gz", marker="manifest")
+        self.pack(root.parent / "shared" / "b.tar.gz", marker="spec")
+        self.install_ok(self.project(root, source))
+        self.assert_entries(2, self.spec_project(root, source))
 
     def test_outside_moved_is_a_new_entry(self):
         """Same bytes at a new path outside the project: the source changed, so it misses."""
