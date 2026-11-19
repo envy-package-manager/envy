@@ -263,8 +263,8 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 // actually reads belongs here: change the URL, the git ref, or the path and you get
 // a different entry rather than yesterday's content under today's declaration.
 //
-// No key holds where the checkout sits, so clones and worktrees share entries: a local
-// path inside the project keys relative to its root, a file pinned by sha256 on the hash.
+// A local path inside the declaring project keys relative to its root, so clones and
+// worktrees share it; outside, canonical absolute. A sha256-pinned file keys on the hash.
 //
 // A custom fetch function is the exception -- a Lua closure has no fingerprint, so
 // its entries key on the file that declares it (project-relative when inside it), plus
