@@ -8,12 +8,16 @@ second source and requires envy to fetch it rather than reuse the first entry.
 """
 
 import hashlib
+import os
 import shutil
+import subprocess
 import sys
 import tarfile
+import time
 import unittest
 from pathlib import Path
 
+from . import test_config
 from .env import EnvyTestCase
 
 SPEC = """IDENTITY = "{identity}"
@@ -201,15 +205,15 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
     IDENTITY = "test.loc-bundle@r1"
     MEMBER = "test.loc-member@r1"
 
-    def pack(self, dest: Path, marker: str = "m") -> Path:
+    def pack(self, dest: Path, marker: str = "m", member: str = MEMBER) -> Path:
         src = self.make_temp_dir("bundle-src")
         (src / "specs").mkdir()
         (src / "envy-bundle.lua").write_text(
-            f'BUNDLE = "{self.IDENTITY}"\nSPECS = {{ ["{self.MEMBER}"] = "specs/m.lua" }}\n',
+            f'BUNDLE = "{self.IDENTITY}"\nSPECS = {{ ["{member}"] = "specs/m.lua" }}\n',
             encoding="utf-8",
         )
         (src / "specs" / "m.lua").write_text(
-            SPEC.format(identity=self.MEMBER, marker=marker), encoding="utf-8"
+            SPEC.format(identity=member, marker=marker), encoding="utf-8"
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(dest, "w:gz") as tf:
@@ -414,6 +418,87 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
         self.pack(root.parent / "shared" / "b.tar.gz", marker="spec")
         self.install_ok(self.project(root, source))
         self.assert_entries(2, self.spec_project(root, source))
+
+    # -- symlinked archives: the key names the link, as the fetch opens it --------------
+
+    @unittest.skipIf(sys.platform == "win32", "symlinks need privileges on Windows")
+    def test_a_symlink_alias_behaves_as_on_a_clean_cache(self):
+        """`b.gz` -> `b.tar.gz` extracts as a bare stream, so the tar spelling's entry
+        must not answer for it."""
+        shared = self.make_temp_dir("shared")
+        self.pack(shared / "b.tar.gz")
+        (shared / "b.gz").symlink_to("b.tar.gz")
+        root = self.make_temp_dir("a") / "proj"
+        alias = f'"{self.lua_path(shared / "b.gz")}"'
+        cold = self.install(self.project(root, alias))
+        self.install_ok(self.project(root, f'"{self.lua_path(shared / "b.tar.gz")}"'))
+        warm = self.install(self.project(root, alias))
+        self.assertNotEqual(0, cold.returncode)
+        self.assertEqual(cold.returncode, warm.returncode, warm.stderr)
+
+    @unittest.skipIf(sys.platform == "win32", "symlinks need privileges on Windows")
+    def test_a_symlink_whose_target_is_gone_still_hits(self):
+        shared = self.make_temp_dir("shared")
+        target = self.pack(shared / "real.tar.gz")
+        (shared / "b.tar.gz").symlink_to("real.tar.gz")
+        manifest = self.project(
+            self.make_temp_dir("a") / "proj", f'"{self.lua_path(shared / "b.tar.gz")}"'
+        )
+        self.install_ok(manifest)
+        target.unlink()
+        self.assert_entries(1, manifest)
+
+    @unittest.skipIf(sys.platform == "win32", "symlinks need privileges on Windows")
+    def test_a_symlink_retargeted_mid_run_leaves_its_old_target_alone(self):
+        """The link is repointed after envy keys it but before it fetches; the bytes it
+        then reads must not land under the old target's key."""
+        shared = self.make_temp_dir("shared")
+        old = self.pack(shared / "a.tar.gz")
+        self.pack(shared / "b.tar.gz", member="test.loc-other@r1")  # no MEMBER
+        link = shared / "current.tar.gz"
+        link.symlink_to("a.tar.gz")
+        root = self.make_temp_dir("a") / "proj"
+        barriers = self.make_temp_dir("barriers")
+
+        # Hold the old target's entry so the run, if it keys on that, waits for it.
+        held = test_config.popen(
+            [str(self.envy), "--cache-root", str(self.cache_root), "cache-test",
+             "ensure-spec", self.IDENTITY,
+             "--source", "local\n" + Path(os.path.realpath(old)).as_posix(),
+             f"--barrier-dir={barriers}", "--barrier-signal-after=held",
+             "--barrier-wait-after=release", "--fail-before-complete"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(lambda: held.poll() is None and held.kill())
+        self.wait_for(lambda: (barriers / "held").exists())
+
+        trace = self.work / "retarget.jsonl"
+        run = test_config.popen(
+            [str(self.envy), "--cache-root", str(self.cache_root), f"--trace=file:{trace}",
+             "install", "--manifest", str(self.project(root, f'"{self.lua_path(link)}"'))],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(lambda: run.poll() is None and run.kill())
+        started = f'"spec":"{self.IDENTITY}"'  # its fetch phase began: the key is fixed
+        self.wait_for(
+            lambda: run.poll() is not None
+            or (trace.exists() and any(
+                "phase_start" in line and started in line
+                for line in trace.read_text(encoding="utf-8").splitlines()))
+        )
+        link.unlink()
+        link.symlink_to("b.tar.gz")
+        (barriers / "release").touch()
+        held.communicate(timeout=30)
+        run.communicate(timeout=30)
+
+        self.install_ok(self.project(root, f'"{self.lua_path(old)}"'))
+
+    def wait_for(self, done, timeout: float = 30.0):
+        deadline = time.monotonic() + timeout
+        while not done():
+            self.assertLess(time.monotonic(), deadline, "timed out")
+            time.sleep(0.02)
 
     def test_outside_moved_is_a_new_entry(self):
         """Same bytes at a new path outside the project: the source changed, so it misses."""

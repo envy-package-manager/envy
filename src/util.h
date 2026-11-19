@@ -300,8 +300,12 @@ std::filesystem::path util_absolute_path(std::filesystem::path const &relative,
 // walk: parent_path() on a relative path bottoms out at its own first segment.
 std::filesystem::path util_canonical_path(std::filesystem::path const &path);
 
-// `path` relative to `root` when inside it, compared canonically so a symlinked checkout
-// is still inside; nullopt when outside it or when `root` is empty.
+// `path` absolute with its directories canonical and its leaf as named: a symlinked
+// checkout resolves, a symlinked file stays the link (its name picks the extractor).
+std::filesystem::path util_canonical_path_keep_leaf(std::filesystem::path const &path);
+
+// `path` relative to `root` when inside it, compared canonically up to the leaf so a
+// symlinked checkout is still inside; nullopt when outside it or when `root` is empty.
 std::optional<std::filesystem::path> util_path_inside(std::filesystem::path const &path,
                                                       std::filesystem::path const &root);
 

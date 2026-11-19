@@ -307,10 +307,19 @@ std::filesystem::path util_canonical_path(std::filesystem::path const &path) {
   return ec ? abs : canonical;
 }
 
+std::filesystem::path util_canonical_path_keep_leaf(std::filesystem::path const &path) {
+  std::filesystem::path const abs{ [&] {
+    auto const p{ std::filesystem::absolute(path).lexically_normal() };
+    return p.has_filename() ? p : p.parent_path();  // "dir/" names dir
+  }() };
+  return util_canonical_path(abs.parent_path()) / abs.filename();
+}
+
 std::optional<std::filesystem::path> util_path_inside(std::filesystem::path const &path,
                                                       std::filesystem::path const &root) {
   if (root.empty()) { return std::nullopt; }
-  auto rel{ util_canonical_path(path).lexically_relative(util_canonical_path(root)) };
+  auto rel{ util_canonical_path_keep_leaf(path).lexically_relative(
+      util_canonical_path(root)) };
   if (rel.empty() || *rel.begin() == "..") { return std::nullopt; }
   return rel;
 }

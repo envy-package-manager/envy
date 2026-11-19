@@ -85,9 +85,10 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
                           bundle_fetcher fetch_one,
                           bundle_custom_fetcher run_custom);
 
-// A local bundle source, resolved against `origin`. Inside the declaring project it keys
+// A local bundle source, resolved against `origin`, opened at the path it keys on: its
+// directories canonical, a symlinked file as named. Inside the declaring project it keys
 // relative to that root however written (`envy.abspath` included), so checkouts share it;
-// outside, on the canonical absolute path, which may include the checkout's location.
+// outside, on that absolute path, which may include the checkout's location.
 pkg_cfg::local_source bundle_local_source(uri_info const &info,
                                           pkg_decl_origin const &origin);
 
