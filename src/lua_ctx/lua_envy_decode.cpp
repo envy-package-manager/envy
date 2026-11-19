@@ -118,7 +118,11 @@ void push_toml_datetime(lua_State *L, toml_datum_t const &d) {
   }
   if (d.type == TOML_DATETIME || d.type == TOML_DATETIMETZ) { buf[n++] = 'T'; }
   if (d.type != TOML_DATE) {
-    n += std::snprintf(buf + n, sizeof buf - n, "%02d:%02d:%02d", t.hour, t.minute,
+    n += std::snprintf(buf + n,
+                       sizeof buf - n,
+                       "%02d:%02d:%02d",
+                       t.hour,
+                       t.minute,
                        t.second);
     if (t.usec) {
       n += std::snprintf(buf + n, sizeof buf - n, ".%06d", static_cast<int>(t.usec));
@@ -127,8 +131,12 @@ void push_toml_datetime(lua_State *L, toml_datum_t const &d) {
   }
   if (d.type == TOML_DATETIMETZ) {
     int const a{ std::abs(t.tz) };
-    n += t.tz ? std::snprintf(buf + n, sizeof buf - n, "%c%02d:%02d", t.tz < 0 ? '-' : '+',
-                              a / 60, a % 60)
+    n += t.tz ? std::snprintf(buf + n,
+                              sizeof buf - n,
+                              "%c%02d:%02d",
+                              t.tz < 0 ? '-' : '+',
+                              a / 60,
+                              a % 60)
               : std::snprintf(buf + n, sizeof buf - n, "Z");
   }
   lua_pushlstring(L, buf, static_cast<std::size_t>(n));

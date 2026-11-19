@@ -16,9 +16,8 @@ sol_state_ptr make_lua() {
 
 // Runs a chunk that must return true; a false or an error fails with the chunk's message.
 void check_lua(sol::state &lua, char const *chunk) {
-  sol::protected_function_result const r{
-    lua.safe_script(chunk, sol::script_pass_on_error)
-  };
+  sol::protected_function_result const r{ lua.safe_script(chunk,
+                                                          sol::script_pass_on_error) };
   if (!r.valid()) {
     sol::error const e = r;
     FAIL(std::string{ e.what() });
@@ -27,9 +26,8 @@ void check_lua(sol::state &lua, char const *chunk) {
 }
 
 std::string lua_error(sol::state &lua, char const *chunk) {
-  sol::protected_function_result const r{
-    lua.safe_script(chunk, sol::script_pass_on_error)
-  };
+  sol::protected_function_result const r{ lua.safe_script(chunk,
+                                                          sol::script_pass_on_error) };
   REQUIRE_FALSE(r.valid());
   sol::error const e = r;
   return e.what();
