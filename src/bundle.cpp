@@ -33,6 +33,7 @@ struct bundle_decl {
   };
   struct local_source {
     std::filesystem::path file_path;
+    std::filesystem::path declared;
   };
   using git_source = pkg_cfg::git_source;
   struct custom_fetch_source {
@@ -129,7 +130,10 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
     if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
       resolved = (origin.anchor.parent_path() / resolved).lexically_normal();
     }
-    decl.source = bundle_decl::local_source{ .file_path = std::move(resolved) };
+    decl.source = bundle_decl::local_source{
+      .file_path = std::move(resolved),
+      .declared = std::filesystem::path{ info.canonical }.lexically_normal()
+    };
   } else {
     auto sha256_opt{ sol_util_get_optional<std::string>(table, "sha256", "Bundle") };
     decl.source = bundle_decl::remote_source{ .url = info.canonical,
@@ -150,7 +154,8 @@ pkg_cfg::bundle_source decl_to_source(bundle_decl const &decl) {
           },
           [&](bundle_decl::local_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity,
-                     .fetch_source = pkg_cfg::local_source{ .file_path = s.file_path } };
+                     .fetch_source = pkg_cfg::local_source{ .file_path = s.file_path,
+                                                            .declared = s.declared } };
           },
           [&](bundle_decl::git_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity, .fetch_source = s };

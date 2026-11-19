@@ -808,7 +808,9 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 }
 
 std::string source_key(pkg_cfg::remote_source const &r) {
-  return "remote\n" + r.url + "\n" + r.sha256;
+  return !r.sha256.empty() && r.url.starts_with("file://")
+             ? "sha256\n" + r.sha256  // the same bytes wherever the checkout sits
+             : "remote\n" + r.url + "\n" + r.sha256;
 }
 
 std::string source_key(pkg_cfg::git_source const &g) {
@@ -827,12 +829,24 @@ std::string source_key(pkg_cfg::git_source const &g) {
 }
 
 std::string source_key(pkg_cfg::local_source const &l) {
-  return "local\n" + l.file_path.generic_string();
+  return "local\n" + (l.declared.empty() ? l.file_path : l.declared).generic_string();
 }
 
 std::string custom_fetch_source_key(pkg_cfg const &cfg) {
-  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity +
-         "\n" + cfg.serialized_options;
+  // Inside the project (the root entry's manifest dir), relative to it; outside it (a spec
+  // in the cache), absolute. Never the CWD.
+  std::string const declarer{ [&] {
+    if (cfg.declaring_file_path.empty()) { return std::string{}; }
+    pkg_cfg const *root{ &cfg };
+    while (root->parent) { root = root->parent; }
+    std::filesystem::path const &manifest{ root->declaring_file_path };
+    auto const file{ util_canonical_path(cfg.declaring_file_path) };
+    auto const rel{ manifest.empty() ? manifest
+                                     : file.lexically_relative(
+                                           util_canonical_path(manifest).parent_path()) };
+    return (rel.empty() || *rel.begin() == ".." ? file : rel).generic_string();
+  }() };
+  return "fetch\n" + declarer + "\n" + cfg.identity + "\n" + cfg.serialized_options;
 }
 
 }  // namespace envy

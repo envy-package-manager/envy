@@ -158,7 +158,7 @@ DEFAULT_SHELL = {
 
 **Sources:**
 - **Declarative:** `source` field with a URL (http/https/s3/ftp) or git repo; verified via `sha256` (URL) or `ref` (git); cached
-- **Custom fetch:** `source = { fetch = ..., dependencies = ... }` on the entry that depends on the spec, with verification enforced at the API boundary (`envy.fetch`, `envy.commit_fetch`); cached, keyed on declaring file + identity + options
+- **Custom fetch:** `source = { fetch = ..., dependencies = ... }` on the entry that depends on the spec, with verification enforced at the API boundary (`envy.fetch`, `envy.commit_fetch`); cached, keyed on declaring file (project-relative, so checkouts share it) + identity + options
 - **Project-local:** a `source` path in the project tree; loaded in place and never cached. Any namespace may do this; what `local.*` controls is who may depend on it (see **Security** below)
 - **Fetch prerequisites (nested):** `source.dependencies` declares specs that must reach completion before this spec's fetch runs. Strong only — weak resolution happens at a barrier that waits for every spec_fetch, including that of the consumer whose fetch function is waiting, so nothing weak can be ordered in time.
 

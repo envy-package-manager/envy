@@ -74,6 +74,7 @@ struct pkg_cfg : unmovable {
 
   struct local_source {
     std::filesystem::path file_path;  // Can be file or directory
+    std::filesystem::path declared{};  // as written: relative to its declarer, or absolute
   };
 
   struct git_source {
@@ -245,10 +246,14 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 // actually reads belongs here: change the URL, the git ref, or the path and you get
 // a different entry rather than yesterday's content under today's declaration.
 //
+// No key holds where the checkout sits, so clones and worktrees share entries: a local
+// path keys as written, a file pinned by sha256 on the hash alone.
+//
 // A custom fetch function is the exception -- a Lua closure has no fingerprint, so
-// its entries key on the file that declares it, plus the options it is handed: one
-// function drives down a different path per option set. Editing the function body in
-// place still reuses the entry; move it, or bump the identity, to force a refetch.
+// its entries key on the file that declares it (project-relative when inside it), plus
+// the options it is handed: one function drives down a different path per option set.
+// Editing the function body in place still reuses the entry; move it, or bump the
+// identity, to force a refetch.
 std::string source_key(pkg_cfg::remote_source const &r);
 std::string source_key(pkg_cfg::git_source const &g);
 std::string source_key(pkg_cfg::local_source const &l);

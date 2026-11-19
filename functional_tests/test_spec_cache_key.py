@@ -7,9 +7,11 @@ cache would answer with another. Each test here redeclares one identity against 
 second source and requires envy to fetch it rather than reuse the first entry.
 """
 
+import hashlib
 import shutil
 import tarfile
 import unittest
+from pathlib import Path
 
 from .env import EnvyTestCase
 
@@ -126,6 +128,68 @@ PACKAGES = {{
             "a new bundle archive must miss the cache",
         )
         self.assertEqual(2, len(self.spec_entries(self.IDENTITY)))
+
+
+class TestCheckoutIndependentKeys(EnvyTestCase):
+    """Two checkouts of one project share every spec entry: where it sits is incidental."""
+
+    def make_project(self) -> Path:
+        root = self.make_temp_dir("checkout-a")
+        (root / "specs").mkdir()
+        (root / "vendor").mkdir()
+        member = root / "bundle-src"
+        (member / "specs").mkdir(parents=True)
+        (member / "envy-bundle.lua").write_text(
+            'BUNDLE = "test.arch-bundle@r1"\n'
+            'SPECS = { ["test.arch-member@r1"] = "specs/m.lua" }\n',
+            encoding="utf-8",
+        )
+        (member / "specs" / "m.lua").write_text(
+            SPEC.format(identity="test.arch-member@r1", marker="m"), encoding="utf-8"
+        )
+        with tarfile.open(root / "vendor" / "bundle.tar.gz", "w:gz") as tf:
+            for path in sorted(member.rglob("*")):
+                tf.add(path, arcname=path.relative_to(member).as_posix(), recursive=False)
+        shutil.rmtree(member)
+
+        pinned = root / "specs" / "pinned.lua"
+        pinned.write_text(SPEC.format(identity="test.pinned@r1", marker="p"), encoding="utf-8")
+        digest = hashlib.sha256(pinned.read_bytes()).hexdigest()
+        (root / "specs" / "parent.lua").write_text(
+            'IDENTITY = "local.parent@r1"\nUSER_MANAGED = true\n'
+            'SETUP = { main = { CHECK = "exit 0", INSTALL = "exit 0" } }\n'
+            'DEPENDENCIES = { { spec = "test.fetched@r1", source = { fetch = function(tmp_dir)\n'
+            '  local f = io.open(tmp_dir .. "/spec.lua", "w")\n'
+            f"  f:write([[{SPEC.format(identity='test.fetched@r1', marker='f')}]])\n"
+            '  f:close()\n  envy.commit_fetch({ "spec.lua" })\nend } } }\n',
+            encoding="utf-8",
+        )
+        self.write_manifest(
+            'BUNDLES = { b = { identity = "test.arch-bundle@r1", '
+            'source = "vendor/bundle.tar.gz" } }\n'
+            "PACKAGES = {\n"
+            '  { spec = "test.arch-member@r1", bundle = "b", setup = { "main" } },\n'
+            f'  {{ spec = "test.pinned@r1", source = "specs/pinned.lua", sha256 = "{digest}",'
+            ' setup = { "main" } },\n'
+            '  { spec = "local.parent@r1", source = "specs/parent.lua", setup = { "main" } },\n'
+            "}\n",
+            directory=root,
+        )
+        return root
+
+    def test_a_second_checkout_hits_the_first_ones_entries(self):
+        a = self.make_project()
+        b = self.make_temp_dir("checkout-b") / "project"
+        shutil.copytree(a, b)
+
+        for checkout in (a, b):
+            run = self.install(checkout / "envy.lua")
+            self.assertEqual(0, run.returncode, run.stderr)
+
+        for identity in ("test.arch-bundle@r1", "test.pinned@r1", "test.fetched@r1"):
+            with self.subTest(identity):
+                self.assertEqual(1, len(self.spec_entries(identity)))
+                self.assertFalse(run.events("cache_miss", spec=identity), "b refetched")
 
 
 @unittest.skipUnless(shutil.which("git"), "git is not on PATH")

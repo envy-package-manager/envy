@@ -909,6 +909,27 @@ TEST_CASE("source_key tells an include of '!x' from an exclude of 'x'") {
   CHECK(envy::source_key(include_bang) != envy::source_key(exclude));
 }
 
+TEST_CASE("source_key holds no checkout location") {
+  // A local path keys as written, so two checkouts of one project share it.
+  envy::pkg_cfg::local_source const a{ .file_path = "/a/proj/vendor/b.tar.gz",
+                                       .declared = "vendor/b.tar.gz" };
+  envy::pkg_cfg::local_source const b{ .file_path = "/b/proj/vendor/b.tar.gz",
+                                       .declared = "vendor/b.tar.gz" };
+  CHECK(envy::source_key(a) == envy::source_key(b));
+  CHECK(envy::source_key(envy::pkg_cfg::local_source{ .file_path = "/x/y" }) ==
+        "local\n/x/y");
+
+  // A file pinned by sha256 keys on the hash; a URL keeps its URL.
+  envy::pkg_cfg::remote_source const pinned_a{ .url = "file:///a/s.lua", .sha256 = "ab" };
+  envy::pkg_cfg::remote_source const pinned_b{ .url = "file:///b/s.lua", .sha256 = "ab" };
+  CHECK(envy::source_key(pinned_a) == envy::source_key(pinned_b));
+  CHECK(envy::source_key(envy::pkg_cfg::remote_source{ .url = "file:///a/s.lua" }) ==
+        "remote\nfile:///a/s.lua\n");
+  CHECK(envy::source_key(envy::pkg_cfg::remote_source{ .url = "https://h/s.lua",
+                                                       .sha256 = "ab" }) ==
+        "remote\nhttps://h/s.lua\nab");
+}
+
 TEST_CASE("pkg_cfg::parse reads submodules on a git source") {
   sol::state lua;
   auto parse{ [&](char const *script) {

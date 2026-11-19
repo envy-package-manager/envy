@@ -460,7 +460,7 @@ error: Bundle 'acme.toolchain-specs@v1' declares spec 'acme.gcc@v2' at 'specs/gc
 
 ### Revision Immutability
 
-Fetched bundle and spec revisions are **immutable**: a remote's `sha256` or a git commit `ref` pins the bytes, and a mismatch on fetch is an error—the author bumps the revision. So envy never re-fetches "just in case" content changed. A bundle directory at a local path is read in place, like a local spec, so edits land on the next run. A local archive is cached once, keyed on its path, as a remote is.
+Fetched bundle and spec revisions are **immutable**: a remote's `sha256` or a git commit `ref` pins the bytes, and a mismatch on fetch is an error—the author bumps the revision. So envy never re-fetches "just in case" content changed. A bundle directory at a local path is read in place, like a local spec, so edits land on the next run. A local archive is cached once, keyed on its path as written, as a remote is—so clones and worktrees share it.
 
 ---
 
