@@ -375,13 +375,14 @@ envy::cache::ensure_result ensure_entry(
   }
 
   ENVY_TRACE(cache_miss, std::string(pkg_identity), .cache_key = std::string(cache_key));
-  // What an earlier attempt left in pkg/ would ride into this payload: clear it or stop.
-  if (auto const ec{ envy::tree_remove_insisting(result.pkg_path) }) {
-    trace_released();
-    envy::throw_runtime_error({ "cache: cannot clear ",
-                                result.pkg_path,
-                                " left by an earlier attempt: ",
-                                ec.message() });
+  // What an earlier attempt left in pkg/, or in work/ (work/stage/ is renamed into pkg/),
+  // would ride into this payload: clear both or stop.
+  for (path const &dir : { result.pkg_path, entry_dir / "work" }) {
+    if (auto const ec{ envy::tree_remove_insisting(dir) }) {
+      trace_released();
+      envy::throw_runtime_error(
+          { "cache: cannot clear ", dir, " left by an earlier attempt: ", ec.message() });
+    }
   }
   result.lock = envy::cache::scoped_entry_lock::make(entry_dir,
                                                      std::move(lock),
@@ -419,10 +420,8 @@ cache::scoped_entry_lock::scoped_entry_lock(
                                 std::move(lock_path),
                                 std::move(pkg_identity),
                                 lock_acquired_at) } {
-  drop_dir(work_dir());  // always delete (purely ephemeral); ensure_entry cleared pkg/
-
-  // Preserve fetch/ to enable per-file caching across failed attempts; create
-  // the rest.
+  // ensure_entry cleared pkg/ and work/. Preserve fetch/ to enable per-file caching
+  // across failed attempts; create the rest.
   std::filesystem::create_directories(fetch_dir());
   std::filesystem::create_directories(install_dir());
   std::filesystem::create_directories(work_dir());

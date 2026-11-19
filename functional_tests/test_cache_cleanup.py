@@ -18,17 +18,19 @@ INSTALL = function(install_dir) envy.run("touch '" .. install_dir .. "done'") en
 """
 
 
-# An attempt that dies leaving a pkg/ nothing can delete, then the spec gets fixed.
-_STALE_PKG_FAILS = """IDENTITY = "local.stale@r0"
+# An attempt dies leaving a file nothing can delete in {dir}; then the spec gets fixed.
+_STALE_FAILS = """IDENTITY = "local.stale@r0"
 FETCH = function() end
-BUILD = function(install_dir)
-  envy.run("touch '" .. install_dir .. "stale' && chflags uchg '" .. install_dir .. "stale'")
+BUILD = function(install_dir, stage_dir)
+  local f = {dir} .. "stale"
+  envy.run("touch '" .. f .. "' && chflags uchg '" .. f .. "'")
   error("first attempt dies")
 end
 """
-_STALE_PKG_FIXED = """IDENTITY = "local.stale@r0"
+# Builds in the stage and lets the omitted INSTALL promote it, leftovers and all.
+_STALE_FIXED = """IDENTITY = "local.stale@r0"
 FETCH = function() end
-INSTALL = function(install_dir) envy.run("touch '" .. install_dir .. "done'") end
+BUILD = function(install_dir, stage_dir) envy.run("touch '" .. stage_dir .. "built'") end
 """
 
 
@@ -67,23 +69,30 @@ class TestCacheEntryCleanup(EnvyTestCase):
         self.assertIn("could not remove", run.stderr)
         self.assertPathContains(run.stderr, f"{entry.name}/work")
 
-    @unittest.skipUnless(sys.platform == "darwin", "chflags is BSD's")
-    def test_an_unclearable_pkg_dir_fails_the_install(self):
+    def assert_unclearable_fails(self, dir_lua: str, subdir: str):
         """Its bytes would ride into the new payload, so envy refuses to build over them."""
-        spec = self.write_spec("stale.lua", _STALE_PKG_FAILS)
+        spec = self.write_spec("stale.lua", _STALE_FAILS.format(dir=dir_lua))
         manifest = self.write_manifest(
             f'PACKAGES = {{ {{ spec = "local.stale@r0", source = "{self.lua_path(spec)}" }} }}\n'
         )
         self.assertNotEqual(0, self.install(manifest).returncode)
 
-        spec.write_text(_STALE_PKG_FIXED, encoding="utf-8")
+        spec.write_text(_STALE_FIXED, encoding="utf-8")
         run = self.install(manifest)
         self.assertNotEqual(0, run.returncode, run.stderr)
         self.assertIn("cannot clear", run.stderr)
         (entry,) = self.pkg_entries("local.stale@r0")
-        self.assertPathContains(run.stderr, f"{entry.name}/pkg")
+        self.assertPathContains(run.stderr, f"{entry.name}/{subdir}")
         self.assertFalse((entry / "envy-complete").exists())
 
+    @unittest.skipUnless(sys.platform == "darwin", "chflags is BSD's")
+    def test_an_unclearable_pkg_dir_fails_the_install(self):
+        self.assert_unclearable_fails("install_dir", "pkg")
+
+    @unittest.skipUnless(sys.platform == "darwin", "chflags is BSD's")
+    def test_an_unclearable_stage_dir_fails_the_install(self):
+        """work/stage/ is renamed into pkg/, so a leftover there is a payload leftover."""
+        self.assert_unclearable_fails("stage_dir", "work")
 
 if __name__ == "__main__":
     unittest.main()
