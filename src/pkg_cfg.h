@@ -26,12 +26,25 @@ class pkg_cfg_pool;
 struct pkg_decl_origin {
   std::filesystem::path declaring_file;  // provenance, project root, custom-fetch key
   std::filesystem::path anchor;          // relative-path base; its parent dir is used
+  std::filesystem::path project{};       // the declaring project's root; see project_root
 
   // Implicit on purpose: every declaration but a subproject's anchors on its declarer.
   pkg_decl_origin(std::filesystem::path p) : declaring_file{ p }, anchor{ std::move(p) } {}
-  pkg_decl_origin(std::filesystem::path declarer, std::filesystem::path base)
-      : declaring_file{ std::move(declarer) }, anchor{ std::move(base) } {}
+  pkg_decl_origin(std::filesystem::path declarer,
+                  std::filesystem::path base,
+                  std::filesystem::path project_root = {})
+      : declaring_file{ std::move(declarer) },
+        anchor{ std::move(base) },
+        project{ std::move(project_root) } {}
+
+  // A manifest is its project's root, so an unset `project` means the anchor's directory;
+  // a spec sets it to the root its declaration chain began in.
+  std::filesystem::path project_root() const;
 };
+
+inline std::filesystem::path pkg_decl_origin::project_root() const {
+  return project.empty() ? anchor.parent_path() : project;
+}
 
 // Reserved keys a subproject's entries carry: the file their relative paths
 // anchor on, and the BUNDLES table their aliases resolve against.
@@ -205,6 +218,10 @@ struct pkg_cfg : unmovable {
   // the parent chain to the root cfg and take its declaring file's directory, else the
   // current directory. A resolved manifest names the project root itself.
   static std::filesystem::path compute_project_root(pkg_cfg const *cfg);
+
+  // The directory of the manifest this cfg's declaration chain began in -- a subproject's
+  // own -- canonical; empty when the root cfg names no file. Never the CWD.
+  static std::filesystem::path declaring_project_root(pkg_cfg const &cfg);
 
  private:
   friend class pkg_cfg_pool;

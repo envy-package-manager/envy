@@ -85,6 +85,12 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
                           bundle_fetcher fetch_one,
                           bundle_custom_fetcher run_custom);
 
+// A local bundle source, resolved against `origin`. Its cache key holds no checkout
+// location: inside the declaring project, the path relative to its root however written
+// (`envy.abspath` included); outside it, as written when relative, whole when absolute.
+pkg_cfg::local_source bundle_local_source(uri_info const &info,
+                                          pkg_decl_origin const &origin);
+
 // A local directory, read in place whatever the identity's namespace; null otherwise.
 std::filesystem::path const *bundle_local_dir(pkg_cfg::bundle_source const &src);
 

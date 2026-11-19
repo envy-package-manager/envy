@@ -31,10 +31,7 @@ struct bundle_decl {
     std::string url;
     std::string sha256;
   };
-  struct local_source {
-    std::filesystem::path file_path;
-    std::filesystem::path declared;
-  };
+  using local_source = pkg_cfg::local_source;
   using git_source = pkg_cfg::git_source;
   struct custom_fetch_source {
     std::vector<pkg_cfg *> dependencies;  // Parsed dependencies
@@ -126,14 +123,7 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
     decl.source = std::move(*git);
   } else if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE ||
              info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
-    std::filesystem::path resolved{ info.canonical };
-    if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
-      resolved = (origin.anchor.parent_path() / resolved).lexically_normal();
-    }
-    decl.source = bundle_decl::local_source{
-      .file_path = std::move(resolved),
-      .declared = std::filesystem::path{ info.canonical }.lexically_normal()
-    };
+    decl.source = bundle_local_source(info, origin);
   } else {
     auto sha256_opt{ sol_util_get_optional<std::string>(table, "sha256", "Bundle") };
     decl.source = bundle_decl::remote_source{ .url = info.canonical,
@@ -153,9 +143,7 @@ pkg_cfg::bundle_source decl_to_source(bundle_decl const &decl) {
                          pkg_cfg::remote_source{ .url = s.url, .sha256 = s.sha256 } };
           },
           [&](bundle_decl::local_source const &s) -> pkg_cfg::bundle_source {
-            return { .bundle_identity = decl.identity,
-                     .fetch_source = pkg_cfg::local_source{ .file_path = s.file_path,
-                                                            .declared = s.declared } };
+            return { .bundle_identity = decl.identity, .fetch_source = s };
           },
           [&](bundle_decl::git_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity, .fetch_source = s };
@@ -461,6 +449,20 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
           },
       },
       src.fetch_source);
+}
+
+pkg_cfg::local_source bundle_local_source(uri_info const &info,
+                                          pkg_decl_origin const &origin) {
+  std::filesystem::path const written{ info.canonical };
+  bool const relative{ info.scheme == uri_scheme::LOCAL_FILE_RELATIVE };
+  std::filesystem::path const resolved{
+    relative ? (origin.anchor.parent_path() / written).lexically_normal() : written
+  };
+  auto const inside{ util_path_inside(resolved, origin.project_root()) };
+  return { .file_path = resolved,
+           .declared = inside     ? *inside
+                       : relative ? written.lexically_normal()
+                                  : resolved };
 }
 
 std::filesystem::path const *bundle_local_dir(pkg_cfg::bundle_source const &src) {

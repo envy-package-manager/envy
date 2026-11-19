@@ -300,6 +300,11 @@ std::filesystem::path util_absolute_path(std::filesystem::path const &relative,
 // walk: parent_path() on a relative path bottoms out at its own first segment.
 std::filesystem::path util_canonical_path(std::filesystem::path const &path);
 
+// `path` relative to `root` when inside it, compared canonically so a symlinked checkout
+// is still inside; nullopt when outside it or when `root` is empty.
+std::optional<std::filesystem::path> util_path_inside(std::filesystem::path const &path,
+                                                      std::filesystem::path const &root);
+
 // Simplify cache paths in command string for display.
 // First tries to match tokens against product paths (suffix matching).
 // Falls back to cache_root prefix detection with filename extraction.

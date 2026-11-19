@@ -634,13 +634,16 @@ std::optional<sol::protected_function> find_fetch_function(sol::state_view lua,
 }
 
 std::filesystem::path pkg_cfg::compute_project_root(pkg_cfg const *cfg) {
-  while (cfg && cfg->parent) { cfg = cfg->parent; }
+  auto root{ cfg ? declaring_project_root(*cfg) : std::filesystem::path{} };
+  return root.empty() ? std::filesystem::current_path() : root;
+}
 
-  if (cfg && !cfg->declaring_file_path.empty()) {
-    return util_canonical_path(cfg->declaring_file_path).parent_path();
-  }
-
-  return std::filesystem::current_path();
+std::filesystem::path pkg_cfg::declaring_project_root(pkg_cfg const &cfg) {
+  pkg_cfg const *root{ &cfg };
+  while (root->parent) { root = root->parent; }
+  return root->declaring_file_path.empty()
+             ? std::filesystem::path{}
+             : util_canonical_path(root->declaring_file_path).parent_path();
 }
 
 bool operator==(pkg_cfg::remote_source const &lhs, pkg_cfg::remote_source const &rhs) {
@@ -833,18 +836,12 @@ std::string source_key(pkg_cfg::local_source const &l) {
 }
 
 std::string custom_fetch_source_key(pkg_cfg const &cfg) {
-  // Inside the project (the root entry's manifest dir), relative to it; outside it (a spec
-  // in the cache), absolute. Never the CWD.
+  // Inside the project, relative to its root; outside it (a spec in the cache), absolute.
   std::string const declarer{ [&] {
     if (cfg.declaring_file_path.empty()) { return std::string{}; }
-    pkg_cfg const *root{ &cfg };
-    while (root->parent) { root = root->parent; }
-    std::filesystem::path const &manifest{ root->declaring_file_path };
-    auto const file{ util_canonical_path(cfg.declaring_file_path) };
-    auto const rel{ manifest.empty() ? manifest
-                                     : file.lexically_relative(
-                                           util_canonical_path(manifest).parent_path()) };
-    return (rel.empty() || *rel.begin() == ".." ? file : rel).generic_string();
+    auto const rel{ util_path_inside(cfg.declaring_file_path,
+                                     pkg_cfg::declaring_project_root(cfg)) };
+    return (rel ? *rel : util_canonical_path(cfg.declaring_file_path)).generic_string();
   }() };
   return "fetch\n" + declarer + "\n" + cfg.identity + "\n" + cfg.serialized_options;
 }
