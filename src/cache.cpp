@@ -400,8 +400,9 @@ namespace {
 void drop_dir(std::filesystem::path const &dir, bool insist = false) {
   if (auto const ec{ insist ? tree_remove_insisting(dir)
                             : tree_remove_best_effort(dir) }) {
-    tui::warn(
-        "cache: could not remove %s: %s", dir.string().c_str(), ec.message().c_str());
+    tui::warn("cache: could not remove %s: %s",
+              dir.string().c_str(),
+              ec.message().c_str());
   }
 }
 

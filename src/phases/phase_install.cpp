@@ -92,8 +92,11 @@ void run_programmatic_install(sol::protected_function install_func,
     }
 
     // Returned string: spawn fresh shell with manifest defaults
-    run_shell_install(
-        result_obj.as<std::string>(), stage_dir, tmp_dir, p, eng.cache_root());
+    run_shell_install(result_obj.as<std::string>(),
+                      stage_dir,
+                      tmp_dir,
+                      p,
+                      eng.cache_root());
   }
 }
 
