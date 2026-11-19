@@ -112,7 +112,7 @@ class TestLoadenvBundle(LoadenvBundleCase):
 
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(2, len(run.events("pkg_outcome", spec="test.generic@r1")))
-        self.assertTrue(self.spec_complete("test.tools@r1"))
+        self.assertEqual([], self.spec_entries("test.tools@r1"))  # read in place
 
     def test_a_bundled_helper_is_told_the_bundle_it_came_from(self):
         """ENVY_BUNDLE spares the helper an alias the caller already typed."""
@@ -137,7 +137,7 @@ return M
 
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(1, len(run.events("pkg_outcome", spec="test.generic@r1")))
-        self.assertTrue(self.spec_complete("test.tools@r1"))
+        self.assertEqual([], self.spec_entries("test.tools@r1"))  # read in place
 
     def test_a_local_bundle_is_read_where_it_stands(self):
         """`local.` bundles are used in situ, at manifest scope as anywhere else."""
@@ -146,6 +146,27 @@ return M
 
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual([], self.spec_entries("local.tools@r1"))
+
+    def test_any_bundle_at_a_local_path_is_read_where_it_stands(self):
+        """An edit to the helper lands on the next run, `local.` or not (#410)."""
+        root = self.make_bundle(helper=HELPER.replace("return M", 'M.MARK = "one"\nreturn M'))
+
+        def manifest(mark: str) -> Path:
+            return self.manifest(
+                self.bundles_table(root)
+                + 'local gh = envy.loadenv_bundle("tools", "lib.github")\n'
+                f'assert(gh.MARK == "{mark}", "stale helper: " .. tostring(gh.MARK))\n'
+                'PACKAGES = { gh.entry("one") }\n'
+            )
+
+        first = self.install(manifest("one"))
+        self.assertEqual(0, first.returncode, first.stderr)
+
+        helper = root / "lib" / "github.lua"
+        helper.write_text(helper.read_text().replace('"one"', '"two"', 1), encoding="utf-8")
+        second = self.install(manifest("two"))
+        self.assertEqual(0, second.returncode, second.stderr)
+        self.assertEqual([], self.spec_entries("test.tools@r1"))
 
     def test_a_git_bundle_is_cloned_before_the_manifest_finishes(self):
         repo = self.make_git_repo(
@@ -280,8 +301,8 @@ end
 
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
-        self.assertTrue(self.spec_complete("test.own@r1"))
-        self.assertEqual([], self.spec_entries("test.tools@r1"))
+        self.assertTrue(run.events("pkg_outcome", spec="test.own@r1"))
+        self.assertFalse(run.events("pkg_outcome", spec="test.tools@r1"))
 
     def test_a_subproject_resolves_its_own_alias(self):
         root = self.make_bundle()

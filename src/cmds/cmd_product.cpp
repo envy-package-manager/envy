@@ -90,7 +90,7 @@ void cmd_product::execute() {
                                       false,
                                       cfg_.project_dir) };
   engine eng{ *c, m.get() };
-
+  eng.set_quiet_idle_outcomes(true);  // a wrapper's stderr is its tool's
   eng.resolve_graph({ m->packages.begin(), m->packages.end() });
 
   if (cfg_.product_name.empty()) {

@@ -430,15 +430,7 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
             extract(dest, install_dir);
           },
           [&](pkg_cfg::local_source const &local) {
-            // A non-'local.' identity: copied into the cache, not read where it stands.
-            if (std::filesystem::is_directory(local.file_path)) {
-              std::filesystem::copy(local.file_path,
-                                    install_dir,
-                                    std::filesystem::copy_options::recursive |
-                                        std::filesystem::copy_options::overwrite_existing);
-            } else {
-              extract(local.file_path, install_dir);
-            }
+            extract(local.file_path, install_dir);  // a directory is read in place instead
           },
           [&](pkg_cfg::git_source const &git) {
             fetch_one(fetch_request_git{ .source = git.url,
@@ -464,6 +456,12 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
           },
       },
       src.fetch_source);
+}
+
+std::filesystem::path const *bundle_local_dir(pkg_cfg::bundle_source const &src) {
+  auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
+  return local && std::filesystem::is_directory(local->file_path) ? &local->file_path
+                                                                  : nullptr;
 }
 
 std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg) {
@@ -514,12 +512,9 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
         "reaches one of those, with envy.loadenv_spec");
   }
 
-  // Read where it stands, as its BUNDLE_ONLY package does: no entry, so edits land.
-  if (auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
-      local && id.starts_with("local.") &&
-      std::filesystem::is_directory(local->file_path)) {
-    bundle_verify(local->file_path, id, project_root);
-    return local->file_path;
+  if (auto const *dir{ bundle_local_dir(src) }) {  // no entry, so edits land
+    bundle_verify(*dir, id, project_root);
+    return *dir;
   }
 
   if (!c) {

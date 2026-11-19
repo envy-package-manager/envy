@@ -1,13 +1,14 @@
 """A spec cache entry is keyed on its source, not on its identity alone.
 
 Nothing revalidates a complete cache entry, so if identity were the whole key,
-repointing a spec at a new URL, a new git ref, or a new directory would keep
+repointing a spec at a new URL, a new git ref, or a new archive would keep
 serving yesterday's bytes forever -- the declaration would say one thing and the
 cache would answer with another. Each test here redeclares one identity against a
 second source and requires envy to fetch it rather than reuse the first entry.
 """
 
 import shutil
+import tarfile
 import unittest
 
 from .env import EnvyTestCase
@@ -73,7 +74,7 @@ PACKAGES = {{
 
 
 class TestBundleSourceCacheKey(EnvyTestCase):
-    """Two directories, one bundle identity."""
+    """Two archives, one bundle identity. (A bundle directory is read in place.)"""
 
     IDENTITY = "test.keyed-bundle@v1"
     MEMBER = "test.keyed-member@v1"
@@ -94,7 +95,11 @@ class TestBundleSourceCacheKey(EnvyTestCase):
         (root / "specs" / "m.lua").write_text(
             SPEC.format(identity=self.MEMBER, marker=label), encoding="utf-8"
         )
-        return root
+        archive = self.make_temp_dir(f"{label}-archive") / "bundle.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for path in sorted(root.rglob("*")):
+                tf.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+        return archive
 
     def manifest_for(self, bundle_dir):
         return self.write_manifest(
@@ -109,7 +114,7 @@ PACKAGES = {{
 """
         )
 
-    def test_changing_the_bundle_directory_fetches_again(self):
+    def test_changing_the_bundle_archive_fetches_again(self):
         first = self.install(self.manifest_for(self.first))
         self.assertEqual(0, first.returncode, first.stderr)
         self.assertEqual(1, len(self.spec_entries(self.IDENTITY)))
@@ -118,7 +123,7 @@ PACKAGES = {{
         self.assertEqual(0, second.returncode, second.stderr)
         self.assertTrue(
             second.events("cache_miss", spec=self.IDENTITY),
-            "a new bundle directory must miss the cache",
+            "a new bundle archive must miss the cache",
         )
         self.assertEqual(2, len(self.spec_entries(self.IDENTITY)))
 

@@ -76,7 +76,8 @@ void run_completion_phase(pkg *p, engine &eng) {
                               p->cfg->identity,
                               section_text,
                               did_work,
-                              p->display);
+                              p->display,
+                              did_work || !eng.quiet_idle_outcomes());
 }
 
 }  // namespace envy

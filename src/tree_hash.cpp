@@ -309,6 +309,19 @@ class walker : unmovable {
   std::vector<walk_entry> entries_;
 };
 
+// Owner rwx on `dir` and every directory under it, parents first so each can be listed.
+void grant_owner_dir_access(std::filesystem::path const &dir) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::permissions(dir, fs::perms::owner_all, fs::perm_options::add, ec);
+  for (fs::directory_iterator it{ dir, ec }, end; !ec && it != end; it.increment(ec)) {
+    std::error_code st_ec;  // never follows a link: its target is not ours to touch
+    if (it->symlink_status(st_ec).type() == fs::file_type::directory) {
+      grant_owner_dir_access(it->path());
+    }
+  }
+}
+
 void require_directory(std::filesystem::path const &root, char const *who) {
   std::error_code ec;
   if (!std::filesystem::is_directory(root, ec) || ec) {
@@ -426,14 +439,22 @@ bool tree_remove(std::filesystem::path const &root, unsigned threads) {
   // so does this. Following would delete a tree the caller never named.
   if (!fs::is_directory(st)) { return platform::remove_file(root); }
 
-  try {
-    thread_budget const budget{ threads };
-    return tree_remove_listed(root,
-                              tree_list(root, {}, budget.threads()),
-                              budget.threads());
-  } catch (std::exception const &) {
-    return false;  // unreadable somewhere; the caller's fallback decides how hard to try
-  }
+  auto const attempt{ [&] {
+    try {
+      thread_budget const budget{ threads };
+      return tree_remove_listed(root,
+                                tree_list(root, {}, budget.threads()),
+                                budget.threads());
+    } catch (std::exception const &) {
+      return false;  // unreadable somewhere; the caller's fallback decides how hard to try
+    }
+  } };
+  if (attempt()) { return true; }
+
+  // A directory denying write keeps its entries (go's module cache does it on purpose).
+  // Open the tree to its owner and go again, as `go clean -modcache` does.
+  grant_owner_dir_access(root);
+  return attempt();
 }
 
 std::error_code tree_remove_best_effort(std::filesystem::path const &root) {

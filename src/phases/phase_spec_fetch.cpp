@@ -1267,17 +1267,13 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
     return;
   }
 
-  // Local bundles (identity starts with "local.") use source directory in-situ
-  if (bundle_id.starts_with("local.")) {
-    auto const *local_src{ std::get_if<pkg_cfg::local_source>(&bundle_src->fetch_source) };
-    if (local_src && std::filesystem::is_directory(local_src->file_path)) {
-      tui::debug("spec: local bundle %s", bundle_id.c_str());
-
-      bundle parsed{ bundle_verify(local_src->file_path, bundle_id, eng.project_root()) };
-      eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path);
-      p->bundle_in_situ = true;
-      return;
-    }
+  // A local directory is read where it stands, as a local spec is, so edits land.
+  if (auto const *dir{ bundle_local_dir(*bundle_src) }) {
+    tui::debug("spec: local bundle %s", bundle_id.c_str());
+    bundle parsed{ bundle_verify(*dir, bundle_id, eng.project_root()) };
+    eng.register_bundle(bundle_id, std::move(parsed.specs), *dir);
+    p->bundle_in_situ = true;
+    return;
   }
 
   // Non-local bundle: fetch to cache. The completion phase turns these flags into

@@ -172,6 +172,11 @@ class engine : unmovable {
   // type name used just above it, which GCC rejects outright.
   vendor_plan const *vendor() const;
 
+  // Set before the run: an outcome that did no work (a cache hit) logs at DEBUG, work
+  // at INFO. For stderr that isn't envy's narrative: a wrapped tool's, a shell prompt's.
+  void set_quiet_idle_outcomes(bool quiet);
+  bool quiet_idle_outcomes() const;
+
   // Export phase configuration — set before resolve_graph() for pipeline export
   void set_export_config(export_phase_config cfg);
   export_phase_config const *export_config() const;
@@ -281,6 +286,7 @@ class engine : unmovable {
 
   // Vendor plan (set before the run, read by the vendor phase on worker threads)
   std::optional<vendor_plan> vendor_plan_;
+  bool quiet_idle_outcomes_{ false };  // set before the run, like the vendor plan
 
   // Export phase state (set before resolve_graph, read by phase handler)
   std::optional<export_phase_config> export_config_;

@@ -670,7 +670,8 @@ void report_outcome(tui::section_handle section,
                     std::string const &identity,
                     std::string const &text,
                     bool keep_row,
-                    std::string const &display) {
+                    std::string const &display,
+                    bool loud) {
   if (keep_row) {
     tui::section_set_outcome(
         section,
@@ -680,11 +681,11 @@ void report_outcome(tui::section_handle section,
     tui::section_delete(section);
   }
 
-  // Off a TTY no live row carries it, so it is an INFO line; the ambient log context
+  // Off a TTY no live row carries it, so it is a log line; the ambient log context
   // prefixes "[identity]". On a TTY the row is the only output: no duplicate scrollback.
   if (!tui::is_tty()) {
     std::string const line{ display.empty() ? text : display + " " + text };
-    tui::info("%s", line.c_str());
+    (loud ? tui::info : tui::debug)("%s", line.c_str());
   }
 }
 

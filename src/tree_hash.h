@@ -114,6 +114,7 @@ bool tree_remove_listed(std::filesystem::path const &root,
 // The same delete for a caller that has no listing yet: walks with tree_list, which is
 // the native parallel walk, and hands the result to tree_remove_listed. A missing root
 // is success; a root that is a file or a symlink is unlinked as one, never followed.
+// A failure grants the owner rwx on every directory and tries once more.
 bool tree_remove(std::filesystem::path const &root, unsigned threads = 0);
 
 // tree_remove, then std::filesystem for whatever it could not take -- which is still

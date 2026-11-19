@@ -71,6 +71,7 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
                                         std::vector<pkg_cfg const *> const &providers,
                                         std::filesystem::path const &root) {
   engine eng{ *startup.c, startup.m.get() };
+  eng.set_quiet_idle_outcomes(true);  // a local bundle read in place is no news per prompt
   eng.resolve_graph([&] {
     auto all{ providers };
     all.insert(all.end(), roots.begin(), roots.end());

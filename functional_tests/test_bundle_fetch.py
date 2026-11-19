@@ -172,9 +172,8 @@ PACKAGES = {{
         self.assertTrue(pkg_a.exists(), f"Expected {pkg_a} to exist")
         self.assertTrue(pkg_b.exists(), f"Expected {pkg_b} to exist")
 
-        # Verify bundle was cached once
-        spec_cache = self.cache_root / "specs" / "test.simple-bundle@v1"
-        self.assertTrue(spec_cache.exists(), f"Expected bundle cache at {spec_cache}")
+        # A bundle directory is read in place, never copied into the cache
+        self.assertEqual([], self.spec_entries("test.simple-bundle@v1"))
 
     def test_inline_bundle_declaration(self):
         """Inline bundle declaration in package entry."""
@@ -694,6 +693,46 @@ PACKAGES = {{
             bundle_cache.exists(),
             f"Local bundle dependency should not be cached at {bundle_cache}",
         )
+
+
+class TestLocalPathBundleEdits(EnvyTestCase):
+    """A bundle at a local path is read in place, whatever its namespace (#410)."""
+
+    IDENTITY = "test.edited@r0"
+
+    def write_bundle(self, root: Path, marker: str) -> Path:
+        (root / "specs").mkdir(parents=True, exist_ok=True)
+        (root / "envy-bundle.lua").write_text(
+            f'BUNDLE = "{self.IDENTITY}"\nSPECS = {{ ["test.t@r0"] = "specs/t.lua" }}\n',
+            encoding="utf-8",
+        )
+        (root / "specs" / "t.lua").write_text(
+            'IDENTITY = "test.t@r0"\nUSER_MANAGED = true\n'
+            f'SETUP = {{ main = {{ CHECK = function() envy.info("{marker}") return true end,'
+            " INSTALL = function() end } }\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def manifest(self, source: Path) -> Path:
+        return self.write_manifest(
+            f'BUNDLES = {{ b = {{ identity = "{self.IDENTITY}", '
+            f'source = "{self.lua_path(source)}" }} }}\n'
+            'PACKAGES = { { spec = "test.t@r0", bundle = "b", setup = { "main" } } }\n'
+        )
+
+    def test_directory_edit_lands_on_the_next_run(self):
+        root = self.write_bundle(self.make_temp_dir("bundle"), "marker-one")
+        manifest = self.manifest(root)
+        first = self.install(manifest)
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertIn("marker-one", first.stderr)
+
+        self.write_bundle(root, "marker-two")
+        second = self.install(manifest)
+        self.assertEqual(0, second.returncode, second.stderr)
+        self.assertIn("marker-two", second.stderr)
+        self.assertEqual([], self.spec_entries(self.IDENTITY), "copied into the cache")
 
 
 class TestBundleFetchRemote(EnvyTestCase):
