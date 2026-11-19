@@ -73,7 +73,7 @@ struct pkg_cfg : unmovable {
   };
 
   struct local_source {
-    std::filesystem::path file_path;  // Can be file or directory
+    std::filesystem::path file_path;   // Can be file or directory
     std::filesystem::path declared{};  // as written: relative to its declarer, or absolute
   };
 

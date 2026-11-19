@@ -925,8 +925,8 @@ TEST_CASE("source_key holds no checkout location") {
   CHECK(envy::source_key(pinned_a) == envy::source_key(pinned_b));
   CHECK(envy::source_key(envy::pkg_cfg::remote_source{ .url = "file:///a/s.lua" }) ==
         "remote\nfile:///a/s.lua\n");
-  CHECK(envy::source_key(envy::pkg_cfg::remote_source{ .url = "https://h/s.lua",
-                                                       .sha256 = "ab" }) ==
+  CHECK(envy::source_key(
+            envy::pkg_cfg::remote_source{ .url = "https://h/s.lua", .sha256 = "ab" }) ==
         "remote\nhttps://h/s.lua\nab");
 }
 
