@@ -1,6 +1,7 @@
 #include "lua_envy.h"
 
 #include "env_ops.h"
+#include "lua_ctx/lua_envy_decode.h"
 #include "lua_ctx/lua_envy_extract.h"
 #include "lua_ctx/lua_envy_fetch.h"
 #include "lua_ctx/lua_envy_file_ops.h"
@@ -163,6 +164,7 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
   lua_envy_loadenv_install(envy_table);
   lua_envy_loadenv_bundle_install_refusal(envy_table);
   lua_envy_options_install(envy_table);
+  lua_envy_decode_install(envy_table);
 
   lua["envy"] = envy_table;
 

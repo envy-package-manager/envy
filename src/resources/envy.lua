@@ -93,6 +93,26 @@ function envy.path.extension(path) end
 function envy.abspath(path) end
 
 --------------------------------------------------------------------------------
+-- Structured Data
+--------------------------------------------------------------------------------
+
+---@class envy.json
+envy.json = {}
+
+---Decode JSON text; null becomes nil, integers stay integers. Raises on malformed input.
+---@param text string
+---@return any
+function envy.json.decode(text) end
+
+---@class envy.toml
+envy.toml = {}
+
+---Decode TOML 1.1 text; date-times become RFC 3339 strings. Raises on malformed input.
+---@param text string
+---@return table
+function envy.toml.decode(text) end
+
+--------------------------------------------------------------------------------
 -- File Operations
 --------------------------------------------------------------------------------
 

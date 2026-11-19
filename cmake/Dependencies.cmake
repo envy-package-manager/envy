@@ -101,6 +101,12 @@ set(ENVY_PICOJSON_SHA256 5ddf7276d04926da7be243e7af49258e78cc27278ee9097ba45b942
 set(ENVY_PICOJSON_LICENSE_URL "https://raw.githubusercontent.com/kazuho/picojson/v${ENVY_PICOJSON_VERSION}/LICENSE")
 set(ENVY_PICOJSON_LICENSE_SHA256 5585fe141cc7bb08c953f3859db608852968d0bbc625b9b6d95c0bd6349bacb6)
 
+set(ENVY_TOMLC17_VERSION "R261116")
+set(ENVY_TOMLC17_URL "https://raw.githubusercontent.com/cktan/tomlc17/${ENVY_TOMLC17_VERSION}")
+set(ENVY_TOMLC17_H_SHA256 29c0909092f4b23c7edce705167064f4a90548db5334b4aa2cd95d7ad801adb9)
+set(ENVY_TOMLC17_C_SHA256 41cedef3c1214a5bbfac750bd2017ac7ba2952429b436af50f2582decf6e29cf)
+set(ENVY_TOMLC17_LICENSE_SHA256 f949d0976f85076c96fc5122f0632b5a1b806d8b2badbe968c42c97230e6e79e)
+
 set(ENVY_DOCTEST_VERSION "2.5.3")
 set(ENVY_DOCTEST_URL "https://raw.githubusercontent.com/doctest/doctest/v${ENVY_DOCTEST_VERSION}/doctest/doctest.h")
 set(ENVY_DOCTEST_SHA256 cfd518a3ef90f67e1f3ba514df23fb3627437de1a2feeba78cf5062a40021421)
@@ -140,6 +146,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/deps/Lua.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Sol2.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Nanosemver.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Picojson.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/deps/Tomlc17.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Doctest.cmake")
 
 # libgit2 caches CMAKE_C_STANDARD=90 and CMAKE_C_EXTENSIONS=OFF partway through, so a
@@ -169,6 +176,7 @@ target_link_libraries(envy_thirdparty
         blake3::blake3
         nanosemver::nanosemver
         picojson::picojson
+        tomlc17::tomlc17
         AWS::aws-cpp-sdk-s3
         AWS::aws-cpp-sdk-transfer
         AWS::aws-cpp-sdk-sso

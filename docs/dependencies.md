@@ -4,9 +4,17 @@
 
 **Version:** 1.3.0
 **License:** BSD-2-Clause
-**Purpose:** Single-header JSON parser/serializer—parse, edit, serialize `.luarc.json` and structured JSON output
-**Integration:** Single header downloaded to `out/cache/picojson-src/`
+**Purpose:** Single-header JSON parser/serializer—parse, edit, serialize `.luarc.json` and structured JSON output; `envy.json.decode`
+**Integration:** Single header downloaded to `out/cache/picojson-src/`; `PICOJSON_USE_INT64` everywhere (it changes `picojson::value`'s layout) so integers decode exact; `envy.json.decode` is a custom parse context that builds Lua tables in one pass and caps nesting at 256 (1.3.0 has no cap)
 **Rationale:** Smallest viable JSON library (34 KB); replaces bespoke JSON output in `cmd_product.cpp` and enables safe round-trip editing of user `.luarc.json` files
+
+## tomlc17
+
+**Version:** R261116
+**License:** MIT
+**Purpose:** TOML 1.1 parser behind `envy.toml.decode`
+**Integration:** `tomlc17.h`/`.c` from the release tag as a static C99 library; `check_utf8` set once before the first parse
+**Rationale:** Measured against toml++ 3.4.0, toml11 4.4.0, toml-c, cpptoml 0.1.1, libtoml under envy's flags: smallest fully conformant (681/681 toml-test 1.1, ~18 KB), fastest (894 KB Rust manifest in 6.5 ms vs toml++ 18 ms, toml11 360 ms), and the only one both fully conformant and crash-free under 100k-deep nesting and ASan/UBSan fuzzing; toml++ reaches `__builtin_unreachable` on valid CJK input
 
 ## Sol2
 

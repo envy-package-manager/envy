@@ -637,6 +637,20 @@ local cmd = envy.template(
 
 ---
 
+## Structured Data
+
+### envy.json.decode(text) → any
+### envy.toml.decode(text) → table
+
+Decode upstream metadata into plain Lua values: objects/tables → tables, arrays → sequences, integers stay integers, floats stay floats. JSON `null` → `nil` (arrays may get holes); TOML 1.1 date-times → RFC 3339 strings (`"1979-05-27T07:32:00Z"`, `"07:32:00"`). Malformed input raises `envy.json.decode: …`/`envy.toml.decode: …` with a line number. Nesting is capped—JSON at 256 levels; TOML at 30 brackets or braces and 10-part keys, with ≤16384 entries per table or array.
+
+```lua
+local rust = envy.toml.decode(channel_toml).pkg["rust-std"].target[target]  -- .xz_url, .xz_hash
+local go = envy.json.decode(go_dl_json)[1]  -- go.dev/dl/?mode=json: .version, .files[i].sha256
+```
+
+---
+
 ## Phase Context
 
 There is no `ctx` object: directories arrive as phase-function parameters, and everything
