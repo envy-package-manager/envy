@@ -938,8 +938,10 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
       needed_by,
       nullptr,
       nullptr,
-      std::vector<pkg_cfg *>{ bundle::ensure_pkg_cfg(
-          bundle_src, origin.declaring_file, declaring_spec, bundle_pkgs) },
+      std::vector<pkg_cfg *>{ bundle::ensure_pkg_cfg(bundle_src,
+                                                     origin.declaring_file,
+                                                     declaring_spec,
+                                                     bundle_pkgs) },
       std::move(product),
       origin.declaring_file) };
 
