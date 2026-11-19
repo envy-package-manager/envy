@@ -31,9 +31,7 @@ struct bundle_decl {
     std::string url;
     std::string sha256;
   };
-  struct local_source {
-    std::filesystem::path file_path;
-  };
+  using local_source = pkg_cfg::local_source;
   using git_source = pkg_cfg::git_source;
   struct custom_fetch_source {
     std::vector<pkg_cfg *> dependencies;  // Parsed dependencies
@@ -125,11 +123,7 @@ bundle_decl parse_decl(sol::table const &table, pkg_decl_origin const &caller_or
     decl.source = std::move(*git);
   } else if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE ||
              info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
-    std::filesystem::path resolved{ info.canonical };
-    if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
-      resolved = (origin.anchor.parent_path() / resolved).lexically_normal();
-    }
-    decl.source = bundle_decl::local_source{ .file_path = std::move(resolved) };
+    decl.source = bundle_local_source(info, origin);
   } else {
     auto sha256_opt{ sol_util_get_optional<std::string>(table, "sha256", "Bundle") };
     decl.source = bundle_decl::remote_source{ .url = info.canonical,
@@ -149,8 +143,7 @@ pkg_cfg::bundle_source decl_to_source(bundle_decl const &decl) {
                          pkg_cfg::remote_source{ .url = s.url, .sha256 = s.sha256 } };
           },
           [&](bundle_decl::local_source const &s) -> pkg_cfg::bundle_source {
-            return { .bundle_identity = decl.identity,
-                     .fetch_source = pkg_cfg::local_source{ .file_path = s.file_path } };
+            return { .bundle_identity = decl.identity, .fetch_source = s };
           },
           [&](bundle_decl::git_source const &s) -> pkg_cfg::bundle_source {
             return { .bundle_identity = decl.identity, .fetch_source = s };
@@ -430,15 +423,7 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
             extract(dest, install_dir);
           },
           [&](pkg_cfg::local_source const &local) {
-            // A non-'local.' identity: copied into the cache, not read where it stands.
-            if (std::filesystem::is_directory(local.file_path)) {
-              std::filesystem::copy(local.file_path,
-                                    install_dir,
-                                    std::filesystem::copy_options::recursive |
-                                        std::filesystem::copy_options::overwrite_existing);
-            } else {
-              extract(local.file_path, install_dir);
-            }
+            extract(local.file_path, install_dir);  // a directory is read in place instead
           },
           [&](pkg_cfg::git_source const &git) {
             fetch_one(fetch_request_git{ .source = git.url,
@@ -464,6 +449,26 @@ void bundle_fetch_payload(pkg_cfg::bundle_source const &src,
           },
       },
       src.fetch_source);
+}
+
+pkg_cfg::local_source bundle_local_source(uri_info const &info,
+                                          pkg_decl_origin const &origin) {
+  std::filesystem::path const written{ info.canonical };
+  bool const relative{ info.scheme == uri_scheme::LOCAL_FILE_RELATIVE };
+  std::filesystem::path const resolved{
+    relative ? (origin.anchor.parent_path() / written).lexically_normal() : written
+  };
+  auto const inside{ util_path_inside(resolved, origin.project_root()) };
+  return { .file_path = resolved,
+           .declared = inside     ? *inside
+                       : relative ? written.lexically_normal()
+                                  : resolved };
+}
+
+std::filesystem::path const *bundle_local_dir(pkg_cfg::bundle_source const &src) {
+  auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
+  return local && std::filesystem::is_directory(local->file_path) ? &local->file_path
+                                                                  : nullptr;
 }
 
 std::string bundle_source_key(pkg_cfg::bundle_source const &src, pkg_cfg const *cfg) {
@@ -514,12 +519,9 @@ std::filesystem::path bundle_materialize_bare(pkg_cfg::bundle_source const &src,
         "reaches one of those, with envy.loadenv_spec");
   }
 
-  // Read where it stands, as its BUNDLE_ONLY package does: no entry, so edits land.
-  if (auto const *local{ std::get_if<pkg_cfg::local_source>(&src.fetch_source) };
-      local && id.starts_with("local.") &&
-      std::filesystem::is_directory(local->file_path)) {
-    bundle_verify(local->file_path, id, project_root);
-    return local->file_path;
+  if (auto const *dir{ bundle_local_dir(src) }) {  // no entry, so edits land
+    bundle_verify(*dir, id, project_root);
+    return *dir;
   }
 
   if (!c) {

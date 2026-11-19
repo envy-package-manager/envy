@@ -1276,5 +1276,54 @@ echo "line2_should_not_run" > failfast_marker.txt
         )
 
 
+# Fails unless the staged tree is the cwd, then leaves a marker next to it.
+_SEES_STAGED_TREE = (
+    "if (-not (Test-Path root/file1.txt)) { exit 1 }; "
+    "Set-Content -Path marker.txt -Value staged"
+    if os.name == "nt"
+    else "test -f root/file1.txt && echo staged > marker.txt"
+)
+
+
+class TestStringVerbsSeeStagedTree(EnvyTestCase):
+    """A string BUILD/INSTALL runs in work/stage/, so extraction must land there (#408)."""
+
+    def install_spec(self, identity: str, verbs: str) -> Path:
+        archive = self.work / "test.tar.gz"
+        digest = create_test_archive(archive)
+        spec = self.write_spec(
+            "spec.lua",
+            f'IDENTITY = "{identity}"\n'
+            f'FETCH = {{ source = "{self.lua_path(archive)}", sha256 = "{digest}" }}\n'
+            f"{verbs}\n",
+        )
+        run = self.install(self.write_manifest(
+            f'PACKAGES = {{ {{ spec = "{identity}", source = "{self.lua_path(spec)}" }} }}\n'
+        ))
+        self.assertEqual(0, run.returncode, run.stderr)
+        (entry,) = self.pkg_entries(identity)
+        return entry / "pkg"
+
+    def test_string_build_without_function_verbs(self):
+        pkg = self.install_spec("local.str_build@r0", f"BUILD = [[{_SEES_STAGED_TREE}]]")
+        self.assertTrue((pkg / "root" / "file1.txt").is_file())
+        self.assertTrue((pkg / "marker.txt").is_file(), "BUILD's output was not promoted")
+
+    def test_string_install_without_function_verbs(self):
+        pkg = self.install_spec("local.str_inst@r0", f"INSTALL = [[{_SEES_STAGED_TREE}]]")
+        self.assertTrue((pkg / "root" / "file1.txt").is_file())
+        self.assertTrue((pkg / "marker.txt").is_file(), "an INSTALL that left pkg/ empty")
+
+    def test_string_install_that_fills_pkg_keeps_only_that(self):
+        """A `make install`-shaped INSTALL writes pkg/ itself; the stage is not promoted."""
+        fill = (
+            "Set-Content -Path ../../pkg/out.txt -Value installed"
+            if os.name == "nt"
+            else "echo installed > ../../pkg/out.txt"
+        )
+        pkg = self.install_spec("local.str_fill@r0", f"INSTALL = [[{fill}]]")
+        self.assertEqual(["out.txt"], sorted(p.name for p in pkg.iterdir()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -634,13 +634,16 @@ std::optional<sol::protected_function> find_fetch_function(sol::state_view lua,
 }
 
 std::filesystem::path pkg_cfg::compute_project_root(pkg_cfg const *cfg) {
-  while (cfg && cfg->parent) { cfg = cfg->parent; }
+  auto root{ cfg ? declaring_project_root(*cfg) : std::filesystem::path{} };
+  return root.empty() ? std::filesystem::current_path() : root;
+}
 
-  if (cfg && !cfg->declaring_file_path.empty()) {
-    return util_canonical_path(cfg->declaring_file_path).parent_path();
-  }
-
-  return std::filesystem::current_path();
+std::filesystem::path pkg_cfg::declaring_project_root(pkg_cfg const &cfg) {
+  pkg_cfg const *root{ &cfg };
+  while (root->parent) { root = root->parent; }
+  return root->declaring_file_path.empty()
+             ? std::filesystem::path{}
+             : util_canonical_path(root->declaring_file_path).parent_path();
 }
 
 bool operator==(pkg_cfg::remote_source const &lhs, pkg_cfg::remote_source const &rhs) {
@@ -808,7 +811,9 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 }
 
 std::string source_key(pkg_cfg::remote_source const &r) {
-  return "remote\n" + r.url + "\n" + r.sha256;
+  return !r.sha256.empty() && r.url.starts_with("file://")
+             ? "sha256\n" + r.sha256  // the same bytes wherever the checkout sits
+             : "remote\n" + r.url + "\n" + r.sha256;
 }
 
 std::string source_key(pkg_cfg::git_source const &g) {
@@ -827,12 +832,18 @@ std::string source_key(pkg_cfg::git_source const &g) {
 }
 
 std::string source_key(pkg_cfg::local_source const &l) {
-  return "local\n" + l.file_path.generic_string();
+  return "local\n" + (l.declared.empty() ? l.file_path : l.declared).generic_string();
 }
 
 std::string custom_fetch_source_key(pkg_cfg const &cfg) {
-  return "fetch\n" + cfg.declaring_file_path.generic_string() + "\n" + cfg.identity +
-         "\n" + cfg.serialized_options;
+  // Inside the project, relative to its root; outside it (a spec in the cache), absolute.
+  std::string const declarer{ [&] {
+    if (cfg.declaring_file_path.empty()) { return std::string{}; }
+    auto const rel{ util_path_inside(cfg.declaring_file_path,
+                                     pkg_cfg::declaring_project_root(cfg)) };
+    return (rel ? *rel : util_canonical_path(cfg.declaring_file_path)).generic_string();
+  }() };
+  return "fetch\n" + declarer + "\n" + cfg.identity + "\n" + cfg.serialized_options;
 }
 
 }  // namespace envy

@@ -35,23 +35,18 @@ bool fetch_dir_has_files(std::filesystem::path const &fetch_dir) {
   return false;
 }
 
+// Straight into pkg/ only when nothing downstream works on the tree: BUILD and INSTALL
+// run in work/stage/ in every form, strings included, so either one needs it there.
 std::filesystem::path determine_stage_destination(sol::state_view lua,
                                                   cache::scoped_entry_lock const *lock) {
-  sol::object stage_obj{ lua["STAGE"] };
-  sol::object build_obj{ lua["BUILD"] };
-  sol::object install_obj{ lua["INSTALL"] };
-
-  bool const has_custom_phases{ stage_obj.is<sol::protected_function>() ||
-                                build_obj.is<sol::protected_function>() ||
-                                install_obj.is<sol::protected_function>() };
-
-  std::filesystem::path const dest_dir{ has_custom_phases ? lock->stage_dir()
-                                                          : lock->install_dir() };
+  bool const has_custom_phases{ lua["STAGE"].is<sol::protected_function>() ||
+                                sol::object{ lua["BUILD"] }.valid() ||
+                                sol::object{ lua["INSTALL"] }.valid() };
 
   tui::debug(has_custom_phases ? "stage: extracting to stage dir (custom install)"
                                : "stage: extracting to install dir");
 
-  return dest_dir;
+  return has_custom_phases ? lock->stage_dir() : lock->install_dir();
 }
 
 void run_programmatic_stage(sol::protected_function stage_func,

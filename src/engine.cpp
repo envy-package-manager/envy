@@ -833,6 +833,9 @@ vendor_plan const *engine::vendor() const {
   return vendor_plan_ ? &*vendor_plan_ : nullptr;
 }
 
+void engine::set_quiet_idle_outcomes(bool quiet) { quiet_idle_outcomes_ = quiet; }
+bool engine::quiet_idle_outcomes() const { return quiet_idle_outcomes_; }
+
 void engine::set_export_config(export_phase_config cfg) {
   export_config_ = std::move(cfg);
 }

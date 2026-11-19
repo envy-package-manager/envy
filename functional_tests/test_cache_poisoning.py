@@ -13,6 +13,7 @@ because envy never looks at the repaired source again.
 """
 
 import shutil
+import tarfile
 import unittest
 
 from .env import EnvyRun, EnvyTestCase
@@ -56,11 +57,10 @@ class CachePoisoningTestBase(EnvyTestCase):
 
 
 class TestBundleCachePoisoning(CachePoisoningTestBase):
-    """A bundle copied into the cache from a local directory.
+    """A bundle archive fetched into the cache.
 
-    The identity does not start with `local.`, so the directory is copied into
-    `specs/<identity>/pkg` rather than used in situ -- the path that made a
-    malformed envy-bundle.lua a permanent cache entry.
+    The URL never changes; only the archive served there does -- the path that made a
+    malformed envy-bundle.lua a permanent cache entry. A directory is read in place.
     """
 
     IDENTITY = "test.poison-bundle@v1"
@@ -69,12 +69,14 @@ class TestBundleCachePoisoning(CachePoisoningTestBase):
         super().setUp()
         self.bundle_dir = self.work / "bundle-src"
         (self.bundle_dir / "specs").mkdir(parents=True)
+        self.serve = self.make_temp_dir("serve")
+        url = self.serve_directory(self.serve) + "/bundle.tar.gz"
         self.manifest = self.write_manifest(
             f"""
 BUNDLES = {{
     tc = {{
         identity = "{self.IDENTITY}",
-        source = "{self.lua_path(self.bundle_dir)}",
+        source = "{url}",
     }},
 }}
 
@@ -92,6 +94,10 @@ PACKAGES = {{
             spec.write_text(
                 USER_MANAGED_SPEC.format(identity="test.poison-a@v1"), encoding="utf-8"
             )
+        with tarfile.open(self.serve / "bundle.tar.gz", "w:gz") as tf:
+            for path in sorted(self.bundle_dir.rglob("*")):
+                tf.add(path, arcname=path.relative_to(self.bundle_dir).as_posix(),
+                       recursive=False)
 
     def valid_bundle(self) -> str:
         return (

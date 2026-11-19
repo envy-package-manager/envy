@@ -85,7 +85,8 @@ spec text.
 ## `envy product`
 
 `envy product <name>` resolves the graph, extends the provider's closure to completion,
-and prints the rendered value to stdout. With no argument it lists every product:
+and prints the rendered value to stdout. Its stderr is the wrapped tool's, so a package
+that did no work (a cache hit) logs at DEBUG; a lazy install still reports. With no argument it lists every product:
 aligned `name  value  provider (user-managed)` rows on stderr, or with `--json` a
 `{ name: resolved_value }` object on stdout — which needs no install, since the path is
 recomputed from the provider's cache key.

@@ -126,7 +126,7 @@ what the module assigns stays in its sandbox.
 
 - `envy.loadenv_spec(identity, module)`: **Only callable from within phase functions**. Uses Lua dot syntax (`"lib.common"` → `lib/common.lua`). Uses the `needed_by` dependency system and is runtime-verified. If called at global scope, envy throws an error because the phase context doesn't exist yet.
 
-- `envy.loadenv_bundle(alias, module)`: **Manifest scope only**; a spec reaches a bundle it declared with `envy.loadenv_spec`. `alias` is a key of the `BUNDLES` table of the calling file — assigned above the call, since a manifest is read top to bottom — and a subproject resolves its own. The bundle is materialized right there, before the manifest's global scope finishes, so the helper's entries can go straight into `PACKAGES`. A `local.` bundle is read where it stands; every other shape lands in the cache, where the bundle's own package finds it already complete. A custom-fetch bundle is refused: its fetch needs a phase to run in, and its `source.dependencies` cannot be ordered this early.
+- `envy.loadenv_bundle(alias, module)`: **Manifest scope only**; a spec reaches a bundle it declared with `envy.loadenv_spec`. `alias` is a key of the `BUNDLES` table of the calling file — assigned above the call, since a manifest is read top to bottom — and a subproject resolves its own. The bundle is materialized right there, before the manifest's global scope finishes, so the helper's entries can go straight into `PACKAGES`. A bundle directory is read where it stands, whatever its namespace; an archive or a remote lands in the cache, where the bundle's own package finds it already complete. A custom-fetch bundle is refused: its fetch needs a phase to run in, and its `source.dependencies` cannot be ordered this early.
 
 ### A Bundle That Ships Its Own Entry Builder
 
@@ -460,7 +460,7 @@ error: Bundle 'acme.toolchain-specs@v1' declares spec 'acme.gcc@v2' at 'specs/gc
 
 ### Revision Immutability
 
-Bundle and spec revisions are **immutable**. If a bundle at the same revision has content changes (detected via SHA256 mismatch), that's an error—the author must bump the revision. This ensures envy doesn't need to re-fetch bundles/specs on every run "just in case" content changed.
+Fetched bundle and spec revisions are **immutable**: a remote's `sha256` or a git commit `ref` pins the bytes, and a mismatch on fetch is an error—the author bumps the revision. So envy never re-fetches "just in case" content changed. A bundle directory at a local path is read in place, like a local spec, so edits land on the next run. A local archive is cached once, keyed on its path, as a remote is. Inside the declaring project that path is relative to the project's root however written (`envy.abspath` included), so clones and worktrees share it; outside, it keys as written when relative and whole when absolute.
 
 ---
 

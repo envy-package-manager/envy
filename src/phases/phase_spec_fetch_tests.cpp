@@ -1418,14 +1418,11 @@ TEST_CASE("USER_MANAGED with non-boolean non-function type throws") {
 }
 
 // ============================================================================
-// Cache-entry finalization
+// Local bundle directories
 //
-// A cache entry carrying `envy-complete` is trusted forever after -- nothing
-// revalidates its contents. So a fetch that cannot produce a usable artifact must
-// never finalize its entry, or one bad fetch becomes a permanent failure that no
-// amount of repairing the source can clear. These cover the bundle path; the spec
-// paths (remote/git/custom fetch) share the single finalize point in
-// run_spec_fetch_phase and are covered by functional_tests/test_cache_poisoning.py.
+// A bundle directory is read in place whatever its identity's namespace, so it never
+// makes a cache entry and an edit or a repair lands on the next run. Fetched bundles
+// finalize only after validating; functional_tests/test_cache_poisoning.py covers that.
 // ============================================================================
 
 namespace {
@@ -1497,16 +1494,6 @@ struct bundle_entry_fixture {
     return std::nullopt;
   }
 
-  bool entry_complete() const {
-    auto const dir{ entry_dir() };
-    return dir && cache::is_entry_complete(*dir);
-  }
-
-  bool entry_has(std::string const &relative) const {
-    auto const dir{ entry_dir() };
-    return dir && std::filesystem::exists(*dir / relative);
-  }
-
   // One materialization attempt against the on-disk cache, in its own engine and
   // cache objects -- the stand-in for a fresh envy process. Returns the error
   // message, or an empty string on success.
@@ -1523,16 +1510,15 @@ struct bundle_entry_fixture {
 
 }  // namespace
 
-TEST_CASE("valid bundle finalizes its cache entry") {
+TEST_CASE("a bundle directory is read in place, never copied into the cache") {
   bundle_entry_fixture f{ "ok" };
   f.write_source(f.valid_manifest(), bundle_entry_fixture::valid_spec());
 
   CHECK(f.materialize().empty());
-  CHECK(f.entry_complete());
-  CHECK(f.entry_has("pkg/envy-bundle.lua"));
+  CHECK_FALSE(f.entry_dir());
 }
 
-TEST_CASE("unparseable bundle manifest leaves the cache entry unfinalized") {
+TEST_CASE("unparseable bundle manifest fails and caches nothing") {
   bundle_entry_fixture f{ "parse" };
   f.write_source("BUNDLE = \"" + f.identity + "\"\nthis is not lua(((\n",
                  bundle_entry_fixture::valid_spec());
@@ -1540,11 +1526,10 @@ TEST_CASE("unparseable bundle manifest leaves the cache entry unfinalized") {
   auto const msg{ f.materialize() };
   REQUIRE(!msg.empty());
   CHECK(msg.find("Failed to parse bundle manifest") != std::string::npos);
-  CHECK_FALSE(f.entry_complete());
-  CHECK_FALSE(f.entry_has("pkg"));
+  CHECK_FALSE(f.entry_dir());
 }
 
-TEST_CASE("bundle identity mismatch leaves the cache entry unfinalized") {
+TEST_CASE("bundle identity mismatch fails and caches nothing") {
   bundle_entry_fixture f{ "identity" };
   f.write_source(
       "BUNDLE = \"test.someone-else@v9\"\n"
@@ -1554,17 +1539,17 @@ TEST_CASE("bundle identity mismatch leaves the cache entry unfinalized") {
   auto const msg{ f.materialize() };
   REQUIRE(!msg.empty());
   CHECK(msg.find("Bundle identity mismatch") != std::string::npos);
-  CHECK_FALSE(f.entry_complete());
+  CHECK_FALSE(f.entry_dir());
 }
 
-TEST_CASE("bundle whose spec file is missing leaves the cache entry unfinalized") {
+TEST_CASE("bundle whose spec file is missing fails and caches nothing") {
   bundle_entry_fixture f{ "validate" };
   f.write_source(f.valid_manifest(), "");  // SPECS points at a file that is not there
 
   auto const msg{ f.materialize() };
   REQUIRE(!msg.empty());
   CHECK(msg.find("file not found") != std::string::npos);
-  CHECK_FALSE(f.entry_complete());
+  CHECK_FALSE(f.entry_dir());
 }
 
 TEST_CASE("repairing a bad bundle source clears the failure on the next run") {
@@ -1573,16 +1558,12 @@ TEST_CASE("repairing a bad bundle source clears the failure on the next run") {
                  bundle_entry_fixture::valid_spec());
 
   REQUIRE(!f.materialize().empty());
-  REQUIRE_FALSE(f.entry_complete());
-
-  // Same failure on a second run: the entry is still cold, not a cached error.
-  REQUIRE(!f.materialize().empty());
-  REQUIRE_FALSE(f.entry_complete());
+  REQUIRE(!f.materialize().empty());  // the source fails again, not a cached error
 
   f.write_source(f.valid_manifest(), bundle_entry_fixture::valid_spec());
 
   CHECK(f.materialize().empty());
-  CHECK(f.entry_complete());
+  CHECK_FALSE(f.entry_dir());
 }
 
 TEST_CASE("USER_MANAGED=true with FETCH throws (cache-managed phase forbidden)") {

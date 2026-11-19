@@ -352,14 +352,9 @@ envy::cache::ensure_result ensure_entry(
              .lock_path = lock_path.string(),
              .wait_duration_ms = static_cast<std::int64_t>(wait_duration_ms));
 
-  if (envy::cache::is_entry_complete(entry_dir)) {
-    ENVY_TRACE(cache_hit,
-               std::string(pkg_identity),
-               .cache_key = std::string(cache_key),
-               .pkg_path = result.pkg_path.string(),
-               .fast_path = false);
-    // Coarse lock is released here (dtor) without handing off to a
-    // scoped_entry_lock; pair the acquire so lock events balance.
+  // A return or throw before the hand-off releases the coarse lock here (dtor), not via
+  // a scoped_entry_lock; pair the acquire so lock events balance.
+  auto const trace_released{ [&] {
     ENVY_TRACE(lock_released,
                std::string(pkg_identity),
                .lock_path = lock_path.string(),
@@ -367,10 +362,28 @@ envy::cache::ensure_result ensure_entry(
                    std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - lock_acquired_at)
                        .count()));
+  } };
+
+  if (envy::cache::is_entry_complete(entry_dir)) {
+    ENVY_TRACE(cache_hit,
+               std::string(pkg_identity),
+               .cache_key = std::string(cache_key),
+               .pkg_path = result.pkg_path.string(),
+               .fast_path = false);
+    trace_released();
     return result;
   }
 
   ENVY_TRACE(cache_miss, std::string(pkg_identity), .cache_key = std::string(cache_key));
+  // What an earlier attempt left in pkg/, or in work/ (work/stage/ is renamed into pkg/),
+  // would ride into this payload: clear both or stop.
+  for (path const &dir : { result.pkg_path, entry_dir / "work" }) {
+    if (auto const ec{ envy::tree_remove_insisting(dir) }) {
+      trace_released();
+      envy::throw_runtime_error(
+          { "cache: cannot clear ", dir, " left by an earlier attempt: ", ec.message() });
+    }
+  }
   result.lock = envy::cache::scoped_entry_lock::make(entry_dir,
                                                      std::move(lock),
                                                      lock_path,
@@ -382,6 +395,19 @@ envy::cache::ensure_result ensure_entry(
 }  // namespace
 
 namespace envy {
+namespace {
+
+// What will not come away wastes disk but fails nothing, so it warns, naming the path.
+void drop_dir(std::filesystem::path const &dir, bool insist = false) {
+  if (auto const ec{ insist ? tree_remove_insisting(dir)
+                            : tree_remove_best_effort(dir) }) {
+    tui::warn("cache: could not remove %s: %s",
+              dir.string().c_str(),
+              ec.message().c_str());
+  }
+}
+
+}  // namespace
 
 cache::scoped_entry_lock::scoped_entry_lock(
     path entry_dir,
@@ -394,11 +420,8 @@ cache::scoped_entry_lock::scoped_entry_lock(
                                 std::move(lock_path),
                                 std::move(pkg_identity),
                                 lock_acquired_at) } {
-  envy::tree_remove_best_effort(install_dir());
-  envy::tree_remove_best_effort(work_dir());  // always delete (purely ephemeral)
-
-  // Preserve fetch/ to enable per-file caching across failed attempts; create
-  // the rest.
+  // ensure_entry cleared pkg/ and work/. Preserve fetch/ to enable per-file caching
+  // across failed attempts; create the rest.
   std::filesystem::create_directories(fetch_dir());
   std::filesystem::create_directories(install_dir());
   std::filesystem::create_directories(work_dir());
@@ -417,22 +440,14 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
 
   if (m->completed_) {
     disposition = "completed";
-    envy::tree_remove_best_effort(work_dir());
-    if (!m->preserve_fetch_) {
-      // fetch_dir cleanup is best-effort: the install is already complete, so a
-      // lingering fetch dir only wastes disk space.  On Windows, Defender or Search
-      // Indexer may still be scanning recently-downloaded archives.
-      if (auto ec{ envy::tree_remove_insisting(fetch_dir()) }) {
-        tui::warn("cache: could not remove %s: %s",
-                  fetch_dir().string().c_str(),
-                  ec.message().c_str());
-      }
-    }
+    drop_dir(work_dir());
+    // On Windows, Defender or Search Indexer may still be scanning fresh downloads.
+    if (!m->preserve_fetch_) { drop_dir(fetch_dir(), true); }
     platform::touch_file(m->entry_dir_ / "envy-complete");
     platform::flush_directory(m->entry_dir_);
   } else if (m->user_managed_) {
     disposition = "purged_user_managed";
-    envy::tree_remove_best_effort(m->entry_dir_);
+    drop_dir(m->entry_dir_);
   } else {
     // Check empty install_dir AND fetch_dir (installation didn't use cache at all)
     std::error_code ec;
@@ -455,12 +470,12 @@ cache::scoped_entry_lock::~scoped_entry_lock() {
       return it == std::filesystem::directory_iterator{};
     }() };
 
-    envy::tree_remove_best_effort(install_dir());
-    envy::tree_remove_best_effort(work_dir());
+    drop_dir(install_dir());
+    drop_dir(work_dir());
 
     if (install_dir_empty && fetch_dir_empty) {
       disposition = "cleaned_failure";
-      envy::tree_remove_best_effort(fetch_dir());
+      drop_dir(fetch_dir());
     }
   }
 

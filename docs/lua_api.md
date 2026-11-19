@@ -470,9 +470,9 @@ only — a spec reaches a bundle it declared with `envy.loadenv_spec`.
 
 The bundle is fetched during the manifest's own global scope, earlier than the engine
 fetches bundles, so a helper's entries can go straight into `PACKAGES`. Declare the alias
-above the call: a manifest is read top to bottom. A `local.` bundle is read where it
-stands; every other shape lands in the cache, where the bundle's own package finds it
-already complete.
+above the call: a manifest is read top to bottom. A bundle directory is read where it
+stands, whatever its namespace; an archive or a remote lands in the cache, where the
+bundle's own package finds it already complete.
 
 ```lua
 BUNDLES = { tools = { identity = "acme.specs@r1",

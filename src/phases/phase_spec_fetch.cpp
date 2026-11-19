@@ -770,7 +770,7 @@ constexpr std::string_view kSpecFromBundleDepKeys[]{ "bundle",  "needed_by", "op
 // Returns bundle_source if this is a pure bundle dep, nullopt otherwise
 std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
     sol::table const &table,
-    std::filesystem::path const &spec_path) {
+    pkg_decl_origin const &origin) {
   sol::object bundle_obj{ table["bundle"] };
   sol::object source_obj{ table["source"] };
 
@@ -820,7 +820,7 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
       sol::table deps_table{ deps_obj.as<sol::table>() };
       for (size_t i{ 1 }, n{ deps_table.size() }; i <= n; ++i) {
         custom.dependencies.push_back(
-            pkg_cfg::parse_fetch_dependency(deps_table[i], spec_path));
+            pkg_cfg::parse_fetch_dependency(deps_table[i], origin));
       }
     }
 
@@ -842,13 +842,8 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
 
   if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE ||
       info.scheme == uri_scheme::LOCAL_FILE_ABSOLUTE) {
-    std::filesystem::path resolved{ info.canonical };
-    if (info.scheme == uri_scheme::LOCAL_FILE_RELATIVE) {
-      resolved = (spec_path.parent_path() / resolved).lexically_normal();
-    }
     return pkg_cfg::bundle_source{ .bundle_identity = std::move(bundle_identity),
-                                   .fetch_source = pkg_cfg::local_source{
-                                       .file_path = std::move(resolved) } };
+                                   .fetch_source = bundle_local_source(info, origin) };
   }
 
   // Remote source
@@ -863,7 +858,7 @@ std::optional<pkg_cfg::bundle_source> try_parse_pure_bundle_dep(
 
 // Parse a dependency entry that has a bundle field (spec-from-bundle)
 pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
-                                    std::filesystem::path const &spec_path,
+                                    pkg_decl_origin const &origin,
                                     bundle_alias_map const &aliases,
                                     bundle_alias_map const &declared_bundles,
                                     pkg_cfg const *declaring_spec,
@@ -907,7 +902,7 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
     }
 
     if (bundle_obj.is<sol::table>()) {
-      return bundle::parse_inline(bundle_obj.as<sol::table>(), spec_path);
+      return bundle::parse_inline(bundle_obj.as<sol::table>(), origin);
     }
 
     throw_runtime_error({ "Dependency 'bundle' field must be string or table" });
@@ -943,10 +938,12 @@ pkg_cfg *parse_spec_from_bundle_dep(sol::table const &table,
       needed_by,
       nullptr,
       nullptr,
-      std::vector<pkg_cfg *>{
-          bundle::ensure_pkg_cfg(bundle_src, spec_path, declaring_spec, bundle_pkgs) },
+      std::vector<pkg_cfg *>{ bundle::ensure_pkg_cfg(bundle_src,
+                                                     origin.declaring_file,
+                                                     declaring_spec,
+                                                     bundle_pkgs) },
       std::move(product),
-      spec_path) };
+      origin.declaring_file) };
 
   cfg->bundle_identity = bundle_identity;
   return cfg;
@@ -957,8 +954,13 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
                                                 pkg_cfg const &cfg) {
   std::vector<pkg_cfg *> parsed_deps;
 
+  // Paths resolve against the spec; a local bundle keys against its project's root.
+  pkg_decl_origin const origin{ spec_path,
+                                spec_path,
+                                pkg_cfg::declaring_project_root(cfg) };
+
   // Parse BUNDLES table (if present) for alias resolution
-  bundle_alias_map const aliases{ bundle::parse_aliases(lua["BUNDLES"], spec_path) };
+  bundle_alias_map const aliases{ bundle::parse_aliases(lua["BUNDLES"], origin) };
 
   // Track declared bundle dependencies (pure bundle deps) for identity-based resolution
   bundle_alias_map declared_bundles;
@@ -979,7 +981,7 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
 
       if (!entry.is<sol::table>()) {
         // Non-table entries use standard parsing
-        pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
+        pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, origin, pkg_entry_shape::DEPENDENCY) };
         if (!cfg.identity.starts_with("local.") &&
             dep_cfg->identity.starts_with("local.")) {
           throw_runtime_error({ "non-local spec '",
@@ -1025,7 +1027,7 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       }() };
 
       // Check for pure bundle dependency: {bundle = "id", source = "..."}
-      if (auto pure_bundle{ try_parse_pure_bundle_dep(table, spec_path) }) {
+      if (auto pure_bundle{ try_parse_pure_bundle_dep(table, origin) }) {
         if (dep_setup.has_value()) {
           throw_runtime_error(
               { "Bundle dependencies cannot select 'setup' pairs "
@@ -1071,7 +1073,7 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       sol::object bundle_obj{ table["bundle"] };
       if (bundle_obj.valid() && bundle_obj.get_type() != sol::type::lua_nil) {
         pkg_cfg *dep_cfg{ parse_spec_from_bundle_dep(table,
-                                                     spec_path,
+                                                     origin,
                                                      aliases,
                                                      declared_bundles,
                                                      &cfg,
@@ -1091,7 +1093,7 @@ std::vector<pkg_cfg *> parse_dependencies_table(sol::state &lua,
       }
 
       // Standard dependency (no bundle field)
-      pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, spec_path, pkg_entry_shape::DEPENDENCY) };
+      pkg_cfg *dep_cfg{ pkg_cfg::parse(entry, origin, pkg_entry_shape::DEPENDENCY) };
       if (!cfg.identity.starts_with("local.") && dep_cfg->identity.starts_with("local.")) {
         throw_runtime_error({ "non-local spec '",
                               cfg.identity,
@@ -1267,17 +1269,13 @@ void materialize_bundle(pkg_cfg const &cfg, pkg *p, engine &eng) {
     return;
   }
 
-  // Local bundles (identity starts with "local.") use source directory in-situ
-  if (bundle_id.starts_with("local.")) {
-    auto const *local_src{ std::get_if<pkg_cfg::local_source>(&bundle_src->fetch_source) };
-    if (local_src && std::filesystem::is_directory(local_src->file_path)) {
-      tui::debug("spec: local bundle %s", bundle_id.c_str());
-
-      bundle parsed{ bundle_verify(local_src->file_path, bundle_id, eng.project_root()) };
-      eng.register_bundle(bundle_id, std::move(parsed.specs), local_src->file_path);
-      p->bundle_in_situ = true;
-      return;
-    }
+  // A local directory is read where it stands, as a local spec is, so edits land.
+  if (auto const *dir{ bundle_local_dir(*bundle_src) }) {
+    tui::debug("spec: local bundle %s", bundle_id.c_str());
+    bundle parsed{ bundle_verify(*dir, bundle_id, eng.project_root()) };
+    eng.register_bundle(bundle_id, std::move(parsed.specs), *dir);
+    p->bundle_in_situ = true;
+    return;
   }
 
   // Non-local bundle: fetch to cache. The completion phase turns these flags into

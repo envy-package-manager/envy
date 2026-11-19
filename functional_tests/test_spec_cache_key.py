@@ -1,14 +1,18 @@
 """A spec cache entry is keyed on its source, not on its identity alone.
 
 Nothing revalidates a complete cache entry, so if identity were the whole key,
-repointing a spec at a new URL, a new git ref, or a new directory would keep
+repointing a spec at a new URL, a new git ref, or a new archive would keep
 serving yesterday's bytes forever -- the declaration would say one thing and the
 cache would answer with another. Each test here redeclares one identity against a
 second source and requires envy to fetch it rather than reuse the first entry.
 """
 
+import hashlib
 import shutil
+import sys
+import tarfile
 import unittest
+from pathlib import Path
 
 from .env import EnvyTestCase
 
@@ -73,7 +77,7 @@ PACKAGES = {{
 
 
 class TestBundleSourceCacheKey(EnvyTestCase):
-    """Two directories, one bundle identity."""
+    """Two archives, one bundle identity. (A bundle directory is read in place.)"""
 
     IDENTITY = "test.keyed-bundle@v1"
     MEMBER = "test.keyed-member@v1"
@@ -94,7 +98,11 @@ class TestBundleSourceCacheKey(EnvyTestCase):
         (root / "specs" / "m.lua").write_text(
             SPEC.format(identity=self.MEMBER, marker=label), encoding="utf-8"
         )
-        return root
+        archive = self.make_temp_dir(f"{label}-archive") / "bundle.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for path in sorted(root.rglob("*")):
+                tf.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+        return archive
 
     def manifest_for(self, bundle_dir):
         return self.write_manifest(
@@ -109,7 +117,7 @@ PACKAGES = {{
 """
         )
 
-    def test_changing_the_bundle_directory_fetches_again(self):
+    def test_changing_the_bundle_archive_fetches_again(self):
         first = self.install(self.manifest_for(self.first))
         self.assertEqual(0, first.returncode, first.stderr)
         self.assertEqual(1, len(self.spec_entries(self.IDENTITY)))
@@ -118,9 +126,293 @@ PACKAGES = {{
         self.assertEqual(0, second.returncode, second.stderr)
         self.assertTrue(
             second.events("cache_miss", spec=self.IDENTITY),
-            "a new bundle directory must miss the cache",
+            "a new bundle archive must miss the cache",
         )
         self.assertEqual(2, len(self.spec_entries(self.IDENTITY)))
+
+
+class TestCheckoutIndependentKeys(EnvyTestCase):
+    """Two checkouts of one project share every spec entry: where it sits is incidental."""
+
+    def make_project(self) -> Path:
+        root = self.make_temp_dir("checkout-a")
+        (root / "specs").mkdir()
+        (root / "vendor").mkdir()
+        member = root / "bundle-src"
+        (member / "specs").mkdir(parents=True)
+        (member / "envy-bundle.lua").write_text(
+            'BUNDLE = "test.arch-bundle@r1"\n'
+            'SPECS = { ["test.arch-member@r1"] = "specs/m.lua" }\n',
+            encoding="utf-8",
+        )
+        (member / "specs" / "m.lua").write_text(
+            SPEC.format(identity="test.arch-member@r1", marker="m"), encoding="utf-8"
+        )
+        with tarfile.open(root / "vendor" / "bundle.tar.gz", "w:gz") as tf:
+            for path in sorted(member.rglob("*")):
+                tf.add(path, arcname=path.relative_to(member).as_posix(), recursive=False)
+        shutil.rmtree(member)
+
+        pinned = root / "specs" / "pinned.lua"
+        pinned.write_text(SPEC.format(identity="test.pinned@r1", marker="p"), encoding="utf-8")
+        digest = hashlib.sha256(pinned.read_bytes()).hexdigest()
+        (root / "specs" / "parent.lua").write_text(
+            'IDENTITY = "local.parent@r1"\nUSER_MANAGED = true\n'
+            'SETUP = { main = { CHECK = "exit 0", INSTALL = "exit 0" } }\n'
+            'DEPENDENCIES = { { spec = "test.fetched@r1", source = { fetch = function(tmp_dir)\n'
+            '  local f = io.open(tmp_dir .. "/spec.lua", "w")\n'
+            f"  f:write([[{SPEC.format(identity='test.fetched@r1', marker='f')}]])\n"
+            '  f:close()\n  envy.commit_fetch({ "spec.lua" })\nend } } }\n',
+            encoding="utf-8",
+        )
+        self.write_manifest(
+            'BUNDLES = { b = { identity = "test.arch-bundle@r1", '
+            'source = "vendor/bundle.tar.gz" } }\n'
+            "PACKAGES = {\n"
+            '  { spec = "test.arch-member@r1", bundle = "b", setup = { "main" } },\n'
+            f'  {{ spec = "test.pinned@r1", source = "specs/pinned.lua", sha256 = "{digest}",'
+            ' setup = { "main" } },\n'
+            '  { spec = "local.parent@r1", source = "specs/parent.lua", setup = { "main" } },\n'
+            "}\n",
+            directory=root,
+        )
+        return root
+
+    def test_a_second_checkout_hits_the_first_ones_entries(self):
+        a = self.make_project()
+        b = self.make_temp_dir("checkout-b") / "project"
+        shutil.copytree(a, b)
+
+        for checkout in (a, b):
+            run = self.install(checkout / "envy.lua")
+            self.assertEqual(0, run.returncode, run.stderr)
+
+        for identity in ("test.arch-bundle@r1", "test.pinned@r1", "test.fetched@r1"):
+            with self.subTest(identity):
+                self.assertEqual(1, len(self.spec_entries(identity)))
+                self.assertFalse(run.events("cache_miss", spec=identity), "b refetched")
+
+
+class TestLocalArchiveKeyLocation(EnvyTestCase):
+    """A local archive bundle inside its declaring project keys relative to that project,
+    however the path is spelled, so checkouts share it; one outside keys on its whole path."""
+
+    IDENTITY = "test.loc-bundle@r1"
+    MEMBER = "test.loc-member@r1"
+
+    def pack(self, dest: Path) -> Path:
+        src = self.make_temp_dir("bundle-src")
+        (src / "specs").mkdir()
+        (src / "envy-bundle.lua").write_text(
+            f'BUNDLE = "{self.IDENTITY}"\nSPECS = {{ ["{self.MEMBER}"] = "specs/m.lua" }}\n',
+            encoding="utf-8",
+        )
+        (src / "specs" / "m.lua").write_text(
+            SPEC.format(identity=self.MEMBER, marker="m"), encoding="utf-8"
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(dest, "w:gz") as tf:
+            for path in sorted(src.rglob("*")):
+                tf.add(path, arcname=path.relative_to(src).as_posix(), recursive=False)
+        return dest
+
+    def body(self, source: str) -> str:
+        """`source` is a Lua expression: a literal, or a call such as envy.abspath."""
+        return (
+            f'BUNDLES = {{ b = {{ identity = "{self.IDENTITY}", source = {source} }} }}\n'
+            f'PACKAGES = {{ {{ spec = "{self.MEMBER}", bundle = "b", setup = {{ "main" }} }} }}\n'
+        )
+
+    def project(self, root: Path, source: str) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        return self.write_manifest(self.body(source), directory=root)
+
+    def superproject(self, root: Path, source: str) -> tuple[Path, Path]:
+        """A superproject whose subproject `sub/` declares the bundle; both manifests."""
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        sub = root / "sub" / "envy.lua"
+        sub.write_text(
+            '-- @envy bin "sub-bin"\n-- @envy root "false"\n' + self.body(source),
+            encoding="utf-8",
+        )
+        top = self.write_manifest(
+            'local sub = envy.subproject("sub")\nPACKAGES = sub.PACKAGES\n', directory=root
+        )
+        return top, sub
+
+    def spec_project(self, root: Path, source: str) -> Path:
+        """A project whose spec `specs/consumer.lua` declares the bundle as a dependency."""
+        (root / "specs").mkdir(parents=True, exist_ok=True)
+        (root / "specs" / "consumer.lua").write_text(
+            'IDENTITY = "local.consumer@r1"\nUSER_MANAGED = true\n'
+            'SETUP = { main = { CHECK = "exit 0", INSTALL = "exit 0" } }\n'
+            f'DEPENDENCIES = {{ {{ bundle = "{self.IDENTITY}", source = {source} }} }}\n',
+            encoding="utf-8",
+        )
+        return self.write_manifest(
+            'PACKAGES = { { spec = "local.consumer@r1", source = "specs/consumer.lua",'
+            ' setup = { "main" } } }\n',
+            directory=root,
+        )
+
+    def install_ok(self, manifest: Path):
+        run = self.install(manifest)
+        self.assertEqual(0, run.returncode, run.stderr)
+        return run
+
+    def assert_entries(self, n: int, *manifests: Path):
+        for manifest in manifests:
+            self.install_ok(manifest)
+        self.assertEqual(n, len(self.spec_entries(self.IDENTITY)), self.spec_entries(self.IDENTITY))
+
+    # -- inside the declaring project ---------------------------------------------------
+
+    def test_inside_relative_is_shared_across_checkouts(self):
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "proj"
+        for root in (a, b):
+            self.pack(root / "vendor" / "b.tar.gz")
+        self.assert_entries(
+            1, self.project(a, '"vendor/b.tar.gz"'), self.project(b, '"vendor/b.tar.gz"')
+        )
+
+    def test_inside_absolute_is_shared_across_checkouts(self):
+        """`envy.abspath` spells a different absolute path in every checkout."""
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "x" / "y" / "proj"
+        for root in (a, b):
+            self.pack(root / "vendor" / "b.tar.gz")
+        source = 'envy.abspath("vendor/b.tar.gz")'
+        self.assert_entries(1, self.project(a, source), self.project(b, source))
+
+    def test_inside_absolute_at_the_project_root_is_shared_across_checkouts(self):
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "proj"
+        for root in (a, b):
+            self.pack(root / "b.tar.gz")
+        source = 'envy.abspath("b.tar.gz")'
+        self.assert_entries(1, self.project(a, source), self.project(b, source))
+
+    def test_inside_absolute_literal_is_shared_across_checkouts(self):
+        """A literal absolute path, written into each checkout's manifest, keys the same."""
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "proj"
+        manifests = []
+        for root in (a, b):
+            archive = self.pack(root / "vendor" / "b.tar.gz")
+            manifests.append(self.project(root, f'"{self.lua_path(archive)}"'))
+        self.assert_entries(1, *manifests)
+
+    def test_inside_relative_and_absolute_spellings_share_an_entry(self):
+        root = self.make_temp_dir("a") / "proj"
+        self.pack(root / "vendor" / "b.tar.gz")
+        relative = self.project(root, '"vendor/b.tar.gz"')
+        self.install_ok(relative)
+        self.assert_entries(1, self.project(root, 'envy.abspath("vendor/b.tar.gz")'))
+
+    def test_inside_a_subproject_keys_the_same_nested_and_standalone(self):
+        """The subproject's own root anchors it, not whichever project is on top."""
+        a, b = self.make_temp_dir("a") / "tree", self.make_temp_dir("b") / "tree"
+        source = 'envy.abspath("vendor/b.tar.gz")'
+        for root in (a, b):
+            self.pack(root / "sub" / "vendor" / "b.tar.gz")
+        top_a, _ = self.superproject(a, source)
+        _, sub_b = self.superproject(b, source)
+        self.assert_entries(1, top_a, sub_b)
+
+    @unittest.skipIf(sys.platform == "win32", "symlinks need privileges on Windows")
+    def test_inside_through_a_symlinked_checkout_is_inside(self):
+        real = self.make_temp_dir("real") / "proj"
+        self.pack(real / "vendor" / "b.tar.gz")
+        manifest = self.project(real, 'envy.abspath("vendor/b.tar.gz")')
+        link = self.make_temp_dir("link") / "proj"
+        link.symlink_to(real, target_is_directory=True)
+        self.assert_entries(1, manifest, link / "envy.lua")
+
+    def test_inside_from_a_spec_keys_against_the_project_root(self):
+        """`../vendor` leaves the spec's directory, not the project: checkouts share it."""
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "proj"
+        manifests = []
+        for root in (a, b):
+            self.pack(root / "vendor" / "b.tar.gz")
+            manifests.append(self.spec_project(root, '"../vendor/b.tar.gz"'))
+        self.assert_entries(1, *manifests)
+
+    def test_inside_absolute_from_a_spec_is_shared_across_checkouts(self):
+        a, b = self.make_temp_dir("a") / "proj", self.make_temp_dir("b") / "proj"
+        source = 'envy.abspath("../vendor/b.tar.gz")'
+        manifests = []
+        for root in (a, b):
+            self.pack(root / "vendor" / "b.tar.gz")
+            manifests.append(self.spec_project(root, source))
+        self.assert_entries(1, *manifests)
+
+    def test_inside_spec_and_manifest_spellings_share_an_entry(self):
+        root = self.make_temp_dir("a") / "proj"
+        self.pack(root / "vendor" / "b.tar.gz")
+        self.install_ok(self.project(root, '"vendor/b.tar.gz"'))
+        self.assert_entries(1, self.spec_project(root, '"../vendor/b.tar.gz"'))
+
+    # -- outside the declaring project --------------------------------------------------
+
+    def test_outside_absolute_from_a_spec_is_shared_by_checkouts_at_any_depth(self):
+        archive = self.pack(self.make_temp_dir("shared") / "b.tar.gz")
+        source = f'"{self.lua_path(archive)}"'
+        self.assert_entries(
+            1,
+            self.spec_project(self.make_temp_dir("a") / "proj", source),
+            self.spec_project(self.make_temp_dir("b") / "x" / "y" / "proj", source),
+        )
+
+    def test_outside_relative_from_a_spec_keys_as_written(self):
+        parent = self.make_temp_dir("parent")
+        self.pack(parent / "shared" / "b.tar.gz")
+        source = '"../../shared/b.tar.gz"'
+        self.assert_entries(
+            1, self.spec_project(parent / "a", source), self.spec_project(parent / "b", source)
+        )
+
+    def test_outside_absolute_is_shared_by_checkouts_at_any_depth(self):
+        """Kept whole: relative to each checkout it would read differently per depth."""
+        archive = self.pack(self.make_temp_dir("shared") / "b.tar.gz")
+        source = f'"{self.lua_path(archive)}"'
+        self.assert_entries(
+            1,
+            self.project(self.make_temp_dir("a") / "proj", source),
+            self.project(self.make_temp_dir("b") / "x" / "y" / "proj", source),
+        )
+
+    def test_outside_absolute_beside_the_project_is_not_relativized(self):
+        """`proj-other` shares a prefix with `proj`, not a subtree: each is its own path."""
+        manifests = []
+        for label in ("a", "b"):
+            parent = self.make_temp_dir(label)
+            self.pack(parent / "proj-other" / "b.tar.gz")
+            manifests.append(self.project(parent / "proj", 'envy.abspath("../proj-other/b.tar.gz")'))
+        self.assert_entries(2, *manifests)
+
+    def test_outside_relative_keys_as_written(self):
+        """Sibling checkouts reaching one shared archive by the same relative path share it."""
+        parent = self.make_temp_dir("parent")
+        self.pack(parent / "shared" / "b.tar.gz")
+        source = '"../shared/b.tar.gz"'
+        self.assert_entries(
+            1, self.project(parent / "a", source), self.project(parent / "b", source)
+        )
+
+    def test_outside_relative_from_a_subproject_keys_as_written(self):
+        """`../vendor` leaves the subproject's root, so it keys as written: still shared."""
+        a, b = self.make_temp_dir("a") / "tree", self.make_temp_dir("b") / "tree"
+        tops = []
+        for root in (a, b):
+            self.pack(root / "vendor" / "b.tar.gz")
+            tops.append(self.superproject(root, '"../vendor/b.tar.gz"')[0])
+        self.assert_entries(1, *tops)
+
+    def test_outside_moved_is_a_new_entry(self):
+        """Same bytes at a new path outside the project: the source changed, so it misses."""
+        first = self.pack(self.make_temp_dir("one") / "b.tar.gz")
+        second = self.make_temp_dir("two") / "b.tar.gz"
+        shutil.copyfile(first, second)
+        root = self.make_temp_dir("a") / "proj"
+        self.install_ok(self.project(root, f'"{self.lua_path(first)}"'))
+        self.assert_entries(2, self.project(root, f'"{self.lua_path(second)}"'))
 
 
 @unittest.skipUnless(shutil.which("git"), "git is not on PATH")

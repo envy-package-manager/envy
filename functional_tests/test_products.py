@@ -794,5 +794,37 @@ PACKAGES = {{
         )
 
 
+class TestProductStderr(EnvyTestCase):
+    """A product wrapper's stderr is its tool's: `envy product` says only what it did (#411)."""
+
+    def test_hits_are_silent_and_a_lazy_install_reports(self):
+        archive = self.work / "test.tar.gz"
+        digest = create_test_archive(archive)
+        bundle = self.make_temp_dir("bundle")
+        (bundle / "envy-bundle.lua").write_text(
+            'BUNDLE = "test.tools@r0"\nSPECS = { ["test.p@r0"] = "p.lua" }\n',
+            encoding="utf-8",
+        )
+        (bundle / "p.lua").write_text(
+            'IDENTITY = "test.p@r0"\nPRODUCTS = { tool = "root/file1.txt" }\n'
+            f'FETCH = {{ source = "{self.lua_path(archive)}", sha256 = "{digest}" }}\n',
+            encoding="utf-8",
+        )
+        manifest = self.write_manifest(
+            f'BUNDLES = {{ b = {{ identity = "test.tools@r0", '
+            f'source = "{self.lua_path(bundle)}" }} }}\n'
+            'PACKAGES = { { spec = "test.p@r0", bundle = "b" } }\n'
+        )
+
+        cold = self.run_envy("product", "tool", "--manifest", manifest)
+        self.assertEqual(0, cold.returncode, cold.stderr)
+        self.assertRegex(cold.stderr, r"\[test\.p@r0\] installed")
+
+        warm = self.run_envy("product", "tool", "--manifest", manifest)
+        self.assertEqual(0, warm.returncode, warm.stderr)
+        self.assertPathContains(warm.stdout, "root/file1.txt")
+        self.assertEqual("", warm.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

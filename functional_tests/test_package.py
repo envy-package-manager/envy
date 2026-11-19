@@ -330,14 +330,16 @@ PACKAGES = {{
 """
         )
 
-        # First installation
+        # First installation reports it; stderr is the caller's, so a hit says nothing
         result1 = self.run_package("local.build_dependency@v1", manifest)
         self.assertEqual(result1.returncode, 0)
+        self.assertIn("[local.build_dependency@v1] installed", result1.stderr)
         path1 = result1.stdout.strip()
 
         # Second query (should be cached)
         result2 = self.run_package("local.build_dependency@v1", manifest)
         self.assertEqual(result2.returncode, 0)
+        self.assertEqual("", result2.stderr)
         path2 = result2.stdout.strip()
 
         # Same path returned

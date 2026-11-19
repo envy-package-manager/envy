@@ -88,6 +88,7 @@ void cmd_package::execute() {
 
   engine eng{ *c, m.get() };
   if (cfg_.ignore_depot) { eng.set_ignore_depot(true); }
+  eng.set_quiet_idle_outcomes(true);  // stderr is the caller's: `$(envy package ...)`
 
   eng.resolve_graph({ m->packages.begin(), m->packages.end() });
 

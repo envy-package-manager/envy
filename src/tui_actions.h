@@ -210,12 +210,13 @@ std::string timed_outcome(std::string_view text,
                           std::chrono::steady_clock::duration elapsed);
 
 // A package's last word: `text` as its row's final frame, or no row unless `keep_row`.
-// Off a TTY it is also an INFO line, led by `display` when set.
+// Off a TTY it is also a log line led by `display` when set: INFO, or DEBUG if !`loud`.
 void report_outcome(tui::section_handle section,
                     std::string const &identity,
                     std::string const &text,
                     bool keep_row,
-                    std::string const &display = {});
+                    std::string const &display = {},
+                    bool loud = true);
 
 // Unified shell execution with TUI progress tracking.
 // Creates a run_progress tracker, shows scrubbed command header; the tracker itself

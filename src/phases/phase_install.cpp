@@ -39,9 +39,8 @@ bool directory_has_entries(std::filesystem::path const &dir) {
   return false;
 }
 
-bool run_shell_install(std::string_view script,
-                       std::filesystem::path const &install_dir,
-                       cache::scoped_entry_lock *lock,
+void run_shell_install(std::string_view script,
+                       std::filesystem::path const &cwd,
                        std::filesystem::path const &tmp_dir,
                        pkg *p,
                        std::filesystem::path const &cache_root) {
@@ -49,23 +48,15 @@ bool run_shell_install(std::string_view script,
   tui_actions::run_phase_shell_script(
       script,
       "Install",
-      install_dir,
+      cwd,
       p->cfg->identity,
       pkg_default_shell(p),
       p->tui_section,
       cache_root,
       pkg_env_for_phase(p, pkg_phase::pkg_install, tmp_dir));
-
-  if (lock) {
-    lock->mark_install_complete();
-    return true;
-  }
-
-  return false;
 }
 
-bool run_programmatic_install(sol::protected_function install_func,
-                              cache::scoped_entry_lock *lock,
+void run_programmatic_install(sol::protected_function install_func,
                               std::filesystem::path const &fetch_dir,
                               std::filesystem::path const &stage_dir,
                               std::filesystem::path const &install_dir,
@@ -101,22 +92,12 @@ bool run_programmatic_install(sol::protected_function install_func,
     }
 
     // Returned string: spawn fresh shell with manifest defaults
-    std::string const returned_script{ result_obj.as<std::string>() };
-    return run_shell_install(returned_script,
-                             stage_dir,
-                             lock,
-                             tmp_dir,
-                             p,
-                             eng.cache_root());
+    run_shell_install(result_obj.as<std::string>(),
+                      stage_dir,
+                      tmp_dir,
+                      p,
+                      eng.cache_root());
   }
-
-  // Function returned nil/none successfully - mark complete
-  if (lock) {
-    lock->mark_install_complete();
-    return true;
-  }
-
-  return false;
 }
 
 bool promote_stage_to_install(cache::scoped_entry_lock *lock) {
@@ -164,42 +145,40 @@ void run_install_phase(pkg *p, engine &eng) {
   auto const lua_acc{ p->lua.lock() };
   sol::state_view lua_view{ *lua_acc };
   sol::object install_obj{ lua_view["INSTALL"] };
-  bool marked_complete{ false };
 
-  if (!install_obj.valid()) {
-    marked_complete = promote_stage_to_install(lock.get());
-  } else if (install_obj.is<std::string>()) {
-    std::string script{ install_obj.as<std::string>() };
-    marked_complete = run_shell_install(script,
-                                        lock->stage_dir(),
-                                        lock.get(),
-                                        lock->tmp_dir(),
-                                        p,
-                                        eng.cache_root());
-  } else if (install_obj.is<sol::protected_function>()) {
-    marked_complete = run_programmatic_install(install_obj.as<sol::protected_function>(),
-                                               lock.get(),
-                                               lock->fetch_dir(),
-                                               lock->stage_dir(),
-                                               lock->install_dir(),
-                                               lock->tmp_dir(),
-                                               p->cfg->identity,
-                                               eng,
-                                               p);
-  } else {
-    throw_runtime_error(
-        { "INSTALL field must be nil, string, or function for ", p->cfg->identity });
-  }
-
-  if (marked_complete && lock) {
-    sol::object exportable_obj{ lua_view["EXPORTABLE"] };
-    bool const exportable{ exportable_obj.valid() &&
-                           exportable_obj.get_type() == sol::type::boolean &&
-                           exportable_obj.as<bool>() };
-    if (!exportable) { lock->mark_preserve_fetch(); }
-  }
-
+  bool const marked_complete{ [&] {
+    if (!install_obj.valid()) { return promote_stage_to_install(lock.get()); }
+    if (install_obj.is<std::string>()) {
+      run_shell_install(install_obj.as<std::string>(),
+                        lock->stage_dir(),
+                        lock->tmp_dir(),
+                        p,
+                        eng.cache_root());
+      promote_stage_to_install(lock.get());  // a script that left pkg/ empty (`chmod +x`)
+    } else if (install_obj.is<sol::protected_function>()) {
+      run_programmatic_install(install_obj.as<sol::protected_function>(),
+                               lock->fetch_dir(),
+                               lock->stage_dir(),
+                               lock->install_dir(),
+                               lock->tmp_dir(),
+                               p->cfg->identity,
+                               eng,
+                               p);
+    } else {
+      throw_runtime_error(
+          { "INSTALL field must be nil, string, or function for ", p->cfg->identity });
+    }
+    lock->mark_install_complete();
+    return true;
+  }() };
   if (!marked_complete) { return; }
+
+  sol::object exportable_obj{ lua_view["EXPORTABLE"] };
+  bool const exportable{ exportable_obj.valid() &&
+                         exportable_obj.get_type() == sol::type::boolean &&
+                         exportable_obj.as<bool>() };
+  if (!exportable) { lock->mark_preserve_fetch(); }
+
   p->pkg_path = final_pkg_path;
 
   // Stamp while the entry is still ours and the payload untouched, but only for what

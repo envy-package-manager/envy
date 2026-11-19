@@ -26,12 +26,25 @@ class pkg_cfg_pool;
 struct pkg_decl_origin {
   std::filesystem::path declaring_file;  // provenance, project root, custom-fetch key
   std::filesystem::path anchor;          // relative-path base; its parent dir is used
+  std::filesystem::path project{};       // the declaring project's root; see project_root
 
   // Implicit on purpose: every declaration but a subproject's anchors on its declarer.
   pkg_decl_origin(std::filesystem::path p) : declaring_file{ p }, anchor{ std::move(p) } {}
-  pkg_decl_origin(std::filesystem::path declarer, std::filesystem::path base)
-      : declaring_file{ std::move(declarer) }, anchor{ std::move(base) } {}
+  pkg_decl_origin(std::filesystem::path declarer,
+                  std::filesystem::path base,
+                  std::filesystem::path project_root = {})
+      : declaring_file{ std::move(declarer) },
+        anchor{ std::move(base) },
+        project{ std::move(project_root) } {}
+
+  // A manifest is its project's root, so an unset `project` means the anchor's directory;
+  // a spec sets it to the root its declaration chain began in.
+  std::filesystem::path project_root() const;
 };
+
+inline std::filesystem::path pkg_decl_origin::project_root() const {
+  return project.empty() ? anchor.parent_path() : project;
+}
 
 // Reserved keys a subproject's entries carry: the file their relative paths
 // anchor on, and the BUNDLES table their aliases resolve against.
@@ -73,7 +86,8 @@ struct pkg_cfg : unmovable {
   };
 
   struct local_source {
-    std::filesystem::path file_path;  // Can be file or directory
+    std::filesystem::path file_path;   // Can be file or directory
+    std::filesystem::path declared{};  // as written: relative to its declarer, or absolute
   };
 
   struct git_source {
@@ -205,6 +219,10 @@ struct pkg_cfg : unmovable {
   // current directory. A resolved manifest names the project root itself.
   static std::filesystem::path compute_project_root(pkg_cfg const *cfg);
 
+  // The directory of the manifest this cfg's declaration chain began in -- a subproject's
+  // own -- canonical; empty when the root cfg names no file. Never the CWD.
+  static std::filesystem::path declaring_project_root(pkg_cfg const &cfg);
+
  private:
   friend class pkg_cfg_pool;
 };
@@ -245,10 +263,14 @@ pkg_source_match pkg_cfg_source_compare(pkg_cfg::source_t const &lhs,
 // actually reads belongs here: change the URL, the git ref, or the path and you get
 // a different entry rather than yesterday's content under today's declaration.
 //
+// No key holds where the checkout sits, so clones and worktrees share entries: a local
+// path keys as written, a file pinned by sha256 on the hash alone.
+//
 // A custom fetch function is the exception -- a Lua closure has no fingerprint, so
-// its entries key on the file that declares it, plus the options it is handed: one
-// function drives down a different path per option set. Editing the function body in
-// place still reuses the entry; move it, or bump the identity, to force a refetch.
+// its entries key on the file that declares it (project-relative when inside it), plus
+// the options it is handed: one function drives down a different path per option set.
+// Editing the function body in place still reuses the entry; move it, or bump the
+// identity, to force a refetch.
 std::string source_key(pkg_cfg::remote_source const &r);
 std::string source_key(pkg_cfg::git_source const &g);
 std::string source_key(pkg_cfg::local_source const &l);

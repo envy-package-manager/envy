@@ -307,6 +307,14 @@ std::filesystem::path util_canonical_path(std::filesystem::path const &path) {
   return ec ? abs : canonical;
 }
 
+std::optional<std::filesystem::path> util_path_inside(std::filesystem::path const &path,
+                                                      std::filesystem::path const &root) {
+  if (root.empty()) { return std::nullopt; }
+  auto rel{ util_canonical_path(path).lexically_relative(util_canonical_path(root)) };
+  if (rel.empty() || *rel.begin() == "..") { return std::nullopt; }
+  return rel;
+}
+
 std::string util_flatten_script_with_semicolons(std::string_view script) {
   if (script.empty()) { return {}; }
 

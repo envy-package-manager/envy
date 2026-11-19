@@ -132,11 +132,8 @@ PACKAGES = {{
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-        # Verify bundle was cached
-        bundle_cache = self.cache_root / "specs" / "test.helper-bundle@v1"
-        self.assertTrue(
-            bundle_cache.exists(), f"Expected bundle cache at {bundle_cache}"
-        )
+        # A bundle directory is read in place, never copied into the cache
+        self.assertEqual([], self.spec_entries("test.helper-bundle@v1"))
 
     def test_spec_with_spec_from_bundle_dependency(self):
         """Spec can depend on a spec from a bundle."""
@@ -183,9 +180,8 @@ PACKAGES = {{
 
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-        # Verify both bundle and spec were processed
-        bundle_cache = self.cache_root / "specs" / "test.toolchain@v1"
-        self.assertTrue(bundle_cache.exists())
+        # The bundle is read in place; the spec from it still installs
+        self.assertEqual([], self.spec_entries("test.toolchain@v1"))
         pkg_cache = self.cache_root / "packages" / "test.gcc@v1"
         self.assertTrue(pkg_cache.exists(), f"Expected package at {pkg_cache}")
 
