@@ -185,7 +185,8 @@ TEST_CASE("env_script: cmd sets, unsets, keeps metacharacters, and ends in succe
         "set \"Q=a;\"C:\\x y\";b\"\n"
         "set \"V=a b & c | <d> ^e %PATH% !x!\"\n"
         "exit /b 0\n");
-  CHECK(env_script(env_shell::CMD, from, from) == "exit /b 0\n");  // nothing to do: success
+  CHECK(env_script(env_shell::CMD, from, from) ==
+        "exit /b 0\n");  // nothing to do: success
 }
 
 TEST_CASE("env_script: cmd refuses what a set line cannot carry") {

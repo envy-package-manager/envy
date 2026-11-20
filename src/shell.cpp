@@ -79,9 +79,7 @@ std::optional<std::filesystem::path> shell_find_executable(
       continue;
     }
     for (auto const &n : names) {
-      if (auto candidate{ dir / n }; runnable(candidate)) {
-        return candidate;
-      }
+      if (auto candidate{ dir / n }; runnable(candidate)) { return candidate; }
     }
   }
   return std::nullopt;
