@@ -171,10 +171,9 @@ void deploy_product_scripts(fs::path const &bin_dir,
       // No `default`: -Wswitch is what makes a new script_write fail the build here
       // rather than silently trace the wrong action.
       auto const action{ [&]() -> char const * {
-        switch (util_write_script(
-            script_path,
-            deploy_stamp_product_script(product.product_name, plat),
-            plat)) {
+        switch (util_write_script(script_path,
+                                  deploy_stamp_product_script(product.product_name, plat),
+                                  plat)) {
           case script_write::UNCHANGED: ++unchanged; return "unchanged";
           case script_write::CREATED:
             ++created;
