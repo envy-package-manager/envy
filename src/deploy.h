@@ -37,7 +37,7 @@ void deploy_verify_bin_dir(std::filesystem::path const &bin_dir,
 // Shared tail of `sync` and `deploy`: refresh the bootstrap script for each platform,
 // then either deploy product scripts ('@envy deploy') or explain how to turn deployment
 // on. manifest_path names the file in the disabled hint; meta supplies the '@envy version'
-// the stamp is checked against and the '@envy root' the project-root stamp depends on.
+// the stamp is checked against.
 void deploy_finalize(std::filesystem::path const &bin_dir,
                      std::vector<product_info> const &products,
                      std::vector<platform_id> const &platforms,

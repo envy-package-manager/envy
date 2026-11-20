@@ -82,10 +82,6 @@ void shell_init();
 shell_env_t shell_getenv();
 shell_result shell_run(std::string_view script, shell_run_cfg const &cfg);
 
-// Make this process's environment `to`, given that it is `from` now: only names whose
-// value differs are written.
-void shell_putenv(shell_env_t const &from, shell_env_t const &to);
-
 // `name` searched along `path_list` (PATHEXT applied on Windows), skipping empty entries
 // -- the cwd -- and any directory equivalent to `skip_dir`.
 std::optional<std::filesystem::path> shell_find_executable(

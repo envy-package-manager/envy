@@ -63,19 +63,33 @@ std::filesystem::path get_exe_path() {
   return std::filesystem::path{ buf.data() };
 }
 
+namespace {
+
+// UTF-8, as shell_getenv reads the environment.
+std::wstring env_wide(char const *s) {
+  int const n{ ::MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0) };
+  std::wstring out(n > 0 ? static_cast<size_t>(n) : 1, L'\0');
+  if (n > 0) { ::MultiByteToWideChar(CP_UTF8, 0, s, -1, out.data(), n); }
+  out.resize(out.size() - 1);  // the terminator
+  return out;
+}
+
+}  // namespace
+
+// _wputenv_s writes the CRT's copy and the OS block both, so getenv and children agree.
+// An empty value removes the name: the CRT cannot hold one.
 void env_var_set(char const *name, char const *value) {
   if (name == nullptr || value == nullptr) {
     throw std::invalid_argument("env_var_set: null name or value");
   }
-
-  if (::_putenv_s(name, value) != 0) {
+  if (::_wputenv_s(env_wide(name).c_str(), env_wide(value).c_str()) != 0) {
     throw_runtime_error({ "env_var_set: failed to set ", name });
   }
 }
 
 void env_var_unset(char const *name) {
   if (name == nullptr) { throw std::invalid_argument("env_var_unset: null name"); }
-  if (::_putenv_s(name, "") != 0) {
+  if (::_wputenv_s(env_wide(name).c_str(), L"") != 0) {
     throw_runtime_error({ "env_var_unset: failed to unset ", name });
   }
 }

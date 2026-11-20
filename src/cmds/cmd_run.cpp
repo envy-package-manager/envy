@@ -3,16 +3,13 @@
 #include "activation.h"
 #include "env_ops.h"
 #include "manifest.h"
-#include "platform.h"
 #include "reexec.h"
 #include "shell.h"
-#include "tui.h"
 #include "util.h"
 
 #include "cli_parse.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -76,26 +73,20 @@ void cmd_run::execute() {
   // there is nothing left to guess from a script path or the CWD.
   if (cfg_.project_dir) { start_dir = manifest::discovery_start_dir(cfg_.project_dir); }
 
-  if (cfg_.activate) {
-    activate_process_env(start_dir);
-  } else {
-    prepend_bin_dir(start_dir, exec_command.size() > 1);
-  }
-
-  tui::sections_clear();
-  tui::flush();  // activation's warnings: exec would discard the queue
-  throw subprocess_exit{ shell_exec(exec_command) };  // POSIX: returns only by throwing
+  // --activate: what `envy activate` would load; an env already this project's current
+  // activation passes through as the caller has it. main execs once the tui is down.
+  shell_env_t live{ shell_getenv() };
+  shell_env_t to{ cfg_.activate
+                      ? activation_compute(start_dir, cli_cache_root_, live, true).target
+                      : bin_dir_env(start_dir, exec_command.size() > 1, live) };
+  throw exec_request{ .argv = std::move(exec_command),
+                      .from = std::move(live),
+                      .to = std::move(to) };
 }
 
-// The activation `envy activate` would load, written into this process just before it
-// becomes (or spawns) the command: nothing else runs in between to see it. An env that
-// already is this project's current activation is left exactly as the caller has it.
-void cmd_run::activate_process_env(fs::path const &start_dir) const {
-  shell_env_t const live{ shell_getenv() };
-  shell_putenv(live, activation_compute(start_dir, cli_cache_root_, live, true).target);
-}
-
-void cmd_run::prepend_bin_dir(fs::path const &start_dir, bool hint_sentinel) const {
+shell_env_t cmd_run::bin_dir_env(fs::path const &start_dir,
+                                 bool hint_sentinel,
+                                 shell_env_t const &live) const {
   auto const discovered{ manifest::discover(false, start_dir) };
   if (!discovered) {
     std::string msg{ "run: manifest not found (discovery from " + start_dir.string() +
@@ -107,10 +98,6 @@ void cmd_run::prepend_bin_dir(fs::path const &start_dir, bool hint_sentinel) con
   }
   auto const &manifest_path{ discovered->path };
   auto const &meta{ discovered->meta };  // discovery parsed the directives already
-  // No manifest_resolved event here: trace records are queued for the tui worker, and
-  // execvp below replaces this image before it drains. It would surface only on Windows,
-  // which waits on a child instead -- a trace that exists on one platform is worse than
-  // none. What `run` resolved is observable in the PATH the child inherits.
 
   reexec_if_needed(
       meta,
@@ -127,17 +114,14 @@ void cmd_run::prepend_bin_dir(fs::path const &start_dir, bool hint_sentinel) con
   }
   auto const bin_dir{ fs::canonical(bin_dir_raw) };
 
-  auto const manifest_dir{ manifest_path.parent_path().string() };
-
-  char const *existing_path{ std::getenv("PATH") };
-  std::string new_path{ bin_dir.string() };
-  if (existing_path && *existing_path) {
-    new_path += env_path_sep();
-    new_path += existing_path;
-  }
-
-  platform::env_var_set("PATH", new_path.c_str());
-  platform::env_var_set("ENVY_PROJECT_ROOT", manifest_dir.c_str());
+  shell_env_t out{ live };
+  env_ops_apply(out,
+                { { .name = "ENVY_PROJECT_ROOT",
+                    .op = env_set{ manifest_path.parent_path().string() } },
+                  { .name = "PATH",
+                    .op = env_edit{ .prepend = { bin_dir.string() },
+                                    .sep = std::string(1, env_path_sep()) } } });
+  return out;
 }
 
 }  // namespace envy

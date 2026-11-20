@@ -28,6 +28,8 @@
 
 namespace envy {
 
+// fd 1 points at stderr even when the caller closed it: else the next file envy opens
+// lands on fd 1. restore() closes it again, so the caller's closed stdout stays closed.
 stdout_to_stderr::stdout_to_stderr()
     : saved_{ (std::fflush(stdout), ENVY_DUP(ENVY_FILENO(stdout))) } {
   ENVY_DUP2(ENVY_FILENO(stderr), ENVY_FILENO(stdout));
@@ -39,10 +41,15 @@ stdout_to_stderr::~stdout_to_stderr() {
 
 void stdout_to_stderr::restore() {
   std::fflush(stdout);
-  ENVY_DUP2(saved_, ENVY_FILENO(stdout));
+  if (saved_ >= 0) {
+    ENVY_DUP2(saved_, ENVY_FILENO(stdout));
+  } else {
+    ENVY_CLOSE(ENVY_FILENO(stdout));
+  }
 }
 
 void stdout_to_stderr::write(std::string_view s) const {
+  if (saved_ < 0 && !s.empty()) { throw_runtime_error({ "stdout is closed" }); }
   while (!s.empty()) {
     auto const n{ ENVY_WRITE(saved_, s.data(), static_cast<unsigned>(s.size())) };
     if (n <= 0) { throw_runtime_error({ "failed to write stdout" }); }

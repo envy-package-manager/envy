@@ -174,23 +174,42 @@ TEST_CASE("env_shell_parse") {
   CHECK_FALSE(env_shell_parse("tcsh").has_value());
 }
 
-TEST_CASE("env_script: cmd sets, unsets, and keeps cmd's metacharacters literal") {
+TEST_CASE("env_script: cmd sets, unsets, keeps metacharacters, and ends in success") {
   shell_env_t const from{ { "GONE", "x" }, { "SAME", "s" } };
-  shell_env_t const to{ { "SAME", "s" }, { "V", "a b & c | <d> ^e %PATH% !x!" } };
+  shell_env_t const to{ { "SAME", "s" },
+                        { "V", "a b & c | <d> ^e %PATH% !x!" },
+                        { "Q", "a;\"C:\\x y\";b" } };
+  // `set "N=v"` ends at the last quote, so a quoted PATH entry inside survives.
   CHECK(env_script(env_shell::CMD, from, to) ==
         "set \"GONE=\"\n"
-        "set \"V=a b & c | <d> ^e %PATH% !x!\"\n");
+        "set \"Q=a;\"C:\\x y\";b\"\n"
+        "set \"V=a b & c | <d> ^e %PATH% !x!\"\n"
+        "exit /b 0\n");
+  CHECK(env_script(env_shell::CMD, from, from) == "exit /b 0\n");  // nothing to do: success
 }
 
 TEST_CASE("env_script: cmd refuses what a set line cannot carry") {
-  CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "Q", "say \"hi\"" } }),
-                  std::runtime_error);
   for (char const *v : { "a\nb", "a\rb" }) {
     CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "NL", v } }), std::runtime_error);
   }
   CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "LONG", std::string(8200, 'x') } }),
                   std::runtime_error);
   CHECK_NOTHROW(env_script(env_shell::CMD, {}, { { "FITS", std::string(8000, 'x') } }));
+}
+
+TEST_CASE("env_restore: lenient drops state another envy wrote instead of refusing") {
+  shell_env_t const live{ { "ENVY_ACTIVATE_SCHEMA", "999" },
+                          { "ENVY_ACTIVATE_VARS", "A" },
+                          { "ENVY_ACTIVATE_ORIG__A", "orig" },
+                          { "A", "activated" } };
+  CHECK_THROWS_AS(env_restore(live), std::runtime_error);
+  CHECK(env_restore(live, true) == shell_env_t{ { "A", "activated" } });
+}
+
+TEST_CASE("env_activation_pkgs") {
+  CHECK_FALSE(env_activation_pkgs({}).has_value());
+  CHECK(*env_activation_pkgs({ { "ENVY_ACTIVATE_PKGS", "ab:cd" } }) == "ab:cd");
+  CHECK(*env_activation_pkgs({ { "ENVY_ACTIVATE_PKGS", "" } }) == "");
 }
 
 TEST_CASE("env_activation_current") {

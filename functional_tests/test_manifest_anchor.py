@@ -604,8 +604,7 @@ class TestWindowsProductScript(_AnchorTestBase):
 
         script = (p / "build" / "tools" / "tool.bat").read_text(encoding="utf-8")
         self.assertNotIn("@@", script)
-        self.assertIn('call "%~dp0envy.bat" product --run "tool" -- %*', script)
-        self.assertIn("exit /b %ERRORLEVEL%", script)
+        self.assertIn('\n"%~dp0envy.bat" product --run "tool" -- %*', script)
         self.assertNotIn("set ", script.lower())
 
     def test_bat_launcher_injects_the_anchor(self):
@@ -615,6 +614,16 @@ class TestWindowsProductScript(_AnchorTestBase):
 
         launcher = (p / "tools" / "envy.bat").read_text(encoding="utf-8")
         self.assertIn('--project "%~dp0."', launcher)
+
+    def test_bat_launcher_starts_envy_outside_its_own_scope(self):
+        """endlocal first: no launcher variable reaches envy, and a `!` argument survives."""
+        p = self.project("winny", '{ tool = "W-tool" }')
+        run = self.sync(p / "envy.lua", "--platform", "all", cwd=p)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        lines = (p / "tools" / "envy.bat").read_text(encoding="utf-8").splitlines()
+        self.assertEqual('endlocal & "%ENVY_BIN%" --project "%~dp0." %* & exit /b',
+                         lines[-1].strip())  # last: a rewrite mid-run is never read
 
 
 class TestBinDirRoundTrip(_AnchorTestBase):
@@ -795,8 +804,13 @@ class TestDeepBinDir(_AnchorTestBase):
     def deep_bin(root: Path) -> Path:
         return root / "a" / "b" / "c" / "bin"
 
-    def payload(self, body: str) -> Path:
-        """An executable a product can point at, so the script's environment is visible."""
+    def payload(self, body: str, bat: str = "") -> Path:
+        """An executable a product can point at, so the script's environment is visible:
+        `body` in bash, or `bat` in cmd on Windows."""
+        if sys.platform == "win32":
+            path = self.tree / "payload.bat"
+            path.write_text(f"@echo off\r\n{bat}\r\n", encoding="utf-8")
+            return path
         path = self.tree / "payload.sh"
         path.write_text(f'#!/usr/bin/env bash\n{body}\n', encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -813,10 +827,9 @@ class TestDeepBinDir(_AnchorTestBase):
 
     # -- what the deployed scripts resolve at runtime ------------------------
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
     def test_the_product_script_resolves_the_project_root_at_depth(self):
         """The launcher walks four levels up; envy hands the tool that project's root."""
-        payload = self.payload('echo "ROOT=$ENVY_PROJECT_ROOT"')
+        payload = self.payload('echo "ROOT=$ENVY_PROJECT_ROOT"', "echo ROOT=%ENVY_PROJECT_ROOT%")
         env = self.seed_launcher_binary()
         root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
         self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
@@ -827,12 +840,12 @@ class TestDeepBinDir(_AnchorTestBase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         # Exact, not a containment: an off-by-one walk still contains the project root.
-        self.assertEqual(f"ROOT={root}", result.stdout.strip())
+        got = result.stdout.strip().removeprefix("ROOT=")
+        self.assertEqual(os.path.normcase(str(root)), os.path.normcase(got))
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
     def test_the_product_script_puts_the_deep_bin_dir_first_on_path(self):
         """So a product at depth still shells out to its siblings."""
-        payload = self.payload('echo "FIRST=${PATH%%:*}"')
+        payload = self.payload('echo "FIRST=${PATH%%:*}"', "echo FIRST=%PATH%")
         env = self.seed_launcher_binary()
         root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
         self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
@@ -842,7 +855,8 @@ class TestDeepBinDir(_AnchorTestBase):
             cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(f"FIRST={self.deep_bin(root)}", result.stdout.strip())
+        first = result.stdout.strip().removeprefix("FIRST=").split(os.pathsep)[0]
+        self.assertEqual(os.path.normcase(str(self.deep_bin(root))), os.path.normcase(first))
 
     @unittest.skipIf(sys.platform == "win32", "POSIX launcher")
     def test_the_launcher_walks_out_of_a_deep_bin_dir_to_its_manifest(self):

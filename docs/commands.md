@@ -35,7 +35,7 @@ cd ~/other-project
 ../../some-envy-project/tools/uv run ./local_script.py   # uv, in some-envy-project's activated environment
 ```
 
-A product script is one line: `exec <bin>/envy product --run <name> -- "$@"`. The tool runs in its project's activation — bin dir on `PATH`, `ENVY_PROJECT_ROOT`, every installed package's `ENV` — whoever calls it: CI, an IDE, another project's activated shell, another project's tool. See `envy product --run`.
+Product scripts hand off to `envy product --run <name>`: the tool runs in its project's activation — bin dir on `PATH`, `ENVY_PROJECT_ROOT`, every installed package's `ENV` — whoever calls it: CI, an IDE, another project's activated shell or tool.
 
 Because those scripts resolve their project by walking up from the bin dir, `deploy` refuses a *root* manifest whose bin dir walks up to a **different** `envy.lua` — `@envy bin "../shared"`, or a `--manifest` outside the bin dir's tree — since every script written there would hand out another project's tools. It warns instead when the walk finds nothing (a `.git` in between) or when the manifest is not named `envy.lua` (a variant build, invisible to the walk by construction).
 
@@ -78,6 +78,8 @@ envy vendor --all --dry-run         # what has drifted, and what repairing it co
 envy vendor patched --force         # throw away deliberate edits to an exempt copy
 ```
 
+**`envy product --run <name> [-- args…]`** — What product scripts exec: install the provider's closure, then run the tool in the project's activation, built from the same engine. A caller already in this project's activation keeps its env, edits included, gaining only closure `ENV` it lacks (`ENVY_ACTIVATE_PKGS` records what was applied); any other caller — none, another project's, another envy's — gets a fresh activation. A throwing `ENV` in the closure is fatal; elsewhere it warns. Host packages only, as `install` resolves. stdout is the tool's: envy and spec output go to stderr. A user-managed value that is a relative path anchors at the project root; a bare name is searched on `PATH`, past the bin dir when it names the product itself. The tool inherits the caller's signal dispositions; POSIX execs, Windows waits (`.bat`/`.cmd` via `cmd.exe /d /v:off /s /c`) and returns the exit code.
+
 **`envy package <identity> [--manifest=...]`** — Query and install package, print package path. Loads manifest (auto-discovered or via `--manifest`), finds matching spec, installs only that package plus transitive dependencies if not cached, prints absolute path to package directory to stdout. Other manifest packages are not processed. Errors if identity ambiguous (multiple option variants) or programmatic package (no cached artifacts). Exits 0 with path on success, exits 1 with "not found" on failure. A cache hit prints nothing to stderr (DEBUG); an install still reports.
 
 ### Cache
@@ -92,9 +94,7 @@ envy vendor patched --force         # throw away deliberate edits to an exempt c
 
 **`envy run --activate <cmd>`** — Run `cmd` with the project's activated environment, as `envy activate` would set it; an environment that already is that project's current activation passes through untouched. Without the flag, `run` passes the caller's environment through with the bin dir prepended.
 
-**`envy product --run <name> [-- args…]`** — What product scripts exec. One graph: resolve, install the provider's closure (nothing else), then activate from the same engine unless the caller already is this project's activation at its current generation (`ENVY_ACTIVATE_ROOT`/`_GEN`). Read after the install, so a lazy install outdates an older activation and the tool still gets its own `ENV`. A foreign activation is undone first; the exported state makes nested wrappers (`make` → `./tools/gcc`) skip activation and never double `PATH`. A throwing `ENV` in the provider's closure is fatal; elsewhere it warns. stdout is the tool's: envy and spec output go to stderr. A bare user-managed value (`tool = "python3"`) is found on `PATH` past the bin dir, never its own wrapper. POSIX execs; Windows waits and returns the exit code, `.bat`/`.cmd` via `cmd.exe /d /s /c`, Ctrl-C left to the tool.
-
-**cmd sessions** — `envy activate cmd` / `envy deactivate cmd`, run through `<bin>\envy.bat`, change the calling cmd session in place: `endlocal & for /f` runs envy's `set "NAME=value"` lines there. No prompt hook: re-run after an install. Values holding `"` or a line break, or lines past 8191 characters, are refused.
+**cmd sessions** — `tools\envy activate cmd` / `deactivate cmd` change the calling cmd session in place; exit status is the activation's. No prompt hook: re-run after an install. A value holding a line break, or a line past 8191 characters, is refused.
 
 **`envy shell <shell>`** — Print the `source` line to add to your shell profile for automatic PATH management. Supported shells: `bash`, `zsh`, `fish`, `powershell`. Hook files live under the user-wide cache and are created during self-deploy; this command just prints the line. Warns only under `--cache-root`/`ENVY_CACHE_ROOT`, and reports plainly that a project-local cache never populates hooks. Names a stale project-local `shell/` an older envy left behind. See `docs/shell-integration.md` for details.
 

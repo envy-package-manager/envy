@@ -362,6 +362,45 @@ class TestReexecAttestation(_ReexecTestBase):
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
 
 
+@unittest.skipIf(sys.platform == "win32", "POSIX stand-in script")
+class TestReexecProductRun(_ReexecTestBase):
+    """A wrapper whose envy re-execs: the tool runs from the pinned envy."""
+
+    def test_the_tool_keeps_stdout_across_the_reexec(self) -> None:
+        """--run points stdout at stderr while it works; it must come back first.
+
+        The pinned "envy" is a stand-in that marks stderr and runs this build, so the
+        re-exec is proven by the marker, not by log text an exec may drop.
+        """
+        self._setup_reexec_project("1.2.3")
+        stand_in = self._temp_dir / "stand-in" / _BINARY_NAME
+        stand_in.parent.mkdir()
+        stand_in.write_text(f'#!/bin/sh\necho REEXEC-MARKER >&2\nexec "{self._envy}" "$@"\n')
+        stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
+        archive = self._releases_dir / "v1.2.3" / f"envy-{_OS_NAME}-{_ARCH}{_EXT}"
+        _create_envy_archive(archive, stand_in)
+
+        payload = self._temp_dir / "tool.sh"
+        payload.write_text("#!/bin/sh\necho TOOL-STDOUT\n")
+        payload.chmod(payload.stat().st_mode | stat.S_IXUSR)
+        (self._project / "tool.lua").write_text(
+            'IDENTITY = "local.tool@r1"\nUSER_MANAGED = true\n'
+            f'PRODUCTS = {{ tool = "{payload.as_posix()}" }}\n'
+            "SETUP = { main = { CHECK = function() return true end,\n"
+            "                   INSTALL = function() end } }\n"
+        )
+        manifest = self._project / "envy.lua"
+        manifest.write_text(manifest.read_text().replace(
+            "PACKAGES = {}",
+            'PACKAGES = { { spec = "local.tool@r1", source = "tool.lua" } }'))
+
+        env = self._get_env(ENVY_TEST_SELF_VERSION="9.9.9")
+        result = self._run_envy(["product", "--run", "tool"], cwd=self._project, env=env)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertIn("REEXEC-MARKER", result.stderr)
+        self.assertEqual("TOOL-STDOUT", result.stdout.strip())
+
+
 class TestReexecErrors(_ReexecTestBase):
     """Tests for error conditions."""
 

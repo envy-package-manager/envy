@@ -737,6 +737,16 @@ std::wstring quote_arg_cmd(std::wstring_view arg) {
   return out;
 }
 
+std::wstring acp_to_wstring(std::string const &s) {
+  if (s.empty()) { return {}; }
+  int const n{
+    ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), nullptr, 0)
+  };
+  std::wstring out(static_cast<size_t>(n), L'\0');
+  ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+  return out;
+}
+
 std::string getenv_utf8(wchar_t const *name) {
   DWORD const n{ ::GetEnvironmentVariableW(name, nullptr, 0) };
   if (n == 0) { return {}; }
@@ -759,60 +769,41 @@ std::wstring ascii_lower(std::wstring s) {
 
 }  // namespace
 
-void shell_putenv(shell_env_t const &from, shell_env_t const &to) {
-  // Names are case-insensitive: "Path" in one map is "PATH" in the other.
-  auto const find{ [](shell_env_t const &env, std::string const &name) {
-    auto const want{ ascii_lower(utf8_to_wstring(name)) };
-    return std::find_if(env.begin(), env.end(), [&](auto const &kv) {
-      return ascii_lower(utf8_to_wstring(kv.first)) == want;
-    });
-  } };
-  for (auto const &[name, value] : to) {
-    if (auto const it{ find(from, name) }; it == from.end() || it->second != value) {
-      if (!::SetEnvironmentVariableW(utf8_to_wstring(name).c_str(),
-                                     utf8_to_wstring(value).c_str())) {
-        throw_system_error(::GetLastError(), std::system_category(), { "set ", name });
-      }
-    }
-  }
-  for (auto const &[name, _] : from) {
-    if (find(to, name) == to.end()) {
-      ::SetEnvironmentVariableW(utf8_to_wstring(name).c_str(), nullptr);
-    }
-  }
-}
-
 int shell_exec(std::vector<std::string> const &argv) {
   if (argv.empty()) { throw std::invalid_argument("shell_exec: empty argv"); }
 
+  // PATHEXT always applies, the cwd first for a bare name, as _spawnvp and cmd search:
+  // `gradlew` is gradlew.bat, never the POSIX script beside it.
   std::filesystem::path const program{ [&] {
     std::filesystem::path const named{ argv[0] };
-    if (!named.has_parent_path()) {  // the name as given first, as _spawnvp tried it
-      if (platform::can_execute_file(named)) { return named; }
-      if (auto found{ shell_find_executable(argv[0], getenv_utf8(L"PATH")) }) {
-        return *found;
-      }
-      throw_runtime_error({ "exec ", argv[0], ": not found on PATH" });
+    bool const bare{ !named.has_parent_path() };
+    std::string const where{ bare ? ".;" + getenv_utf8(L"PATH")
+                                  : named.parent_path().string() };
+    if (auto found{ shell_find_executable(named.filename().string(), where) }) {
+      return *found;
     }
-    if (platform::can_execute_file(named) || named.has_extension()) { return named; }
-    auto found{ shell_find_executable(named.filename().string(),
-                                      named.parent_path().string()) };
-    return found ? *found : named;
+    if (bare) { throw_runtime_error({ "exec ", argv[0], ": not found on PATH" }); }
+    return named;  // CreateProcess names what is wrong with it
   }() };
 
   // CreateProcess runs a .bat by quietly starting cmd.exe with the line as given, which
   // lets an argument's & or | split it. Starting cmd.exe here quotes for cmd's rules.
   std::wstring const ext{ ascii_lower(program.extension().wstring()) };
   bool const batch{ ext == L".bat" || ext == L".cmd" };
-  std::wstring const comspec{ utf8_to_wstring(getenv_utf8(L"ComSpec")) };
+  std::wstring const cmd_exe{ [] {
+    std::wstring dir(MAX_PATH, L'\0');
+    UINT const n{ ::GetSystemDirectoryW(dir.data(), MAX_PATH) };
+    dir.resize(n);
+    return dir + L"\\cmd.exe";  // not %ComSpec%: a replacement shell quotes differently
+  }() };
   auto const quote{ [batch](std::wstring_view a) {
     return batch ? quote_arg_cmd(a) : quote_arg(a);
   } };
-  std::wstring command_line{ batch ? L"cmd.exe /d /s /c \"" : L"" };
+  std::wstring command_line{ batch ? L"cmd.exe /d /v:off /s /c \"" : L"" };
   command_line.append(quote(program.wstring()));
-  for (size_t i{ 1 }; i < argv.size(); ++i) {
+  for (size_t i{ 1 }; i < argv.size(); ++i) {  // main's argv: the ANSI code page
     command_line.push_back(L' ');
-    command_line.append(quote(utf8_to_wstring(argv[i])));
+    command_line.append(quote(acp_to_wstring(argv[i])));
   }
   if (batch) { command_line.push_back(L'"'); }
   std::vector<wchar_t> cmd_buffer{ command_line.begin(), command_line.end() };
@@ -824,8 +815,8 @@ int shell_exec(std::vector<std::string> const &argv) {
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   PROCESS_INFORMATION pi{};
-  std::wstring const application{ batch ? comspec : program.wstring() };
-  if (!::CreateProcessW(application.empty() ? nullptr : application.c_str(),
+  std::wstring const application{ batch ? cmd_exe : program.wstring() };
+  if (!::CreateProcessW(application.c_str(),
                         cmd_buffer.data(),
                         nullptr,
                         nullptr,

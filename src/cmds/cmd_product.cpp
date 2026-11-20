@@ -22,8 +22,11 @@
 #include <filesystem>
 #include <iomanip>
 #include <memory>
+#include <ranges>
 #include <sstream>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace envy {
@@ -97,93 +100,105 @@ void print_products_aligned(std::vector<product_info> const &products) {
   }
 }
 
-// Everything `--run` hands the OS once envy's own work is done.
-struct run_plan {
-  std::vector<std::string> argv;
-  shell_env_t live;    // the environment as it is now
-  shell_env_t target;  // the one to run in
-};
+// The provider of `name` in the graph `eng` resolved, its closure installed.
+pkg *install_provider(engine &eng, std::string const &name) {
+  pkg *const provider{ eng.find_product_provider(name) };
+  if (!provider) {
+    throw_runtime_error(
+        { "product: '", name, "' has no provider in resolved dependency graph" });
+  }
+  eng.extend_dependencies_to_completion(provider);
+  eng.wait_for_completion(provider->key);
+  return provider;
+}
 
-// Install the provider's closure, then activate from that same engine unless `live`
-// already is this project's current activation: one graph, not two.
-run_plan plan_run(cmd_product::cfg const &cfg,
-                  std::optional<std::filesystem::path> const &cli_cache_root) {
+bool same_command_name(std::string_view a, std::string_view b) {
+#ifdef _WIN32
+  auto const lower{ [](char c) {
+    return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
+  } };
+  return std::ranges::equal(a, b, [&](char x, char y) { return lower(x) == lower(y); });
+#else
+  return a == b;
+#endif
+}
+
+// A user-managed value is a command. A relative path anchors at the project root, where
+// SETUP runs; a bare name is searched on `path_list`.
+std::string user_managed_program(std::string const &value,
+                                 std::string const &product,
+                                 activation_anchor const &anchor,
+                                 envy_meta const &meta,
+                                 std::string const *path_list) {
+  std::filesystem::path const named{ value };
+  if (named.has_parent_path()) {
+    return named.is_absolute() ? value : (anchor.root / named).string();
+  }
+  // Past the bin dir only when the value names this very product: its wrapper would only
+  // run envy again. Another product's wrapper (an alias) is a fine thing to reach.
+  std::error_code ec;
+  auto const bin{ meta.bin && same_command_name(value, product)
+                      ? std::filesystem::canonical(anchor.root / *meta.bin, ec)
+                      : std::filesystem::path{} };
+  auto const found{ shell_find_executable(value,
+                                          path_list ? *path_list : std::string{},
+                                          bin.empty() || ec ? nullptr : &bin) };
+  if (!found) {
+    throw_runtime_error(
+        { "product: '", product, "' runs '", value, "', not found on PATH" });
+  }
+  return found->string();
+}
+
+// Install the provider's closure, then build the tool's environment from that same engine:
+// one graph. Host packages only, as install and activate resolve.
+exec_request plan_run(cmd_product::cfg const &cfg,
+                      std::optional<std::filesystem::path> const &cli_cache_root) {
   auto const [m, c]{
     cmd_startup_load("product", cfg.manifest_path, cli_cache_root, false, cfg.project_dir)
   };
   engine eng{ *c, m.get() };
-  eng.set_quiet_idle_outcomes(true);  // a wrapper's stderr is its tool's
-  eng.resolve_graph({ m->packages.begin(), m->packages.end() });
-
-  pkg *provider{ eng.find_product_provider(cfg.product_name) };
-  if (!provider) {
-    throw_runtime_error({ "product: '",
-                          cfg.product_name,
-                          "' has no provider in resolved dependency graph" });
-  }
-  eng.extend_dependencies_to_completion(provider);
-  eng.wait_for_completion(provider->key);
+  eng.set_quiet_idle_outcomes(true);  // a cache hit is no news on the tool's stderr
+  eng.resolve_graph(
+      engine_filter_host_platform({ m->packages.begin(), m->packages.end() }));
+  pkg *const provider{ install_provider(eng, cfg.product_name) };
   std::string const value{ product_util_resolve(provider, cfg.product_name) };
 
-  // After the install, which bumps the generation: an activation from before it lacks
-  // the product's own ENV, and must not pass for current.
   shell_env_t live{ shell_getenv() };
   auto const anchor{ activation_anchor_read(eng.cache_root(), m->manifest_path) };
-  shell_env_t target{
-    env_activation_current(live, anchor.root.string(), anchor.gen)
-        ? live
-        : activation_from_engine(eng, *m, anchor, live, provider).target
-  };
-
-  // A bare user-managed value is a command, searched past the bin dir: the wrapper named
-  // after it sits first on PATH and would only run envy again.
-  auto program{ [&] {
-    if (provider->type != pkg_type::USER_MANAGED ||
-        std::filesystem::path{ value }.has_parent_path()) {
-      return value;
-    }
-    std::error_code ec;
-    auto const bin{ m->meta.bin
-                        ? std::filesystem::canonical(anchor.root / *m->meta.bin, ec)
-                        : std::filesystem::path{} };
-    auto const *path_list{ env_get(target, "PATH") };
-    auto const found{ shell_find_executable(value,
-                                            path_list ? *path_list : std::string{},
-                                            bin.empty() || ec ? nullptr : &bin) };
-    if (!found) {
-      throw_runtime_error(
-          { "product: '", cfg.product_name, "' runs '", value, "', not found on PATH" });
-    }
-    return found->string();
+  shell_env_t to{ activation_for_tool(eng, *m, anchor, live, provider) };
+  auto argv{ [&] {
+    std::vector<std::string> out{ provider->type == pkg_type::USER_MANAGED
+                                      ? user_managed_program(value,
+                                                             cfg.product_name,
+                                                             anchor,
+                                                             m->meta,
+                                                             env_get(to, "PATH"))
+                                      : value };
+    out.insert(out.end(), cfg.args.begin(), cfg.args.end());
+    return out;
   }() };
-
-  run_plan plan{ .argv = { std::move(program) },
-                 .live = std::move(live),
-                 .target = std::move(target) };
-  plan.argv.insert(plan.argv.end(), cfg.args.begin(), cfg.args.end());
-  return plan;
+  return { .argv = std::move(argv), .from = std::move(live), .to = std::move(to) };
 }
 
 }  // namespace
 
 // The tool owns stdout: anything envy or a spec's Lua prints meanwhile goes to stderr.
+// main runs the request once the tui is down.
 void cmd_product::run() const {
-  auto const plan{ [&] {
+  auto request{ [&] {
     stdout_to_stderr redirect;
     try {
-      auto p{ plan_run(cfg_, cli_cache_root_) };
-      tui::sections_clear();
+      auto r{ plan_run(cfg_, cli_cache_root_) };
       tui::flush();  // queued lines land while stderr stands in for stdout
       redirect.restore();
-      return p;
+      return r;
     } catch (reexec_request const &) {
       redirect.restore();  // the pinned envy prints the tool's stdout itself
       throw;
     }
   }() };
-  tui::trace_file_handoff();
-  shell_putenv(plan.live, plan.target);
-  throw subprocess_exit{ shell_exec(plan.argv) };  // POSIX: returns only by throwing
+  throw std::move(request);
 }
 
 void cmd_product::execute() {
@@ -198,7 +213,7 @@ void cmd_product::execute() {
                                       false,
                                       cfg_.project_dir) };
   engine eng{ *c, m.get() };
-  eng.set_quiet_idle_outcomes(true);  // a wrapper's stderr is its tool's
+  eng.set_quiet_idle_outcomes(true);  // `$(envy product x)` wants the value, not news
   eng.resolve_graph({ m->packages.begin(), m->packages.end() });
 
   if (cfg_.product_name.empty()) {
@@ -210,16 +225,7 @@ void cmd_product::execute() {
     return;
   }
 
-  pkg *provider{ eng.find_product_provider(cfg_.product_name) };
-  if (!provider) {
-    throw_runtime_error({ "product: '",
-                          cfg_.product_name,
-                          "' has no provider in resolved dependency graph" });
-  }
-
-  eng.extend_dependencies_to_completion(provider);
-  eng.wait_for_completion(provider->key);
-
+  pkg *const provider{ install_provider(eng, cfg_.product_name) };
   std::string const rendered_value{ product_util_resolve(provider, cfg_.product_name) };
   tui::print_stdout("%s\n", rendered_value.c_str());
 }

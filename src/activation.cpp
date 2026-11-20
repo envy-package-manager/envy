@@ -69,34 +69,48 @@ struct keyed_layer {
   env_ops ops;
 };
 
+// What ENVY_ACTIVATE_PKGS records per applied package: short, yet enough to tell apart.
+std::string pkg_digest(std::string_view key) {
+  auto const d{ blake3_hash(key.data(), key.size()) };
+  return util_bytes_to_hex(d.data(), 4);
+}
+
+// p's ENV layer, or nullopt when it has none or isn't in the cache. A throwing ENV
+// propagates when p is in `strict`; otherwise it warns, costing only p's own ENV.
+std::optional<keyed_layer> package_layer(pkg *p,
+                                         std::filesystem::path const &root,
+                                         std::unordered_set<pkg *> const &strict) {
+  if (!p->has_env) { return std::nullopt; }
+  std::optional<std::filesystem::path> pkg_path;
+  if (p->type == pkg_type::CACHE_MANAGED) {
+    pkg_path = pkg_predicted_path(p);
+    if (!cache::is_entry_complete(pkg_path->parent_path())) { return std::nullopt; }
+  } else if (p->type != pkg_type::USER_MANAGED) {
+    return std::nullopt;
+  }
+
+  try {
+    auto ops{ pkg_env_eval(p, pkg_path, root) };
+    return ops ? std::optional{ keyed_layer{ .key = p->key.canonical(),
+                                             .ops = std::move(*ops) } }
+               : std::nullopt;
+  } catch (std::exception const &e) {
+    if (strict.contains(p)) {
+      throw_runtime_error({ "ENV of ", p->cfg->identity, ": ", e.what() });
+    }
+    tui::warn("activate: skipping ENV of %s: %s", p->cfg->identity.c_str(), e.what());
+    return std::nullopt;
+  }
+}
+
 // The ENV layers of the graph `eng` resolved, walked from `roots` in priority order.
-// Skips packages not in the cache. An ENV that throws inside `strict` propagates;
-// anywhere else it warns and is skipped, so one broken spec costs only its own ENV.
 std::vector<keyed_layer> engine_layers(engine const &eng,
                                        std::vector<pkg_cfg const *> const &roots,
                                        std::filesystem::path const &root,
                                        std::unordered_set<pkg *> const &strict) {
   std::vector<keyed_layer> layers;
   for (pkg *p : walk_graph(eng, roots)) {
-    if (!p->has_env) { continue; }
-    std::optional<std::filesystem::path> pkg_path;
-    if (p->type == pkg_type::CACHE_MANAGED) {
-      pkg_path = pkg_predicted_path(p);
-      if (!cache::is_entry_complete(pkg_path->parent_path())) { continue; }
-    } else if (p->type != pkg_type::USER_MANAGED) {
-      continue;
-    }
-
-    try {
-      if (auto ops{ pkg_env_eval(p, pkg_path, root) }) {
-        layers.push_back({ .key = p->key.canonical(), .ops = std::move(*ops) });
-      }
-    } catch (std::exception const &e) {
-      if (strict.contains(p)) {
-        throw_runtime_error({ "ENV of ", p->cfg->identity, ": ", e.what() });
-      }
-      tui::warn("activate: skipping ENV of %s: %s", p->cfg->identity.c_str(), e.what());
-    }
+    if (auto l{ package_layer(p, root, strict) }) { layers.push_back(std::move(*l)); }
   }
   return layers;
 }
@@ -132,10 +146,10 @@ void keep_layers(std::vector<keyed_layer> found,
 // Uninstalled packages and uncached specs are skipped silently: shims install lazily.
 void package_layers(cmd_startup const &startup,
                     std::filesystem::path const &root,
-                    std::vector<env_ops> &layers) {
+                    std::vector<env_ops> &layers,
+                    std::unordered_set<std::string> &seen) {
   auto const roots{ engine_filter_host_platform(
       { startup.m->packages.begin(), startup.m->packages.end() }) };
-  std::unordered_set<std::string> seen;
   auto const keep{ [&](std::vector<keyed_layer> found) {
     keep_layers(std::move(found), seen, layers);
   } };
@@ -210,12 +224,33 @@ env_ops builtin_layer(std::filesystem::path const &root, envy_meta const &meta) 
   return out;
 }
 
+std::string join_digests(std::unordered_set<std::string> const &digests) {
+  std::vector<std::string> sorted{ digests.begin(), digests.end() };
+  util_sort(sorted, [](auto const &a, auto const &b) { return a < b; });
+  std::string out;
+  for (auto const &d : sorted) { out.append(out.empty() ? "" : ":").append(d); }
+  return out;
+}
+
+std::unordered_set<std::string> digests_of(std::unordered_set<std::string> const &keys) {
+  std::unordered_set<std::string> out;
+  for (auto const &k : keys) { out.insert(pkg_digest(k)); }
+  return out;
+}
+
 // `layers` (highest first) over `live` with any prior activation undone, plus the state
-// that records it.
+// that records it. lenient: state another envy wrote is dropped rather than refused.
 activation finish(shell_env_t const &live,
                   activation_anchor const &anchor,
-                  std::vector<env_ops> const &layers) {
-  shell_env_t const base{ env_restore(live) };
+                  std::vector<env_ops> const &layers,
+                  std::unordered_set<std::string> const &applied,
+                  bool lenient = false) {
+  if (auto const *schema{ env_get(live, std::string{ kEnvStatePrefix } + "SCHEMA") };
+      lenient && schema && *schema != kEnvStateSchema) {
+    tui::warn("activation state from another envy (schema %s) left in place, not undone",
+              schema->c_str());
+  }
+  shell_env_t const base{ env_restore(live, lenient) };
   shell_env_t target{ base };
   for (auto it{ layers.rbegin() }; it != layers.rend(); ++it) {
     env_ops_apply(target, *it);
@@ -227,7 +262,8 @@ activation finish(shell_env_t const &live,
                                     { .root = anchor.root.string(),
                                       .exe = platform::get_exe_path().string(),
                                       .genfile = anchor.genfile.string(),
-                                      .gen = anchor.gen }),
+                                      .gen = anchor.gen,
+                                      .pkgs = join_digests(digests_of(applied)) }),
            .root = anchor.root.string(),
            .vars = vars };
 }
@@ -246,8 +282,8 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
                               std::optional<std::filesystem::path> const &cli_cache_root,
                               shell_env_t const &live,
                               bool reuse_current) {
-  // Re-exec into the pinned envy before anything reads the state: that envy owns its
-  // format. A manifest that fails to load still activates its bin dir and root.
+  // A manifest that fails to load still activates its bin dir and root. A reused one skips
+  // the re-exec below: nothing then reads the state but the check itself.
   auto const found{ manifest::find_and_discover(std::nullopt, false, project_dir) };
 
   // Read before any package is inspected: an install finishing mid-activation then leaves
@@ -274,32 +310,78 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
   }
 
   std::vector<env_ops> layers{ builtin_layer(anchor.root, found.meta) };  // highest first
+  std::unordered_set<std::string> applied;
   if (startup) {
     try {
-      package_layers(*startup, anchor.root, layers);
+      package_layers(*startup, anchor.root, layers, applied);
     } catch (std::exception const &e) {
       tui::warn("activate: package ENV skipped: %s", e.what());
     }
   }
-  return finish(live, anchor, layers);
+  return finish(live, anchor, layers, applied);
 }
 
-activation activation_from_engine(engine const &eng,
-                                  manifest const &m,
-                                  activation_anchor const &anchor,
-                                  shell_env_t const &live,
-                                  pkg *strict) {
+shell_env_t activation_for_tool(engine const &eng,
+                                manifest const &m,
+                                activation_anchor const &anchor,
+                                shell_env_t const &live,
+                                pkg *strict) {
   auto const closure{ walk_graph({ strict }) };
+  std::unordered_set<pkg *> const in_closure{ closure.begin(), closure.end() };
+
+  // This project's activation already: keep the caller's env, edits included, adding only
+  // closure ENV it lacks -- installed since, maybe by another project sharing the cache.
+  if (auto const recorded{ env_activation_pkgs(live) };
+      recorded && env_activation_of(live, anchor.root.string())) {
+    std::unordered_set<std::string> have;
+    for (std::string_view rest{ *recorded }; !rest.empty();) {
+      size_t const colon{ rest.find(':') };
+      have.emplace(rest.substr(0, colon));
+      rest = colon == std::string_view::npos ? std::string_view{} : rest.substr(colon + 1);
+    }
+    std::vector<keyed_layer> missing;
+    for (pkg *p : closure) {  // provider first: the walk's priority order
+      if (!p->has_env || have.contains(pkg_digest(p->key.canonical()))) { continue; }
+      if (auto l{ package_layer(p, anchor.root, in_closure) }) {
+        missing.push_back(std::move(*l));
+      }
+    }
+    if (missing.empty()) {
+      tui::debug("product: the caller's activation already holds this tool's ENV");
+      return live;
+    }
+
+    tui::debug("product: adding %zu missing ENV layer(s) to the caller's activation",
+               missing.size());
+    shell_env_t target{ live };
+    std::erase_if(target, [](auto const &kv) {
+      return std::string_view{ kv.first }.starts_with(kEnvStatePrefix);
+    });
+    for (auto it{ missing.rbegin() }; it != missing.rend(); ++it) {
+      env_ops_apply(target, it->ops);
+      have.insert(pkg_digest(it->key));
+    }
+    auto const *gen{ env_get(live, std::string{ kEnvStatePrefix } + "GEN") };
+    return env_with_state(env_restore(live),
+                          std::move(target),
+                          { .root = anchor.root.string(),
+                            .exe = platform::get_exe_path().string(),
+                            .genfile = anchor.genfile.string(),
+                            .gen = gen ? *gen : anchor.gen,  // still the older activation
+                            .pkgs = join_digests(have) });
+  }
+
+  tui::debug("product: activating %s for this tool", anchor.root.string().c_str());
   std::vector<env_ops> layers{ builtin_layer(anchor.root, m.meta) };
-  std::unordered_set<std::string> seen;
+  std::unordered_set<std::string> applied;
   keep_layers(
       engine_layers(eng,
                     engine_filter_host_platform({ m.packages.begin(), m.packages.end() }),
                     anchor.root,
-                    { closure.begin(), closure.end() }),
-      seen,
+                    in_closure),
+      applied,
       layers);
-  return finish(live, anchor, layers);
+  return finish(live, anchor, layers, applied, true).target;
 }
 
 std::filesystem::path activation_genfile(std::filesystem::path const &cache_root,

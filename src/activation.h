@@ -39,13 +39,13 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
                               shell_env_t const &live,
                               bool reuse_current = false);
 
-// The same activation, from an engine that has resolved m's PACKAGES already: one graph,
-// not two. An ENV that throws in `strict`'s closure propagates; elsewhere it warns.
-activation activation_from_engine(engine const &eng,
-                                  manifest const &m,
-                                  activation_anchor const &anchor,
-                                  shell_env_t const &live,
-                                  pkg *strict);
+// strict's tool's env: this project's activation in `live` plus closure ENV it lacks, or
+// else a fresh one from `eng`. A throwing ENV in strict's closure propagates.
+shell_env_t activation_for_tool(engine const &eng,
+                                manifest const &m,
+                                activation_anchor const &anchor,
+                                shell_env_t const &live,
+                                pkg *strict);
 
 // `<cache root>/activate/<root digest>`: bumped by every package that does work and every
 // `envy install`, so an activated shell in that project re-activates at its next prompt.
@@ -66,7 +66,7 @@ class activation_refresh_guard : unmovable {
   std::filesystem::path genfile_;
 };
 
-// The shell `cmd` (activate/deactivate) emits for; Windows supports only powershell.
+// The shell `cmd` (activate/deactivate) emits for; Windows supports powershell and cmd.
 env_shell activation_shell(std::string_view name, std::string_view cmd);
 bool activation_stdout_is_tty();
 std::string activation_eval_hint(std::string_view cmd,

@@ -2,7 +2,6 @@
 # envy-managed schema "@@ENVY_PRODUCT_SCRIPT_VERSION@@"
 set -Eeuo pipefail
 ENVY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# The sibling launcher injects --project, so envy resolves the project this script was
-# deployed into. `product --run` installs the tool if needed, activates the project unless
-# the caller already is its current activation, and execs the tool in that environment.
+# The sibling launcher injects --project; `product --run` installs the tool if needed and
+# execs it in the project's activation.
 exec "$ENVY_SCRIPT_DIR/envy" product --run "@@PRODUCT_NAME@@" -- "$@"

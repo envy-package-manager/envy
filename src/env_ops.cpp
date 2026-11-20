@@ -1,5 +1,6 @@
 #include "env_ops.h"
 
+#include "platform.h"
 #include "sol_util.h"
 #include "util.h"
 
@@ -298,10 +299,14 @@ void env_ops_apply(shell_env_t &env, env_ops const &ops) {
   }
 }
 
-shell_env_t env_restore(shell_env_t const &live) {
+shell_env_t env_restore(shell_env_t const &live, bool lenient) {
   shell_env_t out{ live };
   if (std::string const *vars{ env_get(live, state_name("VARS")) }) {
     std::string const *schema{ env_get(live, state_name("SCHEMA")) };
+    if ((!schema || *schema != kEnvStateSchema) && lenient) {
+      std::erase_if(out, [](auto const &kv) { return is_state_name(kv.first); });
+      return out;
+    }
     if (!schema || *schema != kEnvStateSchema) {
       throw_runtime_error({ "activation state schema '",
                             schema ? *schema : std::string{},
@@ -322,6 +327,17 @@ shell_env_t env_restore(shell_env_t const &live) {
   }
   std::erase_if(out, [](auto const &kv) { return is_state_name(kv.first); });
   return out;
+}
+
+void env_write_process(shell_env_t const &from, shell_env_t const &to) {
+  for (auto const &[name, value] : to) {
+    if (auto const *cur{ env_get(from, name) }; !cur || *cur != value) {
+      platform::env_var_set(name.c_str(), value.c_str());
+    }
+  }
+  for (auto const &[name, _] : from) {
+    if (!env_get(to, name)) { platform::env_var_unset(name.c_str()); }
+  }
 }
 
 shell_env_t const &env_pristine() {
@@ -348,18 +364,29 @@ shell_env_t env_with_state(shell_env_t const &base,
   env_put(target, state_name("EXE"), fields.exe);
   env_put(target, state_name("GENFILE"), fields.genfile);
   env_put(target, state_name("GEN"), fields.gen);
+  env_put(target, state_name("PKGS"), fields.pkgs);
   return target;
+}
+
+bool env_activation_of(shell_env_t const &env, std::string_view root) {
+  auto const is{ [&](char const *suffix, std::string_view want) {
+    std::string const *v{ env_get(env, state_name(suffix)) };
+    return v && *v == want;
+  } };
+  return is("SCHEMA", kEnvStateSchema) && is("ROOT", root) &&
+         env_get(env, state_name("VARS"));
 }
 
 bool env_activation_current(shell_env_t const &env,
                             std::string_view root,
                             std::string_view gen) {
-  auto const is{ [&](char const *suffix, std::string_view want) {
-    std::string const *v{ env_get(env, state_name(suffix)) };
-    return v && *v == want;
-  } };
-  return is("SCHEMA", kEnvStateSchema) && is("ROOT", root) && is("GEN", gen) &&
-         env_get(env, state_name("VARS"));
+  std::string const *v{ env_get(env, state_name("GEN")) };
+  return env_activation_of(env, root) && v && *v == gen;
+}
+
+std::optional<std::string> env_activation_pkgs(shell_env_t const &env) {
+  std::string const *v{ env_get(env, state_name("PKGS")) };
+  return v ? std::optional{ *v } : std::nullopt;
 }
 
 std::optional<env_shell> env_shell_parse(std::string_view name) {
@@ -417,12 +444,11 @@ std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const 
         }
         break;
       case env_shell::CMD: {
-        // Inside `set "…"` cmd keeps & | < > ^ and spaces literal, and `for /f` runs the
-        // line after expanding %, so a % survives too. A quote or line break can't.
-        if (v && v->find_first_of("\"\r\n") != std::string::npos) {
-          throw_runtime_error({ "activation: cmd cannot set ",
-                                name,
-                                " to a value holding a quote or a line break" });
+        // `for /f` runs each line as text: no % expansion, no & | < > ^ splitting, and
+        // `set "N=v"` ends at the last quote, so inner quotes survive. A line break can't.
+        if (v && v->find_first_of("\r\n") != std::string::npos) {
+          throw_runtime_error(
+              { "activation: cmd cannot set ", name, " to a value holding a line break" });
         }
         size_t const start{ out.size() };
         out.append("set \"").append(name).append("=");
@@ -436,6 +462,7 @@ std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const 
     }
     out += '\n';
   }
+  if (sh == env_shell::CMD) { out += "exit /b 0\n"; }  // envy.bat: no output, no success
   return out;
 }
 

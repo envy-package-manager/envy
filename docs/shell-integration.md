@@ -40,7 +40,7 @@ A project whose `@envy version` predates `activate` (below 0.6.0) falls back to 
 
 Without hooks, the same commands work by hand: `eval "$(envy activate zsh)"`, `eval "$(envy deactivate zsh)"`. Activating always deactivates first, from any project. cmd has no hook; `tools\envy activate cmd` and `tools\envy deactivate cmd` change the session in place.
 
-Product scripts read the same state: a caller already in this project's current activation runs the tool as is; anyone else — CI, another project's shell — gets the activation applied for that one tool.
+Product scripts read the same state: a caller already in this project's activation runs the tool as is, plus any of the tool's `ENV` it lacks; anyone else — CI, another project's shell — gets the activation applied for that one tool.
 
 ## Activation State
 
@@ -53,6 +53,7 @@ Activation is modal and lives in exported variables, so nested shells, tmux pane
 | `ENVY_ACTIVATE_ROOT` | Activated project (canonical); `ENVY_ACTIVATE_KEY` is the hook's spelling of it |
 | `ENVY_ACTIVATE_EXE` | Binary that wrote the state; the hook deactivates with it |
 | `ENVY_ACTIVATE_GEN` / `_GENFILE` | Generation in effect / the file installs bump |
+| `ENVY_ACTIVATE_PKGS` | Digests of the packages whose `ENV` it applied; product scripts add what their tool lacks |
 | `ENVY_ACTIVATE_SCHEMA` | State format; a mismatch says to restart the shell |
 
 Restore is wholesale: a variable activation touched goes back to its pre-activate value on leave, including edits you made to it inside the project. Envy never applies activation to its own phases—`envy install` from an activated shell builds exactly what it builds in CI.

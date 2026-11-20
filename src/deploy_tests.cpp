@@ -149,9 +149,8 @@ TEST_CASE("deploy: product scripts hand the tool to `envy product --run`") {
 
   std::string const win{ envy::deploy_stamp_product_script("foo",
                                                            envy::platform_id::WINDOWS) };
-  CHECK(win.find("call \"%~dp0envy.bat\" product --run \"foo\" -- %*") !=
-        std::string::npos);
-  CHECK(win.find("exit /b %ERRORLEVEL%") != std::string::npos);
+  CHECK(win.find("\n\"%~dp0envy.bat\" product --run \"foo\" -- %*") != std::string::npos);
+  CHECK(win.find("call ") == std::string::npos);  // call doubles carets in arguments
   CHECK(win.find("set \"") == std::string::npos);
 }
 

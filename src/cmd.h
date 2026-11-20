@@ -1,19 +1,26 @@
 #pragma once
 
+#include "shell.h"
 #include "util.h"
 
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace envy {
 
 class cache;
 struct manifest;
 
-struct subprocess_exit {  // for commands that proxy subprocess exit codes
-  int code;
+// A command's last act: become `argv` in environment `to` (`from` now). Thrown so main
+// runs it after the tui and libraries are down -- no thread races the env, no row lingers.
+struct exec_request {
+  std::vector<std::string> argv;
+  shell_env_t from;
+  shell_env_t to;
 };
 
 // Shared command prologue: load manifest (throws "<cmd_name>: could not load
