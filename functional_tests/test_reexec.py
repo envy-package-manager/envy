@@ -366,12 +366,9 @@ class TestReexecAttestation(_ReexecTestBase):
 class TestReexecProductRun(_ReexecTestBase):
     """A wrapper whose envy re-execs: the tool runs from the pinned envy."""
 
-    def test_the_tool_keeps_stdout_across_the_reexec(self) -> None:
-        """--run points stdout at stderr while it works; it must come back first.
-
-        The pinned "envy" is a stand-in that marks stderr and runs this build, so the
-        re-exec is proven by the marker, not by log text an exec may drop.
-        """
+    def _publish_stand_in(self) -> None:
+        """The pinned "envy": marks stderr, then runs this build. The marker proves the
+        re-exec, not log text an exec may drop."""
         self._setup_reexec_project("1.2.3")
         stand_in = self._temp_dir / "stand-in" / _BINARY_NAME
         stand_in.parent.mkdir()
@@ -379,6 +376,26 @@ class TestReexecProductRun(_ReexecTestBase):
         stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
         archive = self._releases_dir / "v1.2.3" / f"envy-{_OS_NAME}-{_ARCH}{_EXT}"
         _create_envy_archive(archive, stand_in)
+
+    def test_run_activate_reexecs_even_when_the_activation_is_current(self) -> None:
+        """Reusing the caller's activation must not skip the version pin."""
+        self._publish_stand_in()
+        env = self._get_env(
+            ENVY_TEST_SELF_VERSION="9.9.9",
+            ENVY_ACTIVATE_SCHEMA="1",
+            ENVY_ACTIVATE_VARS="X",
+            ENVY_ACTIVATE_ROOT=str(self._project.resolve()),
+            ENVY_ACTIVATE_GEN="0",  # no genfile yet reads as "0": current
+        )
+        result = self._run_envy(["run", "--activate", "sh", "-c", "echo RAN"],
+                                cwd=self._project, env=env)
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertIn("REEXEC-MARKER", result.stderr)
+        self.assertEqual("RAN", result.stdout.strip())
+
+    def test_the_tool_keeps_stdout_across_the_reexec(self) -> None:
+        """--run points stdout at stderr while it works; it must come back first."""
+        self._publish_stand_in()
 
         payload = self._temp_dir / "tool.sh"
         payload.write_text("#!/bin/sh\necho TOOL-STDOUT\n")

@@ -697,6 +697,13 @@ class TestWindowsShells(_ProductRunBase):
                            env=env, capture_output=True, text=True, timeout=90)
         self.assertNotEqual(0, r.returncode, r.stdout + r.stderr)
 
+    def test_a_trailing_backslash_survives_the_batch_hop(self) -> None:
+        """tool.bat hands %* to a native program, which reads `\\"` as an escaped quote."""
+        args = ["C:\\dir with space\\", "next", 'say \\"hi\\"']
+        r = self.call([self.wrapper(self.a), *args])
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertEqual(args, json.loads(r.stdout)["argv"])
+
     def test_powershell_runs_the_wrapper(self) -> None:
         env = dict(self.env, DUMP_EXIT="5")
         r = subprocess.run(

@@ -722,18 +722,28 @@ std::wstring build_command_line_custom(custom_shell_inline const &shell,
   return command;
 }
 
-// One argument as cmd.exe reads it: quoted when empty or holding a character cmd would
-// act on, a quote doubled inside. % still expands; nothing in a /c line escapes it.
+// One argument as cmd reads it and as the native program a batch hands %* to parses it:
+// quotes doubled, backslashes doubled before any quote. % still expands in a /c line.
 std::wstring quote_arg_cmd(std::wstring_view arg) {
   if (!arg.empty() && arg.find_first_of(L" \t\"&|<>^(),;=!") == std::wstring_view::npos) {
     return std::wstring{ arg };
   }
   std::wstring out{ L"\"" };
+  size_t backslashes{ 0 };
   for (wchar_t const c : arg) {
-    out.push_back(c);
-    if (c == L'"') { out.push_back(L'"'); }
+    if (c == L'\\') {
+      ++backslashes;
+      out.push_back(c);
+      continue;
+    }
+    if (c == L'"') {
+      out.append(backslashes, L'\\').append(L"\"\"");
+    } else {
+      out.push_back(c);
+    }
+    backslashes = 0;
   }
-  out.push_back(L'"');
+  out.append(backslashes, L'\\').push_back(L'"');  // `dir with space\` stays one argument
   return out;
 }
 

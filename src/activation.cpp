@@ -9,6 +9,7 @@
 #include "pkg_env.h"
 #include "pkg_key.h"
 #include "platform.h"
+#include "reexec.h"
 #include "tui.h"
 #include "util.h"
 
@@ -282,18 +283,17 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
                               std::optional<std::filesystem::path> const &cli_cache_root,
                               shell_env_t const &live,
                               bool reuse_current) {
-  // A manifest that fails to load still activates its bin dir and root. A reused one skips
-  // the re-exec below: nothing then reads the state but the check itself.
+  // A manifest that fails to load still activates its bin dir and root.
   auto const found{ manifest::find_and_discover(std::nullopt, false, project_dir) };
+  auto const resolved{ resolve_cache_root(
+      found.meta.cache_request(cli_cache_root, found.path.parent_path())) };
 
   // Read before any package is inspected: an install finishing mid-activation then leaves
   // the recorded generation stale, and the next prompt refreshes.
-  auto const anchor{ activation_anchor_read(
-      resolve_cache_root(
-          found.meta.cache_request(cli_cache_root, found.path.parent_path()))
-          .root,
-      found.path) };
+  auto const anchor{ activation_anchor_read(resolved.root, found.path) };
   if (reuse_current && env_activation_current(live, anchor.root.string(), anchor.gen)) {
+    // The pinned envy still takes over, as cmd_startup_load below would make it.
+    reexec_if_needed(found.meta, resolved, found.path.parent_path());
     return { .target = live, .root = anchor.root.string(), .vars = 0 };
   }
 
