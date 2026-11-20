@@ -1,7 +1,6 @@
 #pragma once
 
 #include "cmd.h"
-#include "shell.h"
 
 #include <filesystem>
 #include <optional>
@@ -26,11 +25,6 @@ class cmd_run : public cmd {
   void execute() override;
 
  private:
-  // The caller's env with the bin dir first on PATH and ENVY_PROJECT_ROOT set.
-  shell_env_t bin_dir_env(std::filesystem::path const &start_dir,
-                          bool hint_sentinel,
-                          shell_env_t const &live) const;
-
   cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;
 };

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "shell.h"
 #include "util.h"
 
 #include <filesystem>
@@ -8,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace envy {
@@ -18,10 +18,13 @@ struct manifest;
 // A command's last act: become `argv` in environment `to` (`from` now). Thrown so main
 // runs it after the tui and libraries are down -- no thread races the env, no row lingers.
 struct exec_request {
+  using env_t = std::unordered_map<std::string, std::string>;  // shell_env_t; see below
   std::vector<std::string> argv;
-  shell_env_t from;
-  shell_env_t to;
+  env_t from;
+  env_t to;
 };
+// shell.h stays out of this header: its sol/forward.hpp ahead of a TU's later sol.hpp,
+// with a library's __has_builtin shim between them, is a macro redefinition under MSVC.
 
 // Shared command prologue: load manifest (throws "<cmd_name>: could not load
 // manifest"), re-exec if the manifest pins a different envy version, then

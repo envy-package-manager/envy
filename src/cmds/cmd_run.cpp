@@ -20,6 +20,52 @@ namespace envy {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+// The caller's env with the bin dir first on PATH and ENVY_PROJECT_ROOT set.
+shell_env_t bin_dir_env(fs::path const &start_dir,
+                        bool hint_sentinel,
+                        std::optional<fs::path> const &cli_cache_root,
+                        shell_env_t const &live) {
+  auto const discovered{ manifest::discover(false, start_dir) };
+  if (!discovered) {
+    std::string msg{ "run: manifest not found (discovery from " + start_dir.string() +
+                     ")" };
+    if (hint_sentinel) {
+      msg += "\nhint: use '--' to specify script location for manifest discovery";
+    }
+    throw_runtime_error({ msg });
+  }
+  auto const &manifest_path{ discovered->path };
+  auto const &meta{ discovered->meta };  // discovery parsed the directives already
+
+  reexec_if_needed(
+      meta,
+      resolve_cache_root(meta.cache_request(cli_cache_root, manifest_path.parent_path())),
+      manifest_path.parent_path());
+
+  if (!meta.bin) {
+    throw_runtime_error({ "run: manifest has no @envy bin directive: ", manifest_path });
+  }
+
+  auto const bin_dir_raw{ manifest_path.parent_path() / *meta.bin };
+  if (!fs::exists(bin_dir_raw) || !fs::is_directory(bin_dir_raw)) {
+    throw_runtime_error({ "run: bin directory does not exist: ", bin_dir_raw });
+  }
+  auto const bin_dir{ fs::canonical(bin_dir_raw) };
+
+  shell_env_t out{ live };
+  env_ops_apply(out,
+                { { .name = "ENVY_PROJECT_ROOT",
+                    .op = env_set{ manifest_path.parent_path().string() } },
+                  { .name = "PATH",
+                    .op = env_edit{ .prepend = { bin_dir.string() },
+                                    .sep = std::string(1, env_path_sep()) } } });
+  return out;
+}
+
+}  // namespace
+
 cli_cmd &cmd_run::register_cli(cli_cmd &app, cfg &c) {
   auto &sub{ app.sub("run", "Run a command with envy bin dir on PATH") };
   sub.flag("--activate", c.activate, "Run with the project's activated environment");
@@ -78,50 +124,13 @@ void cmd_run::execute() {
   shell_env_t live{ shell_getenv() };
   shell_env_t to{ cfg_.activate
                       ? activation_compute(start_dir, cli_cache_root_, live, true).target
-                      : bin_dir_env(start_dir, exec_command.size() > 1, live) };
+                      : bin_dir_env(start_dir,
+                                    exec_command.size() > 1 && !cfg_.project_dir,
+                                    cli_cache_root_,
+                                    live) };
   throw exec_request{ .argv = std::move(exec_command),
                       .from = std::move(live),
                       .to = std::move(to) };
-}
-
-shell_env_t cmd_run::bin_dir_env(fs::path const &start_dir,
-                                 bool hint_sentinel,
-                                 shell_env_t const &live) const {
-  auto const discovered{ manifest::discover(false, start_dir) };
-  if (!discovered) {
-    std::string msg{ "run: manifest not found (discovery from " + start_dir.string() +
-                     ")" };
-    if (!cfg_.project_dir && hint_sentinel) {
-      msg += "\nhint: use '--' to specify script location for manifest discovery";
-    }
-    throw_runtime_error({ msg });
-  }
-  auto const &manifest_path{ discovered->path };
-  auto const &meta{ discovered->meta };  // discovery parsed the directives already
-
-  reexec_if_needed(
-      meta,
-      resolve_cache_root(meta.cache_request(cli_cache_root_, manifest_path.parent_path())),
-      manifest_path.parent_path());
-
-  if (!meta.bin) {
-    throw_runtime_error({ "run: manifest has no @envy bin directive: ", manifest_path });
-  }
-
-  auto const bin_dir_raw{ manifest_path.parent_path() / *meta.bin };
-  if (!fs::exists(bin_dir_raw) || !fs::is_directory(bin_dir_raw)) {
-    throw_runtime_error({ "run: bin directory does not exist: ", bin_dir_raw });
-  }
-  auto const bin_dir{ fs::canonical(bin_dir_raw) };
-
-  shell_env_t out{ live };
-  env_ops_apply(out,
-                { { .name = "ENVY_PROJECT_ROOT",
-                    .op = env_set{ manifest_path.parent_path().string() } },
-                  { .name = "PATH",
-                    .op = env_edit{ .prepend = { bin_dir.string() },
-                                    .sep = std::string(1, env_path_sep()) } } });
-  return out;
 }
 
 }  // namespace envy
