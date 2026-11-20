@@ -225,12 +225,13 @@ env_ops builtin_layer(std::filesystem::path const &root, envy_meta const &meta) 
   return out;
 }
 
+// Never empty: Windows can't hold an empty variable, and an absent one reads as "unknown".
 std::string join_digests(std::unordered_set<std::string> const &digests) {
   std::vector<std::string> sorted{ digests.begin(), digests.end() };
   util_sort(sorted, [](auto const &a, auto const &b) { return a < b; });
   std::string out;
   for (auto const &d : sorted) { out.append(out.empty() ? "" : ":").append(d); }
-  return out;
+  return out.empty() ? "-" : out;
 }
 
 std::unordered_set<std::string> digests_of(std::unordered_set<std::string> const &keys) {
@@ -336,7 +337,7 @@ shell_env_t activation_for_tool(engine const &eng,
     std::unordered_set<std::string> have;
     for (std::string_view rest{ *recorded }; !rest.empty();) {
       size_t const colon{ rest.find(':') };
-      have.emplace(rest.substr(0, colon));
+      if (auto const d{ rest.substr(0, colon) }; d != "-") { have.emplace(d); }
       rest = colon == std::string_view::npos ? std::string_view{} : rest.substr(colon + 1);
     }
     std::vector<keyed_layer> missing;

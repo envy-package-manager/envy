@@ -491,7 +491,7 @@ REM `activate cmd`/`deactivate cmd` change the caller's session: cmd expands the
 REM `endlocal` drops our scope; envy's last line, `exit /b 0`, is the only way out with 0.
 :apply
 endlocal & (for /f "delims=" %%L in ('^""%ENVY_BIN%" --project "%~dp0." %*^"') do %%L) & exit /b 1
-REM `endlocal` first: envy gets the caller's env, not ours, and with delayed expansion back
-REM off a `!` in an argument survives. A bare `exit /b` keeps envy's exit code.
+REM `endlocal` first: envy gets the caller's env, and a `!` argument survives. The failed
+REM goto ends this batch (npm's cmd-shim trick): envy runs last, so its code is ours.
 :exec
-endlocal & "%ENVY_BIN%" --project "%~dp0." %* & exit /b
+endlocal & goto #_undefined_# 2>nul || title %COMSPEC% & "%ENVY_BIN%" --project "%~dp0." %*

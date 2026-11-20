@@ -616,13 +616,15 @@ class TestWindowsProductScript(_AnchorTestBase):
         self.assertIn('--project "%~dp0."', launcher)
 
     def test_bat_launcher_starts_envy_outside_its_own_scope(self):
-        """endlocal first: no launcher variable reaches envy, and a `!` argument survives."""
+        """endlocal first: no launcher variable reaches envy, and a `!` argument survives.
+        The failed goto ends the batch, so envy runs last and its exit code is the batch's."""
         p = self.project("winny", '{ tool = "W-tool" }')
         run = self.sync(p / "envy.lua", "--platform", "all", cwd=p)
         self.assertEqual(0, run.returncode, run.stderr)
 
         lines = (p / "tools" / "envy.bat").read_text(encoding="utf-8").splitlines()
-        self.assertEqual('endlocal & "%ENVY_BIN%" --project "%~dp0." %* & exit /b',
+        self.assertEqual('endlocal & goto #_undefined_# 2>nul || title %COMSPEC% & '
+                         '"%ENVY_BIN%" --project "%~dp0." %*',
                          lines[-1].strip())  # last: a rewrite mid-run is never read
 
 
