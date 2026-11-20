@@ -170,7 +170,53 @@ TEST_CASE("env_script: refuses names a shell cannot assign") {
 TEST_CASE("env_shell_parse") {
   CHECK(env_shell_parse("bash") == env_shell::BASH);
   CHECK(env_shell_parse("powershell") == env_shell::POWERSHELL);
-  CHECK_FALSE(env_shell_parse("cmd").has_value());
+  CHECK(env_shell_parse("cmd") == env_shell::CMD);
+  CHECK_FALSE(env_shell_parse("tcsh").has_value());
+}
+
+TEST_CASE("env_script: cmd sets, unsets, and keeps cmd's metacharacters literal") {
+  shell_env_t const from{ { "GONE", "x" }, { "SAME", "s" } };
+  shell_env_t const to{ { "SAME", "s" }, { "V", "a b & c | <d> ^e %PATH% !x!" } };
+  CHECK(env_script(env_shell::CMD, from, to) ==
+        "set \"GONE=\"\n"
+        "set \"V=a b & c | <d> ^e %PATH% !x!\"\n");
+}
+
+TEST_CASE("env_script: cmd refuses what a set line cannot carry") {
+  CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "Q", "say \"hi\"" } }),
+                  std::runtime_error);
+  for (char const *v : { "a\nb", "a\rb" }) {
+    CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "NL", v } }), std::runtime_error);
+  }
+  CHECK_THROWS_AS(env_script(env_shell::CMD, {}, { { "LONG", std::string(8200, 'x') } }),
+                  std::runtime_error);
+  CHECK_NOTHROW(env_script(env_shell::CMD, {}, { { "FITS", std::string(8000, 'x') } }));
+}
+
+TEST_CASE("env_activation_current") {
+  shell_env_t const act{ { "ENVY_ACTIVATE_SCHEMA", kEnvStateSchema },
+                         { "ENVY_ACTIVATE_VARS", "A" },
+                         { "ENVY_ACTIVATE_ROOT", "/p" },
+                         { "ENVY_ACTIVATE_GEN", "7" } };
+  CHECK(env_activation_current(act, "/p", "7"));
+
+  SUBCASE("another project's activation is not this one's") {
+    CHECK_FALSE(env_activation_current(act, "/q", "7"));
+  }
+  SUBCASE("a bumped generation makes it stale") {
+    CHECK_FALSE(env_activation_current(act, "/p", "8"));
+  }
+  SUBCASE("a state format this envy cannot read is never current") {
+    auto other{ act };
+    other["ENVY_ACTIVATE_SCHEMA"] = "999";
+    CHECK_FALSE(env_activation_current(other, "/p", "7"));
+  }
+  SUBCASE("partial state is not an activation") {
+    auto partial{ act };
+    partial.erase("ENVY_ACTIVATE_VARS");
+    CHECK_FALSE(env_activation_current(partial, "/p", "7"));
+  }
+  SUBCASE("no state at all") { CHECK_FALSE(env_activation_current({}, "/p", "7")); }
 }
 
 }  // namespace envy

@@ -32,14 +32,14 @@ The launcher `sync`/`deploy` writes into `@envy bin` injects `--project` with it
 
 ```bash
 cd ~/other-project
-../../some-envy-project/tools/uv run ./local_script.py   # uv, PATH and ENVY_PROJECT_ROOT from some-envy-project
+../../some-envy-project/tools/uv run ./local_script.py   # uv, in some-envy-project's activated environment
 ```
 
-Product scripts also prepend their own bin dir to `PATH`, so a tool that shells out to a sibling product finds it. They export `ENVY_PROJECT_ROOT` too — stamped as a path relative to the bin dir, so a re-cloned or moved tree still resolves — but only for a root manifest: under `@envy root "false"` the project depends on where the tree is nested, no deploy-time constant is right in every checkout, and the caller's value stands instead.
+A product script is one line: `exec <bin>/envy product --run <name> -- "$@"`. The tool runs in its project's activation — bin dir on `PATH`, `ENVY_PROJECT_ROOT`, every installed package's `ENV` — whoever calls it: CI, an IDE, another project's activated shell, another project's tool. See `envy product --run`.
 
 Because those scripts resolve their project by walking up from the bin dir, `deploy` refuses a *root* manifest whose bin dir walks up to a **different** `envy.lua` — `@envy bin "../shared"`, or a `--manifest` outside the bin dir's tree — since every script written there would hand out another project's tools. It warns instead when the walk finds nothing (a `.git` in between) or when the manifest is not named `envy.lua` (a variant build, invisible to the walk by construction).
 
-`@envy root "false"` opts out of that check: it *declares* that the walk continues past this manifest, so its bin dir resolving the enclosing project is the design. Nothing deployed into a non-root bin dir names its own tree — no absolute paths, and no project-root stamp — so a superproject checkout can restamp a nested submodule's committed bin dir in place, byte-for-byte identically to a standalone clone. `--subproject` is what targets it (nearest manifest, `@envy root` ignored).
+`@envy root "false"` opts out of that check: it *declares* that the walk continues past this manifest, so its bin dir resolving the enclosing project is the design. Nothing deployed into a bin dir names its own tree — no absolute paths, no project-root stamp — so a superproject checkout can restamp a nested submodule's committed bin dir in place, byte-for-byte identically to a standalone clone. `--subproject` is what targets it (nearest manifest, `@envy root` ignored).
 
 `envy run` also infers the anchor from the script it is given (`--` sentinel, or a first argument that names an existing file); `--project` outranks both.
 
@@ -86,11 +86,15 @@ envy vendor patched --force         # throw away deliberate edits to an exempt c
 
 ### Shell Integration
 
-**`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell only) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is silently skipped; the prompt after it installs—by `envy install` or a shim—refreshes. Prints a usage hint instead of the script when stdout is a terminal.
+**`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell, cmd) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is silently skipped; the prompt after it installs—by `envy install` or a shim—refreshes. Prints a usage hint instead of the script when stdout is a terminal.
 
 **`envy deactivate <shell>`** — Print shell code that restores every variable activation touched, byte-for-byte, from the backups activation keeps in the environment. Reads nothing but those variables: no manifest, no Lua, no network.
 
-**`envy run --activate <cmd>`** — Run `cmd` with the project's activated environment, as `envy activate` would set it. Without the flag, `run` passes the caller's environment through with the bin dir prepended.
+**`envy run --activate <cmd>`** — Run `cmd` with the project's activated environment, as `envy activate` would set it; an environment that already is that project's current activation passes through untouched. Without the flag, `run` passes the caller's environment through with the bin dir prepended.
+
+**`envy product --run <name> [-- args…]`** — What product scripts exec. One graph: resolve, install the provider's closure (nothing else), then activate from the same engine unless the caller already is this project's activation at its current generation (`ENVY_ACTIVATE_ROOT`/`_GEN`). Read after the install, so a lazy install outdates an older activation and the tool still gets its own `ENV`. A foreign activation is undone first; the exported state makes nested wrappers (`make` → `./tools/gcc`) skip activation and never double `PATH`. A throwing `ENV` in the provider's closure is fatal; elsewhere it warns. stdout is the tool's: envy and spec output go to stderr. A bare user-managed value (`tool = "python3"`) is found on `PATH` past the bin dir, never its own wrapper. POSIX execs; Windows waits and returns the exit code, `.bat`/`.cmd` via `cmd.exe /d /s /c`, Ctrl-C left to the tool.
+
+**cmd sessions** — `envy activate cmd` / `envy deactivate cmd`, run through `<bin>\envy.bat`, change the calling cmd session in place: `endlocal & for /f` runs envy's `set "NAME=value"` lines there. No prompt hook: re-run after an install. Values holding `"` or a line break, or lines past 8191 characters, are refused.
 
 **`envy shell <shell>`** — Print the `source` line to add to your shell profile for automatic PATH management. Supported shells: `bash`, `zsh`, `fish`, `powershell`. Hook files live under the user-wide cache and are created during self-deploy; this command just prints the line. Warns only under `--cache-root`/`ENVY_CACHE_ROOT`, and reports plainly that a project-local cache never populates hooks. Names a stale project-local `shell/` an older envy left behind. See `docs/shell-integration.md` for details.
 

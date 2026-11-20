@@ -82,4 +82,19 @@ void shell_init();
 shell_env_t shell_getenv();
 shell_result shell_run(std::string_view script, shell_run_cfg const &cfg);
 
+// Make this process's environment `to`, given that it is `from` now: only names whose
+// value differs are written.
+void shell_putenv(shell_env_t const &from, shell_env_t const &to);
+
+// `name` searched along `path_list` (PATHEXT applied on Windows), skipping empty entries
+// -- the cwd -- and any directory equivalent to `skip_dir`.
+std::optional<std::filesystem::path> shell_find_executable(
+    std::string_view name,
+    std::string_view path_list,
+    std::filesystem::path const *skip_dir = nullptr);
+
+// Become argv[0] (PATH-searched unless a path) with this env and stdio: POSIX execs;
+// Windows runs it (.bat/.cmd via cmd.exe), leaves Ctrl-C to it, returns its exit code.
+int shell_exec(std::vector<std::string> const &argv);
+
 }  // namespace envy

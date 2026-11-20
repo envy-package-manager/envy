@@ -479,6 +479,12 @@ exit /b 0
 
 REM --project ahead of the caller's argv: this script belongs to one project; take_last
 REM means a hand-typed --project wins. The dot keeps %~dp0's backslash off the quote.
-REM envy sync may rewrite this script; single line ensures cmd.exe never reads past here.
+REM envy sync may rewrite this script; single lines ensure cmd.exe never reads past them.
 :run
+if /i "%~1"=="activate" if /i "%~2"=="cmd" goto :apply
+if /i "%~1"=="deactivate" if /i "%~2"=="cmd" goto :apply
 "!ENVY_BIN!" --project "%~dp0." %* & exit /b !ERRORLEVEL!
+REM `activate cmd` and `deactivate cmd` change the caller's session: cmd expands this whole
+REM line first, so `endlocal` drops our scope and `for /f` runs envy's `set` lines there.
+:apply
+endlocal & (for /f "delims=" %%L in ('""%ENVY_BIN%" --project "%~dp0." %*"') do %%L) & exit /b 0

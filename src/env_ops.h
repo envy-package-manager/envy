@@ -78,10 +78,18 @@ shell_env_t env_with_state(shell_env_t const &base,
 // Names whose value differs between `a` and `b`, the ENVY_ACTIVATE_ state excluded.
 std::vector<std::string> env_changed_names(shell_env_t const &a, shell_env_t const &b);
 
-enum class env_shell { BASH, ZSH, FISH, POWERSHELL };
+// `env` is already the activation of `root` (canonical manifest dir) at generation `gen`,
+// in a state format this envy reads: nothing to do or undo before running in it.
+bool env_activation_current(shell_env_t const &env,
+                            std::string_view root,
+                            std::string_view gen);
+
+enum class env_shell { BASH, ZSH, FISH, POWERSHELL, CMD };
 std::optional<env_shell> env_shell_parse(std::string_view name);
 
-// A script that, evaluated by `sh`, turns environment `from` into `to`.
+// A script that, evaluated by `sh`, turns environment `from` into `to`. CMD is one
+// `set "NAME=value"` per line, run by envy.bat's `for /f`; it throws on a value holding
+// a quote or a line break, or a line past cmd's 8191-character limit.
 std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const &to);
 
 }  // namespace envy

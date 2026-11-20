@@ -34,10 +34,9 @@ namespace envy {
 
 namespace {
 
-// Depth-first from the manifest roots, each package before its dependencies and children
-// in key order: the order activation's "earlier wins" precedence is defined over.
-std::vector<pkg *> walk_graph(engine const &eng,
-                              std::vector<pkg_cfg const *> const &roots) {
+// Depth-first from the roots, each package before its dependencies and children in key
+// order: the order activation's "earlier wins" precedence is defined over.
+std::vector<pkg *> walk_graph(std::vector<pkg *> const &roots) {
   std::vector<pkg *> order;
   std::unordered_set<pkg *> seen;
   auto const visit{ [&](auto const &self, pkg *p) -> void {
@@ -54,8 +53,15 @@ std::vector<pkg *> walk_graph(engine const &eng,
     });
     for (pkg *d : deps) { self(self, d); }
   } };
-  for (auto const *cfg : roots) { visit(visit, eng.find_exact(pkg_key{ *cfg })); }
+  for (pkg *p : roots) { visit(visit, p); }
   return order;
+}
+
+std::vector<pkg *> walk_graph(engine const &eng,
+                              std::vector<pkg_cfg const *> const &roots) {
+  std::vector<pkg *> pkgs;
+  for (auto const *cfg : roots) { pkgs.push_back(eng.find_exact(pkg_key{ *cfg })); }
+  return walk_graph(pkgs);
 }
 
 struct keyed_layer {
@@ -63,21 +69,13 @@ struct keyed_layer {
   env_ops ops;
 };
 
-// The graph under `roots` -- plus `providers`, which may satisfy their weak references --
-// resolved by one engine and walked from `roots` into ENV layers in priority order. Skips
-// packages not in the cache. Throws if unresolvable.
-std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
-                                        std::vector<pkg_cfg const *> const &roots,
-                                        std::vector<pkg_cfg const *> const &providers,
-                                        std::filesystem::path const &root) {
-  engine eng{ *startup.c, startup.m.get() };
-  eng.set_quiet_idle_outcomes(true);  // a local bundle read in place is no news per prompt
-  eng.resolve_graph([&] {
-    auto all{ providers };
-    all.insert(all.end(), roots.begin(), roots.end());
-    return all;
-  }());
-
+// The ENV layers of the graph `eng` resolved, walked from `roots` in priority order.
+// Skips packages not in the cache. An ENV that throws inside `strict` propagates;
+// anywhere else it warns and is skipped, so one broken spec costs only its own ENV.
+std::vector<keyed_layer> engine_layers(engine const &eng,
+                                       std::vector<pkg_cfg const *> const &roots,
+                                       std::filesystem::path const &root,
+                                       std::unordered_set<pkg *> const &strict) {
   std::vector<keyed_layer> layers;
   for (pkg *p : walk_graph(eng, roots)) {
     if (!p->has_env) { continue; }
@@ -94,10 +92,40 @@ std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
         layers.push_back({ .key = p->key.canonical(), .ops = std::move(*ops) });
       }
     } catch (std::exception const &e) {
+      if (strict.contains(p)) {
+        throw_runtime_error({ "ENV of ", p->cfg->identity, ": ", e.what() });
+      }
       tui::warn("activate: skipping ENV of %s: %s", p->cfg->identity.c_str(), e.what());
     }
   }
   return layers;
+}
+
+// The graph under `roots` -- plus `providers`, which may satisfy their weak references --
+// resolved by one engine and walked from `roots` into ENV layers in priority order. Skips
+// packages not in the cache. Throws if unresolvable.
+std::vector<keyed_layer> resolve_layers(cmd_startup const &startup,
+                                        std::vector<pkg_cfg const *> const &roots,
+                                        std::vector<pkg_cfg const *> const &providers,
+                                        std::filesystem::path const &root) {
+  engine eng{ *startup.c, startup.m.get() };
+  eng.set_quiet_idle_outcomes(true);  // a local bundle read in place is no news per prompt
+  eng.resolve_graph([&] {
+    auto all{ providers };
+    all.insert(all.end(), roots.begin(), roots.end());
+    return all;
+  }());
+
+  return engine_layers(eng, roots, root, {});
+}
+
+// Keeps the first layer per package key: a dependency shared by two roots applies once.
+void keep_layers(std::vector<keyed_layer> found,
+                 std::unordered_set<std::string> &seen,
+                 std::vector<env_ops> &layers) {
+  for (auto &l : found) {
+    if (seen.insert(l.key).second) { layers.push_back(std::move(l.ops)); }
+  }
 }
 
 // Every installed package's ENV with root = the project root, highest priority first.
@@ -107,11 +135,9 @@ void package_layers(cmd_startup const &startup,
                     std::vector<env_ops> &layers) {
   auto const roots{ engine_filter_host_platform(
       { startup.m->packages.begin(), startup.m->packages.end() }) };
-  std::unordered_set<std::string> seen;  // a dependency shared by two roots applies once
+  std::unordered_set<std::string> seen;
   auto const keep{ [&](std::vector<keyed_layer> found) {
-    for (auto &l : found) {
-      if (seen.insert(l.key).second) { layers.push_back(std::move(l.ops)); }
-    }
+    keep_layers(std::move(found), seen, layers);
   } };
 
   try {
@@ -170,24 +196,70 @@ void package_layers(cmd_startup const &startup,
   for (auto &f : found) { keep(std::move(f)); }
 }
 
+// Built-ins outrank every package: ENVY_PROJECT_ROOT, and the bin dir ahead on PATH.
+env_ops builtin_layer(std::filesystem::path const &root, envy_meta const &meta) {
+  env_ops out{ { .name = "ENVY_PROJECT_ROOT", .op = env_set{ root.string() } } };
+  if (meta.bin) {
+    std::error_code ec;
+    if (auto const bin{ std::filesystem::canonical(root / *meta.bin, ec) }; !ec) {
+      out.push_back({ .name = "PATH",
+                      .op = env_edit{ .prepend = { bin.string() },
+                                      .sep = std::string(1, env_path_sep()) } });
+    }
+  }
+  return out;
+}
+
+// `layers` (highest first) over `live` with any prior activation undone, plus the state
+// that records it.
+activation finish(shell_env_t const &live,
+                  activation_anchor const &anchor,
+                  std::vector<env_ops> const &layers) {
+  shell_env_t const base{ env_restore(live) };
+  shell_env_t target{ base };
+  for (auto it{ layers.rbegin() }; it != layers.rend(); ++it) {
+    env_ops_apply(target, *it);
+  }
+
+  size_t const vars{ env_changed_names(base, target).size() };
+  return { .target = env_with_state(base,
+                                    std::move(target),
+                                    { .root = anchor.root.string(),
+                                      .exe = platform::get_exe_path().string(),
+                                      .genfile = anchor.genfile.string(),
+                                      .gen = anchor.gen }),
+           .root = anchor.root.string(),
+           .vars = vars };
+}
+
 }  // namespace
+
+activation_anchor activation_anchor_read(std::filesystem::path const &cache_root,
+                                         std::filesystem::path const &manifest_path) {
+  std::filesystem::path root{ util_canonical_path(manifest_path).parent_path() };
+  auto genfile{ activation_genfile(cache_root, root) };
+  std::string gen{ activation_gen_read(genfile) };
+  return { .root = std::move(root), .genfile = std::move(genfile), .gen = std::move(gen) };
+}
 
 activation activation_compute(std::optional<std::filesystem::path> const &project_dir,
                               std::optional<std::filesystem::path> const &cli_cache_root,
-                              shell_env_t const &live) {
+                              shell_env_t const &live,
+                              bool reuse_current) {
   // Re-exec into the pinned envy before anything reads the state: that envy owns its
   // format. A manifest that fails to load still activates its bin dir and root.
   auto const found{ manifest::find_and_discover(std::nullopt, false, project_dir) };
-  std::filesystem::path const root{ util_canonical_path(found.path).parent_path() };
 
   // Read before any package is inspected: an install finishing mid-activation then leaves
   // the recorded generation stale, and the next prompt refreshes.
-  auto const genfile{ activation_genfile(
+  auto const anchor{ activation_anchor_read(
       resolve_cache_root(
           found.meta.cache_request(cli_cache_root, found.path.parent_path()))
           .root,
-      root) };
-  std::string const gen{ activation_gen_read(genfile) };
+      found.path) };
+  if (reuse_current && env_activation_current(live, anchor.root.string(), anchor.gen)) {
+    return { .target = live, .root = anchor.root.string(), .vars = 0 };
+  }
 
   std::optional<cmd_startup> startup;
   try {
@@ -201,42 +273,33 @@ activation activation_compute(std::optional<std::filesystem::path> const &projec
     tui::warn("activate: %s; only the bin dir is active", e.what());
   }
 
-  shell_env_t const base{ env_restore(live) };
-
-  std::vector<env_ops> layers{ { { .name = "ENVY_PROJECT_ROOT",
-                                   .op = env_set{ root.string() } } } };  // highest first
-  if (found.meta.bin) {
-    std::error_code ec;
-    if (auto const bin{ std::filesystem::canonical(root / *found.meta.bin, ec) }; !ec) {
-      layers.front().push_back(
-          { .name = "PATH",
-            .op = env_edit{ .prepend = { bin.string() },
-                            .sep = std::string(1, env_path_sep()) } });
-    }
-  }
-
+  std::vector<env_ops> layers{ builtin_layer(anchor.root, found.meta) };  // highest first
   if (startup) {
     try {
-      package_layers(*startup, root, layers);
+      package_layers(*startup, anchor.root, layers);
     } catch (std::exception const &e) {
       tui::warn("activate: package ENV skipped: %s", e.what());
     }
   }
+  return finish(live, anchor, layers);
+}
 
-  shell_env_t target{ base };
-  for (auto it{ layers.rbegin() }; it != layers.rend(); ++it) {
-    env_ops_apply(target, *it);
-  }
-
-  size_t const vars{ env_changed_names(base, target).size() };
-  return { .target = env_with_state(base,
-                                    std::move(target),
-                                    { .root = root.string(),
-                                      .exe = platform::get_exe_path().string(),
-                                      .genfile = genfile.string(),
-                                      .gen = gen }),
-           .root = root.string(),
-           .vars = vars };
+activation activation_from_engine(engine const &eng,
+                                  manifest const &m,
+                                  activation_anchor const &anchor,
+                                  shell_env_t const &live,
+                                  pkg *strict) {
+  auto const closure{ walk_graph({ strict }) };
+  std::vector<env_ops> layers{ builtin_layer(anchor.root, m.meta) };
+  std::unordered_set<std::string> seen;
+  keep_layers(
+      engine_layers(eng,
+                    engine_filter_host_platform({ m.packages.begin(), m.packages.end() }),
+                    anchor.root,
+                    { closure.begin(), closure.end() }),
+      seen,
+      layers);
+  return finish(live, anchor, layers);
 }
 
 std::filesystem::path activation_genfile(std::filesystem::path const &cache_root,
@@ -279,8 +342,12 @@ env_shell activation_shell(std::string_view name, std::string_view cmd) {
   auto const sh{ env_shell_parse(name) };
   if (!sh) { throw_runtime_error({ cmd, ": unsupported shell '", name, "'" }); }
 #ifdef _WIN32
-  if (*sh != env_shell::POWERSHELL) {
-    throw_runtime_error({ cmd, ": only powershell is supported on Windows" });
+  if (*sh != env_shell::POWERSHELL && *sh != env_shell::CMD) {
+    throw_runtime_error({ cmd, ": only powershell and cmd are supported on Windows" });
+  }
+#else
+  if (*sh == env_shell::CMD) {
+    throw_runtime_error({ cmd, ": cmd is supported only on Windows" });
   }
 #endif
   return *sh;
@@ -298,6 +365,9 @@ std::string activation_eval_hint(std::string_view cmd, std::string_view shell) {
   std::string const call{ "envy " + std::string{ cmd } + " " + std::string{ shell } };
   if (shell == "fish") { return call + " | source"; }
   if (shell == "powershell") { return call + " | Out-String | Invoke-Expression"; }
+  if (shell == "cmd") {  // the launcher runs the `set` lines in the caller's session
+    return call + ", through the project's envy.bat";
+  }
   return "eval \"$(" + call + ")\"";
 }
 

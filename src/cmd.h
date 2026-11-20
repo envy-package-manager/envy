@@ -43,6 +43,20 @@ inline std::optional<std::filesystem::path> subproject_anchor(
   return subproject ? std::nullopt : project_dir;
 }
 
+// Points fd 1 at stderr until restore(), so nothing a command doesn't mean to print -- a
+// spec's envy.stdout, queued tui output -- reaches stdout.
+class stdout_to_stderr : unmovable {
+ public:
+  stdout_to_stderr();
+  ~stdout_to_stderr();
+
+  void restore();                        // the real stdout back on fd 1
+  void write(std::string_view s) const;  // to the real stdout
+
+ private:
+  int saved_;
+};
+
 class cmd : unmovable {
  public:
   using ptr_t = std::unique_ptr<cmd>;

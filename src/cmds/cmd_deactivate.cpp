@@ -16,9 +16,9 @@ namespace envy {
 cli_cmd &cmd_deactivate::register_cli(cli_cmd &app, cfg &c) {
   auto &sub{ app.sub("deactivate",
                      "Print shell code that restores the pre-activate environment") };
-  sub.pos("shell", c.shell, "Shell name (bash, zsh, fish, powershell)")
+  sub.pos("shell", c.shell, "Shell name (bash, zsh, fish, powershell, cmd)")
       .required()
-      .one_of("bash,zsh,fish,powershell");
+      .one_of("bash,zsh,fish,powershell,cmd");
   return sub;
 }
 

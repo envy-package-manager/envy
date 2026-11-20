@@ -6,10 +6,49 @@
 #include "self_deploy.h"
 #include "util.h"
 
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 
+#ifdef _WIN32
+#include <io.h>
+#define ENVY_DUP _dup
+#define ENVY_DUP2 _dup2
+#define ENVY_CLOSE _close
+#define ENVY_WRITE _write
+#define ENVY_FILENO _fileno
+#else
+#include <unistd.h>
+#define ENVY_DUP ::dup
+#define ENVY_DUP2 ::dup2
+#define ENVY_CLOSE ::close
+#define ENVY_WRITE ::write
+#define ENVY_FILENO ::fileno
+#endif
+
 namespace envy {
+
+stdout_to_stderr::stdout_to_stderr()
+    : saved_{ (std::fflush(stdout), ENVY_DUP(ENVY_FILENO(stdout))) } {
+  ENVY_DUP2(ENVY_FILENO(stderr), ENVY_FILENO(stdout));
+}
+
+stdout_to_stderr::~stdout_to_stderr() {
+  if (saved_ >= 0) { ENVY_CLOSE(saved_); }
+}
+
+void stdout_to_stderr::restore() {
+  std::fflush(stdout);
+  ENVY_DUP2(saved_, ENVY_FILENO(stdout));
+}
+
+void stdout_to_stderr::write(std::string_view s) const {
+  while (!s.empty()) {
+    auto const n{ ENVY_WRITE(saved_, s.data(), static_cast<unsigned>(s.size())) };
+    if (n <= 0) { throw_runtime_error({ "failed to write stdout" }); }
+    s.remove_prefix(static_cast<size_t>(n));
+  }
+}
 
 cmd_startup cmd_startup_load(std::string_view cmd_name,
                              std::optional<std::filesystem::path> const &manifest_path,

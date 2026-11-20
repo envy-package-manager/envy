@@ -361,6 +361,7 @@ end
 Two consumers, one syntax:
 
 - **Shell:** `envy activate` applies every installed package's `ENV` with `root` = the project root (depth-first from `PACKAGES`, a package before its dependencies, earlier wins), then the bin dir on `PATH` and `ENVY_PROJECT_ROOT`. See `docs/shell-integration.md`.
+- **Wrappers:** `envy product --run` (every deployed product script) runs the tool in that same activation, built from the engine that installed the provider — unless the caller already is it. `./tools/go` sees `GOTOOLCHAIN` in CI exactly as in an activated shell.
 - **Phases:** a package's verbs (string forms, `envy.run`, SETUP pairs) see the `ENV` of everything reached through the edges their phase waits on, with `root` = that package's tmp dir; deepest applies first, so nearer dependencies win, ties by key. A's INSTALL running B's tool that runs C's cargo gets C's `CARGO_HOME`, sandboxed under A's build.
 
 **Same hash, same bytes:** nothing project- or shell-specific reaches a phase. Phases and Lua `os.getenv` see the pre-activation environment—an activated shell's variables are undone before envy runs any verb—and `root` in a phase is never a project path. A dependency's `ENV` derives only from its own path, options and spec, all already behind the dependent's key. Project layout (e.g. `CARGO_HOME` under `out/`) belongs in no package's `options`.

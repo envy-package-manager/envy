@@ -5,26 +5,19 @@
 #include "manifest.h"
 #include "platform.h"
 #include "reexec.h"
+#include "shell.h"
 #include "tui.h"
 #include "util.h"
 
 #include "cli_parse.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace envy {
 
@@ -90,40 +83,16 @@ void cmd_run::execute() {
   }
 
   tui::sections_clear();
-  tui::flush();  // activation's warnings: execvp would discard the queue
-
-  auto const argv{ [&] {
-    std::vector<char *> a;
-    a.reserve(exec_command.size() + 1);
-    for (auto &arg : exec_command) { a.push_back(arg.data()); }
-    a.push_back(nullptr);
-    return a;
-  }() };
-
-#ifdef _WIN32
-  // Windows has no true execvp; spawn the child, wait, propagate its exit code.
-  intptr_t const rc{ _spawnvp(_P_WAIT, argv[0], argv.data()) };
-  if (rc == -1) { throw_runtime_error({ "run: spawn failed: ", std::strerror(errno) }); }
-  throw subprocess_exit{ static_cast<int>(rc) };
-#else
-  execvp(argv[0], argv.data());
-  throw_runtime_error({ "run: exec failed: ", std::strerror(errno) });
-#endif
+  tui::flush();  // activation's warnings: exec would discard the queue
+  throw subprocess_exit{ shell_exec(exec_command) };  // POSIX: returns only by throwing
 }
 
 // The activation `envy activate` would load, written into this process just before it
-// becomes (or spawns) the command: nothing else runs in between to see it.
+// becomes (or spawns) the command: nothing else runs in between to see it. An env that
+// already is this project's current activation is left exactly as the caller has it.
 void cmd_run::activate_process_env(fs::path const &start_dir) const {
   shell_env_t const live{ shell_getenv() };
-  auto const act{ activation_compute(start_dir, cli_cache_root_, live) };
-  for (auto const &[name, value] : act.target) {
-    if (auto const *cur{ env_get(live, name) }; !cur || *cur != value) {
-      platform::env_var_set(name.c_str(), value.c_str());
-    }
-  }
-  for (auto const &[name, _] : live) {
-    if (!env_get(act.target, name)) { platform::env_var_unset(name.c_str()); }
-  }
+  shell_putenv(live, activation_compute(start_dir, cli_cache_root_, live, true).target);
 }
 
 void cmd_run::prepend_bin_dir(fs::path const &start_dir, bool hint_sentinel) const {

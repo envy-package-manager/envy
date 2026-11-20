@@ -11,6 +11,10 @@
 
 namespace envy {
 
+class engine;
+struct manifest;
+struct pkg;
+
 // A project's shell activation, computed over `live` with any prior activation undone.
 struct activation {
   shell_env_t target;  // the whole environment to switch to, state included
@@ -18,11 +22,30 @@ struct activation {
   size_t vars{ 0 };    // names it touches
 };
 
+// Which project, and the generation an activation would record -- read now, so a later
+// install leaves it stale and the next consumer refreshes.
+struct activation_anchor {
+  std::filesystem::path root;  // canonical manifest dir
+  std::filesystem::path genfile;
+  std::string gen;
+};
+activation_anchor activation_anchor_read(std::filesystem::path const &cache_root,
+                                         std::filesystem::path const &manifest_path);
+
 // Built-ins (bin dir on PATH, ENVY_PROJECT_ROOT) always apply; installed packages' ENV is
-// best-effort over a read-only cache: the uninstalled are skipped, a Lua error warns.
+// best-effort over a read-only cache. reuse_current: an already-current `live` is kept.
 activation activation_compute(std::optional<std::filesystem::path> const &project_dir,
                               std::optional<std::filesystem::path> const &cli_cache_root,
-                              shell_env_t const &live);
+                              shell_env_t const &live,
+                              bool reuse_current = false);
+
+// The same activation, from an engine that has resolved m's PACKAGES already: one graph,
+// not two. An ENV that throws in `strict`'s closure propagates; elsewhere it warns.
+activation activation_from_engine(engine const &eng,
+                                  manifest const &m,
+                                  activation_anchor const &anchor,
+                                  shell_env_t const &live,
+                                  pkg *strict);
 
 // `<cache root>/activate/<root digest>`: bumped by every package that does work and every
 // `envy install`, so an activated shell in that project re-activates at its next prompt.

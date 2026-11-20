@@ -66,11 +66,9 @@ fs::path product_script_path(fs::path const &bin_dir,
 }  // namespace
 
 std::string deploy_stamp_product_script(std::string_view product_name,
-                                        platform_id platform,
-                                        std::string_view project_root_rel) {
+                                        platform_id platform) {
   std::string result{ get_product_script_template(platform) };
   replace_all(result, "@@PRODUCT_NAME@@", product_name);
-  replace_all(result, "@@PROJECT_ROOT_REL@@", project_root_rel);
   return result;  // LF as embedded; util_write_script owns the newline policy
 }
 
@@ -135,8 +133,7 @@ void deploy_verify_bin_dir(fs::path const &bin_dir,
 void deploy_product_scripts(fs::path const &bin_dir,
                             std::vector<product_info> const &products,
                             bool strict,
-                            std::vector<platform_id> const &platforms,
-                            std::string_view project_root_rel) {
+                            std::vector<platform_id> const &platforms) {
   // Check if a product is expected for a given platform
   auto const product_expected_for_platform = [&](std::string const &name,
                                                  platform_id plat) {
@@ -176,7 +173,7 @@ void deploy_product_scripts(fs::path const &bin_dir,
       auto const action{ [&]() -> char const * {
         switch (util_write_script(
             script_path,
-            deploy_stamp_product_script(product.product_name, plat, project_root_rel),
+            deploy_stamp_product_script(product.product_name, plat),
             plat)) {
           case script_write::UNCHANGED: ++unchanged; return "unchanged";
           case script_write::CREATED:
@@ -295,17 +292,7 @@ void deploy_finalize(std::filesystem::path const &bin_dir,
   }
 
   if (meta.deploy.has_value() && *meta.deploy) {
-    // Only a root manifest gets a stamped project root. '@envy root "false"' means the
-    // walk continues past this manifest, so which project the scripts resolve depends on
-    // where the tree is nested -- no deploy-time constant is right in both checkouts, and
-    // a wrong ENVY_PROJECT_ROOT is worse than the caller's own.
-    auto const rel{ [&]() -> std::string {
-      if (meta.root.has_value() && !*meta.root) { return {}; }
-      auto const hop{ fs::relative(util_canonical_path(manifest_path).parent_path(),
-                                   util_canonical_path(bin_dir)) };
-      return hop.empty() ? "." : hop.generic_string();
-    }() };
-    deploy_product_scripts(bin_dir, products, strict, platforms, rel);
+    deploy_product_scripts(bin_dir, products, strict, platforms);
   } else {
     tui::warn("deployment is disabled in %s", manifest_path.string().c_str());
     tui::info("Add '-- @envy deploy \"true\"' to enable product script deployment");

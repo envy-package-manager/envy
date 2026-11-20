@@ -4155,8 +4155,66 @@ TEST_CASE("cli_parse: cache-test parent and children") {
 
 #endif  // ENVY_FUNCTIONAL_TESTER
 
+TEST_CASE("cli_parse: cmd_product --run") {
+  SUBCASE("the wrapper's form: name, '--', then the tool's arguments verbatim") {
+    auto const cfg{ accepts<envy::cmd_product::cfg>(
+        { "envy", "product", "--run", "go", "--", "build", "--flag", "--", "", "a b" }) };
+    CHECK(cfg.run);
+    CHECK(cfg.product_name == "go");
+    CHECK(cfg.args == std::vector<std::string>{ "build", "--flag", "--", "", "a b" });
+  }
+
+  SUBCASE("no arguments") {
+    auto const cfg{ accepts<envy::cmd_product::cfg>(
+        { "envy", "product", "--run", "go" }) };
+    CHECK(cfg.run);
+    CHECK(cfg.product_name == "go");
+    CHECK(cfg.args.empty());
+  }
+
+  SUBCASE("an empty '--'") {
+    auto const cfg{ accepts<envy::cmd_product::cfg>(
+        { "envy", "product", "--run", "go", "--" }) };
+    CHECK(cfg.args.empty());
+  }
+
+  SUBCASE("the launcher's --project anchors it") {
+    auto const cfg{ accepts<envy::cmd_product::cfg>(
+        { "envy", "--project", ".", "product", "--run", "go", "--", "x" }) };
+    REQUIRE(cfg.project_dir.has_value());
+    CHECK(cfg.args == std::vector<std::string>{ "x" });
+  }
+
+  SUBCASE("absent by default") {
+    CHECK_FALSE(accepts<envy::cmd_product::cfg>({ "envy", "product", "go" }).run);
+  }
+
+  SUBCASE("a name is required") { rejects({ "envy", "product", "--run" }); }
+
+  SUBCASE("'--' ahead of the name still fills the name first") {
+    auto const cfg{ accepts<envy::cmd_product::cfg>(
+        { "envy", "product", "--run", "--", "go", "x" }) };
+    CHECK(cfg.product_name == "go");
+    CHECK(cfg.args == std::vector<std::string>{ "x" });
+  }
+
+  SUBCASE("it excludes --json") {
+    rejects({ "envy", "product", "--run", "go", "--json" });
+    rejects({ "envy", "product", "--json", "--run", "go" });
+  }
+
+  SUBCASE("arguments without --run are refused") {
+    rejects({ "envy", "product", "go", "x" });
+    rejects({ "envy", "product", "go", "--", "x" });
+  }
+
+  SUBCASE("an option after the name needs '--'") {
+    rejects({ "envy", "product", "--run", "go", "--flag" });
+  }
+}
+
 TEST_CASE("cli_parse: cmd_activate") {
-  for (char const *sh : { "bash", "zsh", "fish", "powershell" }) {
+  for (char const *sh : { "bash", "zsh", "fish", "powershell", "cmd" }) {
     auto const cfg{ accepts<envy::cmd_activate::cfg>({ "envy", "activate", sh }) };
     CHECK(cfg.shell == sh);
     CHECK_FALSE(cfg.project_dir.has_value());
@@ -4171,12 +4229,12 @@ TEST_CASE("cli_parse: cmd_activate") {
 
   SUBCASE("the shell is required and validated") {
     rejects({ "envy", "activate" });
-    rejects({ "envy", "activate", "cmd" });
+    rejects({ "envy", "activate", "tcsh" });
   }
 }
 
 TEST_CASE("cli_parse: cmd_deactivate") {
-  for (char const *sh : { "bash", "zsh", "fish", "powershell" }) {
+  for (char const *sh : { "bash", "zsh", "fish", "powershell", "cmd" }) {
     CHECK(accepts<envy::cmd_deactivate::cfg>({ "envy", "deactivate", sh }).shell == sh);
   }
   rejects({ "envy", "deactivate" });

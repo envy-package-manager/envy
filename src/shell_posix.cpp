@@ -382,6 +382,29 @@ void shell_init() {
   // No-op on POSIX - no job object initialization needed
 }
 
+void shell_putenv(shell_env_t const &from, shell_env_t const &to) {
+  for (auto const &[name, value] : to) {
+    if (auto const it{ from.find(name) }; it == from.end() || it->second != value) {
+      if (::setenv(name.c_str(), value.c_str(), 1) != 0) {
+        throw_runtime_error({ "setenv ", name, ": ", std::strerror(errno) });
+      }
+    }
+  }
+  for (auto const &[name, _] : from) {
+    if (!to.contains(name)) { ::unsetenv(name.c_str()); }
+  }
+}
+
+int shell_exec(std::vector<std::string> const &argv) {
+  if (argv.empty()) { throw std::invalid_argument("shell_exec: empty argv"); }
+  std::vector<char *> args;
+  args.reserve(argv.size() + 1);
+  for (auto const &a : argv) { args.push_back(const_cast<char *>(a.c_str())); }
+  args.push_back(nullptr);
+  ::execvp(args[0], args.data());
+  throw_runtime_error({ "exec ", argv[0], ": ", std::strerror(errno) });
+}
+
 shell_env_t shell_getenv() {
   shell_env_t env;
   if (!environ) { return env; }

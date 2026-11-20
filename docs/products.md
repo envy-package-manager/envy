@@ -84,6 +84,9 @@ spec text.
 
 ## `envy product`
 
+`envy product --run <name> -- args…` runs it instead, in the project's activation — what
+deployed scripts call (see `docs/commands.md`).
+
 `envy product <name>` resolves the graph, extends the provider's closure to completion,
 and prints the rendered value to stdout. Its stderr is the wrapped tool's, so a package
 that did no work (a cache hit) logs at DEBUG; a lazy install still reports. With no argument it lists every product:

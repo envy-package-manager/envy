@@ -351,11 +351,23 @@ shell_env_t env_with_state(shell_env_t const &base,
   return target;
 }
 
+bool env_activation_current(shell_env_t const &env,
+                            std::string_view root,
+                            std::string_view gen) {
+  auto const is{ [&](char const *suffix, std::string_view want) {
+    std::string const *v{ env_get(env, state_name(suffix)) };
+    return v && *v == want;
+  } };
+  return is("SCHEMA", kEnvStateSchema) && is("ROOT", root) && is("GEN", gen) &&
+         env_get(env, state_name("VARS"));
+}
+
 std::optional<env_shell> env_shell_parse(std::string_view name) {
   if (name == "bash") { return env_shell::BASH; }
   if (name == "zsh") { return env_shell::ZSH; }
   if (name == "fish") { return env_shell::FISH; }
   if (name == "powershell") { return env_shell::POWERSHELL; }
+  if (name == "cmd") { return env_shell::CMD; }
   return std::nullopt;
 }
 
@@ -404,6 +416,23 @@ std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const 
               .append("' -ErrorAction SilentlyContinue");
         }
         break;
+      case env_shell::CMD: {
+        // Inside `set "…"` cmd keeps & | < > ^ and spaces literal, and `for /f` runs the
+        // line after expanding %, so a % survives too. A quote or line break can't.
+        if (v && v->find_first_of("\"\r\n") != std::string::npos) {
+          throw_runtime_error({ "activation: cmd cannot set ",
+                                name,
+                                " to a value holding a quote or a line break" });
+        }
+        size_t const start{ out.size() };
+        out.append("set \"").append(name).append("=");
+        if (v) { out.append(*v); }
+        out += '"';
+        if (out.size() - start > 8191) {
+          throw_runtime_error({ "activation: ", name, " is too long for a cmd line" });
+        }
+        break;
+      }
     }
     out += '\n';
   }

@@ -38,7 +38,9 @@ On every directory change:
 
 A project whose `@envy version` predates `activate` (below 0.6.0) falls back to the old behavior without running its launcher: the bin dir on `PATH` and `ENVY_PROJECT_ROOT`, managed by the hook itself. A launcher that fails falls back the same way.
 
-Without hooks, the same commands work by hand: `eval "$(envy activate zsh)"`, `eval "$(envy deactivate zsh)"`. Activating always deactivates first, from any project.
+Without hooks, the same commands work by hand: `eval "$(envy activate zsh)"`, `eval "$(envy deactivate zsh)"`. Activating always deactivates first, from any project. cmd has no hook; `tools\envy activate cmd` and `tools\envy deactivate cmd` change the session in place.
+
+Product scripts read the same state: a caller already in this project's current activation runs the tool as is; anyone else — CI, another project's shell — gets the activation applied for that one tool.
 
 ## Activation State
 
