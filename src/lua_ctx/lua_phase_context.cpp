@@ -12,6 +12,15 @@ phase_context const *lua_phase_context_get(sol::this_state ts) {
   return static_cast<phase_context const *>(obj.as<void *>());
 }
 
+std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
+                                                std::filesystem::path const &path) {
+  if (path.is_absolute()) { return path; }
+  phase_context const *ctx{ lua_phase_context_get(ts) };
+  if (ctx && ctx->run_dir) { return *ctx->run_dir / path; }
+  if (ctx && ctx->p && ctx->p->lock) { return ctx->p->lock->stage_dir() / path; }
+  return std::filesystem::current_path() / path;
+}
+
 phase_context_guard::phase_context_guard(engine *eng,
                                          pkg *p,
                                          lua_State *L,

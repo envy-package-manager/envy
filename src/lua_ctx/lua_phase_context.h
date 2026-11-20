@@ -38,6 +38,10 @@ struct phase_context {
 // Get phase context from Lua registry (returns nullptr if not in phase execution)
 phase_context const *lua_phase_context_get(sol::this_state ts);
 
+// A relative path from Lua, anchored to the phase's run_dir, else its stage_dir, else cwd.
+std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
+                                                std::filesystem::path const &path);
+
 // RAII guard that sets Lua registry context for phase execution scope.
 // Automatically clears context on destruction (including exception unwinding).
 // The guard owns the context struct on the stack; registry stores pointer to it.

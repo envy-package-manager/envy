@@ -14,16 +14,6 @@
 namespace envy {
 namespace {
 
-// Resolve relative path to phase working directory (from registry, or stage_dir fallback)
-std::filesystem::path resolve_relative(std::filesystem::path const &path,
-                                       sol::this_state L) {
-  if (path.is_absolute()) { return path; }
-  phase_context const *ctx{ lua_phase_context_get(L) };
-  if (ctx && ctx->run_dir) { return *ctx->run_dir / path; }
-  if (ctx && ctx->p && ctx->p->lock) { return ctx->p->lock->stage_dir() / path; }
-  return std::filesystem::current_path() / path;
-}
-
 extract_options parse_optional_opts(sol::optional<sol::table> const &opts_table,
                                     std::string const &context) {
   return opts_table ? lua_envy_extract_parse_opts(*opts_table, context)
@@ -58,8 +48,10 @@ void lua_envy_extract_install(sol::table &envy_table) {
                              sol::this_state L) -> int {
     extract_options opts{ parse_optional_opts(opts_table, "envy.extract") };
 
-    std::filesystem::path const archive_path{ resolve_relative(archive_path_str, L) };
-    std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };
+    std::filesystem::path const archive_path{
+      lua_phase_context_resolve(L, archive_path_str)
+    };
+    std::filesystem::path const dest_dir{ lua_phase_context_resolve(L, dest_dir_str) };
 
     if (!std::filesystem::exists(archive_path)) {
       throw_runtime_error({ "envy.extract: file not found: ", archive_path });
@@ -84,8 +76,8 @@ void lua_envy_extract_install(sol::table &envy_table) {
                                  sol::this_state L) {
     extract_options const opts{ parse_optional_opts(opts_table, "envy.extract_all") };
 
-    std::filesystem::path const src_dir{ resolve_relative(src_dir_str, L) };
-    std::filesystem::path const dest_dir{ resolve_relative(dest_dir_str, L) };
+    std::filesystem::path const src_dir{ lua_phase_context_resolve(L, src_dir_str) };
+    std::filesystem::path const dest_dir{ lua_phase_context_resolve(L, dest_dir_str) };
 
     if (!std::filesystem::exists(src_dir)) {
       throw_runtime_error({ "envy.extract_all: source directory not found: ", src_dir });

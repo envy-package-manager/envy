@@ -124,6 +124,7 @@ void cmd_version::execute() {
             nsv_version.minor,
             nsv_version.patch);
   tui::info("  picojson: %s", ENVY_PICOJSON_VERSION);
+  tui::info("  tomlc17: %s", ENVY_TOMLC17_VERSION);
 
   if (cfg_.show_licenses) {
     tui::info("");

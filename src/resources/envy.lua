@@ -93,6 +93,68 @@ function envy.path.extension(path) end
 function envy.abspath(path) end
 
 --------------------------------------------------------------------------------
+-- Structured Data
+--------------------------------------------------------------------------------
+
+---@class envy.json
+envy.json = {}
+
+---Decode JSON text: null becomes nil, integers stay integers, arrays are tagged
+---@param text string
+---@return any
+function envy.json.decode(text) end
+
+---Read and decode a JSON file; relative paths resolve like envy.copy's
+---@param path string
+---@return any
+function envy.json.read(path) end
+
+---Encode to JSON: sorted keys, shortest floats; raises on cycles, functions, inf/nan
+---@param value any
+---@param opts? { indent?: integer } Spaces per level (0-10); 0 or absent is compact
+---@return string
+function envy.json.encode(value, opts) end
+
+---Encode to a JSON file plus trailing newline, atomically, creating parent directories
+---@param path string
+---@param value any
+---@param opts? { indent?: integer }
+function envy.json.write(path, value, opts) end
+
+---Tag a table (or a new one) as an array, so an empty one encodes as []
+---@param t? table
+---@return table
+function envy.json.array(t) end
+
+---@class envy.toml
+envy.toml = {}
+
+---Decode TOML 1.1 text: date-times become RFC 3339 strings, arrays are tagged
+---@param text string
+---@return table
+function envy.toml.decode(text) end
+
+---Read and decode a TOML file; relative paths resolve like envy.copy's
+---@param path string
+---@return table
+function envy.toml.read(path) end
+
+---Encode a table to TOML: own keys first, then [tables] and [[arrays of tables]]
+---@param doc table
+---@return string
+function envy.toml.encode(doc) end
+
+---Encode a table to a TOML file, atomically, creating parent directories
+---@param path string
+---@param doc table
+function envy.toml.write(path, doc) end
+
+---Tag a table (or a new one) as an array, so an empty one encodes as []
+---@param t? table
+---@return table
+function envy.toml.array(t) end
+
+--------------------------------------------------------------------------------
 -- File Operations
 --------------------------------------------------------------------------------
 

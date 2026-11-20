@@ -129,6 +129,49 @@ class EnvyLuaTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must be relative", result.stderr)
 
+    def test_decode_upstream_metadata_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "channel.toml").write_text(
+                "[pkg.rust-std.target.aarch64-apple-darwin]\n"
+                'xz_url = "https://example.com/rust-std.tar.xz"\n',
+                encoding="utf-8",
+            )
+            (root / "index.json").write_text(
+                '[{"version": "v24.11.1", "lts": "Krypton"}]', encoding="utf-8"
+            )
+            script = root / "spec.lua"
+            script.write_text(
+                "local function slurp(p)\n"
+                "  local f = assert(io.open(envy.abspath(p), 'rb'))\n"
+                "  local s = f:read('a')\n"
+                "  f:close()\n"
+                "  return s\n"
+                "end\n"
+                "local m = envy.toml.decode(slurp('channel.toml'))\n"
+                "local r = envy.json.decode(slurp('index.json'))\n"
+                "envy.stdout(m.pkg['rust-std'].target['aarch64-apple-darwin'].xz_url\n"
+                "  .. ' ' .. r[1].version .. ' ' .. r[1].lts)\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_envy("lua", str(script))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "https://example.com/rust-std.tar.xz v24.11.1 Krypton", result.stdout.strip()
+        )
+
+    def test_decode_error_names_decoder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = Path(tmpdir) / "bad.lua"
+            script.write_text("envy.toml.decode('a = ')\n", encoding="utf-8")
+
+            result = self._run_envy("lua", str(script))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("envy.toml.decode: ", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

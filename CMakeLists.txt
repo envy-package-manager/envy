@@ -211,6 +211,7 @@ set(ENVY_LICENSE_SOURCES
     "nanosemver=${NANOSEMVER_CACHE_DIR}"
     "picojson=${PICOJSON_CACHE_DIR}"
     "Sol2=${sol2_SOURCE_DIR}"
+    "tomlc17=${TOMLC17_CACHE_DIR}"
     "zlib=${envy_zlib_SOURCE_DIR}"
 )
 
@@ -275,9 +276,11 @@ set(ENVY_BASE_SOURCES
     src/task_engine.cpp
     src/pkg_phase.cpp
     src/pkg_key.cpp
+    src/lua_ctx/lua_envy_codec_util.cpp
     src/lua_ctx/lua_envy_dep_util.cpp
     src/lua_ctx/lua_envy_extract.cpp
     src/lua_ctx/lua_envy_fetch.cpp
+    src/lua_ctx/lua_envy_json.cpp
     src/lua_ctx/lua_envy_file_ops.cpp
     src/lua_ctx/lua_envy_loadenv_bundle.cpp
     src/lua_ctx/lua_envy_loadenv_spec.cpp
@@ -288,6 +291,7 @@ set(ENVY_BASE_SOURCES
     src/lua_ctx/lua_envy_product.cpp
     src/lua_ctx/lua_envy_run.cpp
     src/lua_ctx/lua_envy_subproject.cpp
+    src/lua_ctx/lua_envy_toml.cpp
     src/lua_ctx/lua_phase_context.cpp
     src/product_util.cpp
     src/reexec.cpp
@@ -582,7 +586,9 @@ set(ENVY_UNIT_TEST_SOURCES
     src/pkg_key_tests.cpp
     src/git_resolve_tests.cpp
     src/lua_ctx/lua_envy_dep_util_tests.cpp
+    src/lua_ctx/lua_envy_json_tests.cpp
     src/lua_ctx/lua_envy_options_tests.cpp
+    src/lua_ctx/lua_envy_toml_tests.cpp
     src/lua_envy_tests.cpp
     src/platform_tests.cpp
     src/product_util_tests.cpp
