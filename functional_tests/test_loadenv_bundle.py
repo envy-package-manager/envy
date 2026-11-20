@@ -301,6 +301,9 @@ end
 
         run = self.install(manifest)
         self.assertEqual(0, run.returncode, run.stderr)
+        loads = [e.raw for e in run.events("lua_ctx_loadenv_bundle")]  # helper's source
+        self.assertEqual(["test.own@r1"], [e["target"] for e in loads])
+        self.assertTrue(Path(loads[0]["root"]).resolve().is_relative_to(sub.resolve()))
         self.assertTrue(run.events("pkg_outcome", spec="test.own@r1"))
         self.assertFalse(run.events("pkg_outcome", spec="test.tools@r1"))
 

@@ -1797,3 +1797,15 @@ TEST_CASE("util_canonical_path is idempotent") {
   auto const once{ envy::util_canonical_path(std::filesystem::path{ "." }) };
   CHECK(envy::util_canonical_path(once) == once);
 }
+
+TEST_CASE("util_canonical_path_keep_leaf normalizes like util_canonical_path") {
+  // A symlinked leaf staying a link is covered by test_spec_cache_key.py: no fs writes.
+  auto const cwd{ canonical_cwd() };
+  REQUIRE(std::filesystem::exists(cwd / "test_data"));
+  CHECK(envy::util_canonical_path_keep_leaf(cwd / "test_data" / ".." / "test_data") ==
+        cwd / "test_data");
+  CHECK(envy::util_canonical_path_keep_leaf(cwd / "test_data" / "") == cwd / "test_data");
+  CHECK(envy::util_canonical_path_keep_leaf(cwd / "no-such-9d3f") == cwd / "no-such-9d3f");
+  CHECK(envy::util_canonical_path_keep_leaf(std::filesystem::path{ "test_data" }) ==
+        cwd / "test_data");
+}

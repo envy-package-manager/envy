@@ -92,7 +92,7 @@ TEST_CASE("bundle::parse_inline parses relative local source") {
 
   auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&src.fetch_source) };
   REQUIRE(local);
-  CHECK(local->file_path == fs::path("/project/bundles/local-bundle"));
+  CHECK(local->file_path == fs::absolute("/project/bundles/local-bundle"));  // C: on win
 }
 
 TEST_CASE("bundle::parse_inline parses absolute local source") {
@@ -105,7 +105,7 @@ TEST_CASE("bundle::parse_inline parses absolute local source") {
 
   auto const *local{ std::get_if<envy::pkg_cfg::local_source>(&src.fetch_source) };
   REQUIRE(local);
-  CHECK(local->file_path == fs::path("/absolute/path/to/bundle"));
+  CHECK(local->file_path == fs::absolute("/absolute/path/to/bundle"));  // C: on win
 }
 
 TEST_CASE("bundle::parse_inline parses git source with ref") {
