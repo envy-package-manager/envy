@@ -4,8 +4,8 @@
 
 **Version:** 1.3.0
 **License:** BSD-2-Clause
-**Purpose:** Single-header JSON parser/serializer—parse, edit, serialize `.luarc.json` and structured JSON output; `envy.json.decode`
-**Integration:** Single header downloaded to `out/cache/picojson-src/`; `PICOJSON_USE_INT64` everywhere (it changes `picojson::value`'s layout) so integers decode exact; `envy.json.decode` is a custom parse context that builds Lua tables in one pass and caps nesting at 256 (1.3.0 has no cap)
+**Purpose:** Single-header JSON parser/serializer—parse, edit, serialize `.luarc.json` and structured JSON output; `envy.json` string lexing
+**Integration:** Single header downloaded to `out/cache/picojson-src/`; `envy.json.decode` drives picojson's string lexer from an iterative reader with its own RFC 8259 number grammar—picojson's `_parse` recurses on the C stack, has no depth cap, and accepts `01`, `2.`, `-.5`
 **Rationale:** Smallest viable JSON library (34 KB); replaces bespoke JSON output in `cmd_product.cpp` and enables safe round-trip editing of user `.luarc.json` files
 
 ## tomlc17

@@ -21,7 +21,6 @@ if(NOT TARGET picojson::picojson)
   add_library(picojson INTERFACE)
   target_include_directories(picojson INTERFACE "${PICOJSON_CACHE_DIR}")
   target_compile_definitions(picojson INTERFACE
-    ENVY_PICOJSON_VERSION="${ENVY_PICOJSON_VERSION}"
-    PICOJSON_USE_INT64)  # every TU must agree: it changes picojson::value's layout
+    ENVY_PICOJSON_VERSION="${ENVY_PICOJSON_VERSION}")
   add_library(picojson::picojson ALIAS picojson)
 endif()

@@ -639,14 +639,24 @@ local cmd = envy.template(
 
 ## Structured Data
 
-### envy.json.decode(text) → any
-### envy.toml.decode(text) → table
+### envy.json.decode(text) → any · envy.toml.decode(text) → table
+### envy.json.read(path) → any · envy.toml.read(path) → table
+### envy.json.encode(value, [opts]) → string · envy.toml.encode(table) → string
+### envy.json.write(path, value, [opts]) · envy.toml.write(path, table)
+### envy.json.array([t]) → t · envy.toml.array([t]) → t
 
-Decode upstream metadata into plain Lua values: objects/tables → tables, arrays → sequences, integers stay integers, floats stay floats. JSON `null` → `nil` (arrays may get holes); TOML 1.1 date-times → RFC 3339 strings (`"1979-05-27T07:32:00Z"`, `"07:32:00"`). Malformed input raises `envy.json.decode: …`/`envy.toml.decode: …` with a line number. Nesting is capped—JSON at 256 levels; TOML at 30 brackets or braces and 10-part keys, with ≤16384 entries per table or array.
+Documents decode to plain Lua: objects/tables → tables, arrays → sequences tagged with a shared metatable, integers stay integers, floats stay floats. JSON `null` → `nil`—interior nulls re-encode as `null`, trailing ones and null members vanish. TOML date-times → RFC 3339 strings (`"1979-05-27T07:32:00Z"`), and encode back as strings. Decoding is strict—RFC 8259 numbers and UTF-8 (BOM skipped), TOML 1.1 via tomlc17—and errors name the function, file, and line: `envy.toml.read: cfg.toml: (line 3) missing value`.
+
+Encoding is deterministic: keys sorted bytewise, floats in shortest round-trip form (`1.0` stays a float), strings checked as UTF-8. A table is an array when tagged (decoded, or `array(t)`) or keyed exactly `1..n`; an empty untagged table is an object, so `array()` spells an empty array. TOML puts a table's own keys first, then `[tables]` and `[[arrays of tables]]`; JSON pretty-prints with `opts.indent` (0–10). Cycles, functions, mixed or sparse keys, and JSON inf/nan raise errors naming the path (`at deps.zlib[2]`). `write` adds JSON's trailing newline, creates parent directories, and replaces the file atomically; relative paths resolve like `envy.copy`'s. Every walk uses a heap stack, never C recursion: JSON nests until Lua's stack limit (~1M arrays); tomlc17 caps TOML input at 30 brackets or braces and 10-part keys, ≤16384 entries per table or array.
 
 ```lua
-local rust = envy.toml.decode(channel_toml).pkg["rust-std"].target[target]  -- .xz_url, .xz_hash
-local go = envy.json.decode(go_dl_json)[1]  -- go.dev/dl/?mode=json: .version, .files[i].sha256
+local e = envy.toml.read(channel_toml).pkg["rust-std"].target[target]  -- .xz_url, .xz_hash
+INSTALL = function(install_dir)
+  envy.json.write(envy.path.join(install_dir, "settings.json"),
+                  { ["editor.tabSize"] = 2, ["files.exclude"] = {} }, { indent = 2 })
+  envy.toml.write(envy.path.join(install_dir, ".cargo", "config.toml"),
+                  { build = { jobs = 8, rustflags = envy.toml.array() } })
+end
 ```
 
 ---
