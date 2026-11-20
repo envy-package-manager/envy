@@ -910,7 +910,7 @@ TEST_CASE("source_key tells an include of '!x' from an exclude of 'x'") {
 }
 
 TEST_CASE("source_key holds no checkout location") {
-  // A local path keys as written, so two checkouts of one project share it.
+  // A local path keys project-relative, so two checkouts of one project share it.
   envy::pkg_cfg::local_source const a{ .file_path = "/a/proj/vendor/b.tar.gz",
                                        .declared = "vendor/b.tar.gz" };
   envy::pkg_cfg::local_source const b{ .file_path = "/b/proj/vendor/b.tar.gz",
