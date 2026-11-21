@@ -398,7 +398,7 @@ function INSTALL(install_dir, stage_dir, fetch_dir, tmp_dir, options) end
         run = self.install_spec(
             "subpred",
             f"""local keep = {{ ["deps/lib"] = true, ["deps/lib/vendor/leaf"] = true }}
-SEEN = {{}}
+local SEEN = {{}}
 FETCH = {{
     source = "{self.repos.super.as_posix()}",
     ref = "{self.repos.super_sha}",

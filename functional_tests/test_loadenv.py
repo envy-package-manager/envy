@@ -79,7 +79,7 @@ PACKAGES = helper.PACKAGES or {{}}
 DEPENDENCIES = {}
 
 local helper = envy.loadenv("helper")
-LOADED_VALUE = helper.HELPER_VALUE
+local LOADED_VALUE = helper.HELPER_VALUE
 
 USER_MANAGED = true
 SETUP = {

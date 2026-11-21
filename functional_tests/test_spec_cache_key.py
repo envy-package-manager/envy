@@ -23,7 +23,7 @@ from .env import EnvyTestCase
 SPEC = """IDENTITY = "{identity}"
 DEPENDENCIES = {{}}
 USER_MANAGED = true
-MARKER = "{marker}"
+local MARKER = "{marker}"
 SETUP = {{
   main = {{ CHECK = "exit 0", INSTALL = "exit 0" }},
 }}

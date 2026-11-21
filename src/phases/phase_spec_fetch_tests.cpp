@@ -289,6 +289,47 @@ TEST_CASE("SETUP pair with bad PLATFORMS type throws") {
   CHECK(msg.find("PLATFORMS must be a table") != std::string::npos);
 }
 
+// ============================================================================
+// Spec globals: an all-caps global envy doesn't read is a typo, not a helper
+// ============================================================================
+
+namespace {
+
+constexpr char kMinimalUserManaged[]{
+  "USER_MANAGED = true\n"
+  "SETUP = { main = { CHECK = 'exit 0', INSTALL = 'echo x' } }\n"
+};
+
+}  // namespace
+
+TEST_CASE("spec defining an unknown all-caps global throws") {
+  auto const msg{ run_spec_body("unknown_global",
+                                std::string{ kMinimalUserManaged } +
+                                    "EVN = { FOO = 'bar' }\n") };
+  CHECK(msg ==
+        "spec 'test.setup_unknown_global@v1' defines unknown global 'EVN'; make helpers "
+        "local");
+}
+
+TEST_CASE("spec defining several unknown all-caps globals names them all, sorted") {
+  auto const msg{ run_spec_body("unknown_globals",
+                                std::string{ kMinimalUserManaged } +
+                                    "HASHES = {}\nEVN = {}\nfunction F2() end\n") };
+  CHECK(msg.find("defines unknown globals 'EVN', 'F2', 'HASHES'") != std::string::npos);
+}
+
+TEST_CASE("spec helpers that are local, lowercase or mixed-case are free") {
+  CHECK(run_spec_body("free_helpers",
+                      std::string{ kMinimalUserManaged } +
+                          "local HASHES = { a = 1 }\n"
+                          "local function HELPER() end\n"
+                          "hashes = HASHES\n"
+                          "MixedCase = 1\n"
+                          "_PRIVATE = 2\n"
+                          "ENV = { FOO = 'bar' }\n")
+            .empty());
+}
+
 TEST_CASE("cache-managed spec with SETUP parses pairs and platforms") {
   cache c;
   engine eng{ c };

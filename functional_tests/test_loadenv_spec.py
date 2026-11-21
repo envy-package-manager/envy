@@ -221,14 +221,14 @@ PACKAGES = {{
             {"test.dummy@v1": "specs/dummy.lua"},
             "lib/helper.lua",
             """local M = {}
-M.seen = CONSUMER_GLOBAL or "<nil>"
+M.seen = consumer_global or "<nil>"
 M.bundle = ENVY_BUNDLE.identity
 return M
 """,
         )
 
         spec_content = f"""IDENTITY = "local.consumer@v1"
-CONSUMER_GLOBAL = "from the spec"
+consumer_global = "from the spec"
 DEPENDENCIES = {{
   {{
     bundle = "test.helpers@v1",
