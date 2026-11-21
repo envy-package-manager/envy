@@ -141,7 +141,7 @@ std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice 
     throw_runtime_error(
         { pwsh ? "PowerShell" : "cmd", " cannot quote '", arg, "': ", why });
   } };
-  bool const batch{ shell == shell_choice::cmd && !argv.empty() && [&] {
+  bool const batch{ !posix && !argv.empty() && [&] {
     std::string ext{ std::filesystem::path{ argv.front() }.extension().string() };
     for (char &c : ext) { c = (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; }
     return ext == ".bat" || ext == ".cmd";
@@ -171,6 +171,9 @@ std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice 
       }
       if (arg.back() == '\\' && arg.find_first_of(" \t") != std::string_view::npos) {
         refuse(arg, "powershell.exe turns a trailing '\\' into an escaped quote");
+      }
+      if (batch && arg.find_first_of("&|<>^%!") != std::string_view::npos) {
+        refuse(arg, "powershell.exe hands a .bat/.cmd its arguments through cmd, unquoted");
       }
       if (plain(arg) && arg.front() != '-') {  // a bare `-a.b` arrives as `-a` and `.b`
         out += arg;

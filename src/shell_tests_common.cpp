@@ -61,6 +61,15 @@ TEST_CASE("shell_quote_argv: PowerShell") {
   CHECK_THROWS_WITH(q({ "x", "C:\\a b\\" }),
                     doctest::Contains("turns a trailing '\\' into an escaped quote"));
   CHECK_THROWS_WITH(q({ "x", "a\nb" }), doctest::Contains("a line break"));
+
+  // A .bat/.cmd runs through cmd, which PowerShell hands `a&b` bare: data, not a command.
+  CHECK(q({ "C:\\w\\gradlew.bat", "build", "a b" }) == "& C:\\w\\gradlew.bat build 'a b'");
+  for (char const *const meta : { "a&b", "a|b", "a<b", "a>b", "a^b", "50%", "wow!" }) {
+    CAPTURE(meta);
+    CHECK_THROWS_WITH(q({ "C:\\w\\gradlew.CMD", meta }),
+                      doctest::Contains("hands a .bat/.cmd its arguments through cmd"));
+    CHECK_NOTHROW(q({ "C:\\w\\node.exe", meta }));  // a native program gets it intact
+  }
 }
 
 TEST_CASE("shell_quote_argv: cmd") {

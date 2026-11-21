@@ -389,8 +389,8 @@ provider-agnostic. A bare program resolves on the phase's `PATH`. Quoted for `sh
 `"…"`, with `call` before a `.bat`/`.cmd`. A custom `DEFAULT_SHELL` has no quoting envy
 knows; pass `shell`. What a shell cannot carry intact is refused, never mangled: a line
 break outside POSIX; under `powershell.exe` 5.1 an empty argument, a `"`, or a spaced one
-ending in `\`; under cmd a `"` or `!`, and `%`/`^` behind `call`. PowerShell hands a
-`.bat`/`.cmd` program its arguments through cmd, so cmd metacharacters there are cmd's.
+ending in `\`, and for a `.bat`/`.cmd` program, which it runs through cmd, any of
+`& | < > ^ % !`; under cmd a `"` or `!`, and `%`/`^` behind `call`.
 Failures trace as refusals, like `envy.product`'s.
 
 ```lua
