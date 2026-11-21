@@ -21,7 +21,7 @@ setopt(CURLOPT_RESUME_FROM_LARGE, partial_bytes);  // 206: append; 200: truncate
 
 ## S3 Region in the URI
 
-`fetch_request_s3::region` exists but nothing sets it. The SDK falls back to `AWS_REGION`, the profile, then `us-east-1`, so a bucket in another region fails as a redirect. Parse the region from the URI.
+`fetch_request_s3::region` exists but nothing sets it. envy falls back to `AWS_DEFAULT_REGION`, `AWS_REGION`, the profile, then `us-east-1`, so a bucket in another region fails as a redirect. Parse the region from the URI.
 
 ```lua
 FETCH = { source = "s3://my-bucket/tool.tar.gz?region=eu-west-1" }

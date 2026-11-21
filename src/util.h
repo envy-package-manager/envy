@@ -215,11 +215,14 @@ file_ptr_t util_open_file(std::filesystem::path const &path, char const *mode);
 // Throws std::runtime_error if file cannot be opened or read.
 std::vector<unsigned char> util_load_file(std::filesystem::path const &path);
 
-// Write content to file atomically (temp file + rename); `executable` adds the exec bits
-// before the rename (no-op on Windows). Parent directory must exist. Throws on failure.
+// How util_write_file sets a file's POSIX mode before it appears (no-op on Windows).
+enum class util_file_mode { DEFAULT, EXECUTABLE, OWNER_ONLY };  // umask; +x; 0600
+
+// Write content to file atomically (temp file + rename), in `mode` before the rename.
+// Parent directory must exist. Throws on failure.
 void util_write_file(std::filesystem::path const &path,
                      std::string_view content,
-                     bool executable = false);
+                     util_file_mode mode = util_file_mode::DEFAULT);
 
 // A gzip stream plus the byte count it inflates to; instances are emitted by
 // cmake/scripts/embed_resource.py --compress.

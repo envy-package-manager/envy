@@ -4,8 +4,6 @@
 #include "platform.h"
 
 #include "archive.h"
-#include "aws/core/Version.h"
-#include "aws/crt/Api.h"
 #include "blake3.h"
 #include "bzlib.h"
 #include "cli_parse.h"
@@ -108,15 +106,11 @@ void cmd_version::execute() {
   tui::info("  bzip2: %s", BZ2_bzlibVersion());
   tui::info("  zstd: %s", ZSTD_versionString());
   tui::info("  liblzma: %s", lzma_version_string());
-  auto const *aws_sdk_version{ Aws::Version::GetVersionString() };
-  tui::info("  AWS SDK for C++: %s", aws_sdk_version);
-
-  Aws::Crt::ApiHandle crt_handle;
-  auto const crt_version{ crt_handle.GetCrtVersion() };
-  tui::info("  AWS CRT: %u.%u.%u",
-            static_cast<unsigned>(crt_version.major),
-            static_cast<unsigned>(crt_version.minor),
-            static_cast<unsigned>(crt_version.patch));
+  if constexpr (sizeof(ENVY_AWS_C_TLS) > 1) {  // Linux builds its own TLS for S3
+    tui::info("  aws-c-s3: %s (TLS: %s)", ENVY_AWS_C_S3_VERSION, ENVY_AWS_C_TLS);
+  } else {
+    tui::info("  aws-c-s3: %s", ENVY_AWS_C_S3_VERSION);
+  }
 
   nsv_semver_t const nsv_version = NSV_VERSION_LIT;
   tui::info("  nanosemver: %u.%u.%u",

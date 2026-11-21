@@ -1,0 +1,24 @@
+import pathlib
+import re
+
+# Remove -Wa,--noexecstack from aws-lc assembly builds to silence lto-wrapper warnings
+# during TSAN+LTO linking. The GNU linker marks stacks non-executable on modern Linux.
+
+aws_lc_crypto_cmakelists = pathlib.Path(r"@AWS_LC_CRYPTO_CMAKELISTS@")
+
+# Patch aws-lc crypto/CMakeLists.txt
+text = aws_lc_crypto_cmakelists.read_text()
+marker = "# envy: removed -Wa,--noexecstack"
+
+if marker not in text:
+    # Replace CMAKE_ASM_FLAGS line containing -Wa,--noexecstack
+    pattern = re.compile(
+        r'(\s+set\(CMAKE_ASM_FLAGS\s+"[^"]*)-Wa,--noexecstack([^"]*"\))',
+        re.MULTILINE
+    )
+    match = pattern.search(text)
+    if match:
+        text = pattern.sub(r'\1\2 ' + marker, text)
+        aws_lc_crypto_cmakelists.write_text(text)
+    else:
+        raise RuntimeError("aws-lc: CMAKE_ASM_FLAGS with -Wa,--noexecstack not found")

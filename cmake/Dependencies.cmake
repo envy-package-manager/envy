@@ -46,10 +46,21 @@ set(ENVY_LIBCURL_ARCHIVE "curl-${ENVY_LIBCURL_VERSION}.tar.xz")
 set(ENVY_LIBCURL_URL "https://curl.se/download/${ENVY_LIBCURL_ARCHIVE}")
 set(ENVY_LIBCURL_SHA256 aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6)
 
-set(ENVY_AWS_SDK_VERSION "1.11.850")
-set(ENVY_AWS_SDK_ARCHIVE "aws-sdk-cpp-${ENVY_AWS_SDK_VERSION}.zip")
-set(ENVY_AWS_SDK_URL "https://github.com/aws/aws-sdk-cpp/archive/refs/tags/${ENVY_AWS_SDK_VERSION}.zip")
-set(ENVY_AWS_SDK_SHA256 980e32369e9cb6d2dea70b68e78faf35a5380608088fc1e7193a9620a3bf4964)
+# S3 and the AWS C libraries beneath it: "<github org/repo> <tag> <archive sha256>".
+# aws-lc and s2n-tls are Linux's TLS; macOS and Windows use the OS's.
+set(ENVY_AWS_C_DEPS
+    "awslabs/aws-c-common v0.14.2 da518accb60eb08e0d56f641f00c3ea856c36a0972394770c978e5ff3bfc3728"
+    "aws/aws-lc v5.2.0 f9ad6bde29eb9c8ce585085d9a12bb2ffe89bfd940a631f760eeb1b2d9b2d1a7"
+    "aws/s2n-tls v1.7.5 841f67cb1eb4ce71c829fa12ce940ae33556429c7e137be5c16461999bb7f666"
+    "awslabs/aws-c-cal v0.9.14 0e96e0067fa921768e07b5b4ebad82011ccf474903e9286419ef428d68f317ea"
+    "awslabs/aws-c-io v0.27.4 0f2ce32de3685ca5ba3a8395d461c783253c1718cf70d31378eb6be890db1e3e"
+    "awslabs/aws-checksums v0.2.10 cb6509f75e42ee25c372a6d379e8582ce5179e5335183842e808f7d8abb0c314"
+    "awslabs/aws-c-compression v0.3.2 f93f5a5d8b3fee3a6d97b14ba279efacd4d4016ef9cc7dc4be7d43519ecfbe93"
+    "awslabs/aws-c-http v0.11.0 4ccbdd33c798b590288330dec9e93abe2ff6cfb198b7a4db036c9d362f2e6506"
+    "awslabs/aws-c-sdkutils v0.2.7 802b8c4169da2b4cf5c48f9598fb778faccd3e052e443a482089193411c2b7bb"
+    "awslabs/aws-c-auth v0.10.4 6fb567f496a450d4b6d3f5749d735977a0156957e8ccbca9af7a5ee15d1ffda7"
+    "awslabs/aws-c-s3 v0.13.1 30cd8deec12a6995b8dda32d8f3a53b3c1f2d2dcad56287aab64dfee80eb7630"
+)
 
 set(ENVY_LIBARCHIVE_VERSION "3.8.8")
 set(ENVY_LIBARCHIVE_ARCHIVE "libarchive-${ENVY_LIBARCHIVE_VERSION}.tar.gz")
@@ -139,7 +150,7 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Libssh2.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Libgit2.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Libcurl.cmake")
-include("${CMAKE_CURRENT_LIST_DIR}/deps/AwsSdk.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/deps/AwsC.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Libarchive.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Blake3.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/deps/Lua.cmake")
@@ -177,11 +188,7 @@ target_link_libraries(envy_thirdparty
         nanosemver::nanosemver
         picojson::picojson
         tomlc17::tomlc17
-        AWS::aws-cpp-sdk-s3
-        AWS::aws-cpp-sdk-transfer
-        AWS::aws-cpp-sdk-sso
-        AWS::aws-cpp-sdk-sso-oidc
-        aws-crt-cpp
+        aws-c-s3
 )
 
 if(APPLE)
@@ -195,13 +202,11 @@ endif()
 
 target_compile_definitions(envy_thirdparty INTERFACE
     $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:CURL_STATICLIB>
+    ENVY_AWS_C_S3_VERSION="${ENVY_AWS_C_S3_VERSION}"
+    ENVY_AWS_C_TLS="${ENVY_AWS_C_TLS}"
 )
 
 target_include_directories(envy_thirdparty INTERFACE
-    "$<BUILD_INTERFACE:${aws_sdk_SOURCE_DIR}/aws-cpp-sdk-core/include>"
-    "$<BUILD_INTERFACE:${aws_sdk_SOURCE_DIR}/src/aws-cpp-sdk-core/include>"
-    "$<BUILD_INTERFACE:${aws_sdk_BINARY_DIR}/generated/src/aws-cpp-sdk-core/include>"
-    "$<BUILD_INTERFACE:${ENVY_AWSCRT_ROOT}/include>"
     $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>,$<BOOL:${ENVY_LIBCURL_INCLUDE}>>:$<BUILD_INTERFACE:${ENVY_LIBCURL_INCLUDE}>>
     $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>,$<BOOL:${ENVY_LIBCURL_BINARY_INCLUDE}>>:$<BUILD_INTERFACE:${ENVY_LIBCURL_BINARY_INCLUDE}>>
 )

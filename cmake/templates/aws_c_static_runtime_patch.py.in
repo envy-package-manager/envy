@@ -1,7 +1,7 @@
 import pathlib
 
-# Force AWS CRT projects to use the release (/MT) runtime even when building
-# Debug configurations so the toolchain never emits /MD or /MTd.
+# Force the AWS C libraries onto the release (/MT) runtime even in Debug configurations,
+# so the toolchain never emits /MD or /MTd.
 
 aws_cflags_path = pathlib.Path(r"@AWS_CFLAGS_PATH@")
 text = aws_cflags_path.read_text()
@@ -16,4 +16,6 @@ if marker not in text:
         'list(APPEND AWS_C_FLAGS "/MD$<$<CONFIG:Debug>:d>")',
         'list(APPEND AWS_C_FLAGS "/MD") # envy override static crt',
     )
+    if marker not in text:  # a silent no-op would surface later as LNK2038 in Debug
+        raise RuntimeError("aws-c-common: MSVC runtime selection in AwsCFlags.cmake not found")
     aws_cflags_path.write_text(text)

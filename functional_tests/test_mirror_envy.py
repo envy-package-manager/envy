@@ -1,8 +1,8 @@
 """Functional tests for `envy mirror-envy`.
 
 Staging runs against a file:// source mirror so no network is involved. The S3 upload leg
-runs against a local S3 stub reached via AWS_ENDPOINT_URL_S3, which the AWS SDK honors
-natively -- so the upload path gets real coverage without touching AWS.
+runs against a local S3 stub reached via AWS_ENDPOINT_URL_S3, so the upload path gets real
+coverage without touching AWS.
 """
 
 from __future__ import annotations
@@ -16,15 +16,13 @@ import shutil
 import sys
 import tarfile
 import tempfile
-import threading
 import unittest
 import zipfile
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 from . import test_config
 from .env import EnvyTestCase
+from .s3_stub import S3Stub, hermetic_env, s3_env
 
 # Must stay byte-identical to kEnvyReleaseTargets in src/envy_release.h.
 RELEASE_ASSETS = [
@@ -52,176 +50,6 @@ def _archive_for(asset: str) -> bytes:
         info.mode = 0o755
         tf.addfile(info, io.BytesIO(payload))
     return buf.getvalue()
-
-
-class S3Stub:
-    """Minimal S3-compatible endpoint: just enough for single-part PutObject/GetObject.
-
-    Staged archives are tiny, so TransferManager stays under its 5MiB buffer size and never
-    reaches for multipart -- which is why Create/UploadPart/CompleteMultipartUpload are not
-    implemented here. If that assumption ever breaks, the SDK will 501 and the test fails
-    loudly rather than silently skipping coverage.
-    """
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-        # (status, <Code>, <Message>) to answer every PutObject with, or None to store it.
-        self.put_error: tuple[int, str, str] | None = None
-        self._server: ThreadingHTTPServer | None = None
-        self._thread: threading.Thread | None = None
-        self.port = 0
-
-    def start(self) -> int:
-        parent = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003
-                return
-
-            def _key(self) -> str:
-                # Path-style addressing: /<bucket>/<key>. The SDK uses path-style
-                # automatically when the endpoint host is an IP literal.
-                return self.path.lstrip("/").split("?", 1)[0]
-
-            def _read_body(self) -> bytes:
-                """Read the request body, unwrapping both framings the SDK applies.
-
-                A PutObject from aws-sdk-cpp arrives double-framed: HTTP
-                `Transfer-Encoding: chunked` on the outside, and `Content-Encoding:
-                aws-chunked` on the inside with an `x-amz-trailer` checksum after the
-                terminating zero chunk. There is no Content-Length. Reading the body fully
-                also keeps HTTP/1.1 keep-alive framing intact for the next request.
-                """
-                if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
-                    body = self._read_http_chunked()
-                else:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = self.rfile.read(length) if length else b""
-
-                if "aws-chunked" in (self.headers.get("Content-Encoding") or "").lower():
-                    body = self._decode_aws_chunked(body)
-                return body
-
-            def _read_http_chunked(self) -> bytes:
-                chunks: list[bytes] = []
-                while True:
-                    line = self.rfile.readline().strip()
-                    if not line:
-                        continue
-                    size = int(line.split(b";", 1)[0], 16)
-                    if size == 0:
-                        break
-                    chunks.append(self.rfile.read(size))
-                    self.rfile.read(2)  # chunk-terminating CRLF
-                while True:  # trailer headers, terminated by a blank line
-                    line = self.rfile.readline()
-                    if not line or line in (b"\r\n", b"\n"):
-                        break
-                return b"".join(chunks)
-
-            @staticmethod
-            def _decode_aws_chunked(buf: bytes) -> bytes:
-                out = bytearray()
-                pos = 0
-                while True:
-                    eol = buf.find(b"\r\n", pos)
-                    if eol < 0:
-                        break
-                    size = int(buf[pos:eol].split(b";", 1)[0] or b"0", 16)
-                    pos = eol + 2
-                    if size == 0:
-                        break  # trailers follow; the payload is complete
-                    out += buf[pos : pos + size]
-                    pos += size + 2  # data plus its CRLF
-                return bytes(out)
-
-            def do_PUT(self) -> None:
-                body = self._read_body()  # Drained even on failure, to keep framing.
-                if parent.put_error is not None:
-                    parent._send_error(self, *parent.put_error)
-                    return
-                # Fail loudly if the stub mis-framed the body rather than silently storing
-                # an empty object, which would make byte-for-byte assertions meaningless.
-                declared = self.headers.get("x-amz-decoded-content-length")
-                if declared is not None and len(body) != int(declared):
-                    parent._send_error(self, 400, "IncompleteBody")
-                    return
-                key = self._key()
-                if "/" not in key:
-                    self.send_response(400)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                bucket, obj = key.split("/", 1)
-                if bucket != "test-bucket":
-                    parent._send_error(self, 404, "NoSuchBucket")
-                    return
-                parent.objects[obj] = body
-                self.send_response(200)
-                self.send_header("ETag", f'"{hashlib.md5(body).hexdigest()}"')
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-
-            def do_GET(self) -> None:
-                key = self._key()
-                bucket, _, obj = key.partition("/")
-                if bucket != "test-bucket":
-                    parent._send_error(self, 404, "NoSuchBucket")
-                    return
-                if obj not in parent.objects:
-                    parent._send_error(self, 404, "NoSuchKey")
-                    return
-                body = parent.objects[obj]
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("ETag", f'"{hashlib.md5(body).hexdigest()}"')
-                self.end_headers()
-                self.wfile.write(body)
-
-            def do_HEAD(self) -> None:
-                key = self._key()
-                bucket, _, obj = key.partition("/")
-                if bucket != "test-bucket" or obj not in parent.objects:
-                    self.send_response(404)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(parent.objects[obj])))
-                self.end_headers()
-
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.port = self._server.server_address[1]
-        self._thread = test_config.serve_in_thread(self._server)
-        return self.port
-
-    @staticmethod
-    def _send_error(
-        handler: BaseHTTPRequestHandler,
-        code: int,
-        aws_code: str,
-        message: str | None = None,
-    ) -> None:
-        # Escaped: a caller-supplied message carrying & or < would otherwise emit invalid
-        # XML, and the SDK would fail to parse it for a reason the test never intended.
-        body = (
-            f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{escape(aws_code)}</Code>'
-            f"<Message>{escape(message or aws_code)}</Message></Error>"
-        ).encode()
-        handler.send_response(code)
-        handler.send_header("Content-Type", "application/xml")
-        handler.send_header("Content-Length", str(len(body)))
-        handler.end_headers()
-        handler.wfile.write(body)
-
-    def stop(self) -> None:
-        if self._server is not None:
-            self._server.shutdown()
-            self._server.server_close()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
 
 
 class MirrorEnvyFunctionalTest(EnvyTestCase):
@@ -275,8 +103,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         return self._source.as_uri()
 
     def _run(self, args: list[str], env_extra: dict[str, str] | None = None):
-        env = os.environ.copy()
-        env["ENVY_CACHE_ROOT"] = str(self._temp / "cache")
+        env = hermetic_env({"ENVY_CACHE_ROOT": str(self._temp / "cache")})
         if env_extra:
             env.update(env_extra)
         return test_config.run(
@@ -422,16 +249,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
     # --- S3 upload ----------------------------------------------------------------
 
     def _s3_env(self, port: int) -> dict[str, str]:
-        return {
-            "AWS_ENDPOINT_URL": f"http://127.0.0.1:{port}",
-            "AWS_ENDPOINT_URL_S3": f"http://127.0.0.1:{port}",
-            "AWS_REGION": "us-east-1",
-            "AWS_DEFAULT_REGION": "us-east-1",
-            "AWS_ACCESS_KEY_ID": "test",
-            "AWS_SECRET_ACCESS_KEY": "test",
-            "AWS_EC2_METADATA_DISABLED": "1",
-            "AWS_MAX_ATTEMPTS": "2",
-        }
+        return s3_env(port)
 
     def test_s3_staging_directory_is_cleaned_up(self) -> None:
         """S3 mode stages to a private temp tree; it must not outlive the run.
@@ -512,6 +330,18 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         # No double-slash keys: S3 keys are opaque, so "a//b" would be unreachable.
         for key in stub.objects:
             self.assertNotIn("//", key)
+        # Signed, typed, and checksummed in a trailer S3 verifies against what it stores.
+        puts = [r for r in stub.requests if r["method"] == "PUT"]
+        self.assertTrue(puts and all(r["signed"] for r in puts), stub.requests)
+        for put in puts:
+            headers = put["headers"]
+            self.assertEqual("x-amz-checksum-crc64nvme", headers.get("x-amz-trailer"))
+            expected = (
+                "application/gzip" if str(put["key"]).endswith(".tar.gz")
+                else "application/zip" if str(put["key"]).endswith(".zip")
+                else "application/octet-stream"
+            )
+            self.assertEqual(expected, headers.get("content-type"), put["key"])
 
     def test_uploads_to_bucket_root_without_prefix(self) -> None:
         stub = S3Stub()
@@ -569,12 +399,8 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         self.assertIn("NoSuchBucket", result.stderr)
         self.assertIn("envy never creates buckets", result.stderr)
 
-    def test_unmapped_error_body_is_quoted_rather_than_renamed(self) -> None:
-        """An error code the SDK cannot map must be reported as received.
-
-        The marshaller wraps such a body as "Unable to parse ExceptionName: <code> Message:
-        <text>", which reads like a diagnosis envy made about the request it sent.
-        """
+    def test_s3_error_body_is_quoted_as_received(self) -> None:
+        """S3's own code and message, not a rewording that reads like envy's diagnosis."""
         stub = S3Stub()
         port = stub.start()
         stub.put_error = (
@@ -596,9 +422,11 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
             stub.stop()
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("unrecognized S3 error code NotImplemented", result.stderr)
-        self.assertIn("implies functionality that is not implemented", result.stderr)
-        self.assertNotIn("Unable to parse ExceptionName", result.stderr)
+        self.assertIn(
+            "NotImplemented: A header you provided implies functionality that is not"
+            " implemented (HTTP 501)",
+            result.stderr,
+        )
 
     def _no_credentials_env(self, port: int) -> dict[str, str]:
         """S3 env with every credential source the chain reads pointed somewhere empty.
@@ -606,8 +434,8 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         Emptying the variables is what makes this hermetic: the developer running the suite
         very likely has a working session, and the chain would find it.
         """
-        aws_dir = self._temp / "aws"
-        aws_dir.mkdir(exist_ok=True)
+        aws_dir = self._temp / "home" / ".aws"  # ~/.aws, where `aws sso login` writes
+        aws_dir.mkdir(parents=True, exist_ok=True)
         return {
             **self._s3_env(port),
             "AWS_ACCESS_KEY_ID": "",
@@ -619,18 +447,18 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
             "AWS_CONFIG_FILE": str(aws_dir / "config"),
             "AWS_WEB_IDENTITY_TOKEN_FILE": "",
             "AWS_ROLE_ARN": "",
-            "HOME": str(aws_dir),
-            "USERPROFILE": str(aws_dir),
+            "HOME": str(aws_dir.parent),
+            "USERPROFILE": str(aws_dir.parent),
         }
 
     def _write_expired_sso_session(self) -> None:
         """Plant the exact state `aws sso login` refreshes: a cached token past its expiry.
 
-        The SDK finds the profile, loads the token, sees it stale, and hands back empty
-        credentials -- the shape that used to reach S3 as an unsigned write.
+        Every credential source comes back empty -- the shape that used to reach S3 as an
+        unsigned write.
         """
-        aws_dir = self._temp / "aws"
-        aws_dir.mkdir(exist_ok=True)
+        aws_dir = self._temp / "home" / ".aws"
+        aws_dir.mkdir(parents=True, exist_ok=True)
         start_url = "https://envy-test.awsapps.com/start"
         (aws_dir / "config").write_text(
             "[profile envy-test-expired]\n"
@@ -640,7 +468,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
             "sso_role_name = EnvyTest\n"
             "region = us-east-1\n"
         )
-        # Path and name are the SDK's: <credentials dir>/sso/cache/<sha1(start_url)>.json.
+        # ~/.aws/sso/cache/<sha1(start_url)>.json, as the AWS CLI writes it.
         cache = aws_dir / "sso" / "cache"
         cache.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha1(start_url.encode()).hexdigest()
@@ -668,8 +496,10 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("no usable AWS credentials", result.stderr)
         self.assertIn("aws sso login", result.stderr)
-        # The SDK's own account of why, which is otherwise discarded.
-        self.assertIn("Cached Token expired at 2020-01-01T00:00:00Z", result.stderr)
+        self.assertIn(
+            "SSO token for profile 'envy-test-expired' expired at 2020-01-01T00:00:00Z",
+            result.stderr,
+        )
         # Once, up front -- not once per object, and never as an S3 protocol code.
         self.assertEqual(1, result.stderr.count("no usable AWS credentials"))
         self.assertNotIn("uploads failed", result.stderr)

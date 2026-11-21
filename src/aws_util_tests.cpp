@@ -71,3 +71,83 @@ TEST_CASE("aws_s3_parse_uri: op label appears in the error") {
     CHECK(std::string{ e.what() }.starts_with("mirror-envy: "));
   }
 }
+
+// --- aws_s3_endpoint ---
+
+namespace {
+
+envy::s3_endpoint endpoint(std::string bucket,
+                           std::string key,
+                           std::string_view region = "us-west-2",
+                           std::string_view override_url = {}) {
+  return envy::aws_s3_endpoint({ .bucket = std::move(bucket), .key = std::move(key) },
+                               region,
+                               override_url);
+}
+
+}  // namespace
+
+TEST_CASE("aws_s3_endpoint: AWS buckets are virtual-hosted in their region") {
+  auto const e{ endpoint("my-bucket", "releases/v1/envy.tar.gz") };
+  CHECK(e.scheme == "https");
+  CHECK(e.authority == "my-bucket.s3.us-west-2.amazonaws.com");
+  CHECK(e.path == "/releases/v1/envy.tar.gz");
+}
+
+TEST_CASE("aws_s3_endpoint: China regions use the amazonaws.com.cn partition") {
+  CHECK(endpoint("b-1", "k", "cn-north-1").authority ==
+        "b-1.s3.cn-north-1.amazonaws.com.cn");
+}
+
+TEST_CASE("aws_s3_endpoint: buckets that can't be a TLS host label go path-style") {
+  // Dots break the *.s3 wildcard certificate; uppercase and underscores aren't DNS-safe.
+  for (char const *bucket : { "my.bucket", "MyBucket", "my_bucket", "ab" }) {
+    CAPTURE(bucket);
+    auto const e{ endpoint(bucket, "k") };
+    CHECK(e.authority == "s3.us-west-2.amazonaws.com");
+    CHECK(e.path == "/" + std::string{ bucket } + "/k");
+  }
+}
+
+TEST_CASE("aws_s3_endpoint: an IP or localhost override goes path-style on its port") {
+  auto const ip{ endpoint("test-bucket", "a/b", "us-east-1", "http://127.0.0.1:9000") };
+  CHECK(ip.scheme == "http");
+  CHECK(ip.authority == "127.0.0.1:9000");
+  CHECK(ip.path == "/test-bucket/a/b");
+
+  auto const v6{ endpoint("test-bucket", "k", "us-east-1", "http://[::1]:9000/") };
+  CHECK(v6.authority == "[::1]:9000");
+  CHECK(v6.path == "/test-bucket/k");
+
+  auto const local{ endpoint("test-bucket", "k", "us-east-1", "http://localhost:9000") };
+  CHECK(local.authority == "localhost:9000");
+  CHECK(local.path == "/test-bucket/k");
+}
+
+TEST_CASE("aws_s3_endpoint: a hostname override is virtual-hosted under its own path") {
+  auto const e{ endpoint("bkt", "k", "auto", "https://acct.r2.example.com/gateway/") };
+  CHECK(e.scheme == "https");
+  CHECK(e.authority == "bkt.acct.r2.example.com");
+  CHECK(e.path == "/gateway/k");
+}
+
+TEST_CASE("aws_s3_endpoint: keys are percent-encoded except for '/'") {
+  CHECK(endpoint("bkt", "a b/c+d=é~_.-").path == "/a%20b/c%2Bd%3D%C3%A9~_.-");
+}
+
+// --- aws_s3_parse_error ---
+
+TEST_CASE("aws_s3_parse_error: code and message, unescaped") {
+  auto const e{ envy::aws_s3_parse_error(
+      R"(<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code>)"
+      R"(<Message>a &lt;b&gt; &amp; &quot;c&quot; &apos;d&apos;</Message></Error>)") };
+  CHECK(e.code == "AccessDenied");
+  CHECK(e.message == R"(a <b> & "c" 'd')");
+}
+
+TEST_CASE("aws_s3_parse_error: absent elements and empty bodies read as empty") {
+  CHECK(envy::aws_s3_parse_error("<Error><Code>NoSuchKey</Code></Error>").message.empty());
+  auto const none{ envy::aws_s3_parse_error("") };
+  CHECK(none.code.empty());
+  CHECK(none.message.empty());
+}

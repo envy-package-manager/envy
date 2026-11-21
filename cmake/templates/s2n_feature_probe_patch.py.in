@@ -81,7 +81,7 @@ function(envy_s2n_prepare_probe LINK_LIB PROBE_NAME OUT_COMPILE_DEFS OUT_SANITIZ
         endforeach()
     endif()
     if(NOT _envy_probe_had_include)
-        set(_envy_probe_fallback "${CMAKE_CURRENT_LIST_DIR}/../aws-lc/include")
+        set(_envy_probe_fallback "@AWS_LC_INCLUDE_DIR@")
         if(EXISTS "${_envy_probe_fallback}/openssl/evp.h")
             list(APPEND _envy_probe_compile_defs -I "${_envy_probe_fallback}")
             list(APPEND _envy_sanitized_includes "${_envy_probe_fallback}")

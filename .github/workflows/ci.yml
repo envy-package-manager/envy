@@ -130,16 +130,13 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # `out/cache/*`: the cache glob doesn't descend, so `!` only drops top-level entries --
-      # here the already-extracted SDK and CRT archives. Identical paths key the cache version.
+      # Identical paths key the cache version: keep every save and restore listing in step.
       - name: Restore third-party downloads
         id: deps-cache
         uses: actions/cache/restore@v6
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
 
@@ -245,8 +242,6 @@ jobs:
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Purge superseded caches
@@ -338,8 +333,6 @@ jobs:
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
 
@@ -425,8 +418,6 @@ jobs:
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Purge superseded caches
@@ -525,8 +516,6 @@ jobs:
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/deps/*.cmake', 'cmake/templates/*', 'tools/build.py') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-deps-
 
@@ -636,8 +625,6 @@ jobs:
         with:
           path: |
             out/cache/*
-            !out/cache/aws-sdk-cpp-*.zip
-            !out/cache/aws-crt
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Purge superseded caches

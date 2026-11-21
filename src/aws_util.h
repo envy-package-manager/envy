@@ -10,8 +10,7 @@
 
 namespace envy {
 
-void aws_init();
-void aws_shutdown();
+void aws_shutdown();  // Joins aws-c-* threads; envy's last AWS call.
 
 struct s3_uri_parts {
   std::string bucket;
@@ -23,6 +22,28 @@ struct s3_uri_parts {
 // without minting a distinct double-slash key -- S3 keys are opaque bytes, so "a//b" and
 // "a/b" are different objects. op appears in error messages only.
 s3_uri_parts aws_s3_parse_uri(std::string_view uri, std::string_view op);
+
+// Where one object's requests go: scheme://authority is the connection and Host header,
+// path the URI-encoded request path.
+struct s3_endpoint {
+  std::string scheme;
+  std::string authority;
+  std::string path;
+};
+
+// Virtual-hosted unless the bucket can't be a TLS host label or override_url (the
+// AWS_ENDPOINT_URL[_S3] value) is an IP or localhost; then path-style.
+s3_endpoint aws_s3_endpoint(s3_uri_parts const &parts,
+                            std::string_view region,
+                            std::string_view override_url);
+
+struct s3_error {
+  std::string code;
+  std::string message;
+};
+
+// <Code> and <Message> of an S3 XML error body, unescaped; empty where absent.
+s3_error aws_s3_parse_error(std::string_view xml);
 
 struct s3_download_request {
   std::string uri;
@@ -42,10 +63,9 @@ struct s3_upload_request {
 
 void aws_s3_upload(s3_upload_request const &request);
 
-// Resolves credentials as a transfer would, throwing if none are usable and quoting the
-// SDK's account of why. Call once before writes: unsigned ones fail per object, opaquely.
-void aws_credentials_require(std::optional<std::string> const &region,
-                             std::string_view op);
+// Throws, saying which sources failed and why, when transfers would go unsigned. Call
+// once before writes: unsigned ones fail per object, opaquely.
+void aws_credentials_require(std::string_view op);
 
 class aws_shutdown_guard : unmovable {
  public:
