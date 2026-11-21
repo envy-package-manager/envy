@@ -24,7 +24,9 @@ int test_throw_past_lua(lua_State *L) {
 
 void lua_envy_functional_test_install(sol::table &envy_table) {
   envy_table.set_function("test_throw", test_throw);  // sol's trampoline, like envy.*
-  lua_State *const L{ envy_table.lua_state() };  // raw C function: unwinds to the C++ caller
+  lua_State *const L{
+    envy_table.lua_state()
+  };  // raw C function: unwinds to the C++ caller
   envy_table.push();
   lua_pushcfunction(L, test_throw_past_lua);
   lua_setfield(L, -2, "test_throw_past_lua");
