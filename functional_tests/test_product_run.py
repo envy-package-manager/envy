@@ -238,13 +238,14 @@ class _ProductRunBase(EnvyTestCase):
 
 
 def _env_a(extra: str = "") -> str:
-    return ('function(pkg_path, root) return { A_VAR = "a", SHARED = "from-a", '
-            'A_ROOT = root, PATH = { prepend = envy.path.join(pkg_path, "a-prepend") }'
+    return ('function(pkg_dir, pkg_state_dir) return { A_VAR = "a", SHARED = "from-a", '
+            'A_STATE = pkg_state_dir, '
+            'PATH = { prepend = envy.path.join(pkg_dir, "a-prepend") }'
             f"{extra} }} end")
 
 
-_ENV_B = ('function(pkg_path, root) return { B_VAR = "b", SHARED = "from-b", '
-          'PATH = { prepend = envy.path.join(pkg_path, "b-prepend") } } end')
+_ENV_B = ('function(pkg_dir) return { B_VAR = "b", SHARED = "from-b", '
+          'PATH = { prepend = envy.path.join(pkg_dir, "b-prepend") } } end')
 
 
 class TestWrapperAppliesEnv(_ProductRunBase):
@@ -258,9 +259,10 @@ class TestWrapperAppliesEnv(_ProductRunBase):
         self.assertSamePath(a, seen["env"].get("ENVY_PROJECT_ROOT"))
         self.assertSamePath(a, seen["env"].get("ENVY_ACTIVATE_ROOT"))
 
-    def test_root_is_the_project_root(self) -> None:
+    def test_pkg_state_dir_is_under_the_project_root(self) -> None:
         a = self.simple("a", "A", _env_a())
-        self.assertSamePath(a, self.tool(a)["env"].get("A_ROOT"))
+        pkg_state_dir = self.tool(a)["env"].get("A_STATE")
+        self.assertSamePath(a / ".envy" / "state" / "local.a", pkg_state_dir)
 
     def test_the_first_run_installs_and_still_gets_the_products_own_env(self) -> None:
         """Activation skips the uninstalled; the install has to come first."""
@@ -358,7 +360,7 @@ class TestWrapperAppliesEnv(_ProductRunBase):
         base = dict(self.env, HELPER_GONE="set-before")
         shell = self.activated(a, env=base)
         tool = self.tool(a, env=base)["env"]
-        for name in ("A_VAR", "A_ROOT", "SHARED", "DEP_VAR", "OTHER_VAR", "HELPER_GONE",
+        for name in ("A_VAR", "A_STATE", "SHARED", "DEP_VAR", "OTHER_VAR", "HELPER_GONE",
                      "PATH", "ENVY_PROJECT_ROOT", "ENVY_ACTIVATE_PKGS"):
             self.assertEqual(shell.get(name), tool.get(name), name)
 
@@ -500,7 +502,7 @@ class TestCallerAlreadyActivated(_ProductRunBase):
         self.assertEqual("b", env.get("B_VAR"))
         self.assertEqual("from-b", env.get("SHARED"))
         self.assertNotIn("A_VAR", env)
-        self.assertNotIn("A_ROOT", env)
+        self.assertNotIn("A_STATE", env)
         self.assertSamePath(self.b, env.get("ENVY_PROJECT_ROOT"))
         self.assertSamePath(self.b, env.get("ENVY_ACTIVATE_ROOT"))
         self.assertPathAbsent(seen, self.a)
