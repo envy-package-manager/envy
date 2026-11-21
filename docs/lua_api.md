@@ -146,6 +146,12 @@ Move/rename file or directory.
 ### envy.remove(path)
 Delete file or directory recursively.
 
+### envy.write(path, content, opts?)
+Write `content` bytes untranslated, atomically; creates parent directories, closes the handle before returning. `opts.executable = true` adds the exec bits—a no-op on Windows.
+
+### envy.mkdir(path)
+Create a directory and its parents; an existing directory is not an error.
+
 ### envy.exists(path) → bool
 Check if path exists.
 
@@ -160,6 +166,8 @@ if not envy.exists("src") then
   envy.copy(fetch_dir .. "/upstream-src", "src")
 end
 envy.move("output/lib", install_dir .. "/lib")
+envy.write(install_dir .. "/bin/tool", '#!/bin/sh\nexec "$(dirname "$0")/../lib/tool" "$@"\n',
+           { executable = true })
 ```
 
 ---

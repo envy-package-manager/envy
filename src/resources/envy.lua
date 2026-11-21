@@ -172,6 +172,16 @@ function envy.move(src, dst) end
 ---@param path string Path to remove
 function envy.remove(path) end
 
+---Write bytes untranslated, atomically, creating parent directories; handle closed on return
+---@param path string Relative paths resolve from stage_dir
+---@param content string
+---@param opts? { executable?: boolean } Adds exec bits; a no-op on Windows
+function envy.write(path, content, opts) end
+
+---Create a directory and its parents; an existing directory is not an error
+---@param path string Relative paths resolve from stage_dir
+function envy.mkdir(path) end
+
 ---Check if path exists
 ---@param path string
 ---@return boolean
