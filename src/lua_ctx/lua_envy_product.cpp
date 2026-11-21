@@ -57,9 +57,7 @@ product_access authorize(char const *fn,
                          std::string const &product_name,
                          phase_context const *ctx) {
   pkg *const consumer{ ctx ? ctx->p : nullptr };
-  if (!consumer) {
-    throw_runtime_error({ fn, ": not in phase context (missing pkg)" });
-  }
+  if (!consumer) { throw_runtime_error({ fn, ": not in phase context (missing pkg)" }); }
   if (product_name.empty()) {
     throw_runtime_error({ fn, ": product name cannot be empty" });
   }
@@ -143,15 +141,12 @@ product_access authorize(char const *fn,
 // envy.run picks it. A custom shell has no quoting envy knows, so it must be named.
 shell_choice command_shell(sol::optional<sol::object> const &shell_obj,
                            phase_context const *ctx) {
-  resolved_shell const shell{
-    shell_obj && shell_obj->valid()
-        ? parse_shell_config_from_lua(*shell_obj, "shell")
-    : ctx->builtin_shell ? shell_resolve_default(nullptr)
-                         : pkg_default_shell(ctx->p)
-  };
+  resolved_shell const shell{ shell_obj && shell_obj->valid()
+                                  ? parse_shell_config_from_lua(*shell_obj, "shell")
+                              : ctx->builtin_shell ? shell_resolve_default(nullptr)
+                                                   : pkg_default_shell(ctx->p) };
   if (auto const *choice{ std::get_if<shell_choice>(&shell) }) { return *choice; }
-  throw_runtime_error(
-      { "the shell is custom; pass an ENVY_SHELL constant to quote for" });
+  throw_runtime_error({ "the shell is custom; pass an ENVY_SHELL constant to quote for" });
 }
 
 }  // namespace

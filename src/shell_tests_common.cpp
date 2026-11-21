@@ -44,9 +44,11 @@ TEST_CASE("shell_quote_argv: PowerShell") {
   CHECK(q({ "C:\\Program Files\\x.exe" }) == "& 'C:\\Program Files\\x.exe'");
   CHECK(q({ "x", "-Djava.awt.headless", "@args", "$HOME", "a`b" }) ==
         "& x '-Djava.awt.headless' '@args' '$HOME' 'a`b'");
-  CHECK(q({ "x", "O\xE2\x80\x99"
-                 "Brien" }) == "& x 'O\xE2\x80\x99\xE2\x80\x99"
-                               "Brien'");
+  CHECK(q({ "x",
+            "O\xE2\x80\x99"
+            "Brien" }) ==
+        "& x 'O\xE2\x80\x99\xE2\x80\x99"
+        "Brien'");
   CHECK(q({ "x", "C:\\no-space\\" }) == "& x C:\\no-space\\");
 
   CHECK_THROWS_WITH(q({ "x", "" }),

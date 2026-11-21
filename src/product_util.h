@@ -58,9 +58,10 @@ std::vector<std::string> product_util_run_argv(pkg *provider,
                                                std::string const &name,
                                                std::string *program = nullptr);
 
-// product_util_argv before anything is installed: a user-managed value raw, a cache-managed
-// path where the payload *will* land, predicted from the provider's cache key. `envy
-// product` lists after resolution but before any payload phase, so no pkg_path exists yet.
+// product_util_argv before anything is installed: a user-managed value raw, a
+// cache-managed path where the payload *will* land, predicted from the provider's cache
+// key. `envy product` lists after resolution but before any payload phase, so no pkg_path
+// exists yet.
 std::vector<std::string> product_util_predict_argv(pkg *provider, std::string const &name);
 
 }  // namespace envy

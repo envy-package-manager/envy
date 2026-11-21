@@ -217,8 +217,8 @@ TEST_CASE("product_util_argv walks the whole closure, from each provider's own")
   leaf->products["cc"] = path("bin/cc");
   sibling->products["ld"] = path("bin/ld");
   mid->products["build"] = command({ "{{cc}}", "{{cc}}:{{cc}}" });  // two levels down
-  app->products["twice"] = command({ "{{build}}", "{{build}}" });    // no false cycle
-  mid->products["link"] = command({ "{{ld}}" });                       // app's, not mid's
+  app->products["twice"] = command({ "{{build}}", "{{build}}" });   // no false cycle
+  mid->products["link"] = command({ "{{ld}}" });                    // app's, not mid's
 
   CHECK(render(app.get(), "twice") ==
         std::vector<std::string>{ "local.leaf@v1:cc",
@@ -242,7 +242,10 @@ TEST_CASE("product_util_argv names the product that supplied argv[0]") {
   auto const program_of{ [&](std::string const &name) {
     std::string program;
     product_util_argv(
-        app.get(), name, [](pkg *, std::string const &n) { return n; }, &program);
+        app.get(),
+        name,
+        [](pkg *, std::string const &n) { return n; },
+        &program);
     return program;
   } };
   CHECK(program_of("node") == "node");    // a path product supplies itself
@@ -258,8 +261,9 @@ TEST_CASE("product_util_argv refuses a self-cycle and a null provider") {
   CHECK_THROWS_WITH_AS(render(p.get(), "a"),
                        "Product 'a' in spec 'local.p@v1' is a command cycle: a -> a",
                        std::runtime_error);
-  CHECK_THROWS_WITH_AS(
-      render(nullptr, "a"), "Product 'a' has no provider", std::runtime_error);
+  CHECK_THROWS_WITH_AS(render(nullptr, "a"),
+                       "Product 'a' has no provider",
+                       std::runtime_error);
 }
 
 TEST_CASE("product_util_argv refuses a name outside the provider's closure") {
