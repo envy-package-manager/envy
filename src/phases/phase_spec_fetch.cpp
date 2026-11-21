@@ -384,9 +384,9 @@ sol::object deserialize_options(sol::state_view lua,
 // All-caps globals are envy's: one it doesn't read is a typo ('EVN') silently disabling a
 // feature. `local`, lowercase and mixed-case names are the author's.
 constexpr std::string_view kSpecGlobals[]{
-  "BUILD",   "BUNDLES", "CHECK", "DEPENDENCIES", "DISPLAY",   "ENV",
-  "EXPORTABLE", "FETCH", "IDENTITY", "INSTALL", "OPTIONS", "PLATFORMS",
-  "PRODUCTS", "SETUP",   "STAGE", "USER_MANAGED", "VENDOR",
+  "BUILD",      "BUNDLES", "CHECK",    "DEPENDENCIES", "DISPLAY", "ENV",
+  "EXPORTABLE", "FETCH",   "IDENTITY", "INSTALL",      "OPTIONS", "PLATFORMS",
+  "PRODUCTS",   "SETUP",   "STAGE",    "USER_MANAGED", "VENDOR",
 };  // CHECK is read only so validate_phases can point it at SETUP
 
 std::vector<std::string> all_caps_globals(sol::state_view lua) {
