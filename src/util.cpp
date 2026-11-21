@@ -276,6 +276,15 @@ std::string util_normalized_path(std::filesystem::path path) {
   return path.make_preferred().string();
 }
 
+std::string util_path_to_utf8(std::filesystem::path const &path) {
+  auto const u8{ path.u8string() };
+  return { u8.begin(), u8.end() };
+}
+
+std::filesystem::path util_path_from_utf8(std::string_view utf8) {
+  return std::u8string{ utf8.begin(), utf8.end() };
+}
+
 std::string util_path_with_separator(std::filesystem::path const &path) {
   std::string result{ util_normalized_path(path) };
   if (result.empty()) { return result; }

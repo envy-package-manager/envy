@@ -57,17 +57,38 @@ cmd_product::cmd_product(cfg cfg,
 
 namespace {
 
-void print_products_json(engine &eng, cache &c) {
+// A path product is a string; a command is its argv, ready to exec without re-parsing --
+// or null off its platforms, where validation never checked what it names.
+void print_products_json(engine &eng) {
   auto const products{ eng.collect_all_products() };
 
   picojson::object obj;
   for (auto const &pi : products) {
-    obj[pi.product_name] = picojson::value(
-        product_util_predict(pi, eng.find_product_provider(pi.product_name), c));
+    obj[pi.product_name] = [&] {
+      bool const command{ !pi.command.empty() };
+      if (command && !util_platform_matches(pi.platforms,
+                                            platform::os_name(),
+                                            platform::arch_name())) {
+        return picojson::value{};
+      }
+      auto argv{ product_util_predict_argv(eng.find_product_provider(pi.product_name),
+                                           pi.product_name) };
+      if (!command) { return picojson::value(std::move(argv.front())); }
+      picojson::array arr;
+      for (auto &arg : argv) { arr.emplace_back(std::move(arg)); }
+      return picojson::value(std::move(arr));
+    }();
   }
 
   std::string const output{ picojson::value(obj).serialize(true) };
   tui::print_stdout("%s", output.c_str());
+}
+
+// A command lists as declared, placeholders and all: nothing is resolved here.
+std::string listed_value(product_info const &p) {
+  std::string v{ p.value };  // empty for a command
+  for (auto const &arg : p.command) { v += (v.empty() ? "" : " ") + arg; }
+  return v;
 }
 
 void print_products_aligned(std::vector<product_info> const &products) {
@@ -83,7 +104,7 @@ void print_products_aligned(std::vector<product_info> const &products) {
 
   for (auto const &p : products) {
     max_product = std::max(max_product, p.product_name.size());
-    max_value = std::max(max_value, p.value.size());
+    max_value = std::max(max_value, listed_value(p).size());
     max_provider = std::max(max_provider, p.provider_canonical.size());
   }
 
@@ -94,7 +115,7 @@ void print_products_aligned(std::vector<product_info> const &products) {
                                                : "" };
     std::ostringstream oss;
     oss << std::left << std::setw(max_product) << p.product_name << "  "
-        << std::setw(max_value) << p.value << "  " << p.provider_canonical
+        << std::setw(max_value) << listed_value(p) << "  " << p.provider_canonical
         << user_managed_marker;
     tui::info("%s", oss.str().c_str());
   }
@@ -112,46 +133,58 @@ pkg *install_provider(engine &eng, std::string const &name) {
   return provider;
 }
 
-bool same_command_name(std::string_view a, std::string_view b) {
-#ifdef _WIN32
-  auto const lower{ [](char c) {
-    return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
-  } };
-  return std::ranges::equal(a, b, [&](char x, char y) { return lower(x) == lower(y); });
-#else
-  return a == b;
-#endif
-}
-
-// A user-managed value is a command. A relative path anchors at the project root, where
-// SETUP runs; a bare name is searched on `path_list`.
-std::string user_managed_program(std::string const &value,
-                                 std::string const &product,
-                                 activation_anchor const &anchor,
-                                 envy_meta const &meta,
-                                 std::string const *path_list) {
-  std::filesystem::path const named{ value };
+// The program a product runs: an absolute path as is (every cache-managed path); a
+// relative one anchors at the project root, where SETUP runs; a bare name is searched on
+// `path_list` from the cwd the tool inherits. `supplier` is the product whose value or
+// command put it there. UTF-8 in and out.
+std::string resolve_program(std::string const &value,
+                            std::string const &supplier,
+                            activation_anchor const &anchor,
+                            envy_meta const &meta,
+                            std::string const *path_list) {
+  std::filesystem::path const named{ util_path_from_utf8(value) };
   if (named.has_parent_path()) {
-    return named.is_absolute() ? value : (anchor.root / named).string();
+    return named.is_absolute() ? value : util_path_to_utf8(anchor.root / named);
   }
-  // Past the bin dir only when the value names this very product: its wrapper would only
-  // run envy again. Another product's wrapper (an alias) is a fine thing to reach.
   std::error_code ec;
-  auto const bin{ meta.bin && same_command_name(value, product)
-                      ? std::filesystem::canonical(anchor.root / *meta.bin, ec)
-                      : std::filesystem::path{} };
-  auto const found{ shell_find_executable(value,
-                                          path_list ? *path_list : std::string{},
-                                          bin.empty() || ec ? nullptr : &bin) };
+  auto const bin{ meta.bin ? std::filesystem::canonical(anchor.root / *meta.bin, ec)
+                           : std::filesystem::path{} };
+  auto const found{ product_util_find_program(value,
+                                              supplier,
+                                              path_list ? *path_list : std::string{},
+                                              std::filesystem::current_path(),
+                                              bin.empty() || ec ? nullptr : &bin) };
   if (!found) {
     throw_runtime_error(
-        { "product: '", product, "' runs '", value, "', not found on PATH" });
+        { "product: '", supplier, "' runs '", value, "', not found on PATH" });
   }
-  return found->string();
+  return *found;
 }
 
-// Install the provider's closure, then build the tool's environment from that same engine:
-// one graph. Host packages only, as install and activate resolve.
+// The tool as `--run` execs it: the product rendered, its program resolved in the
+// project's activation -- the one built here from the same engine.
+struct tool_plan {
+  std::vector<std::string> argv;  // UTF-8, as shell_exec reads it
+  shell_env_t live;
+  shell_env_t to;
+};
+
+tool_plan plan_tool(engine &eng,
+                    manifest const &m,
+                    pkg *provider,
+                    std::string const &name) {
+  shell_env_t live{ shell_getenv() };
+  auto const anchor{ activation_anchor_read(eng.cache_root(), m.manifest_path) };
+  shell_env_t to{ activation_for_tool(eng, m, anchor, live, provider) };
+  std::string program;
+  auto argv{ product_util_run_argv(provider, name, &program) };
+  argv.front() =
+      resolve_program(argv.front(), program, anchor, m.meta, env_get(to, "PATH"));
+  return { .argv = std::move(argv), .live = std::move(live), .to = std::move(to) };
+}
+
+// Install the provider's closure, then plan the tool from that same engine: one graph.
+// Host packages only, as install and activate resolve.
 exec_request plan_run(cmd_product::cfg const &cfg,
                       std::optional<std::filesystem::path> const &cli_cache_root) {
   auto const [m, c]{
@@ -161,24 +194,15 @@ exec_request plan_run(cmd_product::cfg const &cfg,
   eng.set_quiet_idle_outcomes(true);  // a cache hit is no news on the tool's stderr
   eng.resolve_graph(
       engine_filter_host_platform({ m->packages.begin(), m->packages.end() }));
-  pkg *const provider{ install_provider(eng, cfg.product_name) };
-  std::string const value{ product_util_resolve(provider, cfg.product_name) };
-
-  shell_env_t live{ shell_getenv() };
-  auto const anchor{ activation_anchor_read(eng.cache_root(), m->manifest_path) };
-  shell_env_t to{ activation_for_tool(eng, *m, anchor, live, provider) };
-  auto argv{ [&] {
-    std::vector<std::string> out{ provider->type == pkg_type::USER_MANAGED
-                                      ? user_managed_program(value,
-                                                             cfg.product_name,
-                                                             anchor,
-                                                             m->meta,
-                                                             env_get(to, "PATH"))
-                                      : value };
-    out.insert(out.end(), cfg.args.begin(), cfg.args.end());
-    return out;
-  }() };
-  return { .argv = std::move(argv), .from = std::move(live), .to = std::move(to) };
+  auto plan{
+    plan_tool(eng, *m, install_provider(eng, cfg.product_name), cfg.product_name)
+  };
+  for (auto const &arg : cfg.args) {  // main's argv is the native encoding
+    plan.argv.push_back(util_path_to_utf8(std::filesystem::path{ arg }));
+  }
+  return { .argv = std::move(plan.argv),
+           .from = std::move(plan.live),
+           .to = std::move(plan.to) };
 }
 
 }  // namespace
@@ -218,15 +242,22 @@ void cmd_product::execute() {
 
   if (cfg_.product_name.empty()) {
     if (cfg_.json) {
-      print_products_json(eng, *c);
+      print_products_json(eng);
     } else {
       print_products_aligned(eng.collect_all_products());
     }
     return;
   }
 
+  // A path product prints as is; a command as `--run` would exec it, quoted for the
+  // platform's shell.
   pkg *const provider{ install_provider(eng, cfg_.product_name) };
-  std::string const rendered_value{ product_util_resolve(provider, cfg_.product_name) };
+  std::string const rendered_value{
+    product_util_is_command(provider, cfg_.product_name)
+        ? shell_quote_argv(plan_tool(eng, *m, provider, cfg_.product_name).argv,
+                           kShellPlatformDefault)
+        : product_util_run_argv(provider, cfg_.product_name).front()
+  };
   tui::print_stdout("%s\n", rendered_value.c_str());
 }
 

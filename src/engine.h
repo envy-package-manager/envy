@@ -53,6 +53,7 @@ struct product_info {
   std::filesystem::path pkg_path;
   bool script = true;
   std::vector<std::string> platforms;  // Effective constraint (empty = all)
+  std::vector<std::string> command;    // Unrendered argv; empty for a path product
 };
 
 // resolve_graph found no package for a weak reference. A resolution of some roots throws
@@ -222,6 +223,7 @@ class engine : unmovable {
   // readable, so registry visibility must not lag behind it.
   void register_products(pkg *p);
   void validate_product_fallbacks();
+  void validate_product_commands();
   void validate_setup_selections();
   void extend_dependencies_recursive(pkg *p, std::unordered_set<pkg_key> &visited);
   void wait_for_resolution_phase();
