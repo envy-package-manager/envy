@@ -173,7 +173,8 @@ std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice 
         refuse(arg, "powershell.exe turns a trailing '\\' into an escaped quote");
       }
       if (batch && arg.find_first_of("&|<>^%!") != std::string_view::npos) {
-        refuse(arg, "powershell.exe hands a .bat/.cmd its arguments through cmd, unquoted");
+        refuse(arg,
+               "powershell.exe hands a .bat/.cmd its arguments through cmd, unquoted");
       }
       if (plain(arg) && arg.front() != '-') {  // a bare `-a.b` arrives as `-a` and `.b`
         out += arg;
