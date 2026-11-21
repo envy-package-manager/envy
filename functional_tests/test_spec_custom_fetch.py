@@ -160,7 +160,7 @@ SETUP = {{ m = {{ CHECK = function() return true end, INSTALL = function() end }
             return f"""  {{ spec = "local.cf_child@v1", options = {{ v = "{value}" }},
     source = {{ fetch = function(tmp_dir, options)
       local f = io.open(tmp_dir .. "/spec.lua", "w")
-      f:write({CHILD_SPEC_LUA} .. 'MARKER = "' .. options.v .. '"\\n')
+      f:write({CHILD_SPEC_LUA} .. 'local MARKER = "' .. options.v .. '"\\n')
       f:close()
       envy.commit_fetch("spec.lua")
     end }} }},"""
@@ -177,7 +177,7 @@ SETUP = {{ m = {{ CHECK = function() return true end, INSTALL = function() end }
             (e / "pkg" / "spec.lua").read_text(encoding="utf-8").strip().splitlines()[-1]
             for e in self.spec_entries("local.cf_child@v1")
         }
-        self.assertEqual({'MARKER = "1"', 'MARKER = "2"'}, markers)
+        self.assertEqual({'local MARKER = "1"', 'local MARKER = "2"'}, markers)
 
     # -- everything committed is the spec directory --------------------------
 

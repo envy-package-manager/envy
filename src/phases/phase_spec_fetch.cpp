@@ -25,6 +25,7 @@
 #include <map>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -378,6 +379,53 @@ sol::object deserialize_options(sol::state_view lua,
   }
 
   return opts_result.get<sol::object>();
+}
+
+// All-caps globals are envy's: one it doesn't read is a typo ('EVN') silently disabling a
+// feature. `local`, lowercase and mixed-case names are the author's.
+constexpr std::string_view kSpecGlobals[]{
+  "BUILD",      "BUNDLES", "CHECK",    "DEPENDENCIES", "DISPLAY", "ENV",
+  "EXPORTABLE", "FETCH",   "IDENTITY", "INSTALL",      "OPTIONS", "PLATFORMS",
+  "PRODUCTS",   "SETUP",   "STAGE",    "USER_MANAGED", "VENDOR",
+};  // CHECK is read only so validate_phases can point it at SETUP
+
+std::vector<std::string> all_caps_globals(sol::state_view lua) {
+  std::vector<std::string> names;
+  for (auto const &[key, _] : lua.globals()) {
+    if (sol::object const k(key); k.get_type() == sol::type::string) {
+      std::string name{ k.as<std::string>() };
+      if (name[0] >= 'A' && name[0] <= 'Z' &&
+          name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
+              std::string::npos) {
+        names.push_back(std::move(name));
+      }
+    }
+  }
+  return names;
+}
+
+// `preset` is what envy installed before the spec ran (e.g. ENVY_SHELL); not the spec's.
+void reject_unknown_globals(sol::state_view lua,
+                            std::vector<std::string> const &preset,
+                            std::string const &identity) {
+  auto unknown{ all_caps_globals(lua) };
+  std::erase_if(unknown, [&](std::string const &name) {
+    return std::ranges::find(kSpecGlobals, name) != std::end(kSpecGlobals) ||
+           std::ranges::find(preset, name) != preset.end();
+  });
+  if (unknown.empty()) { return; }
+  util_sort(unknown);  // globals iterate in hash order
+  std::string const list{ [&] {
+    std::string out;
+    for (auto const &name : unknown) { out += (out.empty() ? "'" : ", '") + name + "'"; }
+    return out;
+  }() };
+  throw_runtime_error({ "spec '",
+                        identity,
+                        "' defines unknown global",
+                        unknown.size() > 1 ? "s " : " ",
+                        list,
+                        "; make helpers local" });
 }
 
 int load_spec_script(sol::state &lua,
@@ -1521,6 +1569,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     }
   }
 
+  auto const preset_globals{ all_caps_globals(*lua) };
   p->schema = load_spec_script(*lua, spec_path, cfg.identity);
 
   // Store spec file path for error reporting
@@ -1624,6 +1673,10 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   p->display = resolve_display(p, *lua);
   tui::section_set_display(p->tui_section, p->display);
   p->has_env = resolve_env(*lua, cfg.identity);
+
+  // Spec semantics, so after the entry is finalized; after load-time callbacks
+  // (OPTIONS, DISPLAY, USER_MANAGED...) too, since they can assign globals as well.
+  reject_unknown_globals(*lua, preset_globals, cfg.identity);
 
   p->lua.set(std::move(lua));
 
