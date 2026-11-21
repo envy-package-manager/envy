@@ -230,6 +230,26 @@ class TestProductCommand(EnvyTestCase):
         line = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
         self.assertIn(_norm(PY.parent), _norm(line.replace("'", "")))
 
+    def test_product_command_carries_or_refuses_awkward_arguments(self):
+        """sh carries an empty argument and a '"' intact; powershell.exe 5.1 would drop
+        one and strip the other, so on Windows envy refuses rather than mangle."""
+        tool = self.tool_spec(
+            '{ ["tool.py"] = { value = "lib/tool.py", script = false },\n'
+            '  odd = { command = { "{{py}}", "{{tool.py}}", "", "say \\"hi\\"" } } }')
+        consumer = self.consumer_spec(
+            '{ product = "odd" }',
+            '  local ok, cmd = pcall(envy.product_command, "odd")\n'
+            "  out = ok and envy.json.decode(envy.run(cmd, { capture = true }).stdout)\n"
+            "    or cmd")
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool),
+                          ("local.consumer@v1", consumer))
+        out = self.out(m)
+        if WINDOWS:
+            self.assertIn("envy.product_command: PowerShell cannot quote '': "
+                          "powershell.exe drops an empty argument", out)
+        else:
+            self.assert_tool_argv(m, out, ["", 'say "hi"'])
+
     @unittest.skipIf(WINDOWS, "a POSIX custom shell")
     def test_custom_default_shell_needs_a_named_shell(self):
         consumer = self.consumer_spec(

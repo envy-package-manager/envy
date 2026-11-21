@@ -26,8 +26,11 @@ TEST_CASE("shell_quote_argv: POSIX quotes everything outside a bare set") {
                      std::string_view{ "_-.:+/@," }.find(c) != std::string_view::npos };
     std::string const quoted{ c == '\'' ? std::string{ "'a'\\'''" } : "'" + arg + "'" };
     CAPTURE(arg);
-    CHECK(shell_quote_argv({ arg }, shell_choice::bash) == (bare ? arg : quoted));
+    CHECK(shell_quote_argv({ "/x", arg }, shell_choice::bash) ==
+          "/x " + (bare ? arg : quoted));
   }
+  CHECK(shell_quote_argv({ "if", "x" }, shell_choice::bash) == "'if' x");  // a program
+  CHECK(shell_quote_argv({ "time" }, shell_choice::sh) == "'time'");
   CHECK(shell_quote_argv({ "/opt/node", "a b", "it's", "", "-x=1" }, shell_choice::sh) ==
         "/opt/node 'a b' 'it'\\''s' '' '-x=1'");
 }
@@ -69,10 +72,11 @@ TEST_CASE("shell_quote_argv: cmd") {
 
   CHECK(q({ "C:\\n\\node.exe", "a b", "50%", "-x=1", "C:/fwd" }) ==
         "C:\\n\\node.exe \"a b\" \"50%%\" \"-x=1\" \"C:/fwd\"");
-  CHECK(q({ "x", "C:\\a b\\", "a b\\\\" }) == "x \"C:\\a b\\\\\" \"a b\\\\\\\\\"");
+  CHECK(q({ "x", "C:\\a b\\", "a b\\\\" }) == "\"x\" \"C:\\a b\\\\\" \"a b\\\\\\\\\"");
   CHECK(q({ "C:\\w\\gradlew.BAT", "build", "a b" }) ==
         "call C:\\w\\gradlew.BAT build \"a b\"");
-  CHECK(q({ "g.exe", "a^b" }) == "g.exe \"a^b\"");
+  CHECK(q({ "g.exe", "a^b" }) == "\"g.exe\" \"a^b\"");  // not a builtin either
+  CHECK(q({ "start" }) == "\"start\"");
 
   CHECK_THROWS_WITH(q({ "say \"hi\"" }), doctest::Contains("cmd cannot quote"));
   CHECK_THROWS_WITH(q({ "wow!" }), doctest::Contains("cmd cannot quote 'wow!'"));

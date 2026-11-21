@@ -154,8 +154,12 @@ std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice 
     if (!posix && arg.find_first_of("\r\n") != std::string_view::npos) {
       refuse(arg, "a line break ends the script line");
     }
+    // A bare program word may be a keyword (`if`, `time`) or a cmd builtin (`start`);
+    // quoted, it can only name a program. PowerShell's `&` already says so.
+    bool const bare_program{ i == 0 && arg.find_first_of(posix ? "/" : "/\\:") ==
+                                           std::string_view::npos };
     if (posix) {
-      if (plain(arg)) {
+      if (plain(arg) && !bare_program) {
         out += arg;
       } else {
         shell_append_quoted_posix(out, arg);
@@ -180,7 +184,7 @@ std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice 
       if (batch && arg.find_first_of("%^") != std::string_view::npos) {
         refuse(arg, "'call' expands '%' and doubles '^' again");
       }
-      if (plain(arg)) {
+      if (plain(arg) && !bare_program) {
         out += arg;
         continue;
       }
