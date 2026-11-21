@@ -55,7 +55,7 @@ std::string validated_key(pkg *p, std::string const &name) {
 
 struct argv_builder {
   product_render render;
-  std::unordered_set<std::string> *validated;  // set: check only, each command once
+  std::unordered_set<std::string> *validated;        // set: check only, each command once
   std::vector<std::pair<pkg *, std::string>> stack;  // products being rendered: cycles
   std::vector<std::string> out;
   std::string program;  // the product that rendered out[0]
@@ -192,7 +192,6 @@ bool same_program(std::string_view a, std::string_view b) {
 #endif
 }
 
-
 }  // namespace
 
 std::string product_util_resolve(pkg *provider, std::string const &product_name) {
@@ -272,9 +271,11 @@ std::vector<std::string> product_util_argv(pkg *provider,
                                            product_render render,
                                            std::string *program) {
   if (!provider) { throw_runtime_error({ "Product '", name, "' has no provider" }); }
-  argv_builder b{
-    .render = render, .validated = nullptr, .stack = {}, .out = {}, .program = {}
-  };
+  argv_builder b{ .render = render,
+                  .validated = nullptr,
+                  .stack = {},
+                  .out = {},
+                  .program = {} };
   b.append(provider, name);
   if (program) { *program = std::move(b.program); }
   return std::move(b.out);
@@ -284,9 +285,11 @@ void product_util_validate(pkg *provider,
                            std::string const &name,
                            std::unordered_set<std::string> &validated) {
   auto const stand_in{ [](pkg *, std::string const &) { return std::string{}; } };
-  argv_builder b{
-    .render = stand_in, .validated = &validated, .stack = {}, .out = {}, .program = {}
-  };
+  argv_builder b{ .render = stand_in,
+                  .validated = &validated,
+                  .stack = {},
+                  .out = {},
+                  .program = {} };
   b.append(provider, name);
 }
 
@@ -306,11 +309,12 @@ std::vector<std::string> product_util_predict_argv(pkg *provider,
   });
 }
 
-std::optional<std::string> product_util_find_program(std::string const &program,
-                                                     std::string const &supplier,
-                                                     std::string const &path_list,
-                                                     std::filesystem::path const &base,
-                                                     std::filesystem::path const *bin_dir) {
+std::optional<std::string> product_util_find_program(
+    std::string const &program,
+    std::string const &supplier,
+    std::string const &path_list,
+    std::filesystem::path const &base,
+    std::filesystem::path const *bin_dir) {
 #ifdef _WIN32
   constexpr char kSep{ ';' };
 #else
@@ -329,8 +333,9 @@ std::optional<std::string> product_util_find_program(std::string const &program,
     at = end + 1;
   }
   bool const own{ bin_dir && same_program(program, supplier) };
-  auto const found{ shell_find_executable(
-      util_path_from_utf8(program).string(), anchored, own ? bin_dir : nullptr) };
+  auto const found{ shell_find_executable(util_path_from_utf8(program).string(),
+                                          anchored,
+                                          own ? bin_dir : nullptr) };
   return found ? std::optional{ util_path_to_utf8(*found) } : std::nullopt;
 }
 

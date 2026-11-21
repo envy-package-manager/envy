@@ -17,8 +17,8 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <string>
+#include <system_error>
 #include <variant>
 
 namespace envy {
@@ -131,8 +131,8 @@ product_access authorize(char const *fn,
                    dep.provider->cfg->identity + "'");
   }
 
-  // The declarer: the edge's package, or for a weak fallback one in its closure -- finished
-  // whenever the edge's package is. A pin to a package that lacks it is refused.
+  // The declarer: the edge's package, or for a weak fallback one in its closure --
+  // finished whenever the edge's package is. A pin to a package that lacks it is refused.
   try {
     if (pkg *const owner{ product_util_owner(consumer, product_name) }) {
       a.provider = owner;
@@ -195,12 +195,12 @@ void lua_envy_product_install(sol::table &envy_table) {
           shell_env_t const env{ pkg_env_for_context(ctx) };
           std::string const *const path{ env_get(env, "PATH") };
           auto const bin{ bin_dir(ctx->eng) };
-          auto found{ product_util_find_program(argv.front(),
-                                                program,
-                                                path ? *path : std::string{},
-                                                lua_phase_context_resolve(L, ".")
-                                                    .lexically_normal(),
-                                                bin.empty() ? nullptr : &bin) };
+          auto found{ product_util_find_program(
+              argv.front(),
+              program,
+              path ? *path : std::string{},
+              lua_phase_context_resolve(L, ".").lexically_normal(),
+              bin.empty() ? nullptr : &bin) };
           if (!found) { throw std::runtime_error{ "'" + argv.front() + "' not on PATH" }; }
           argv.front() = std::move(*found);
         }

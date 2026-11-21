@@ -66,8 +66,9 @@ void print_products_json(engine &eng) {
   for (auto const &pi : products) {
     obj[pi.product_name] = [&] {
       bool const command{ !pi.command.empty() };
-      if (command &&
-          !util_platform_matches(pi.platforms, platform::os_name(), platform::arch_name())) {
+      if (command && !util_platform_matches(pi.platforms,
+                                            platform::os_name(),
+                                            platform::arch_name())) {
         return picojson::value{};
       }
       auto argv{ product_util_predict_argv(eng.find_product_provider(pi.product_name),
@@ -168,13 +169,17 @@ struct tool_plan {
   shell_env_t to;
 };
 
-tool_plan plan_tool(engine &eng, manifest const &m, pkg *provider, std::string const &name) {
+tool_plan plan_tool(engine &eng,
+                    manifest const &m,
+                    pkg *provider,
+                    std::string const &name) {
   shell_env_t live{ shell_getenv() };
   auto const anchor{ activation_anchor_read(eng.cache_root(), m.manifest_path) };
   shell_env_t to{ activation_for_tool(eng, m, anchor, live, provider) };
   std::string program;
   auto argv{ product_util_run_argv(provider, name, &program) };
-  argv.front() = resolve_program(argv.front(), program, anchor, m.meta, env_get(to, "PATH"));
+  argv.front() =
+      resolve_program(argv.front(), program, anchor, m.meta, env_get(to, "PATH"));
   return { .argv = std::move(argv), .live = std::move(live), .to = std::move(to) };
 }
 
@@ -189,7 +194,9 @@ exec_request plan_run(cmd_product::cfg const &cfg,
   eng.set_quiet_idle_outcomes(true);  // a cache hit is no news on the tool's stderr
   eng.resolve_graph(
       engine_filter_host_platform({ m->packages.begin(), m->packages.end() }));
-  auto plan{ plan_tool(eng, *m, install_provider(eng, cfg.product_name), cfg.product_name) };
+  auto plan{
+    plan_tool(eng, *m, install_provider(eng, cfg.product_name), cfg.product_name)
+  };
   for (auto const &arg : cfg.args) {  // main's argv is the native encoding
     plan.argv.push_back(util_path_to_utf8(std::filesystem::path{ arg }));
   }
