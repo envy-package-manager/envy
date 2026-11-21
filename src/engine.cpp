@@ -18,6 +18,7 @@
 #include "pkg_key.h"
 #include "pkg_phase.h"
 #include "platform.h"
+#include "product_util.h"
 #include "tui.h"
 #include "util.h"
 
@@ -32,6 +33,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
@@ -402,24 +404,6 @@ void resolve_product_ref(pkg *p,
   }
 }
 
-bool pkg_provides_product(pkg *root, std::string const &product_name) {
-  std::vector<pkg *> work{ root };
-  std::unordered_set<pkg const *> visited{ root };
-
-  while (!work.empty()) {
-    pkg *p{ work.back() };
-    work.pop_back();
-
-    std::lock_guard const deps_lock(p->deps_mutex);
-    if (p->products.contains(product_name)) { return true; }
-    for (auto const &[_, dep_info] : p->dependencies) {
-      if (visited.insert(dep_info.p).second) { work.push_back(dep_info.p); }
-    }
-  }
-
-  return false;
-}
-
 }  // namespace
 
 void engine::wire_dependency(pkg *parent,
@@ -703,6 +687,7 @@ std::vector<product_info> engine::collect_all_products() const {
             .script = prod_entry.script,
             .platforms =
                 util_platform_intersect(prod_entry.platforms, package->resolved_platforms),
+            .command = prod_entry.command,
         });
       }
     }
@@ -1513,7 +1498,7 @@ void engine::validate_product_fallbacks() {
   std::vector<std::string> errors;
 
   for (auto const &[p, wr] : to_validate) {
-    if (!pkg_provides_product(wr->resolved, wr->query)) {
+    if (!product_util_closure_provider(wr->resolved, wr->query)) {
       errors.push_back("Fallback for product '" + wr->query + "' in spec '" +
                        p->cfg->identity + "' resolved to '" + wr->resolved->cfg->identity +
                        "', which does not provide product transitively");
@@ -1528,6 +1513,36 @@ void engine::validate_product_fallbacks() {
     }
     throw_runtime_error({ oss.str() });
   }
+}
+
+void engine::validate_product_commands() {
+  // Rendering with stand-in leaves walks exactly what a run renders: every placeholder a
+  // product of its provider's closure, no cycle, no command embedded mid-element.
+  std::vector<std::pair<pkg *, std::string>> commands;
+  {
+    std::lock_guard const lock(mutex_);
+    for (auto &[_, package] : packages_) {
+      std::lock_guard const deps_lock(package->deps_mutex);
+      for (auto const &[name, entry] : package->products) {
+        if (!entry.command.empty()) { commands.emplace_back(package.get(), name); }
+      }
+    }
+  }
+  util_sort(commands, [](auto const &a, auto const &b) {  // a stable error order
+    return std::tie(a.first->key, a.second) < std::tie(b.first->key, b.second);
+  });
+
+  auto const stand_in{ [](pkg *, std::string const &) { return std::string{}; } };
+  std::string errors;
+  for (auto const &[p, name] : commands) {
+    try {
+      product_util_argv(p, name, stand_in);
+    } catch (std::exception const &e) {
+      errors += errors.empty() ? "" : "\n";
+      errors += e.what();
+    }
+  }
+  if (!errors.empty()) { throw_runtime_error({ errors }); }
 }
 
 void engine::validate_setup_selections() {
@@ -1689,6 +1704,7 @@ void engine::resolve_graph(std::vector<pkg_cfg const *> const &roots) {
   }
 
   validate_product_fallbacks();
+  validate_product_commands();
   validate_setup_selections();
 }
 

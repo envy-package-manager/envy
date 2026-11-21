@@ -64,8 +64,8 @@ reuses. Two cfgs on one key must agree on their source (see below).
 Then the loop: wait until no `spec_fetch` is in flight, run one weak resolution pass,
 repeat while it makes progress. Progress is "something resolved or a
 fallback was spawned"; no progress with references left is an error listing them.
-Finally `validate_product_fallbacks` and `validate_setup_selections` run once, against a
-fully resolved graph.
+Finally `validate_product_fallbacks`, `validate_product_commands` and
+`validate_setup_selections` run once, against a fully resolved graph.
 
 `run_full` adds the rest: extend every task to completion, join, then throw one error
 built from *all* failures, deduplicated and sorted (a dependent re-reports its

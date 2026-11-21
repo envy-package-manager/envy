@@ -24,6 +24,36 @@ the manifest entry's `platforms`). An OS covers its arches, so granularity may d
 script. `script = false`
 suppresses the deployed wrapper (see `docs/commands.md` for `deploy`).
 
+## Commands
+
+A product may be an argv instead of a path — a script run by another product's
+interpreter, or a tool that needs fixed flags. Every `{{name}}` is a product:
+
+```lua
+DEPENDENCIES = { { product = "node" }, { product = "java" } }
+PRODUCTS = {
+  ["yarn.cjs"]   = { value = "lib/yarn.cjs", script = false },   -- a file the command runs
+  yarn           = { command = { "{{node}}", "{{yarn.cjs}}" } },
+  ["gradle.jar"] = { value = "lib/gradle.jar", script = false },
+  gradle         = { command = { "{{java}}", "-Xmx2g", "-jar", "{{gradle.jar}}" } },
+  ci             = { command = { "{{yarn}}", "install", "--frozen-lockfile" } },  -- splices
+}
+```
+
+- `command` excludes `value`; `script` and `platforms` apply as before.
+- `{{name}}` resolves in the provider itself, then its dependency closure; the registry
+  admits one provider per name, so it names exactly one. In the graph but outside the
+  closure is an error, checked once resolution converges (`validate_product_commands`). A
+  command's own files are path products of its package, so they resolve first.
+- A path product may sit inside an element (`--node={{node}}`); a command must fill a whole
+  element, and its argv splices in. Cycles are errors.
+- Rendered at each use, never at install: nothing lands in the payload, so the hash still
+  covers the bytes and the cache root can move.
+- A first element that is not absolute resolves as a user-managed value does: relative
+  from the project root, bare on `PATH` — so user-managed products take arguments too.
+- `{{ }}` echoes `envy.template`, but these names are products filled in at use; build a
+  command with `..`, not `envy.template`, which rejects names it was not given.
+
 ## Depending on a product
 
 A dependency entry carries `product =`; the entry's `spec` (when present) pins which
@@ -70,7 +100,9 @@ outcome is traced `product_resolved{product, provider, via}` with `via` = `regis
 `envy.product(name)` requires a *direct* edge to the provider whose `needed_by` the
 current phase has reached; a provider reachable only transitively is refused. The value
 is the provider's package path joined with the product value (cache-managed) or the raw
-string (user-managed). Allowed or not, the attempt is traced
+string (user-managed); a command product is refused. `envy.product_command(name)`
+authorizes the same way and returns the rendered argv quoted for the phase's shell — a
+path product as one element — so consumers run any product without knowing its shape. Allowed or not, the attempt is traced
 `lua_ctx_product_access{target, provider, current_phase, needed_by, allowed, reason}`.
 
 ## Cache key
@@ -85,9 +117,9 @@ spec text.
 ## `envy product`
 
 `envy product <name>` resolves the graph, extends the provider's closure to completion,
-and prints the rendered value to stdout. A cache hit logs at DEBUG, so `$(envy product x)`
+and prints the rendered value to stdout — a command quoted for the platform's shell. A cache hit logs at DEBUG, so `$(envy product x)`
 stays quiet; a lazy install still reports. `--run` executes the product instead, in the
 project's activation — what deployed scripts call (see `docs/commands.md`). With no argument it lists every product:
-aligned `name  value  provider (user-managed)` rows on stderr, or with `--json` a
-`{ name: resolved_value }` object on stdout — which needs no install, since the path is
-recomputed from the provider's cache key.
+aligned `name  value  provider (user-managed)` rows on stderr (a command as declared), or
+with `--json` a `{ name: resolved_value }` object on stdout, a command as its argv array —
+which needs no install, since paths are recomputed from the providers' cache keys.

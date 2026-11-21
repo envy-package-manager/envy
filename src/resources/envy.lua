@@ -280,10 +280,17 @@ function envy.verify_hash(file_path, expected_sha256) end
 ---@return string pkg_path Absolute path to dependency's installed package
 function envy.package(identity) end
 
----Get product value from a dependency
+---Get product value from a dependency; errors on a command product
 ---@param name string Product name declared in provider's PRODUCTS
 ---@return string value Product value (path or arbitrary string)
 function envy.product(name) end
+
+---Command line that runs a product, quoted for `shell` (default: the phase's shell);
+---a path product is a one-element command. Append arguments and pass to envy.run.
+---@param name string Product name declared in provider's PRODUCTS
+---@param shell? integer ENVY_SHELL.* constant; required when the phase's shell is custom
+---@return string command e.g. "/c/node/bin/node /c/yarn/lib/yarn.cjs"
+function envy.product_command(name, shell) end
 
 ---Load Lua file from declared dependency into sandboxed environment
 ---Supports fuzzy identity matching (e.g., "helpers" matches "acme.helpers@v1")
@@ -406,7 +413,8 @@ DEPENDENCIES = {}
 PLATFORMS = nil
 
 ---@class envy.product_entry
----@field value string Relative path to product (required)
+---@field value? string Relative path to product (this or `command`)
+---@field command? string[] Argv run as the product; each `{{name}}` is a product of this package or its dependency closure
 ---@field script? boolean Generate wrapper script (default: true)
 ---@field platforms? string[] Platform constraints for this product (empty/absent = all)
 

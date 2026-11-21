@@ -377,7 +377,23 @@ end
 
 Works inside a `source.fetch` function too: `source.dependencies` entries are wired
 with `needed_by = spec_fetch` before the fetch function runs, so their products are
-readable there.
+readable there. A command product (`docs/products.md`) has no path; `envy.product` refuses
+it, naming `envy.product_command`.
+
+### envy.product_command(name, [shell]) → string
+
+The command line that runs a product, authorized as `envy.product` is. A command
+product renders its argv; a path product is a one-element command, so a consumer stays
+provider-agnostic. Quoted for `shell` (an `ENVY_SHELL` constant), else the phase's own:
+POSIX single quotes, PowerShell `& '…'`, cmd `"…"`. A custom `DEFAULT_SHELL` has no quoting
+envy knows; pass `shell`.
+
+```lua
+DEPENDENCIES = { { product = "yarn" } }
+BUILD = function()
+  envy.run(envy.product_command("yarn") .. " install --frozen-lockfile")
+end
+```
 
 A `source.fetch` closure lives in the declaring file's interpreter but runs as the spec
 it declares: that spec's `source.dependencies` are the edges `envy.package` and

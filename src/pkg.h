@@ -64,9 +64,10 @@ constexpr std::string_view pkg_closure_name(pkg_closure kind) {
 }
 
 struct product_entry {
-  std::string value;
+  std::string value;  // a path product; empty when `command` is set
   bool script = true;
   std::vector<std::string> platforms;  // empty = inherit from package
+  std::vector<std::string> command;    // argv with {{placeholders}}, rendered at each use
 };
 
 struct pkg {

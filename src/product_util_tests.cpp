@@ -116,28 +116,146 @@ TEST_CASE("product_util_resolve refuses a provider whose type is unresolved") {
 
 TEST_CASE("product_util_predict prints a user-managed value verbatim") {
   auto provider{ make_pkg("local.provider@v1", pkg_type::USER_MANAGED) };
-  cache c{ std::filesystem::path("/nonexistent-cache") };  // never consulted
 
   product_info const pi{ .product_name = "tool",
                          .value = "programmatic-tool",
                          .provider_canonical = "local.provider@v1",
                          .type = pkg_type::USER_MANAGED };
 
-  CHECK(product_util_predict(pi, provider.get(), c) == "programmatic-tool");
+  CHECK(product_util_predict(pi, provider.get()) == "programmatic-tool");
 }
 
 TEST_CASE("product_util_predict refuses a product whose type is unresolved") {
   auto provider{ make_pkg("local.provider@v1", pkg_type::UNKNOWN) };
-  cache c{ std::filesystem::path("/nonexistent-cache") };
 
   product_info const pi{ .product_name = "tool",
                          .value = "programmatic-tool",
                          .provider_canonical = "local.provider@v1",
                          .type = pkg_type::UNKNOWN };
 
-  CHECK_THROWS_WITH_AS(product_util_predict(pi, provider.get(), c),
+  CHECK_THROWS_WITH_AS(product_util_predict(pi, provider.get()),
                        "Product 'tool' provider 'local.provider@v1' has no resolved "
                        "package type; its spec did not finish loading",
+                       std::runtime_error);
+}
+
+// Commands render through a stand-in leaf -- `identity:name` for a path product -- so
+// these pin the walk, not any platform's path spelling.
+
+namespace {
+
+std::vector<std::string> render(pkg *provider, std::string const &name) {
+  return product_util_argv(provider, name, [](pkg *p, std::string const &n) {
+    return p->cfg->identity + ":" + n;
+  });
+}
+
+product_entry command(std::vector<std::string> argv) {
+  return product_entry{ .value = {}, .script = true, .platforms = {}, .command = argv };
+}
+
+product_entry path(std::string value) {
+  return product_entry{ .value = std::move(value), .script = false };
+}
+
+void depend(pkg *from, pkg *to) {
+  from->dependencies[to->cfg->identity] = { .p = to, .needed_by = pkg_phase::pkg_build };
+}
+
+}  // namespace
+
+TEST_CASE("product_util_placeholders finds names and spans") {
+  auto const holes{ product_util_placeholders("--a={{node}}:{{ yarn.cjs }}}}") };
+  REQUIRE(holes.size() == 2);
+  CHECK(holes[0].name == "node");
+  CHECK(holes[0].begin == 4);
+  CHECK(holes[0].end == 12);
+  CHECK(holes[1].name == "yarn.cjs");  // trimmed
+  CHECK(holes[1].begin == 13);
+  CHECK(holes[1].end == 27);  // the trailing stray "}}" stays literal
+
+  CHECK(product_util_placeholders("plain").empty());
+  CHECK_THROWS_WITH_AS(product_util_placeholders("x{{node"),
+                       "unterminated '{{' in 'x{{node'",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(product_util_placeholders("{{ }}"),
+                       "empty placeholder in '{{ }}'",
+                       std::runtime_error);
+}
+
+TEST_CASE("product_util_argv renders products of the provider and its closure") {
+  auto yarn{ make_pkg("local.yarn@v1", pkg_type::CACHE_MANAGED) };
+  auto node{ make_pkg("local.node@v1", pkg_type::CACHE_MANAGED) };
+  depend(yarn.get(), node.get());
+  node->products["node"] = path("bin/node");
+  yarn->products["yarn.cjs"] = path("lib/yarn.cjs");  // its own
+  yarn->products["yarn"] = command({ "{{node}}", "{{yarn.cjs}}", "--node={{node}}", "-q" });
+
+  CHECK(render(yarn.get(), "yarn") == std::vector<std::string>{ "local.node@v1:node",
+                                                                "local.yarn@v1:yarn.cjs",
+                                                                "--node=local.node@v1:node",
+                                                                "-q" });
+  CHECK(render(node.get(), "node") == std::vector<std::string>{ "local.node@v1:node" });
+}
+
+TEST_CASE("product_util_argv splices a whole-element command from the closure") {
+  auto app{ make_pkg("local.app@v1", pkg_type::CACHE_MANAGED) };
+  auto node{ make_pkg("local.node@v1", pkg_type::CACHE_MANAGED) };
+  depend(app.get(), node.get());
+  node->products["node"] = path("bin/node");
+  node->products["npm-cli.js"] = path("lib/npm-cli.js");
+  node->products["npm"] = command({ "{{node}}", "{{npm-cli.js}}" });
+  app->products["install"] = command({ "{{npm}}", "ci" });
+
+  CHECK(render(app.get(), "install") ==
+        std::vector<std::string>{ "local.node@v1:node", "local.node@v1:npm-cli.js", "ci" });
+}
+
+TEST_CASE("product_util_argv refuses a name outside the provider's closure") {
+  auto yarn{ make_pkg("local.yarn@v1", pkg_type::CACHE_MANAGED) };
+  auto stray{ make_pkg("local.node@v1", pkg_type::CACHE_MANAGED) };  // not a dependency
+  stray->products["node"] = path("bin/node");
+  yarn->products["yarn"] = command({ "{{node}}", "x" });
+
+  CHECK_THROWS_WITH_AS(render(yarn.get(), "yarn"),
+                       "Product 'yarn' in spec 'local.yarn@v1' runs '{{node}}', but "
+                       "nothing in its dependency closure provides 'node'",
+                       std::runtime_error);
+}
+
+TEST_CASE("product_util_argv refuses a command cycle") {
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  p->products["a"] = command({ "{{b}}" });
+  p->products["b"] = command({ "{{a}}", "x" });
+
+  CHECK_THROWS_WITH_AS(render(p.get(), "a"),
+                       "Product 'a' in spec 'local.p@v1' is a command cycle: a -> b -> a",
+                       std::runtime_error);
+}
+
+TEST_CASE("product_util_argv refuses a command embedded in part of an element") {
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  p->products["tool"] = command({ "tool" });
+  p->products["wrap"] = command({ "run", "--with={{tool}}" });
+
+  CHECK_THROWS_WITH_AS(render(p.get(), "wrap"),
+                       "Product 'wrap' in spec 'local.p@v1' embeds command product "
+                       "'tool' in '--with={{tool}}'; a command can only fill a whole "
+                       "element",
+                       std::runtime_error);
+}
+
+TEST_CASE("a command product is not a path") {
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  p->pkg_path = std::filesystem::path("/tmp/p");
+  p->products["tool"] = command({ "{{path}}" });
+  p->products["path"] = path("bin/path");
+
+  CHECK(product_util_is_command(p.get(), "tool"));
+  CHECK_FALSE(product_util_is_command(p.get(), "path"));
+  CHECK_FALSE(product_util_is_command(p.get(), "missing"));
+  CHECK_THROWS_WITH_AS(product_util_resolve(p.get(), "tool"),
+                       "Product 'tool' in provider 'local.p@v1' is a command, not a path",
                        std::runtime_error);
 }
 

@@ -57,17 +57,34 @@ cmd_product::cmd_product(cfg cfg,
 
 namespace {
 
-void print_products_json(engine &eng, cache &c) {
+// A path product is a string; a command is its argv, ready to exec without re-parsing.
+void print_products_json(engine &eng) {
   auto const products{ eng.collect_all_products() };
 
   picojson::object obj;
   for (auto const &pi : products) {
-    obj[pi.product_name] = picojson::value(
-        product_util_predict(pi, eng.find_product_provider(pi.product_name), c));
+    pkg *const provider{ eng.find_product_provider(pi.product_name) };
+    obj[pi.product_name] = [&] {
+      if (pi.command.empty()) {
+        return picojson::value(product_util_predict(pi, provider));
+      }
+      picojson::array argv;
+      for (auto &arg : product_util_predict_argv(provider, pi.product_name)) {
+        argv.emplace_back(std::move(arg));
+      }
+      return picojson::value(std::move(argv));
+    }();
   }
 
   std::string const output{ picojson::value(obj).serialize(true) };
   tui::print_stdout("%s", output.c_str());
+}
+
+// A command lists as declared, placeholders and all: nothing is resolved here.
+std::string listed_value(product_info const &p) {
+  std::string v{ p.value };  // empty for a command
+  for (auto const &arg : p.command) { v += (v.empty() ? "" : " ") + arg; }
+  return v;
 }
 
 void print_products_aligned(std::vector<product_info> const &products) {
@@ -83,7 +100,7 @@ void print_products_aligned(std::vector<product_info> const &products) {
 
   for (auto const &p : products) {
     max_product = std::max(max_product, p.product_name.size());
-    max_value = std::max(max_value, p.value.size());
+    max_value = std::max(max_value, listed_value(p).size());
     max_provider = std::max(max_provider, p.provider_canonical.size());
   }
 
@@ -94,7 +111,7 @@ void print_products_aligned(std::vector<product_info> const &products) {
                                                : "" };
     std::ostringstream oss;
     oss << std::left << std::setw(max_product) << p.product_name << "  "
-        << std::setw(max_value) << p.value << "  " << p.provider_canonical
+        << std::setw(max_value) << listed_value(p) << "  " << p.provider_canonical
         << user_managed_marker;
     tui::info("%s", oss.str().c_str());
   }
@@ -123,13 +140,14 @@ bool same_command_name(std::string_view a, std::string_view b) {
 #endif
 }
 
-// A user-managed value is a command. A relative path anchors at the project root, where
-// SETUP runs; a bare name is searched on `path_list`.
-std::string user_managed_program(std::string const &value,
-                                 std::string const &product,
-                                 activation_anchor const &anchor,
-                                 envy_meta const &meta,
-                                 std::string const *path_list) {
+// The program a product runs: an absolute path as is (every cache-managed path); a
+// relative one anchors at the project root, where SETUP runs; a bare name is searched on
+// `path_list`.
+std::string resolve_program(std::string const &value,
+                            std::string const &product,
+                            activation_anchor const &anchor,
+                            envy_meta const &meta,
+                            std::string const *path_list) {
   std::filesystem::path const named{ value };
   if (named.has_parent_path()) {
     return named.is_absolute() ? value : (anchor.root / named).string();
@@ -162,19 +180,14 @@ exec_request plan_run(cmd_product::cfg const &cfg,
   eng.resolve_graph(
       engine_filter_host_platform({ m->packages.begin(), m->packages.end() }));
   pkg *const provider{ install_provider(eng, cfg.product_name) };
-  std::string const value{ product_util_resolve(provider, cfg.product_name) };
 
   shell_env_t live{ shell_getenv() };
   auto const anchor{ activation_anchor_read(eng.cache_root(), m->manifest_path) };
   shell_env_t to{ activation_for_tool(eng, *m, anchor, live, provider) };
   auto argv{ [&] {
-    std::vector<std::string> out{ provider->type == pkg_type::USER_MANAGED
-                                      ? user_managed_program(value,
-                                                             cfg.product_name,
-                                                             anchor,
-                                                             m->meta,
-                                                             env_get(to, "PATH"))
-                                      : value };
+    auto out{ product_util_run_argv(provider, cfg.product_name) };
+    out.front() =
+        resolve_program(out.front(), cfg.product_name, anchor, m->meta, env_get(to, "PATH"));
     out.insert(out.end(), cfg.args.begin(), cfg.args.end());
     return out;
   }() };
@@ -218,15 +231,19 @@ void cmd_product::execute() {
 
   if (cfg_.product_name.empty()) {
     if (cfg_.json) {
-      print_products_json(eng, *c);
+      print_products_json(eng);
     } else {
       print_products_aligned(eng.collect_all_products());
     }
     return;
   }
 
+  // A command prints quoted for the platform's shell; a path product prints as is.
   pkg *const provider{ install_provider(eng, cfg_.product_name) };
-  std::string const rendered_value{ product_util_resolve(provider, cfg_.product_name) };
+  auto const argv{ product_util_run_argv(provider, cfg_.product_name) };
+  std::string const rendered_value{ product_util_is_command(provider, cfg_.product_name)
+                                        ? shell_quote_argv(argv, kShellPlatformDefault)
+                                        : argv.front() };
   tui::print_stdout("%s\n", rendered_value.c_str());
 }
 

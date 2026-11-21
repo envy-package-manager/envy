@@ -55,6 +55,13 @@ struct default_shell_decl {
   default_shell_cfg_t value;  // set only when !is_function
 };
 
+// The platform's built-in shell: envy.run's absent DEFAULT_SHELL.
+#if defined(_WIN32)
+inline constexpr shell_choice kShellPlatformDefault{ shell_choice::powershell };
+#else
+inline constexpr shell_choice kShellPlatformDefault{ shell_choice::bash };
+#endif
+
 // Resolve manifest default shell (or platform default if unset)
 resolved_shell shell_resolve_default(default_shell_cfg_t const *cfg);
 
@@ -69,6 +76,11 @@ struct shell_run_cfg {
 };
 
 shell_choice shell_parse_choice(std::optional<std::string_view> value);
+
+// argv as one command line for `shell`, quoting only elements that need it: POSIX single
+// quotes; PowerShell single quotes behind `&`; cmd double quotes, `%` doubled because
+// envy.run hands cmd a batch file. Throws on '"' or '!', which cmd cannot quote.
+std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice shell);
 
 // Validate custom shell configuration (checks executable exists and is accessible)
 void shell_validate_custom(custom_shell const &cfg);

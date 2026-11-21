@@ -11,6 +11,7 @@
 #include "lua_error_formatter.h"
 #include "manifest.h"
 #include "pkg.h"
+#include "product_util.h"
 #include "sha256.h"
 #include "sol_util.h"
 #include "trace.h"
@@ -597,6 +598,39 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
   return { std::move(spec_path), nullptr };
 }
 
+[[noreturn]] void fail_product_command(std::string const &key,
+                                       std::string const &id,
+                                       std::string_view why) {
+  throw_runtime_error({ "PRODUCTS entry '", key, "' command ", why, " in spec '", id, "'" });
+}
+
+// A PRODUCTS `command`: a non-empty list of strings whose placeholders parse. Which
+// products they name is checked once the graph resolves.
+std::vector<std::string> parse_product_command(sol::object const &obj,
+                                               std::string const &key,
+                                               std::string const &id) {
+  if (obj.get_type() != sol::type::table) {
+    fail_product_command(key, id, "must be a list of strings");
+  }
+  sol::table const t{ obj.as<sol::table>() };
+  std::vector<std::string> out;
+  for (std::size_t i{ 1 }; i <= t.size(); ++i) {
+    sol::object const elem{ t[i] };
+    if (!elem.is<std::string>()) {
+      fail_product_command(key, id, "must be a list of strings");
+    }
+    std::string s{ elem.as<std::string>() };
+    try {
+      product_util_placeholders(s);
+    } catch (std::exception const &e) { fail_product_command(key, id, e.what()); }
+    out.push_back(std::move(s));
+  }
+  if (out.empty() || out.front().empty()) {
+    fail_product_command(key, id, "must be a non-empty list starting with a program");
+  }
+  return out;
+}
+
 std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg const &cfg,
                                                                     sol::state &lua,
                                                                     pkg *p) {
@@ -653,20 +687,33 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     std::string val_str;
     bool script{ true };
     std::vector<std::string> entry_platforms;
+    std::vector<std::string> command;
 
     if (val_obj.is<std::string>()) {
       val_str = val_obj.as<std::string>();
     } else if (val_obj.is<sol::table>()) {
       sol::table t{ val_obj.as<sol::table>() };
       sol::object val_field{ t["value"] };
-      if (!val_field.is<std::string>()) {
+      sol::object const command_field{ t["command"] };
+      if (command_field.get_type() != sol::type::lua_nil) {
+        if (val_field.get_type() != sol::type::lua_nil) {
+          throw_runtime_error({ "PRODUCTS entry '",
+                                key_str,
+                                "' has both 'value' and 'command' in spec '",
+                                id,
+                                "'" });
+        }
+        command = parse_product_command(command_field, key_str, id);
+      } else if (!val_field.is<std::string>()) {
         throw_runtime_error({ "PRODUCTS table entry '",
                               key_str,
-                              "' must have string 'value' field in spec '",
+                              "' must have string 'value' field or 'command' list in "
+                              "spec '",
                               id,
                               "'" });
+      } else {
+        val_str = val_field.as<std::string>();
       }
-      val_str = val_field.as<std::string>();
       sol::object script_field{ t["script"] };
       if (script_field.valid() && script_field.is<bool>()) {
         script = script_field.as<bool>();
@@ -721,11 +768,11 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       }
     }
 
-    if (val_str.empty()) {
+    if (command.empty() && val_str.empty()) {
       throw_runtime_error({ "PRODUCTS value cannot be empty in spec '", id, "'" });
     }
 
-    if (!user_managed) {  // Validate path safety for cached packages
+    if (command.empty() && !user_managed) {  // Validate path safety for cached packages
       std::filesystem::path product_path{ val_str };
 
       if (product_path.is_absolute() || (!val_str.empty() && val_str[0] == '/')) {
@@ -747,8 +794,10 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       }
     }
 
-    parsed_products[std::move(key_str)] =
-        product_entry{ std::move(val_str), script, std::move(entry_platforms) };
+    parsed_products[std::move(key_str)] = product_entry{ std::move(val_str),
+                                                         script,
+                                                         std::move(entry_platforms),
+                                                         std::move(command) };
   }
 
   return parsed_products;

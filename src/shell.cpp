@@ -4,6 +4,7 @@
 
 #include "sol/sol.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
@@ -96,12 +97,41 @@ resolved_shell shell_resolve_default(default_shell_cfg_t const *cfg) {
                } },
         **cfg);
   }
+  return kShellPlatformDefault;
+}
 
-#if defined(_WIN32)
-  return shell_choice::powershell;
-#else
-  return shell_choice::bash;
-#endif
+std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice shell) {
+  bool const posix{ shell == shell_choice::bash || shell == shell_choice::sh };
+  auto const plain{ [&](char c) {
+    bool const common{ (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' ||
+                       c == '/' || c == ':' || c == '+' };
+    return common || (posix ? c == '@' || c == ',' : c == '\\');
+  } };
+
+  std::string out{ shell == shell_choice::powershell ? "& " : "" };
+  for (std::size_t i{ 0 }; i < argv.size(); ++i) {
+    std::string const &arg{ argv[i] };
+    if (i) { out += ' '; }
+    if (!arg.empty() && std::ranges::all_of(arg, plain)) {
+      out += arg;
+      continue;
+    }
+    if (shell == shell_choice::cmd) {
+      if (arg.find_first_of("\"!") != std::string::npos) {
+        throw_runtime_error({ "cmd cannot quote '", arg, "'" });
+      }
+      out += '"';
+      for (char c : arg) { out += c == '%' ? "%%" : std::string_view{ &c, 1 }; }
+      out += '"';
+      continue;
+    }
+    std::string_view const escaped_quote{ posix ? "'\\''" : "''" };
+    out += '\'';
+    for (char c : arg) { out += c == '\'' ? escaped_quote : std::string_view{ &c, 1 }; }
+    out += '\'';
+  }
+  return out;
 }
 
 shell_choice shell_parse_choice(std::optional<std::string_view> value) {
