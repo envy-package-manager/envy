@@ -199,7 +199,7 @@ include(cmake/FindLicenses.cmake)
 # All other dependencies have separate license files that are discovered automatically.
 set(ENVY_LICENSE_SOURCES
     "envy=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
-    "AWS SDK for C++=${aws_sdk_SOURCE_DIR}"
+    ${ENVY_AWS_C_SOURCE_DIRS}
     "BLAKE3=${blake3_SOURCE_DIR}"
     "bzip2=${envy_libbz2_SOURCE_DIR}"
     "libarchive=${libarchive_SOURCE_DIR}"
@@ -411,6 +411,8 @@ function(configure_envy_executable TARGET_NAME)
     set_target_properties(${TARGET_NAME} PROPERTIES LINK_WARNING_AS_ERROR ON)
     target_link_options(${TARGET_NAME} PRIVATE
         $<$<PLATFORM_ID:Darwin>:-Wl,-dead_strip>
+        # Nothing dlopens envy; its export trie is ~125 KB of dead nodes for 65 weak defs.
+        $<$<PLATFORM_ID:Darwin>:-Wl,-no_exported_symbols>
         $<$<PLATFORM_ID:Linux>:-Wl,--gc-sections>
     )
 
@@ -435,7 +437,7 @@ function(apply_sanitizers TARGET_NAME)
 
     # Map option to compiler flags
     if(ENVY_SANITIZER STREQUAL "ASAN")
-        # GCC: Disable ASan to avoid third-party false positives (mbedTLS, AWS SDK)
+        # GCC: Disable ASan to avoid third-party false positives (mbedTLS, AWS C libraries)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             message(STATUS "GCC: ASan disabled due to third-party false positives; using UBSAN instead")
             return()
@@ -658,13 +660,10 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
     COMMAND ${Python3_EXECUTABLE}
         "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
-    COMMAND ${Python3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
     COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
     DEPENDS "${PROJECT_SOURCE_DIR}/cmake/scripts/embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_embed_resource.py"
             "${PROJECT_SOURCE_DIR}/cmake/scripts/test_shell_strictness.py"
-            "${PROJECT_SOURCE_DIR}/cmake/scripts/test_unzip.py"
-            "${PROJECT_SOURCE_DIR}/tools/unzip"
             ${_envy_shell_lint_inputs}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     COMMENT "Running build-script tests"

@@ -40,13 +40,13 @@
 **Integration:** Smart protocol v0 only (no v2 client through 2.0.0-rc.1), so an unadvertised commit needs the server's `allow-reachable-sha1-in-want`; GitHub, GitLab, googlesource, and kernel.org advertise it. `USE_SHA1` stays unset: the default collision-detecting SHA-1 is what makes a commit pin the integrity check for a whole submodule tree; `cmake/templates/libgit2_longpaths_patch.py.in` raises libgit2's Windows `MAX_PATH` cap on repository-internal paths (gitdir, refs, packs) to `GIT_PATH_MAX`, which its `\\?\` path layer already reaches—nested submodule gitdirs outgrow 260; `cmake/templates/libgit2_https_transport_patch.py.in` has https fail as git:// does—WinHTTP takes the server timeouts and words a timeout in English; mbedTLS keeps the socket's error
 **Rationale:** 1.9.7 escapes repository paths in the libssh2 transport (CVE-2026-5917); 2.0 waits for a release
 
-## AWS SDK for C++
+## AWS C libraries
 
-**Version:** 1.11.850 (CRT 0.42.1)
+**Version:** aws-c-s3 0.13.1, aws-c-auth 0.10.4, aws-c-http 0.11.0, aws-c-io 0.27.4 and their deps—the set aws-sdk-cpp 1.11.850 pinned; Linux adds aws-lc 5.2.0 and s2n-tls 1.7.5
 **License:** Apache-2.0
-**Purpose:** S3 transfers and the credential provider chain
-**Integration:** `BUILD_ONLY=s3;transfer;sso;sso-oidc`; extraction skips the other ~425 generated clients, `tools/`, and tests (`tools/unzip --exclude-regex`; 188k files → 24k, cutting the cold extract and the CI deps-cache untar); patches in `cmake/DependencyPatches.cmake` (curl, runtime, S3 endpoint ruleset deflated); CRT targets build with `AWS_STATIC_LOG_LEVEL=0`; `ENABLE_RTTI=ON`, matching envy
-**Rationale:** envy installs a discarding CRT logger, so the CRT's ~700 log sites compile out (~140 KB); the SDK's own C++ logging stays, since credential failures explain themselves there; RTTI is on everywhere because macOS `-fno-rtti` code can't catch libc++'s exceptions, and mixed RTTI gave GCC LTO -Wodr vtable mismatches
+**Purpose:** S3 transfers (auto-ranged GET/PUT, CRC64NVME) and the credential chain
+**Integration:** `cmake/deps/AwsC.cmake` builds each from its pinned release archive (`ENVY_AWS_C_DEPS`), in-tree as aws-crt-cpp's `BUILD_DEPS` did; macOS and Windows use the OS's TLS; `AWS_STATIC_LOG_LEVEL=0`; patches: static MSVC runtime, AVX2 base64 signature, s2n feature probes, aws-lc/s2n noexecstack; `src/aws_util.cpp` reads private `aws/auth/private/sso_token_utils.h` to name a lapsed SSO session offline
+**Rationale:** Replaced aws-sdk-cpp + aws-crt-cpp (#424), whose `std::function`-heavy C++ carried most of RTTI's cost: −730 KB on macOS arm64. No SSO token refresh—envy says to run `aws sso login`
 
 ## nanosemver
 

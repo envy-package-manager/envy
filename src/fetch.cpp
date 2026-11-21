@@ -148,7 +148,7 @@ fetch_result fetch_single(fetch_request const &request,
           [&](fetch_request_https const &req) { return download(req, req.post_data); },
           [&](fetch_request_ftp const &req) { return download(req, std::nullopt); },
           [&](fetch_request_ftps const &req) { return download(req, std::nullopt); },
-          // The AWS SDK's TransferManager retries internally.
+          // aws-c-s3 retries internally.
           [&](fetch_request_s3 const &req) -> fetch_result {
             auto const info{ classify(req.source) };
             return fetch_result{ .scheme = info.scheme,
@@ -394,9 +394,9 @@ void fetch_await_release(std::filesystem::path const &path,
 
 // The single retry seam. Retrying here rather than inside a backend gives http, ftp
 // and git one policy; git calls in once per repository, so a tree of submodules never
-// restarts whole. s3 is deliberately absent: the AWS SDK's TransferManager already
-// retries internally. Safe because fetches are idempotent GETs and payloads are
-// sha256-verified by the caller after transport, so a replay can never launder bad bytes.
+// restarts whole. s3 is deliberately absent: aws-c-s3 already retries internally. Safe
+// because fetches are idempotent GETs and payloads are sha256-verified by the caller
+// after transport, so a replay can never launder bad bytes.
 void fetch_retrying(function_ref<void()> once,
                     fetch_progress_cb_t const &progress,
                     std::string const &trace_spec,

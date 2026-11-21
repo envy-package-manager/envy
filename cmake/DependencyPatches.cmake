@@ -138,282 +138,47 @@ function(envy_patch_libarchive_cmakelists source_dir binary_dir)
     unset(LIBARCHIVE_SOURCE)
 endfunction()
 
-# Guard AWS SDK’s curl capability probe against generator expressions so it
-# stays compatible with the libcurl target we fetch locally.
-function(envy_patch_aws_sdk_curl source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_awssdk_curl_patch.stamp")
+# Runs templates/<template>.py.in over an AWS C library's sources once per version: the
+# stamp sits beside the sources, so a re-pinned archive is patched afresh.
+function(envy_patch_aws_source source_dir template)
+    set(_stamp "${source_dir}/.envy-${template}.stamp")
     if(EXISTS "${_stamp}")
         return()
     endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_sdk_curl.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_sdk_curl_patch.py.in")
-
-    set(AWS_CORE_CMAKELISTS "${_source_dir_norm}/src/aws-cpp-sdk-core/CMakeLists.txt")
-    if(NOT EXISTS "${AWS_CORE_CMAKELISTS}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
+    set(_script "${source_dir}/.envy-${template}.py")
+    configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/${template}.py.in"
+        "${_script}" @ONLY)
     envy_run_python("${_script}")
-
     file(REMOVE "${_script}")
     file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWS_CORE_CMAKELISTS)
 endfunction()
 
-# Force AWS CRT to stick with the static MSVC runtime regardless of build
-# type to match Envy’s global toolchain expectations.
-function(envy_patch_aws_sdk_runtime source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_awssdk_runtime_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_sdk_runtime.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_sdk_runtime_patch.py.in")
-
-    set(AWS_CFLAGS_PATH "${_source_dir_norm}/crt/aws-crt-cpp/crt/aws-c-common/cmake/AwsCFlags.cmake")
-    if(NOT EXISTS "${AWS_CFLAGS_PATH}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWS_CFLAGS_PATH)
+# Pin every aws-c-* configuration to the static release MSVC runtime, as envy builds.
+function(envy_patch_aws_c_static_runtime aws_c_common_dir)
+    set(AWS_CFLAGS_PATH "${aws_c_common_dir}/cmake/AwsCFlags.cmake")
+    envy_patch_aws_source("${aws_c_common_dir}" aws_c_static_runtime_patch)
 endfunction()
 
-# Replace aws_prebuild_dependency() in aws-crt-cpp so aws-lc builds during
-# the normal compile phase instead of at configure-time.
-function(envy_patch_aws_crt_disable_prebuild source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_awssdk_crt_prebuild_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_crt_disable_prebuild.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_crt_disable_prebuild_patch.py.in")
-
-    set(AWSCRT_CMAKELISTS "${_source_dir_norm}/crt/aws-crt-cpp/CMakeLists.txt")
-    if(NOT EXISTS "${AWSCRT_CMAKELISTS}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWSCRT_CMAKELISTS)
+# Align aws-c-common's AVX2 base64 encoder definition with its declaration; upstream's
+# Base64url change left it a parameter short and GCC LTO warns (-Wlto-type-mismatch).
+function(envy_patch_aws_c_base64_sig aws_c_common_dir)
+    set(AWS_C_COMMON_ENCODING_AVX2 "${aws_c_common_dir}/source/arch/intel/encoding_avx2.c")
+    envy_patch_aws_source("${aws_c_common_dir}" aws_c_base64_sig_patch)
 endfunction()
 
-# On Apple, envy uses Secure Transport (USE_S2N=OFF), so skip compiling s2n and
-# its aws-lc dependency entirely instead of building ~1.7 MB that never links.
-function(envy_patch_aws_crt_no_apple_s2n source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_awssdk_crt_no_apple_s2n_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_crt_no_apple_s2n.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_crt_no_apple_s2n_patch.py.in")
-
-    set(AWSCRT_CMAKELISTS "${_source_dir_norm}/crt/aws-crt-cpp/CMakeLists.txt")
-    if(NOT EXISTS "${AWSCRT_CMAKELISTS}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWSCRT_CMAKELISTS)
+# Ensure s2n's feature probes include aws-lc headers instead of falling back to system
+# OpenSSL when evaluating libcrypto capabilities.
+function(envy_patch_s2n_feature_probes s2n_dir)
+    set(S2N_CMAKELISTS "${s2n_dir}/CMakeLists.txt")
+    envy_patch_aws_source("${s2n_dir}" s2n_feature_probe_patch)
 endfunction()
 
-# Ensure s2n's feature probes include aws-lc headers instead of falling back
-# to system OpenSSL when evaluating libcrypto capabilities.
-function(envy_patch_s2n_feature_probes source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_s2n_feature_probe_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_s2n_feature_probes.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/s2n_feature_probe_patch.py.in")
-
-    set(S2N_CMAKELISTS "${_source_dir_norm}/crt/aws-crt-cpp/crt/s2n/CMakeLists.txt")
-    if(NOT EXISTS "${S2N_CMAKELISTS}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(S2N_CMAKELISTS)
-endfunction()
-
-# Remove -Wa,--noexecstack from aws-lc and s2n assembly builds to silence
-# lto-wrapper warnings during TSAN+LTO linking.
-function(envy_patch_aws_noexecstack source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_aws_noexecstack_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_noexecstack.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_noexecstack_patch.py.in")
-
-    set(AWS_LC_CRYPTO_CMAKELISTS "${_source_dir_norm}/crt/aws-crt-cpp/crt/aws-lc/crypto/CMakeLists.txt")
-    set(S2N_CMAKELISTS "${_source_dir_norm}/crt/aws-crt-cpp/crt/s2n/CMakeLists.txt")
-
-    if(NOT EXISTS "${AWS_LC_CRYPTO_CMAKELISTS}" OR NOT EXISTS "${S2N_CMAKELISTS}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWS_LC_CRYPTO_CMAKELISTS)
-    unset(S2N_CMAKELISTS)
-endfunction()
-
-# Align aws-c-common's AVX2 base64 encoder definition with its declaration;
-# upstream's Base64url change left the definition one parameter short and GCC
-# LTO warns (-Wlto-type-mismatch) at final link.
-function(envy_patch_aws_crt_base64_sig source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_aws_crt_base64_sig_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_crt_base64_sig.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_crt_base64_sig_patch.py.in")
-
-    set(AWS_C_COMMON_ENCODING_AVX2 "${_source_dir_norm}/crt/aws-crt-cpp/crt/aws-c-common/source/arch/intel/encoding_avx2.c")
-    if(NOT EXISTS "${AWS_C_COMMON_ENCODING_AVX2}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWS_C_COMMON_ENCODING_AVX2)
-endfunction()
-
-# The generated S3 endpoint ruleset is a 119 KB JSON blob emitted one char
-# literal per byte, read once when an S3 client is built. Deflate it to ~4.5 KB
-# and inflate on first use.
-function(envy_patch_aws_s3_rules_gzip source_dir binary_dir)
-    set(_source_dir_norm "${source_dir}")
-    set(_binary_dir_norm "${binary_dir}")
-
-    set(_stamp "${_binary_dir_norm}/envy_aws_s3_rules_gzip_patch.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-
-    set(_script "${_binary_dir_norm}/envy_patch_aws_s3_rules_gzip.py")
-    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/aws_s3_rules_gzip_patch.py.in")
-
-    set(AWS_S3_ENDPOINT_RULES_CPP
-        "${_source_dir_norm}/generated/src/aws-cpp-sdk-s3/source/S3EndpointRules.cpp")
-    if(NOT EXISTS "${AWS_S3_ENDPOINT_RULES_CPP}")
-        return()
-    endif()
-
-    configure_file("${_template}" "${_script}" @ONLY)
-
-    envy_run_python("${_script}")
-
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
-
-    unset(_stamp)
-    unset(_script)
-    unset(_template)
-    unset(_source_dir_norm)
-    unset(_binary_dir_norm)
-    unset(AWS_S3_ENDPOINT_RULES_CPP)
+# Remove -Wa,--noexecstack from aws-lc and s2n assembly builds to silence lto-wrapper
+# warnings during TSAN+LTO linking.
+function(envy_patch_aws_noexecstack aws_lc_dir s2n_dir)
+    set(AWS_LC_CRYPTO_CMAKELISTS "${aws_lc_dir}/crypto/CMakeLists.txt")
+    set(S2N_CMAKELISTS "${s2n_dir}/CMakeLists.txt")
+    envy_patch_aws_source("${s2n_dir}" aws_noexecstack_patch)
 endfunction()
 
 # Make libcurl’s pkg-config metadata reference the actual zlib target we
