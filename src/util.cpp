@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +23,8 @@
 
 #if defined(_WIN32)
 #include <string>
+#else
+#include <sys/stat.h>
 #endif
 
 namespace envy {
@@ -165,48 +168,44 @@ void util_write_file(std::filesystem::path const &path,
                      std::string_view content,
                      bool executable) {
   namespace fs = std::filesystem;
-  // One temp file per writer: a shared one interleaves two envys' bytes.
+  // Exclusive create: a file or symlink already at the temp name is skipped, never
+  // truncated or followed. The name omits the destination's, so it never nears NAME_MAX.
   static std::atomic<std::uint64_t> s_seq{ 0 };
-  fs::path const temp_path{ path.parent_path() /
-                            (".envy-tmp-" + path.filename().string() + "." +
-                             std::to_string(platform::get_process_id()) + "." +
-                             std::to_string(s_seq++)) };
-
-  {
-    std::ofstream out{ temp_path, std::ios::binary };
-    if (!out) { throw_runtime_error({ "util_write_file: failed to create ", temp_path }); }
-    out.write(content.data(), static_cast<std::streamsize>(content.size()));
-    if (!out.good()) {
-      throw_runtime_error({ "util_write_file: failed to write ", temp_path });
+  auto [temp_path, file]{ [&] {
+    std::string const pid{ std::to_string(platform::get_process_id()) };
+    for (int attempt{ 0 }; attempt < 64; ++attempt) {
+      fs::path p{ path.parent_path() / (".envy-tmp-" + pid + "." + std::to_string(s_seq++)) };
+      if (file_ptr_t f{ util_open_file(p, "wbx") }) { return std::pair{ p, std::move(f) }; }
+      if (errno != EEXIST) { break; }
     }
-  }
+    throw_system_error(errno, std::generic_category(), { "util_write_file: no temp file for ", path });
+  }() };
 
-  std::error_code ec;
+  int err{ 0 };  // the first failure's errno; fclose flushes, so a full disk shows there
+  if (std::fwrite(content.data(), 1, content.size(), file.get()) != content.size()) {
+    err = errno;
+  }
 #ifndef _WIN32
-  if (executable) {  // before the rename: the file never appears without its exec bits
-    fs::permissions(temp_path,
-                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                    fs::perm_options::add,
-                    ec);
-    if (ec) {
-      std::error_code rm_ec;
-      fs::remove(temp_path, rm_ec);
-      throw_runtime_error(
-          { "util_write_file: failed to chmod ", temp_path, ": ", ec.message() });
+  if (!err && executable) {  // before the rename: the file never appears without exec bits
+    int const fd{ ::fileno(file.get()) };
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 ||
+        ::fchmod(fd, (st.st_mode & 07777) | S_IXUSR | S_IXGRP | S_IXOTH) != 0) {
+      err = errno;
     }
   }
 #else
   static_cast<void>(executable);
 #endif
-  fs::rename(temp_path, path, ec);
-  if (ec) {
-    fs::remove(temp_path, ec);
-    throw_runtime_error({ "util_write_file: failed to rename ",
-                          temp_path,
-                          " to ",
-                          path,
-                          ": ",
-                          ec.message() });
+  if (std::fclose(file.release()) != 0 && !err) { err = errno; }
+
+  std::error_code ec;
+  if (!err) { fs::rename(temp_path, path, ec); }
+  if (err || ec) {
+    std::error_code rm_ec;
+    fs::remove(temp_path, rm_ec);
+    std::error_code const code{ err ? std::error_code{ err, std::generic_category() } : ec };
+    throw_system_error(code.value(), code.category(), { "util_write_file: cannot write ", path });
   }
 }
 

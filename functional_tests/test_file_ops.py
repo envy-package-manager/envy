@@ -91,6 +91,43 @@ class TestEnvyWriteMkdir(EnvyTestCase):
         if sys.platform != "win32":
             self.assertEqual(0, target.stat().st_mode & 0o111, "a rewrite keeps no exec bit")
 
+    def test_non_ascii_paths_are_utf8(self):
+        """Lua strings are UTF-8; on Windows they must not pass through the ANSI code page."""
+        target = self.work / "café" / "naïve.txt"
+        run = self.run_lua(
+            f'envy.mkdir("{self.lua_path(target.parent)}")\n'
+            f'envy.write("{self.lua_path(target)}", "x")\n'
+            f'assert(envy.is_file("{self.lua_path(target)}"))\n'
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(b"x", target.read_bytes())
+
+    @POSIX_MODES  # Windows' MAX_PATH bites first
+    def test_a_name_near_name_max_still_writes(self):
+        """The temp file's name must not embed the destination's."""
+        target = self.work / ("a" * 244)
+        run = self.run_lua(f'envy.write("{self.lua_path(target)}", "x")\n')
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(b"x", target.read_bytes())
+
+    @POSIX_MODES
+    def test_a_failed_write_keeps_the_old_file(self):
+        """A file-size limit fails the write at flush; the old content must survive."""
+        target = self.work / "kept.txt"
+        t = self.lua_path(target)
+        self.assertEqual(0, self.run_lua(f'envy.write("{t}", "old")\n').returncode)
+        script = self.work / "big.lua"
+        script.write_text(f'envy.write("{t}", string.rep("x", 3000))\n', encoding="utf-8")
+        run = test_config.run(  # ulimit -f is 1–2 KB; SIGXFSZ ignored so write() fails
+            ["/bin/sh", "-c", "trap '' XFSZ; ulimit -f 2; exec \"$@\"", "sh",
+             self.envy, "--cache-root", self.cache_root, "lua", script],
+            capture_output=True,
+        )
+        self.assertEqual(1, run.returncode, run.stderr)
+        self.assertIn("envy.write: cannot write", run.stderr)
+        self.assertEqual(b"old", target.read_bytes())
+        self.assertEqual([], [p.name for p in self.work.glob(".envy-tmp-*")])
+
     @POSIX_MODES
     def test_executable_write_runs(self):
         launcher = self.work / "bin" / "hello"

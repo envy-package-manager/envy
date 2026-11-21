@@ -39,7 +39,7 @@ void envy_write(sol::this_state L,
 
 // envy.mkdir(path) - create_directories; an existing directory is not an error
 void envy_mkdir(sol::this_state L, std::string_view path) {
-  std::filesystem::path const p{ lua_phase_context_resolve(L, std::string{ path }) };
+  std::filesystem::path const p{ lua_phase_context_resolve(L, path) };
   std::error_code create_ec;
   std::filesystem::create_directories(p, create_ec);
   std::error_code stat_ec;
