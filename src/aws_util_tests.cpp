@@ -96,7 +96,8 @@ TEST_CASE("aws_s3_endpoint: AWS buckets are virtual-hosted in their region") {
 }
 
 TEST_CASE("aws_s3_endpoint: China regions use the amazonaws.com.cn partition") {
-  CHECK(endpoint("b-1", "k", "cn-north-1").authority == "b-1.s3.cn-north-1.amazonaws.com.cn");
+  CHECK(endpoint("b-1", "k", "cn-north-1").authority ==
+        "b-1.s3.cn-north-1.amazonaws.com.cn");
 }
 
 TEST_CASE("aws_s3_endpoint: buckets that can't be a TLS host label go path-style") {

@@ -182,7 +182,9 @@ std::string sso_expired_at(aws_allocator *alloc, std::string const &profile) {
     if (!token || aws_date_time_diff(&token->expiration, &now) > 0) { return {}; }
     std::uint8_t text[AWS_DATE_TIME_STR_MAX_LEN]{};
     auto buf{ aws_byte_buf_from_empty_array(text, sizeof text) };
-    return aws_date_time_to_utc_time_str(&token->expiration, AWS_DATE_FORMAT_ISO_8601, &buf)
+    return aws_date_time_to_utc_time_str(&token->expiration,
+                                         AWS_DATE_FORMAT_ISO_8601,
+                                         &buf)
                ? std::string{ "an unknown time" }
                : std::string{ to_view(aws_byte_cursor_from_buf(&buf)) };
   }() };
@@ -267,14 +269,15 @@ void crt_stack::build() {
   // still download. Cached, so the chain runs once per expiry rather than per request.
   auto chain{ credential_sources(*this) };
   aws_credentials_provider_shutdown_options const no_shutdown{};
-  chain.push_back({ "anonymous", aws_credentials_provider_new_anonymous(alloc, &no_shutdown) });
+  chain.push_back(
+      { "anonymous", aws_credentials_provider_new_anonymous(alloc, &no_shutdown) });
   std::vector<aws_credentials_provider *> members;
   for (auto const &source : chain) {
     if (source.provider) { members.push_back(source.provider); }
   }
-  aws_credentials_provider_chain_options const chain_options{
-    .providers = members.data(), .provider_count = members.size()
-  };
+  aws_credentials_provider_chain_options const chain_options{ .providers = members.data(),
+                                                              .provider_count =
+                                                                  members.size() };
   auto *const linked{ aws_credentials_provider_new_chain(alloc, &chain_options) };
   for (auto *member : members) { aws_credentials_provider_release(member); }
   if (!linked) { throw_aws_error(kOp, "credential chain"); }
@@ -326,7 +329,9 @@ bool g_library_live{ false };
 crt_stack &crt_get() {
   std::lock_guard const lock{ g_crt_mutex };
   if (!g_crt) {
-    if (!std::exchange(g_library_live, true)) { aws_s3_library_init(aws_default_allocator()); }
+    if (!std::exchange(g_library_live, true)) {
+      aws_s3_library_init(aws_default_allocator());
+    }
     auto stack{ std::make_unique<crt_stack>() };
     stack->build();  // A throw here releases what was built.
     g_crt = std::move(stack);
@@ -345,14 +350,17 @@ resolved_credentials resolve_credentials(aws_credentials_provider *provider) {
     c_completion done;
     resolved_credentials result;
   } w;
-  auto const on_credentials{ +[](aws_credentials *credentials, int error, void *user) noexcept {
-    auto &w{ *static_cast<waiter *>(user) };
-    w.result = credentials ? resolved_credentials{ AWS_ERROR_SUCCESS,
-                                                   aws_credentials_is_anonymous(credentials) }
-                           : resolved_credentials{ error ? error
-                                                         : AWS_AUTH_SIGNING_NO_CREDENTIALS };
-    w.done.finish();
-  } };
+  auto const on_credentials{
+    +[](aws_credentials *credentials, int error, void *user) noexcept {
+      auto &w{ *static_cast<waiter *>(user) };
+      w.result =
+          credentials
+              ? resolved_credentials{ AWS_ERROR_SUCCESS,
+                                      aws_credentials_is_anonymous(credentials) }
+              : resolved_credentials{ error ? error : AWS_AUTH_SIGNING_NO_CREDENTIALS };
+      w.done.finish();
+    }
+  };
   if (aws_credentials_provider_get_credentials(provider, on_credentials, &w)) {
     return { aws_last_error() };
   }
@@ -373,8 +381,9 @@ credentials_diagnosis diagnose_credentials(crt_stack &s) {
   for (auto const &[name, provider] : credential_sources(s)) {
     std::string_view const source{ name };
     auto const expired{ source == "sso" ? sso_expired_at(s.alloc, s.profile) : "" };
-    auto const result{ expired.empty() ? resolve_credentials(provider)
-                                       : resolved_credentials{ AWS_AUTH_SSO_TOKEN_EXPIRED } };
+    auto const result{ expired.empty()
+                           ? resolve_credentials(provider)
+                           : resolved_credentials{ AWS_AUTH_SSO_TOKEN_EXPIRED } };
     aws_credentials_provider_release(provider);
     any_worked |= result.error == AWS_ERROR_SUCCESS;
     // The environment source always exists; quote it only when it was meant to answer.
@@ -402,8 +411,9 @@ std::string denied_hint(crt_stack &s) {
   if (diagnosis.failures.empty()) { return {}; }
   std::string out{ "no usable AWS credentials, so the request went unsigned:" };
   for (auto const &failure : diagnosis.failures) { out.append("\n    ").append(failure); }
-  return out.append("\n  Run 'aws sso login', or set AWS_ACCESS_KEY_ID and"
-                    " AWS_SECRET_ACCESS_KEY.");
+  return out.append(
+      "\n  Run 'aws sso login', or set AWS_ACCESS_KEY_ID and"
+      " AWS_SECRET_ACCESS_KEY.");
 }
 
 [[noreturn]] void throw_s3_failure(crt_stack &crt,
@@ -448,7 +458,9 @@ class s3_transfer : unmovable {
     done_.wait();
 
     std::unique_lock lock{ mutex_ };  // Uncontended: every callback has returned.
-    if (cancelled_) { throw_runtime_error({ op_, ": transfer cancelled by progress callback" }); }
+    if (cancelled_) {
+      throw_runtime_error({ op_, ": transfer cancelled by progress callback" });
+    }
     if (error_code_ != AWS_ERROR_SUCCESS) {
       auto const [code, status, body]{ std::tuple{ error_code_, status_, error_body_ } };
       lock.unlock();  // Diagnosis may go to the network.
@@ -461,10 +473,11 @@ class s3_transfer : unmovable {
 
  private:
   fetch_progress_t snapshot() const {
-    return fetch_progress_t{ std::in_place_type<fetch_transfer_progress>,
-                             fetch_transfer_progress{
-                                 .transferred = transferred_,
-                                 .total = total_ ? std::optional{ total_ } : std::nullopt } };
+    return fetch_progress_t{
+      std::in_place_type<fetch_transfer_progress>,
+      fetch_transfer_progress{ .transferred = transferred_,
+                               .total = total_ ? std::optional{ total_ } : std::nullopt }
+    };
   }
 
   void report(aws_s3_meta_request *request, aws_s3_meta_request_progress const &p) {
@@ -503,7 +516,8 @@ class s3_transfer : unmovable {
           self.error_code_ = result->error_code;
           self.status_ = result->response_status;
           if (result->error_response_body) {
-            self.error_body_ = to_view(aws_byte_cursor_from_buf(result->error_response_body));
+            self.error_body_ =
+                to_view(aws_byte_cursor_from_buf(result->error_response_body));
           }
         },
         [] {});
@@ -542,7 +556,8 @@ void s3_run(aws_byte_cursor method,
   std::string const url{ endpoint.scheme + "://" + endpoint.authority };
 
   std::unique_ptr<aws_http_message, decltype(&aws_http_message_release)> const message{
-    aws_http_message_new_request(crt.alloc), aws_http_message_release
+    aws_http_message_new_request(crt.alloc),
+    aws_http_message_release
   };
   struct uri_holder : unmovable {
     aws_uri uri{};
@@ -551,9 +566,10 @@ void s3_run(aws_byte_cursor method,
   auto const url_cursor{ to_cursor(url) };
   if (!message || aws_http_message_set_request_method(message.get(), method) ||
       aws_http_message_set_request_path(message.get(), to_cursor(endpoint.path)) ||
-      aws_http_message_add_header(message.get(),
-                                  aws_http_header{ .name = to_cursor("Host"),
-                                                   .value = to_cursor(endpoint.authority) }) ||
+      aws_http_message_add_header(
+          message.get(),
+          aws_http_header{ .name = to_cursor("Host"),
+                           .value = to_cursor(endpoint.authority) }) ||
       aws_uri_init_parse(&uri.uri, crt.alloc, &url_cursor)) {
     throw_aws_error(op, "cannot build the request");
   }
@@ -619,7 +635,9 @@ void append_uri_path(std::string &out, std::string_view raw) {
 // S3's DNS-compatible bucket rule without dots, which break TLS wildcard certificates.
 bool virtual_hostable(std::string_view bucket) {
   if (bucket.size() < 3 || bucket.size() > 63) { return false; }
-  auto const alnum{ [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); } };
+  auto const alnum{ [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+  } };
   return alnum(bucket.front()) && alnum(bucket.back()) &&
          std::ranges::all_of(bucket, [&](char c) { return alnum(c) || c == '-'; });
 }
@@ -635,12 +653,15 @@ bool path_style_host(std::string_view host) {
 std::string xml_unescape(std::string_view s) {
   std::string out;
   out.reserve(s.size());
-  constexpr std::pair<std::string_view, char> kEntities[]{
-    { "&amp;", '&' }, { "&lt;", '<' }, { "&gt;", '>' }, { "&quot;", '"' }, { "&apos;", '\'' }
-  };
+  constexpr std::pair<std::string_view, char> kEntities[]{ { "&amp;", '&' },
+                                                           { "&lt;", '<' },
+                                                           { "&gt;", '>' },
+                                                           { "&quot;", '"' },
+                                                           { "&apos;", '\'' } };
   for (size_t i{ 0 }; i < s.size();) {
-    auto const entity{ std::ranges::find_if(
-        kEntities, [&](auto const &e) { return s.substr(i).starts_with(e.first); }) };
+    auto const entity{ std::ranges::find_if(kEntities, [&](auto const &e) {
+      return s.substr(i).starts_with(e.first);
+    }) };
     if (entity == std::end(kEntities)) {
       out.push_back(s[i++]);
     } else {
@@ -718,7 +739,7 @@ void aws_shutdown() {
 
 aws_shutdown_guard::~aws_shutdown_guard() { aws_shutdown(); }
 
-void c_completion::finish() noexcept {  // Notifies under the lock: wait()'s caller may
+void c_completion::finish() noexcept {   // Notifies under the lock: wait()'s caller may
   std::lock_guard const lock{ mutex_ };  // free *this the moment it returns.
   done_ = true;
   cv_.notify_all();
