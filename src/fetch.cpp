@@ -154,7 +154,8 @@ fetch_result fetch_single(fetch_request const &request,
             return retrying(req, [&] {
               auto const info{ classify(req.source) };
               return fetch_result{ .scheme = info.scheme,
-                                   .resolved_source = std::filesystem::path{ info.canonical },
+                                   .resolved_source =
+                                       std::filesystem::path{ info.canonical },
                                    .resolved_destination = aws_s3_download(
                                        s3_download_request{ .uri = info.canonical,
                                                             .destination = req.destination,

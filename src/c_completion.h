@@ -39,7 +39,7 @@ void c_completion::guard(F &&body, G &&on_throw) noexcept {
 }
 
 inline void c_completion::finish() noexcept {  // Notifies under the lock: wait()'s
-  std::lock_guard const lock{ mutex_ };         // caller may free *this on return.
+  std::lock_guard const lock{ mutex_ };        // caller may free *this on return.
   done_ = true;
   cv_.notify_all();
 }

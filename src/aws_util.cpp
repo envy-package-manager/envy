@@ -77,8 +77,8 @@ void append_hint(std::ostringstream &msg,
       msg << "\n  Hint: the bucket is in a different region. Set AWS_DEFAULT_REGION (or a"
              " profile region); envy defaults to us-east-1.";
     } else {
-      msg << "\n  Hint: the bucket is in " << bucket_region << ". Set AWS_DEFAULT_REGION="
-          << bucket_region << " and retry.";
+      msg << "\n  Hint: the bucket is in " << bucket_region
+          << ". Set AWS_DEFAULT_REGION=" << bucket_region << " and retry.";
     }
   } else if ((http_code == 401 || http_code == 403) && !denied.empty()) {
     msg << "\n  Hint: " << denied;
@@ -155,7 +155,8 @@ aws_http_connection_manager *bounded_connection_manager(
   return aws_http_connection_manager_new(alloc, &bounded);
 }
 
-aws_auth_http_system_vtable *auth_http() {  // static: providers shut down after envy lets go
+aws_auth_http_system_vtable *
+auth_http() {  // static: providers shut down after envy lets go
   static aws_auth_http_system_vtable table{ [] {
     auto t{ *g_aws_credentials_provider_http_function_table };
     t.aws_http_connection_manager_new = bounded_connection_manager;
@@ -177,9 +178,9 @@ struct crt_stack : unmovable {
   std::string region;          // for requests that name none
   std::string endpoint;        // AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, profile; else AWS
   std::string sso_expired_at;  // the profile's cached SSO token had lapsed at startup
-  proxy_env_var_settings proxy{ .env_var_type = AWS_HPEV_ENABLE };  // HTTPS_PROXY et al.
+  proxy_env_var_settings proxy{ .env_var_type = AWS_HPEV_ENABLE };   // HTTPS_PROXY et al.
   aws_ptr<aws_event_loop_group, &aws_event_loop_group_release> elg;  // members release
-  aws_ptr<aws_host_resolver, &aws_host_resolver_release> resolver;  // bottom-up; aws-c-*
+  aws_ptr<aws_host_resolver, &aws_host_resolver_release> resolver;   // bottom-up; aws-c-*
   aws_ptr<aws_client_bootstrap, &aws_client_bootstrap_release> bootstrap;  // winds down
   aws_ptr<aws_tls_ctx, &aws_tls_ctx_release> tls;  // on its own threads
   provider_ptr credentials;
@@ -334,7 +335,8 @@ void crt_stack::build() {
   // Cached, so the chain runs per expiry, not per request; the refresh bounds how long a
   // transient failure (cached as anonymous) leaves requests unsigned.
   aws_credentials_provider_cached_options const cached_options{
-    .source = linked.get(), .refresh_time_in_milliseconds = 60'000
+    .source = linked.get(),
+    .refresh_time_in_milliseconds = 60'000
   };
   credentials.reset(aws_credentials_provider_new_cached(alloc, &cached_options));
   if (!credentials) { throw_aws_error(kOp, "credential cache"); }
@@ -350,8 +352,9 @@ void crt_stack::build() {
       aws_standard_retry_options standard{};
       standard.backoff_retry_options.el_group = elg.get();
       standard.backoff_retry_options.max_retries = std::min<std::size_t>(attempts - 1, 63);
-      auto *const strategy{ attempts == 1 ? aws_retry_strategy_new_no_retry(alloc, &no_retry)
-                                          : aws_retry_strategy_new_standard(alloc, &standard) };
+      auto *const strategy{ attempts == 1
+                                ? aws_retry_strategy_new_no_retry(alloc, &no_retry)
+                                : aws_retry_strategy_new_standard(alloc, &standard) };
       if (!strategy) { throw_aws_error(kOp, "retry strategy"); }
       return strategy;
     }()
@@ -411,19 +414,20 @@ resolved_credentials resolve_credentials(aws_credentials_provider *provider) {
                                  int error,
                                  void *user) noexcept {
     auto &w{ *static_cast<waiter *>(user) };
-    auto const expiry{ credentials ? aws_credentials_get_expiration_timepoint_seconds(
-                                         credentials)
-                                   : UINT64_MAX };
+    auto const expiry{ credentials
+                           ? aws_credentials_get_expiration_timepoint_seconds(credentials)
+                           : UINT64_MAX };
     auto const now{ static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count()) };
-    w.result = !credentials ? resolved_credentials{ error ? error
-                                                          : AWS_AUTH_SIGNING_NO_CREDENTIALS }
-               : expiry <= now
-                   ? resolved_credentials{ AWS_AUTH_SIGNING_INVALID_CREDENTIALS, false, true }
-                   : resolved_credentials{ AWS_ERROR_SUCCESS,
-                                           aws_credentials_is_anonymous(credentials) };
+    w.result =
+        !credentials
+            ? resolved_credentials{ error ? error : AWS_AUTH_SIGNING_NO_CREDENTIALS }
+        : expiry <= now
+            ? resolved_credentials{ AWS_AUTH_SIGNING_INVALID_CREDENTIALS, false, true }
+            : resolved_credentials{ AWS_ERROR_SUCCESS,
+                                    aws_credentials_is_anonymous(credentials) };
     w.done.finish();
   } };
   if (aws_credentials_provider_get_credentials(provider, on_credentials, &w)) {
@@ -452,9 +456,9 @@ credentials_diagnosis diagnose_credentials(crt_stack &s) {
         (source == "profile" && sso_profile)) {
       continue;
     }
-    out.failures.push_back(std::string{ source } + ": " +
-                           (result.expired ? "credentials have expired"
-                                           : aws_error_str(result.error)));
+    out.failures.push_back(
+        std::string{ source } + ": " +
+        (result.expired ? "credentials have expired" : aws_error_str(result.error)));
   }
   return out;
 }
@@ -509,7 +513,8 @@ struct s3_outcome {
     msg << ": the object changed during the download; retry";
   } else if (outcome.error_code == AWS_OP_ERR || outcome.error_code == AWS_ERROR_UNKNOWN) {
     // aws-c-s3 reports a failed fwrite/fread as a bare -1.
-    msg << ": I/O failed on " << local << (writing ? "" : " (disk full, or not writable?)");
+    msg << ": I/O failed on " << local
+        << (writing ? "" : " (disk full, or not writable?)");
   } else {
     if (!error.code.empty()) { msg << ": " << error.code; }
     if (!error.message.empty() && error.message != error.code) {
@@ -554,7 +559,7 @@ class s3_transfer : unmovable {
     options.shutdown_callback = on_shutdown;
     options.progress_callback = on_progress;
     if (!aws_s3_client_make_meta_request(client, &options)) {  // no callbacks follow
-      fail({ .error_code = aws_last_error() });  // throws
+      fail({ .error_code = aws_last_error() });                // throws
     }
     done_.wait();
 
@@ -614,12 +619,14 @@ class s3_transfer : unmovable {
           self.outcome_.error_code = result->error_code;
           self.outcome_.status = result->response_status;
           if (result->error_response_body) {
-            self.outcome_.body = to_view(aws_byte_cursor_from_buf(result->error_response_body));
+            self.outcome_.body =
+                to_view(aws_byte_cursor_from_buf(result->error_response_body));
           }
-          if (aws_byte_cursor region{}; result->error_response_headers &&
-                                      !aws_http_headers_get(result->error_response_headers,
-                                                            to_cursor("x-amz-bucket-region"),
-                                                            &region)) {
+          if (aws_byte_cursor region{};
+              result->error_response_headers &&
+              !aws_http_headers_get(result->error_response_headers,
+                                    to_cursor("x-amz-bucket-region"),
+                                    &region)) {
             self.outcome_.bucket_region = to_view(region);
           }
         },
@@ -692,9 +699,10 @@ std::uint64_t s3_run(
   options.endpoint = &uri.uri;
   options.max_active_connections_override = kConnectionsPerTransfer;
   setup(options, message.get());
-  return s3_transfer{ progress, op }.run(crt.client.get(), options, [&](s3_outcome const &o) {
-    throw_s3_failure(crt, op, writing, o, url, local);
-  });
+  return s3_transfer{ progress, op }.run(
+      crt.client.get(),
+      options,
+      [&](s3_outcome const &o) { throw_s3_failure(crt, op, writing, o, url, local); });
 }
 
 }  // namespace
@@ -881,24 +889,27 @@ std::filesystem::path aws_s3_download(s3_download_request const &request) {
   // Validated against the checksum S3 stored, if any, which the HEAD it implies returns.
   aws_s3_checksum_config const checksums{ .validate_response_checksum = true };
   try {
-    auto const expected{ s3_run(aws_http_method_get,
-                                parts,
-                                request.region,
-                                request.progress,
-                                kOp,
-                                /*writing=*/false,
-                                local_utf8,
-                                [&](aws_s3_meta_request_options &options, aws_http_message *) {
-                                  options.type = AWS_S3_META_REQUEST_TYPE_GET_OBJECT;
-                                  options.part_size = kDownloadPartSize;
-                                  options.recv_filepath = to_cursor(local_utf8);
-                                  options.recv_file_option = AWS_S3_RECV_FILE_CREATE_OR_REPLACE;
-                                  options.recv_file_delete_on_failure = true;
-                                  options.checksum_config = &checksums;
-                                }) };
+    auto const expected{ s3_run(
+        aws_http_method_get,
+        parts,
+        request.region,
+        request.progress,
+        kOp,
+        /*writing=*/false,
+        local_utf8,
+        [&](aws_s3_meta_request_options &options, aws_http_message *) {
+          options.type = AWS_S3_META_REQUEST_TYPE_GET_OBJECT;
+          options.part_size = kDownloadPartSize;
+          options.recv_filepath = to_cursor(local_utf8);
+          options.recv_file_option = AWS_S3_RECV_FILE_CREATE_OR_REPLACE;
+          options.recv_file_delete_on_failure = true;
+          options.checksum_config = &checksums;
+        }) };
     // aws-c-s3 never checks fclose, so a disk that fills on the last flush goes unnoticed.
-    if (std::error_code ec; expected && std::filesystem::file_size(local, ec) != expected) {
-      throw_runtime_error({ kOp, ": ", local, " is short of ", expected, " bytes (disk full?)" });
+    if (std::error_code ec;
+        expected && std::filesystem::file_size(local, ec) != expected) {
+      throw_runtime_error(
+          { kOp, ": ", local, " is short of ", expected, " bytes (disk full?)" });
     }
   } catch (...) {  // A checksum mismatch is decided after aws-c-s3's own cleanup.
     std::error_code ec;
