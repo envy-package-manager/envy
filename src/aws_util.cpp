@@ -271,7 +271,7 @@ std::string configured_endpoint(crt_stack const &s, char const *service_var) {
 // nears; aws-c-auth doesn't (its TODO), so envy does, once, before building the chain.
 
 constexpr double kSsoRefreshWindowSeconds{ 600 };  // aws-sdk-cpp's, which envy shipped
-constexpr std::size_t kHttpReplyMax{ 1 << 16 };      // a token reply is a few hundred bytes
+constexpr std::size_t kHttpReplyMax{ 1 << 16 };    // a token reply is a few hundred bytes
 
 struct http_reply {
   int status{ 0 };
@@ -284,7 +284,8 @@ class http_exchange : unmovable {
  public:
   http_reply send(crt_stack &s, aws_uri const &uri, aws_http_message *request) {
     request_ = request;
-    bool const https{ !aws_byte_cursor_eq_c_str_ignore_case(aws_uri_scheme(&uri), "http") };
+    bool const https{ !aws_byte_cursor_eq_c_str_ignore_case(aws_uri_scheme(&uri),
+                                                            "http") };
     auto const host{ *aws_uri_host_name(&uri) };
     aws_socket_options const socket_options{ .type = AWS_SOCKET_STREAM,
                                              .connect_timeout_ms = 3000 };
@@ -389,7 +390,7 @@ std::optional<double> seconds_until(picojson::object const &cache, char const *f
 std::string cache_string(picojson::object const &cache, char const *field) {
   auto const it{ cache.find(field) };
   return it != cache.end() && it->second.is<std::string>() ? it->second.get<std::string>()
-                                                          : std::string{};
+                                                           : std::string{};
 }
 
 // Renews the profile's sso-session token in ~/.aws/sso/cache when it is within the refresh
@@ -398,7 +399,8 @@ std::string refresh_sso_token(crt_stack &s) {
   auto const session{ profile_property(s.alloc, s.profile, "sso_session") };
   if (session.empty()) { return {}; }  // legacy profiles carry no refresh token
   string_ptr const name{ aws_string_new_from_c_str(s.alloc, session.c_str()) };
-  string_ptr const path{ name ? aws_construct_sso_token_path(s.alloc, name.get()) : nullptr };
+  string_ptr const path{ name ? aws_construct_sso_token_path(s.alloc, name.get())
+                              : nullptr };
   if (!path) { return {}; }
   auto const file{ util_path_from_utf8(aws_string_c_str(path.get())) };  // aws-c is UTF-8
   std::error_code ec;
@@ -425,7 +427,9 @@ std::string refresh_sso_token(crt_stack &s) {
   }
 
   auto const region{ [&] {
-    auto r{ config_property(s.alloc, AWS_PROFILE_SECTION_TYPE_SSO_SESSION, session,
+    auto r{ config_property(s.alloc,
+                            AWS_PROFILE_SECTION_TYPE_SSO_SESSION,
+                            session,
                             "sso_region") };
     return r.empty() ? cache_string(cache, "region") : r;
   }() };
@@ -440,11 +444,11 @@ std::string refresh_sso_token(crt_stack &s) {
   auto const url_cursor{ to_cursor(url) };
   if (aws_uri_init_parse(&uri.uri, s.alloc, &url_cursor)) { return "bad endpoint " + url; }
 
-  std::string const body{ picojson::value{ picojson::object{
-                              { "grantType", picojson::value{ "refresh_token" } },
-                              { "clientId", picojson::value{ client_id } },
-                              { "clientSecret", picojson::value{ client_secret } },
-                              { "refreshToken", picojson::value{ refresh_token } } } }
+  std::string const body{ picojson::value{
+      picojson::object{ { "grantType", picojson::value{ "refresh_token" } },
+                        { "clientId", picojson::value{ client_id } },
+                        { "clientSecret", picojson::value{ client_secret } },
+                        { "refreshToken", picojson::value{ refresh_token } } } }
                               .serialize() };
   auto body_cursor{ to_cursor(body) };
   aws_ptr<aws_input_stream, &aws_input_stream_release> const stream{
@@ -455,12 +459,13 @@ std::string refresh_sso_token(crt_stack &s) {
   };
   std::string const length{ std::to_string(body.size()) };
   auto const header{ [&](std::string_view n, std::string_view v) {
-    return aws_http_message_add_header(message.get(),
-                                       aws_http_header{ .name = to_cursor(n),
-                                                        .value = to_cursor(v) });
+    return aws_http_message_add_header(
+        message.get(),
+        aws_http_header{ .name = to_cursor(n), .value = to_cursor(v) });
   } };
   auto const *const path_cursor{ aws_uri_path(&uri.uri) };
-  if (!stream || !message || aws_http_message_set_request_method(message.get(), aws_http_method_post) ||
+  if (!stream || !message ||
+      aws_http_message_set_request_method(message.get(), aws_http_method_post) ||
       aws_http_message_set_request_path(message.get(), *path_cursor) ||
       header("Host", to_view(*aws_uri_authority(&uri.uri))) ||
       header("Content-Type", "application/json") || header("Content-Length", length)) {
@@ -483,9 +488,9 @@ std::string refresh_sso_token(crt_stack &s) {
   aws_date_time now;
   aws_date_time_init_now(&now);
   aws_date_time expires;
-  aws_date_time_init_epoch_secs(&expires,
-                                aws_date_time_as_epoch_secs(&now) +
-                                    expires_in->second.get<double>());
+  aws_date_time_init_epoch_secs(
+      &expires,
+      aws_date_time_as_epoch_secs(&now) + expires_in->second.get<double>());
   cache["accessToken"] = picojson::value{ access };
   cache["expiresAt"] = picojson::value{ iso8601(expires) };
   if (auto const rotated{ cache_string(token, "refreshToken") }; !rotated.empty()) {

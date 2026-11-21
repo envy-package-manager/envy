@@ -676,10 +676,10 @@ script_write util_write_script(std::filesystem::path const &path,
 
   // A WINDOWS-target script is data on a POSIX host -- cross-deploying one and then
   // marking it executable only invites the shell to try to run a batch file.
-  util_write_file(path,
-                  content,
-                  plat == platform_id::WINDOWS ? util_file_mode::DEFAULT
-                                               : util_file_mode::EXECUTABLE);
+  util_write_file(
+      path,
+      content,
+      plat == platform_id::WINDOWS ? util_file_mode::DEFAULT : util_file_mode::EXECUTABLE);
   return existing.empty() ? script_write::CREATED : script_write::UPDATED;
 }
 
