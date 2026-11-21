@@ -404,6 +404,30 @@ std::vector<std::string> all_caps_globals(sol::state_view lua) {
   return names;
 }
 
+// `preset` is what envy installed before the spec ran (e.g. ENVY_SHELL); not the spec's.
+void reject_unknown_globals(sol::state_view lua,
+                            std::vector<std::string> const &preset,
+                            std::string const &identity) {
+  auto unknown{ all_caps_globals(lua) };
+  std::erase_if(unknown, [&](std::string const &name) {
+    return std::ranges::find(kSpecGlobals, name) != std::end(kSpecGlobals) ||
+           std::ranges::find(preset, name) != preset.end();
+  });
+  if (unknown.empty()) { return; }
+  util_sort(unknown);  // globals iterate in hash order
+  std::string const list{ [&] {
+    std::string out;
+    for (auto const &name : unknown) { out += (out.empty() ? "'" : ", '") + name + "'"; }
+    return out;
+  }() };
+  throw_runtime_error({ "spec '",
+                        identity,
+                        "' defines unknown global",
+                        unknown.size() > 1 ? "s " : " ",
+                        list,
+                        "; make helpers local" });
+}
+
 int load_spec_script(sol::state &lua,
                      std::filesystem::path const &spec_path,
                      std::string const &identity) {
@@ -414,33 +438,12 @@ int load_spec_script(sol::state &lua,
   std::string const script{ reinterpret_cast<char const *>(content.data()),
                             content.size() };
   std::string const chunk_name{ "@" + spec_path.string() };
-  auto const preset{ all_caps_globals(lua) };  // envy's own, e.g. ENVY_SHELL
   sol::protected_function_result result{
     lua.safe_script(script, sol::script_pass_on_error, chunk_name)
   };
   if (!result.valid()) {
     sol::error err = result;
     throw_runtime_error({ "Failed to load spec: ", identity, ": ", err.what() });
-  }
-
-  auto unknown{ all_caps_globals(lua) };
-  std::erase_if(unknown, [&](std::string const &name) {
-    return std::ranges::find(kSpecGlobals, name) != std::end(kSpecGlobals) ||
-           std::ranges::find(preset, name) != preset.end();
-  });
-  if (!unknown.empty()) {
-    util_sort(unknown);  // globals iterate in hash order
-    std::string const list{ [&] {
-      std::string out;
-      for (auto const &name : unknown) { out += (out.empty() ? "'" : ", '") + name + "'"; }
-      return out;
-    }() };
-    throw_runtime_error({ "spec '",
-                          identity,
-                          "' defines unknown global",
-                          unknown.size() > 1 ? "s " : " ",
-                          list,
-                          "; make helpers local" });
   }
 
   return meta.schema;
@@ -1566,6 +1569,7 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
     }
   }
 
+  auto const preset_globals{ all_caps_globals(*lua) };
   p->schema = load_spec_script(*lua, spec_path, cfg.identity);
 
   // Store spec file path for error reporting
@@ -1669,6 +1673,10 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   p->display = resolve_display(p, *lua);
   tui::section_set_display(p->tui_section, p->display);
   p->has_env = resolve_env(*lua, cfg.identity);
+
+  // Spec semantics, so after the entry is finalized; after load-time callbacks
+  // (OPTIONS, DISPLAY, USER_MANAGED...) too, since they can assign globals as well.
+  reject_unknown_globals(*lua, preset_globals, cfg.identity);
 
   p->lua.set(std::move(lua));
 

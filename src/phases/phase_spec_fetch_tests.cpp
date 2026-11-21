@@ -318,6 +318,20 @@ TEST_CASE("spec defining several unknown all-caps globals names them all, sorted
   CHECK(msg.find("defines unknown globals 'EVN', 'F2', 'HASHES'") != std::string::npos);
 }
 
+TEST_CASE("unknown globals are judged after the identity check") {
+  auto const msg{ run_spec_body("unknown_global_wrong_id",
+                                std::string{ kMinimalUserManaged } +
+                                    "IDENTITY = 'test.other@v1'\nEVN = {}\n") };
+  CHECK(msg.find("Identity mismatch") != std::string::npos);
+}
+
+TEST_CASE("unknown global defined by a load-time callback throws") {
+  auto const msg{ run_spec_body("unknown_global_options",
+                                std::string{ kMinimalUserManaged } +
+                                    "OPTIONS = function(opts) EVN = { FOO = 'bar' } end\n") };
+  CHECK(msg.find("defines unknown global 'EVN'") != std::string::npos);
+}
+
 TEST_CASE("spec helpers that are local, lowercase or mixed-case are free") {
   CHECK(run_spec_body("free_helpers",
                       std::string{ kMinimalUserManaged } + "local HASHES = { a = 1 }\n"
