@@ -21,9 +21,6 @@ sol::table codec_array(sol::this_state L, sol::optional<sol::table> t);
 
 bool codec_utf8_valid(std::string_view s);
 
-// The document argument of a decode: a Lua string, never a coerced number or nil.
-std::string_view codec_text_arg(sol::stack_object text, char const *fn);
-
 // Where a value sits, for errors; built only when one is raised.
 using codec_where = function_ref<std::string()>;
 
@@ -64,14 +61,5 @@ void codec_append_key(std::string &out,
 [[noreturn]] void codec_fail(codec_style const &style,
                              std::string_view what,
                              std::string const &where);
-
-// Whole-file IO; relative paths resolve like envy.copy's. Errors name `fn` and the path.
-std::vector<unsigned char> codec_read_file(sol::this_state L,
-                                           std::string_view path,
-                                           char const *fn);
-void codec_write_file(sol::this_state L,
-                      std::string_view path,
-                      std::string_view content,
-                      char const *fn);
 
 }  // namespace envy

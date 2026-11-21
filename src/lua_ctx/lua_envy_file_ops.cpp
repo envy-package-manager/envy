@@ -1,14 +1,55 @@
 #include "lua_envy_file_ops.h"
 
 #include "lua_phase_context.h"
+#include "sol_util.h"
 #include "tree_hash.h"
 #include "util.h"
 
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 namespace envy {
+namespace {
+
+constexpr std::string_view kWriteOptions[]{ "executable" };
+
+// envy.write(path, content, opts?) - Atomic binary write; parents created, handle closed
+void envy_write(sol::this_state L,
+                std::string_view path,
+                sol::stack_object content,
+                sol::optional<sol::object> opts) {
+  bool const executable{ [&] {
+    if (!opts || !opts->valid()) { return false; }  // absent or nil
+    if (!opts->is<sol::table>()) {
+      throw_runtime_error({ "envy.write: opts must be a table" });
+    }
+    sol::table const t{ opts->as<sol::table>() };
+    sol_util_reject_unknown_keys(t, kWriteOptions, "envy.write");
+    return sol_util_get_optional<bool>(t, "executable", "envy.write").value_or(false);
+  }() };
+  lua_phase_context_write_file(L,
+                               path,
+                               sol_util_string_arg(content, "envy.write"),
+                               "envy.write",
+                               executable);
+}
+
+// envy.mkdir(path) - create_directories; an existing directory is not an error
+void envy_mkdir(sol::this_state L, std::string_view path) {
+  std::filesystem::path const p{ lua_phase_context_resolve(L, path) };
+  std::error_code create_ec;
+  std::filesystem::create_directories(p, create_ec);
+  std::error_code stat_ec;
+  if (std::filesystem::is_directory(p, stat_ec)) { return; }
+  std::error_code const &ec{ create_ec ? create_ec : stat_ec };
+  std::string const why{ ec ? ec.message() : "not a directory" };
+  throw_runtime_error({ "envy.mkdir: cannot create ", p, ": ", why });
+}
+
+}  // namespace
 
 void lua_envy_file_ops_install(sol::table &envy_table) {
   // envy.copy(src, dst) - Copy file or directory (relative paths anchored to stage_dir)
@@ -89,6 +130,9 @@ void lua_envy_file_ops_install(sol::table &envy_table) {
   envy_table["is_dir"] = [](std::string const &path_str, sol::this_state L) -> bool {
     return std::filesystem::is_directory(lua_phase_context_resolve(L, path_str));
   };
+
+  envy_table.set_function("write", envy_write);  // set_function keeps pcall's trampoline
+  envy_table.set_function("mkdir", envy_mkdir);
 }
 
 }  // namespace envy

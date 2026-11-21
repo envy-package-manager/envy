@@ -364,6 +364,7 @@ set(ENVY_COMMON_SOURCES ${ENVY_BASE_SOURCES} src/main.cpp)
 set(ENVY_FUNCTIONAL_TEST_SOURCES
     src/cmds/cmd_cache_functional_test.cpp
     src/cmds/cmd_trace_schema.cpp
+    src/lua_ctx/lua_envy_functional_test.cpp
 )
 
 # Enable ARC for Objective-C++ files
@@ -380,10 +381,6 @@ set(ENVY_COMMON_COMPILE_OPTIONS
     # configured elsewhere and are not ours to reinterpret.
     $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
     $<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>
-    # envy never asks a type its name; RTTI only paid for std::function::target() and
-    # typeinfo strings. Exceptions still match by type: compilers emit EH typeinfo anyway.
-    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fno-rtti>
-    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/GR->
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-ffunction-sections>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fdata-sections>
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-ffunction-sections>
@@ -468,7 +465,7 @@ endfunction()
 
 # envy and the tester differ only in TUs that see ENVY_FUNCTIONAL_TESTER; the rest compile
 # once, linked straight into each single-file executable. Built only when one links it.
-set(ENVY_TESTER_VARIANT_SOURCES src/cli.cpp src/main.cpp src/tui.cpp)
+set(ENVY_TESTER_VARIANT_SOURCES src/cli.cpp src/lua_envy.cpp src/main.cpp src/tui.cpp)
 set(ENVY_SHARED_SOURCES ${ENVY_COMMON_SOURCES})
 list(REMOVE_ITEM ENVY_SHARED_SOURCES ${ENVY_TESTER_VARIANT_SOURCES})
 add_library(envy_shared_objects OBJECT EXCLUDE_FROM_ALL ${ENVY_SHARED_SOURCES})

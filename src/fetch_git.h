@@ -91,11 +91,12 @@ class git_progress : unmovable {
   fetch_progress_cb_t waits(repo *r);  // fetch_retrying's report: its backoff waits
   bool aborted() const { return aborted_; }
 
-  static int on_transfer(git_indexer_progress const *stats, void *payload);
+  // Called from inside libgit2's C frames: a throw must never unwind through them.
+  static int on_transfer(git_indexer_progress const *stats, void *payload) noexcept;
   static void on_checkout(char const *path,
                           std::size_t completed,
                           std::size_t total,
-                          void *payload);
+                          void *payload) noexcept;
 
  private:
   bool publish();  // mutex_ held

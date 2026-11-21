@@ -1,6 +1,8 @@
 #include "lua_envy_json.h"
 
 #include "lua_envy_codec_util.h"
+#include "lua_phase_context.h"
+#include "sol_util.h"
 #include "util.h"
 
 #include "picojson.h"
@@ -219,11 +221,13 @@ std::string encode(lua_State *L,
 }
 
 sol::object json_decode(sol::this_state L, sol::stack_object text) {
-  return decode(L, codec_text_arg(text, "envy.json.decode"), "envy.json.decode");
+  return decode(L, sol_util_string_arg(text, "envy.json.decode"), "envy.json.decode");
 }
 
 sol::object json_read(sol::this_state L, std::string_view path) {
-  std::vector<unsigned char> const bytes{ codec_read_file(L, path, "envy.json.read") };
+  std::vector<unsigned char> const bytes{
+    lua_phase_context_read_file(L, path, "envy.json.read")
+  };
   return decode(L,
                 { reinterpret_cast<char const *>(bytes.data()), bytes.size() },
                 std::string{ "envy.json.read: " } + std::string{ path });
@@ -240,7 +244,7 @@ void json_write(sol::this_state L,
                 sol::stack_object value,
                 sol::optional<sol::table> opts) {
   std::string const text{ encode(L, value.stack_index(), opts, "envy.json.write") + '\n' };
-  codec_write_file(L, path, text, "envy.json.write");
+  lua_phase_context_write_file(L, path, text, "envy.json.write");
 }
 
 }  // namespace

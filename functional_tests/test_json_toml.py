@@ -22,11 +22,6 @@ _DOC = """{
 
 
 class TestJsonToml(EnvyTestCase):
-    def run_lua(self, body: str):
-        script = self.work / "codec.lua"
-        script.write_text(body, encoding="utf-8")
-        return self.run_envy("lua", script)
-
     def test_write_then_read_round_trips_exact_bytes(self):
         j, t, e = (self.lua_path(self.work / n) for n in ("o.json", "o.toml", "e.toml"))
         run = self.run_lua(

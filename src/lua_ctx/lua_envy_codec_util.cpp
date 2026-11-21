@@ -1,6 +1,5 @@
 #include "lua_envy_codec_util.h"
 
-#include "lua_phase_context.h"
 #include "util.h"
 
 #include <algorithm>
@@ -9,8 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <exception>
-#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
@@ -107,17 +104,6 @@ bool codec_utf8_valid(std::string_view s) {
     p += n + 1;
   }
   return true;
-}
-
-std::string_view codec_text_arg(sol::stack_object text, char const *fn) {
-  lua_State *const L{ text.lua_state() };
-  int const type{ lua_type(L, text.stack_index()) };
-  if (type != LUA_TSTRING) {
-    throw_runtime_error({ fn, ": expected a string, got ", lua_typename(L, type) });
-  }
-  std::size_t len;
-  char const *const s{ lua_tolstring(L, text.stack_index(), &len) };
-  return { s, len };
 }
 
 void codec_fail(codec_style const &style,
@@ -289,26 +275,6 @@ void codec_encode(lua_State *L,
       break;
     }
   }
-}
-
-std::vector<unsigned char> codec_read_file(sol::this_state L,
-                                           std::string_view path,
-                                           char const *fn) {
-  std::filesystem::path const p{ lua_phase_context_resolve(L, std::string{ path }) };
-  try {
-    return util_load_file(p);
-  } catch (std::exception const &) { throw_runtime_error({ fn, ": cannot read ", p }); }
-}
-
-void codec_write_file(sol::this_state L,
-                      std::string_view path,
-                      std::string_view content,
-                      char const *fn) {
-  std::filesystem::path const p{ lua_phase_context_resolve(L, std::string{ path }) };
-  try {
-    if (p.has_parent_path()) { std::filesystem::create_directories(p.parent_path()); }
-    util_write_file(p, content);
-  } catch (std::exception const &) { throw_runtime_error({ fn, ": cannot write ", p }); }
 }
 
 }  // namespace envy

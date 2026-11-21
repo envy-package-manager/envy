@@ -30,6 +30,6 @@ TEST_CASE("cmd factory creates command from cfg") {
   auto cmd{ envy::cmd::create(cfg, cli_cache_root) };
   REQUIRE(cmd);
   int const before{ test_cmd::executions };
-  cmd->execute();  // envy builds without RTTI; the override running proves the type
+  cmd->execute();  // the override running proves the type
   CHECK(test_cmd::executions == before + 1);
 }

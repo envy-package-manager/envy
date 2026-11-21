@@ -32,7 +32,7 @@ void ensure_curl_initialized() {
   });
 }
 
-size_t curl_write_file(char *ptr, size_t size, size_t nmemb, void *userdata) {
+size_t curl_write_file(char *ptr, size_t size, size_t nmemb, void *userdata) noexcept {
   auto *stream{ static_cast<std::ofstream *>(userdata) };
   size_t const total{ size * nmemb };
   stream->write(ptr, static_cast<std::streamsize>(total));
@@ -227,9 +227,12 @@ std::filesystem::path fetch_http_download(std::string_view url,
 
     if (progress) {
       setopt(
-          CURLOPT_XFERINFOFUNCTION,
-          +[](void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t)
-              -> int {
+          CURLOPT_XFERINFOFUNCTION,  // noexcept: called from inside curl's C frames
+          +[](void *clientp,
+              curl_off_t dltotal,
+              curl_off_t dlnow,
+              curl_off_t,
+              curl_off_t) noexcept -> int {
             return (*static_cast<fetch_progress_cb_t const *>(clientp))(fetch_progress_t{
                        std::in_place_type<fetch_transfer_progress>,
                        fetch_transfer_progress{

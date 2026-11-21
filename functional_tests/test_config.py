@@ -251,6 +251,12 @@ def _get_executable(name: str, label: str) -> Path:
     return exe
 
 
+def sanitizer() -> str:
+    """The sanitizer the functional tester carries (asan, ubsan, tsan), as the build's
+    owner declares it in ENVY_TEST_SANITIZER -- CI sets it per shard. Empty if none."""
+    return os.environ.get("ENVY_TEST_SANITIZER", "")
+
+
 def get_envy_executable() -> Path:
     """Path to the functional test executable. The default for tests.
 

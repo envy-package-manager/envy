@@ -1,6 +1,8 @@
 #include "lua_envy_toml.h"
 
 #include "lua_envy_codec_util.h"
+#include "lua_phase_context.h"
+#include "sol_util.h"
 #include "util.h"
 
 #include "tomlc17.h"
@@ -256,11 +258,13 @@ std::string encode(lua_State *L, int idx, char const *fn) {
 }
 
 sol::object toml_decode(sol::this_state L, sol::stack_object text) {
-  return decode(L, codec_text_arg(text, "envy.toml.decode"), "envy.toml.decode");
+  return decode(L, sol_util_string_arg(text, "envy.toml.decode"), "envy.toml.decode");
 }
 
 sol::object toml_read(sol::this_state L, std::string_view path) {
-  std::vector<unsigned char> const bytes{ codec_read_file(L, path, "envy.toml.read") };
+  std::vector<unsigned char> const bytes{
+    lua_phase_context_read_file(L, path, "envy.toml.read")
+  };
   return decode(L,
                 { reinterpret_cast<char const *>(bytes.data()), bytes.size() },
                 std::string{ "envy.toml.read: " } + std::string{ path });
@@ -272,7 +276,7 @@ std::string toml_encode(sol::this_state L, sol::stack_object value) {
 
 void toml_write(sol::this_state L, std::string_view path, sol::stack_object value) {
   std::string const text{ encode(L, value.stack_index(), "envy.toml.write") };
-  codec_write_file(L, path, text, "envy.toml.write");
+  lua_phase_context_write_file(L, path, text, "envy.toml.write");
 }
 
 }  // namespace

@@ -2,6 +2,10 @@
 
 #include "lua_envy.h"
 #include "pkg.h"
+#include "util.h"
+
+#include <exception>
+#include <string>
 
 namespace envy {
 
@@ -13,12 +17,36 @@ phase_context const *lua_phase_context_get(sol::this_state ts) {
 }
 
 std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
-                                                std::filesystem::path const &path) {
+                                                std::string_view utf8) {
+  std::filesystem::path const path{ util_path_from_utf8(utf8) };
   if (path.is_absolute()) { return path; }
   phase_context const *ctx{ lua_phase_context_get(ts) };
   if (ctx && ctx->run_dir) { return *ctx->run_dir / path; }
   if (ctx && ctx->p && ctx->p->lock) { return ctx->p->lock->stage_dir() / path; }
   return std::filesystem::current_path() / path;
+}
+
+std::vector<unsigned char> lua_phase_context_read_file(sol::this_state ts,
+                                                       std::string_view path,
+                                                       char const *fn) {
+  std::filesystem::path const p{ lua_phase_context_resolve(ts, path) };
+  try {
+    return util_load_file(p);
+  } catch (std::exception const &) { throw_runtime_error({ fn, ": cannot read ", p }); }
+}
+
+void lua_phase_context_write_file(sol::this_state ts,
+                                  std::string_view path,
+                                  std::string_view content,
+                                  char const *fn,
+                                  bool executable) {
+  std::filesystem::path const p{ lua_phase_context_resolve(ts, path) };
+  try {
+    if (p.has_parent_path()) { std::filesystem::create_directories(p.parent_path()); }
+    util_write_file(p, content, executable);
+  } catch (std::exception const &e) {
+    throw_runtime_error({ fn, ": cannot write ", p, ": ", e.what() });
+  }
 }
 
 phase_context_guard::phase_context_guard(engine *eng,

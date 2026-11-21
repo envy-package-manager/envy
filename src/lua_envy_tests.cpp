@@ -1,10 +1,13 @@
 #include "lua_envy.h"
 
+#include "lua_ctx/lua_envy_functional_test.h"
 #include "sol_util.h"
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 namespace envy {
@@ -251,6 +254,10 @@ TEST_CASE("every envy function is declared in the LuaLS type definitions") {
   sol::table const envy_table = (*lua)["envy"];
   for (auto const &[key, value] : envy_table) {
     if (!key.is<std::string>() || value.get_type() != sol::type::function) { continue; }
+    if (std::ranges::find(kLuaEnvyFunctionalTestHooks, key.as<std::string>()) !=
+        std::end(kLuaEnvyFunctionalTestHooks)) {
+      continue;
+    }
     std::string const decl{ "function envy." + key.as<std::string>() + "(" };
     CHECK_MESSAGE(declarations.find(decl) != std::string::npos,
                   "undeclared in src/resources/envy.lua: ",
