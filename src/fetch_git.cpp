@@ -545,7 +545,7 @@ fetch_progress_cb_t git_progress::waits(repo *r) {
   };
 }
 
-int git_progress::on_transfer(git_indexer_progress const *stats, void *payload) {
+int git_progress::on_transfer(git_indexer_progress const *stats, void *payload) noexcept {
   auto &r{ *static_cast<repo *>(payload) };
   std::lock_guard const lock{ r.sum->mutex_ };
   r.last = { .total_objects = stats->total_objects,
@@ -561,7 +561,7 @@ int git_progress::on_transfer(git_indexer_progress const *stats, void *payload) 
 void git_progress::on_checkout(char const * /*path*/,
                                std::size_t completed,
                                std::size_t total,
-                               void *payload) {
+                               void *payload) noexcept {
   auto &r{ *static_cast<repo *>(payload) };
   std::lock_guard const lock{ r.sum->mutex_ };
   r.last.checkout_done = completed;

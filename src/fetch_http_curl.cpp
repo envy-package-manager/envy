@@ -227,9 +227,9 @@ std::filesystem::path fetch_http_download(std::string_view url,
 
     if (progress) {
       setopt(
-          CURLOPT_XFERINFOFUNCTION,
+          CURLOPT_XFERINFOFUNCTION,  // noexcept: called from inside curl's C frames
           +[](void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t)
-              -> int {
+              noexcept -> int {
             return (*static_cast<fetch_progress_cb_t const *>(clientp))(fetch_progress_t{
                        std::in_place_type<fetch_transfer_progress>,
                        fetch_transfer_progress{

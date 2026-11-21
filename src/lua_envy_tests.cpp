@@ -251,6 +251,7 @@ TEST_CASE("every envy function is declared in the LuaLS type definitions") {
   sol::table const envy_table = (*lua)["envy"];
   for (auto const &[key, value] : envy_table) {
     if (!key.is<std::string>() || value.get_type() != sol::type::function) { continue; }
+    if (key.as<std::string>().starts_with("test_")) { continue; }  // tester-only hooks
     std::string const decl{ "function envy." + key.as<std::string>() + "(" };
     CHECK_MESSAGE(declarations.find(decl) != std::string::npos,
                   "undeclared in src/resources/envy.lua: ",
