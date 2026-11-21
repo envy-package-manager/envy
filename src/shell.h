@@ -84,11 +84,11 @@ void shell_append_quoted_pwsh(std::string &out, std::string_view v);
 
 // argv as one line of an envy.run script for `shell`, quoting only what needs it -- and
 // a program named without a directory, which could otherwise read as a keyword or
-// builtin. POSIX: single quotes. PowerShell: single quotes behind `&`; refuses what powershell.exe 5.1
-// cannot hand a native program intact (empty, `"`, a spaced argument ending in `\`).
-// cmd: double quotes, `%` doubled for the batch file, backslashes doubled before a closing
-// quote, `call` before a .bat/.cmd so the script resumes; refuses `"` and `!`, and `%`/`^`
-// behind `call`. Line breaks are refused outside POSIX.
+// builtin. POSIX: single quotes. PowerShell: single quotes behind `&`; refuses what
+// powershell.exe 5.1 cannot hand a native program intact (empty, `"`, a spaced argument
+// ending in `\`). cmd: double quotes, `%` doubled for the batch file, backslashes doubled
+// before a closing quote, `call` before a .bat/.cmd so the script resumes; refuses `"` and
+// `!`, and `%`/`^` behind `call`. Line breaks are refused outside POSIX.
 std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice shell);
 
 // Validate custom shell configuration (checks executable exists and is accessible)
