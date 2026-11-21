@@ -23,7 +23,9 @@ void envy_write(sol::this_state L,
                 sol::optional<sol::object> opts) {
   bool const executable{ [&] {
     if (!opts || !opts->valid()) { return false; }  // absent or nil
-    if (!opts->is<sol::table>()) { throw_runtime_error({ "envy.write: opts must be a table" }); }
+    if (!opts->is<sol::table>()) {
+      throw_runtime_error({ "envy.write: opts must be a table" });
+    }
     sol::table const t{ opts->as<sol::table>() };
     sol_util_reject_unknown_keys(t, kWriteOptions, "envy.write");
     return sol_util_get_optional<bool>(t, "executable", "envy.write").value_or(false);

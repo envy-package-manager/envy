@@ -44,8 +44,9 @@ phase_context const *lua_phase_context_get(sol::this_state ts);
 std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
                                                 std::filesystem::path const &path);
 
-// Whole-file IO for envy.* functions; paths resolve as above, errors name `fn` and the path.
-// A write creates parent directories and replaces the file atomically, exec bit included.
+// Whole-file IO for envy.* functions; paths resolve as above, errors name `fn` and the
+// path. A write creates parent directories and replaces the file atomically, exec bit
+// included.
 std::vector<unsigned char> lua_phase_context_read_file(sol::this_state ts,
                                                        std::string_view path,
                                                        char const *fn);

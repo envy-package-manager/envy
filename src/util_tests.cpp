@@ -1811,6 +1811,7 @@ TEST_CASE("util_canonical_path_keep_leaf normalizes like util_canonical_path") {
 }
 
 TEST_CASE("an exception the C++ runtime throws from its own code is a std::exception") {
-  // Under -fno-rtti, macOS code can't match libc++.dylib's typeinfo: envy builds with RTTI.
+  // Under -fno-rtti, macOS code can't match libc++.dylib's typeinfo: envy builds with
+  // RTTI.
   CHECK_THROWS_AS(static_cast<void>(std::stoi("not a number")), std::exception);
 }

@@ -225,7 +225,9 @@ sol::object json_decode(sol::this_state L, sol::stack_object text) {
 }
 
 sol::object json_read(sol::this_state L, std::string_view path) {
-  std::vector<unsigned char> const bytes{ lua_phase_context_read_file(L, path, "envy.json.read") };
+  std::vector<unsigned char> const bytes{
+    lua_phase_context_read_file(L, path, "envy.json.read")
+  };
   return decode(L,
                 { reinterpret_cast<char const *>(bytes.data()), bytes.size() },
                 std::string{ "envy.json.read: " } + std::string{ path });

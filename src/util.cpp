@@ -191,7 +191,8 @@ void util_write_file(std::filesystem::path const &path,
     if (ec) {
       std::error_code rm_ec;
       fs::remove(temp_path, rm_ec);
-      throw_runtime_error({ "util_write_file: failed to chmod ", temp_path, ": ", ec.message() });
+      throw_runtime_error(
+          { "util_write_file: failed to chmod ", temp_path, ": ", ec.message() });
     }
   }
 #else
