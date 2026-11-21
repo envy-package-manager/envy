@@ -174,11 +174,16 @@ void util_write_file(std::filesystem::path const &path,
   auto [temp_path, file]{ [&] {
     std::string const pid{ std::to_string(platform::get_process_id()) };
     for (int attempt{ 0 }; attempt < 64; ++attempt) {
-      fs::path p{ path.parent_path() / (".envy-tmp-" + pid + "." + std::to_string(s_seq++)) };
-      if (file_ptr_t f{ util_open_file(p, "wbx") }) { return std::pair{ p, std::move(f) }; }
+      fs::path p{ path.parent_path() /
+                  (".envy-tmp-" + pid + "." + std::to_string(s_seq++)) };
+      if (file_ptr_t f{ util_open_file(p, "wbx") }) {
+        return std::pair{ p, std::move(f) };
+      }
       if (errno != EEXIST) { break; }
     }
-    throw_system_error(errno, std::generic_category(), { "util_write_file: no temp file for ", path });
+    throw_system_error(errno,
+                       std::generic_category(),
+                       { "util_write_file: no temp file for ", path });
   }() };
 
   int err{ 0 };  // the first failure's errno; fclose flushes, so a full disk shows there
@@ -204,8 +209,11 @@ void util_write_file(std::filesystem::path const &path,
   if (err || ec) {
     std::error_code rm_ec;
     fs::remove(temp_path, rm_ec);
-    std::error_code const code{ err ? std::error_code{ err, std::generic_category() } : ec };
-    throw_system_error(code.value(), code.category(), { "util_write_file: cannot write ", path });
+    std::error_code const code{ err ? std::error_code{ err, std::generic_category() }
+                                    : ec };
+    throw_system_error(code.value(),
+                       code.category(),
+                       { "util_write_file: cannot write ", path });
   }
 }
 

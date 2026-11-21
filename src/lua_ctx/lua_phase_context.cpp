@@ -16,7 +16,8 @@ phase_context const *lua_phase_context_get(sol::this_state ts) {
   return static_cast<phase_context const *>(obj.as<void *>());
 }
 
-std::filesystem::path lua_phase_context_resolve(sol::this_state ts, std::string_view utf8) {
+std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
+                                                std::string_view utf8) {
   std::filesystem::path const path{ util_path_from_utf8(utf8) };
   if (path.is_absolute()) { return path; }
   phase_context const *ctx{ lua_phase_context_get(ts) };
