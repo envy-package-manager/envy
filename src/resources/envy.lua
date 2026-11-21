@@ -158,28 +158,28 @@ function envy.toml.array(t) end
 -- File Operations
 --------------------------------------------------------------------------------
 
----Copy file or directory (recursive). Relative paths resolve from stage_dir.
+---Copy file or directory (recursive). Relative paths resolve from the phase's run dir.
 ---@param src string Source path
 ---@param dst string Destination path
 function envy.copy(src, dst) end
 
----Move/rename file or directory. Relative paths resolve from stage_dir.
+---Move/rename file or directory. Relative paths resolve from the phase's run dir.
 ---@param src string Source path
 ---@param dst string Destination path
 function envy.move(src, dst) end
 
----Delete file or directory recursively. Relative paths resolve from stage_dir.
+---Delete file or directory recursively. Relative paths resolve from the phase's run dir.
 ---@param path string Path to remove
 function envy.remove(path) end
 
----Write bytes untranslated, atomically, creating parent directories; handle closed on return
----@param path string Relative paths resolve from stage_dir
+---Write bytes untranslated and atomically (exec bit included), creating parent directories
+---@param path string Relative paths resolve from the phase's run dir
 ---@param content string
 ---@param opts? { executable?: boolean } Adds exec bits; a no-op on Windows
 function envy.write(path, content, opts) end
 
 ---Create a directory and its parents; an existing directory is not an error
----@param path string Relative paths resolve from stage_dir
+---@param path string Relative paths resolve from the phase's run dir
 function envy.mkdir(path) end
 
 ---Check if path exists

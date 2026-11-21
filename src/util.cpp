@@ -161,7 +161,9 @@ std::vector<unsigned char> util_load_file(std::filesystem::path const &path) {
   return buffer;
 }
 
-void util_write_file(std::filesystem::path const &path, std::string_view content) {
+void util_write_file(std::filesystem::path const &path,
+                     std::string_view content,
+                     bool executable) {
   namespace fs = std::filesystem;
   // One temp file per writer: a shared one interleaves two envys' bytes.
   static std::atomic<std::uint64_t> s_seq{ 0 };
@@ -180,6 +182,21 @@ void util_write_file(std::filesystem::path const &path, std::string_view content
   }
 
   std::error_code ec;
+#ifndef _WIN32
+  if (executable) {  // before the rename: the file never appears without its exec bits
+    fs::permissions(temp_path,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add,
+                    ec);
+    if (ec) {
+      std::error_code rm_ec;
+      fs::remove(temp_path, rm_ec);
+      throw_runtime_error({ "util_write_file: failed to chmod ", temp_path, ": ", ec.message() });
+    }
+  }
+#else
+  static_cast<void>(executable);
+#endif
   fs::rename(temp_path, path, ec);
   if (ec) {
     fs::remove(temp_path, ec);
@@ -636,7 +653,6 @@ void util_apply_script_eol(std::string &script, platform_id plat) {
 script_write util_write_script(std::filesystem::path const &path,
                                std::string content,
                                platform_id plat) {
-  namespace fs = std::filesystem;
   util_apply_script_eol(content, plat);
 
   auto const existing{ [&]() -> std::string {
@@ -648,25 +664,9 @@ script_write util_write_script(std::filesystem::path const &path,
   }() };
   if (existing == content) { return script_write::UNCHANGED; }
 
-  util_write_file(path, content);
-
   // A WINDOWS-target script is data on a POSIX host -- cross-deploying one and then
   // marking it executable only invites the shell to try to run a batch file.
-#ifndef _WIN32
-  if (plat != platform_id::WINDOWS) {
-    std::error_code ec;
-    fs::permissions(path,
-                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                    fs::perm_options::add,
-                    ec);
-    if (ec) {
-      tui::warn("Failed to set executable bit on %s: %s",
-                path.string().c_str(),
-                ec.message().c_str());
-    }
-  }
-#endif
-
+  util_write_file(path, content, plat != platform_id::WINDOWS);
   return existing.empty() ? script_write::CREATED : script_write::UPDATED;
 }
 

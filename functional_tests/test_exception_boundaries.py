@@ -1,10 +1,10 @@
-"""What each exception boundary reports for an error envy throws and one libc++ throws.
+"""What each boundary reports for an error envy throws and one the C++ runtime throws.
 
-envy.test_throw (functional tester only) throws through sol's trampoline, as every envy.*
-function does; envy.test_throw_past_lua skips it, so the exception unwinds to the C++
-caller: main for `envy lua`, a task_engine worker for a phase, a validation thread for a
-bundle. "libcxx" throws from inside libc++'s dylib, which macOS -fno-rtti code can't catch
-as std::exception. Every boundary must report the message and fail; none may abort.
+envy.test_throw (functional tester only) is an ordinary envy.* function: "stdlib" throws
+from inside the C++ runtime's compiled code (libc++.dylib on macOS, which -fno-rtti code
+can't catch as std::exception), anything else from envy. Each boundary a spec can reach --
+`envy lua`, pcall, a phase on an engine worker, bundle validation on its own thread -- must
+report the message and fail; none may abort. Messages are each runtime's common wording.
 """
 
 from __future__ import annotations
@@ -14,27 +14,13 @@ import unittest
 from . import test_config
 from .env import EnvyTestCase
 
-MESSAGES = {"envy": "test_throw: thrown by envy", "libcxx": "create_directory"}
+MESSAGES = {"envy": "test_throw: thrown by envy", "stdlib": "stoi"}
 
 
 class TestExceptionBoundaries(EnvyTestCase):
-    def assert_reported(self, run, message: str, returncode: int = 1):
-        self.assertEqual(returncode, run.returncode, test_config.describe_exit(run.result))
+    def assert_reported(self, run, message: str):
+        self.assertEqual(1, run.returncode, test_config.describe_exit(run.result))
         self.assertIn(message, run.stderr)
-
-    def run_lua(self, body: str):
-        script = self.work / "throw.lua"
-        script.write_text(body, encoding="utf-8")
-        return self.run_envy("lua", script)
-
-    def install_spec_that(self, kind: str, body: str):
-        identity = f"local.throw-{kind}@r0"
-        spec = self.write_spec(
-            f"throw-{kind}.lua",
-            f'IDENTITY = "{identity}"\nFETCH = function() end\n'
-            f"INSTALL = function()\n  {body}\nend\n",
-        )
-        return self.install(test_config.write_spec_manifest(self.work, [(identity, spec.name)]))
 
     def test_lua_call(self):
         for kind, message in MESSAGES.items():
@@ -44,31 +30,21 @@ class TestExceptionBoundaries(EnvyTestCase):
     def test_lua_pcall(self):
         for kind, message in MESSAGES.items():
             with self.subTest(kind=kind):
-                run = self.run_lua(
-                    f'local ok, err = pcall(envy.test_throw, "{kind}")\n'
-                    "assert(not ok)\nio.stderr:write(tostring(err))\n"
+                self.assertIn(message, self.lua_error(f'envy.test_throw("{kind}")'))
+
+    def test_phase_on_an_engine_worker(self):
+        for kind, message in MESSAGES.items():
+            with self.subTest(kind=kind):
+                identity = f"local.throw-{kind}@r0"
+                spec = self.write_spec(
+                    f"throw-{kind}.lua",
+                    f'IDENTITY = "{identity}"\nFETCH = function() end\n'
+                    f'INSTALL = function() envy.test_throw("{kind}") end\n',
                 )
-                self.assert_reported(run, message, returncode=0)
+                manifest = test_config.write_spec_manifest(self.work, [(identity, spec.name)])
+                self.assert_reported(self.install(manifest), message)
 
-    def test_phase(self):
-        for kind, message in MESSAGES.items():
-            with self.subTest(kind=kind):
-                run = self.install_spec_that(kind, f'envy.test_throw("{kind}")')
-                self.assert_reported(run, message)
-
-    def test_past_lua_to_main(self):
-        for kind, message in MESSAGES.items():
-            with self.subTest(kind=kind):
-                run = self.run_lua(f'envy.test_throw_past_lua("{kind}")\n')
-                self.assert_reported(run, message)
-
-    def test_past_lua_to_an_engine_worker(self):
-        for kind, message in MESSAGES.items():
-            with self.subTest(kind=kind):
-                run = self.install_spec_that(kind, f'envy.test_throw_past_lua("{kind}")')
-                self.assert_reported(run, message)
-
-    def test_past_lua_to_a_bundle_validation_thread(self):
+    def test_bundle_validation_thread(self):
         for kind, message in MESSAGES.items():
             with self.subTest(kind=kind):
                 bundle = self.make_temp_dir(f"bundle-{kind}")
@@ -77,8 +53,7 @@ class TestExceptionBoundaries(EnvyTestCase):
                     encoding="utf-8",
                 )
                 (bundle / "p.lua").write_text(
-                    f'envy.test_throw_past_lua("{kind}")\nIDENTITY = "test.p@r0"\n',
-                    encoding="utf-8",
+                    f'envy.test_throw("{kind}")\nIDENTITY = "test.p@r0"\n', encoding="utf-8"
                 )
                 manifest = self.write_manifest(
                     f'BUNDLES = {{ b = {{ identity = "test.b@r0", '

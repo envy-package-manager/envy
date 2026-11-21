@@ -146,8 +146,8 @@ Move/rename file or directory.
 ### envy.remove(path)
 Delete file or directory recursively.
 
-### envy.write(path, content, opts?)
-Write `content` bytes untranslated, atomically; creates parent directories, closes the handle before returning. `opts.executable = true` adds the exec bits—a no-op on Windows.
+### envy.write(path, content, [opts])
+Write `content` bytes untranslated, atomically—exec bit included; creates parent directories, closes the handle before returning. `opts.executable = true` adds the exec bits (a no-op on Windows); writing replaces the file, mode and all.
 
 ### envy.mkdir(path)
 Create a directory and its parents; an existing directory is not an error.

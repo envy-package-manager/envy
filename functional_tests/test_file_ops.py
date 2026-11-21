@@ -21,14 +21,11 @@ from . import test_config
 from .env import EnvyTestCase
 
 POSIX_ONLY = unittest.skipIf(sys.platform == "win32", "POSIX symlinks")
+POSIX_MODES = unittest.skipIf(sys.platform == "win32", "POSIX file modes")
+RUNNING_AS_ROOT = sys.platform != "win32" and os.geteuid() == 0
 
 
 class TestEnvyRemove(EnvyTestCase):
-    def run_lua(self, body: str):
-        script = self.work / "ops.lua"
-        script.write_text(body, encoding="utf-8")
-        return self.run_envy("lua", script)
-
     def remove(self, target: Path):
         return self.run_lua(f'envy.remove("{self.lua_path(target)}")\n')
 
@@ -76,27 +73,25 @@ class TestEnvyRemove(EnvyTestCase):
 
 
 class TestEnvyWriteMkdir(EnvyTestCase):
-    def run_lua(self, body: str):
-        script = self.work / "ops.lua"
-        script.write_text(body, encoding="utf-8")
-        return self.run_envy("lua", script)
-
     def test_write_creates_parents_and_keeps_bytes_exact(self):
         """Binary mode: CRLF and NUL survive; a second write replaces the first."""
         target, cmd = self.work / "a" / "b" / "out.bin", self.work / "c" / "tool.cmd"
+        empty = self.work / "empty"
         t = self.lua_path(target)
         run = self.run_lua(
-            f'envy.write("{t}", "stale")\n'
-            f'envy.write("{t}", "x\\r\\ny\\0z\\n")\n'
+            f'envy.write("{t}", "stale", {{ executable = true }})\n'
+            f'envy.write("{t}", "x\\r\\ny\\0z\\n", {{ executable = false }})\n'
             f'envy.write("{self.lua_path(cmd)}", "@echo off\\r\\n", {{ executable = true }})\n'
+            f'envy.write("{self.lua_path(empty)}", "")\n'
         )
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(b"x\r\ny\0z\n", target.read_bytes())
         self.assertEqual(b"@echo off\r\n", cmd.read_bytes())  # executable: a no-op on Windows
+        self.assertEqual(b"", empty.read_bytes())
         if sys.platform != "win32":
-            self.assertEqual(0, target.stat().st_mode & 0o111, "exec bit without opt-in")
+            self.assertEqual(0, target.stat().st_mode & 0o111, "a rewrite keeps no exec bit")
 
-    @POSIX_ONLY
+    @POSIX_MODES
     def test_executable_write_runs(self):
         launcher = self.work / "bin" / "hello"
         run = self.run_lua(
@@ -118,29 +113,37 @@ class TestEnvyWriteMkdir(EnvyTestCase):
         self.assertTrue(nested.is_dir())
 
     def test_errors_are_lua_errors_and_bad_options_write_nothing(self):
-        """pcall catches every one; a rejected call leaves no file behind."""
+        """pcall catches every one, with its cause; a rejected call leaves no file behind."""
         blocker = self.work / "blocker"
         blocker.write_text("file\n", encoding="utf-8")
         out = self.lua_path(self.work / "never.txt")
-        b = self.lua_path(blocker)
+        b, w = self.lua_path(blocker), self.lua_path(self.work)
         cases = [
-            ("envy.write", f'"{out}", 42', "envy.write: expected a string, got number"),
-            ("envy.write", f'"{out}", "x", {{ mode = "0755" }}', "unknown key 'mode'"),
-            ("envy.write", f'"{out}", "x", {{ executable = "yes" }}', "executable"),
-            ("envy.write", f'"{b}/f", "x"', "envy.write: cannot write"),
-            ("envy.mkdir", f'"{b}"', "envy.mkdir: cannot create"),
-            ("envy.mkdir", f'"{b}/sub"', "envy.mkdir: cannot create"),
+            (f'envy.write("{out}", 42)', "envy.write: expected a string, got number"),
+            (f'envy.write("{out}", "x", true)', "envy.write: opts must be a table"),
+            (f'envy.write("{out}", "x", {{ mode = "0755" }})', "unknown key 'mode'"),
+            (f'envy.write("{out}", "x", {{ executable = "yes" }})', "executable must be a"),
+            (f'envy.write("{b}/f", "x")', "envy.write: cannot write"),
+            (f'envy.write("{w}", "x")', "envy.write: cannot write"),  # a directory is there
+            (f'envy.mkdir("{b}")', "envy.mkdir: cannot create"),
+            (f'envy.mkdir("{b}/sub")', "envy.mkdir: cannot create"),
+            (f'envy.copy("{b}", "{b}/sub/x")', "blocker/sub"),
+            (f'envy.move("{b}", "{b}/sub/x")', "blocker/sub"),
         ]
-        for fn, args, message in cases:
-            with self.subTest(fn=fn, args=args):
-                run = self.run_lua(
-                    f"local ok, err = pcall({fn}, {args})\n"
-                    'assert(not ok, "expected an error")\n'
-                    "io.stderr:write(tostring(err))\n"
-                )
-                self.assertEqual(0, run.returncode, run.stderr)
-                self.assertIn(message, run.stderr)
+        for call, message in cases:
+            with self.subTest(call=call):
+                self.assertPathContains(self.lua_error(call), message)
         self.assertFalse((self.work / "never.txt").exists())
+
+    @POSIX_MODES
+    @unittest.skipIf(RUNNING_AS_ROOT, "root searches unreadable directories anyway")
+    def test_mkdir_names_the_cause_when_the_parent_is_unreadable(self):
+        locked = self.make_temp_dir("locked")
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o755)  # LIFO: runs before make_temp_dir's rmtree
+        err = self.lua_error(f'envy.mkdir("{self.lua_path(locked / "sub")}")')
+        self.assertIn("envy.mkdir: cannot create", err)
+        self.assertIn("Permission denied", err)
 
     def test_install_phase_resolves_relative_to_stage(self):
         """The issue's launcher: one call, no tmp detour, no chmod process."""

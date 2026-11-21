@@ -152,7 +152,7 @@ std::vector<submodule_entry> list_submodules(git_repository *repo) {
   std::vector<submodule_entry> out;
   if (git_submodule_foreach(
           repo,
-          [](git_submodule *sm, char const *name, void *payload) -> int {
+          [](git_submodule *sm, char const *name, void *payload) noexcept -> int {
             git_oid const *head{ git_submodule_head_id(sm) };
             if (!head) { return 0; }
             char hex[GIT_OID_MAX_HEXSIZE + 1];

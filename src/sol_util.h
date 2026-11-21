@@ -129,6 +129,9 @@ std::vector<std::string> sol_util_get_string_list(sol::table const &table,
                                                   std::string_view key,
                                                   std::string_view context);
 
+// A Lua string argument as is: never a coerced number, never nil. Errors name `fn`.
+std::string_view sol_util_string_arg(sol::stack_object arg, std::string_view fn);
+
 // Reject every string key `allowed` does not list: a key no parser reads does nothing at
 // all, silently. Write `allowed` sorted; the error lists it verbatim.
 void sol_util_reject_unknown_keys(sol::table const &table,

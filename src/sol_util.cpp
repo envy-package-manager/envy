@@ -106,6 +106,17 @@ std::vector<std::string> sol_util_get_string_list(sol::table const &table,
   return values;
 }
 
+std::string_view sol_util_string_arg(sol::stack_object arg, std::string_view fn) {
+  lua_State *const L{ arg.lua_state() };
+  int const type{ lua_type(L, arg.stack_index()) };
+  if (type != LUA_TSTRING) {
+    throw_runtime_error({ fn, ": expected a string, got ", lua_typename(L, type) });
+  }
+  std::size_t len;
+  char const *const s{ lua_tolstring(L, arg.stack_index(), &len) };
+  return { s, len };
+}
+
 void sol_util_reject_unknown_keys(sol::table const &table,
                                   std::span<std::string_view const> allowed,
                                   std::string_view context) {

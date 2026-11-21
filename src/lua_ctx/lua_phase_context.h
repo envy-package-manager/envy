@@ -7,6 +7,8 @@
 
 #include <filesystem>
 #include <optional>
+#include <string_view>
+#include <vector>
 
 namespace envy {
 
@@ -41,6 +43,17 @@ phase_context const *lua_phase_context_get(sol::this_state ts);
 // A relative path from Lua, anchored to the phase's run_dir, else its stage_dir, else cwd.
 std::filesystem::path lua_phase_context_resolve(sol::this_state ts,
                                                 std::filesystem::path const &path);
+
+// Whole-file IO for envy.* functions; paths resolve as above, errors name `fn` and the path.
+// A write creates parent directories and replaces the file atomically, exec bit included.
+std::vector<unsigned char> lua_phase_context_read_file(sol::this_state ts,
+                                                       std::string_view path,
+                                                       char const *fn);
+void lua_phase_context_write_file(sol::this_state ts,
+                                  std::string_view path,
+                                  std::string_view content,
+                                  char const *fn,
+                                  bool executable = false);
 
 // RAII guard that sets Lua registry context for phase execution scope.
 // Automatically clears context on destruction (including exception unwinding).

@@ -1,6 +1,5 @@
 #include "lua_envy_file_ops.h"
 
-#include "lua_envy_codec_util.h"
 #include "lua_phase_context.h"
 #include "sol_util.h"
 #include "tree_hash.h"
@@ -21,28 +20,29 @@ constexpr std::string_view kWriteOptions[]{ "executable" };
 void envy_write(sol::this_state L,
                 std::string_view path,
                 sol::stack_object content,
-                sol::optional<sol::table> opts) {
+                sol::optional<sol::object> opts) {
   bool const executable{ [&] {
-    if (!opts) { return false; }
-    sol_util_reject_unknown_keys(*opts, kWriteOptions, "envy.write");
-    return sol_util_get_optional<bool>(*opts, "executable", "envy.write").value_or(false);
+    if (!opts || !opts->valid()) { return false; }  // absent or nil
+    if (!opts->is<sol::table>()) { throw_runtime_error({ "envy.write: opts must be a table" }); }
+    sol::table const t{ opts->as<sol::table>() };
+    sol_util_reject_unknown_keys(t, kWriteOptions, "envy.write");
+    return sol_util_get_optional<bool>(t, "executable", "envy.write").value_or(false);
   }() };
-  codec_write_file(L, path, codec_text_arg(content, "envy.write"), "envy.write");
-  if (!executable) { return; }
-#ifndef _WIN32
-  namespace fs = std::filesystem;
-  fs::permissions(lua_phase_context_resolve(L, std::string{ path }),
-                  fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                  fs::perm_options::add);
-#endif
+  lua_phase_context_write_file(L,
+                               path,
+                               sol_util_string_arg(content, "envy.write"),
+                               "envy.write",
+                               executable);
 }
 
 // envy.mkdir(path) - create_directories; an existing directory is not an error
 void envy_mkdir(sol::this_state L, std::string_view path) {
   std::filesystem::path const p{ lua_phase_context_resolve(L, std::string{ path }) };
-  std::error_code ec;
-  std::filesystem::create_directories(p, ec);
-  if (std::filesystem::is_directory(p)) { return; }
+  std::error_code create_ec;
+  std::filesystem::create_directories(p, create_ec);
+  std::error_code stat_ec;
+  if (std::filesystem::is_directory(p, stat_ec)) { return; }
+  std::error_code const &ec{ create_ec ? create_ec : stat_ec };
   std::string const why{ ec ? ec.message() : "not a directory" };
   throw_runtime_error({ "envy.mkdir: cannot create ", p, ": ", why });
 }

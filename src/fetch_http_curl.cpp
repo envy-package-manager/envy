@@ -32,7 +32,7 @@ void ensure_curl_initialized() {
   });
 }
 
-size_t curl_write_file(char *ptr, size_t size, size_t nmemb, void *userdata) {
+size_t curl_write_file(char *ptr, size_t size, size_t nmemb, void *userdata) noexcept {
   auto *stream{ static_cast<std::ofstream *>(userdata) };
   size_t const total{ size * nmemb };
   stream->write(ptr, static_cast<std::streamsize>(total));

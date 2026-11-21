@@ -207,6 +207,22 @@ class EnvyTestCase(unittest.TestCase):
         )
         return EnvyRun(result, trace)
 
+    def run_lua(self, body: str, **kwargs) -> EnvyRun:
+        """Run `body` as a script under `envy lua`."""
+        script = self.work / "script.lua"
+        script.write_text(body, encoding="utf-8")
+        return self.run_envy("lua", script, **kwargs)
+
+    def lua_error(self, call: str, **kwargs) -> str:
+        """The error the Lua statement `call` raises, as pcall sees it."""
+        run = self.run_lua(
+            f"local ok, err = pcall(function() {call} end)\n"
+            'assert(not ok, "expected an error")\nio.stderr:write(tostring(err))\n',
+            **kwargs,
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+        return run.stderr
+
     def install(self, manifest: Path, *extra, **kwargs) -> EnvyRun:
         return self.run_envy("install", "--manifest", manifest, *extra, **kwargs)
 
