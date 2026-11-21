@@ -640,7 +640,8 @@ std::vector<std::string> parse_product_command(sol::object const &obj,
   }
   std::filesystem::path const program{ out.front() };
   if (!user_managed && product_util_placeholders(out.front()).empty() &&
-      program.has_parent_path() && !program.is_absolute()) {
+      program.has_parent_path() && !program.has_root_directory()) {  // `/usr/bin/env`
+                                                                     // on Windows too
     fail_product_command(key,
                          id,
                          "starts with relative path '" + out.front() +

@@ -1516,8 +1516,8 @@ void engine::validate_product_fallbacks() {
 }
 
 void engine::validate_product_commands() {
-  // Rendering with stand-in leaves walks exactly what a run renders: every placeholder a
-  // product of its provider's closure, no cycle, no command embedded mid-element. Only
+  // The checks a run makes: every placeholder a product its provider may name, no cycle,
+  // no command embedded mid-element, no NUL. Only
   // commands this host can run: a spec may declare a platform's interpreter only there.
   std::vector<std::pair<pkg *, std::string>> commands;
   {
@@ -1539,11 +1539,11 @@ void engine::validate_product_commands() {
     return std::tie(a.first->key, a.second) < std::tie(b.first->key, b.second);
   });
 
-  auto const stand_in{ [](pkg *, std::string const &) { return std::string{}; } };
+  std::unordered_set<std::string> validated;  // each command walks once, however spliced
   std::string errors;
   for (auto const &[p, name] : commands) {
     try {
-      product_util_argv(p, name, stand_in);
+      product_util_validate(p, name, validated);
     } catch (std::exception const &e) {
       errors += errors.empty() ? "" : "\n";
       errors += e.what();

@@ -747,16 +747,6 @@ std::wstring quote_arg_cmd(std::wstring_view arg) {
   return out;
 }
 
-std::wstring acp_to_wstring(std::string const &s) {
-  if (s.empty()) { return {}; }
-  int const n{
-    ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), nullptr, 0)
-  };
-  std::wstring out(static_cast<size_t>(n), L'\0');
-  ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
-  return out;
-}
-
 std::string getenv_utf8(wchar_t const *name) {
   DWORD const n{ ::GetEnvironmentVariableW(name, nullptr, 0) };
   if (n == 0) { return {}; }
@@ -785,7 +775,7 @@ int shell_exec(std::vector<std::string> const &argv) {
   // PATHEXT always applies, the cwd first for a bare name, as _spawnvp and cmd search:
   // `gradlew` is gradlew.bat, never the POSIX script beside it.
   std::filesystem::path const program{ [&] {
-    std::filesystem::path const named{ argv[0] };
+    std::filesystem::path const named{ utf8_to_wstring(argv[0]) };
     bool const bare{ !named.has_parent_path() };
     std::string const where{ bare ? ".;" + getenv_utf8(L"PATH")
                                   : named.parent_path().string() };
@@ -811,9 +801,9 @@ int shell_exec(std::vector<std::string> const &argv) {
   } };
   std::wstring command_line{ batch ? L"cmd.exe /d /v:off /s /c \"" : L"" };
   command_line.append(quote(program.wstring()));
-  for (size_t i{ 1 }; i < argv.size(); ++i) {  // main's argv: the ANSI code page
+  for (size_t i{ 1 }; i < argv.size(); ++i) {  // UTF-8: plan_run converts main's argv
     command_line.push_back(L' ');
-    command_line.append(quote(acp_to_wstring(argv[i])));
+    command_line.append(quote(utf8_to_wstring(argv[i])));
   }
   if (batch) { command_line.push_back(L'"'); }
   std::vector<wchar_t> cmd_buffer{ command_line.begin(), command_line.end() };

@@ -112,6 +112,7 @@ std::optional<std::filesystem::path> shell_find_executable(
 
 // Become argv[0] (PATH-searched unless a path) with this env and stdio: POSIX execs;
 // Windows runs it (.bat/.cmd via cmd.exe), leaves Ctrl-C to it, returns its exit code.
+// argv is UTF-8, which Windows decodes; POSIX passes the bytes through.
 int shell_exec(std::vector<std::string> const &argv);
 
 }  // namespace envy

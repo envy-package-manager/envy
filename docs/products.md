@@ -43,17 +43,20 @@ PRODUCTS = {
 - `command` excludes `value`; `script` and `platforms` apply as before. A list with holes
   or non-string entries is an error.
 - `{{name}}` is a product of the provider or its dependency closure; the registry admits
-  one provider per name, so it names exactly one. In the graph but outside the closure is
+  one provider per name, so it names exactly one. A product dependency pins the name to
+  its provider, which must declare it (a weak fallback may provide it transitively). In the graph but outside the closure is
   an error, checked once resolution converges (`validate_product_commands`) for every
   command whose `platforms` admit the host. A command's own files are path products of
   its package. An edge that exists only for a command can say `needed_by = "install"`.
 - A path product may sit inside an element (`--node={{node}}`); a command must fill a whole
-  element, and its argv splices in. Cycles are errors. `{{` has no escape.
+  element, and its argv splices in. Cycles and NULs are errors. `{{` has no escape.
+  Validation walks each command once, however often it is spliced.
 - Rendered at each use, never at install: nothing lands in the provider's payload, and
   its cache root can move. A consumer that bakes a command's output into its own payload
   is keyed only by its own references (see Cache key), as with any transitive tool.
-- The program: absolute as is; bare is searched on `PATH` — so user-managed products take
-  arguments too, and a PowerShell alias (`curl`) never shadows the program. A literal
+- The program: absolute as is; bare is searched on `PATH` (relative entries from where it
+  will run), past the bin-dir wrapper of the product that supplied it — so user-managed
+  products take arguments too, and a PowerShell alias (`curl`) never shadows the program. A literal
   relative program is refused in a cache-managed spec (name the file as a path product);
   a user-managed relative value anchors at the project root under `--run`.
 - `{{ }}` echoes `envy.template`, but these names are products filled in at use; build a
@@ -123,9 +126,11 @@ spec text.
 
 `envy product <name>` resolves the graph, extends the provider's closure to completion,
 and prints the rendered value to stdout — a command quoted for the platform's shell, for
-`eval`/`Invoke-Expression`; scripts wanting an argv read `--json`, or run it with `--run`. A cache hit logs at DEBUG, so `$(envy product x)`
+`eval`/`Invoke-Expression`, its program resolved as `--run` resolves it; scripts wanting
+an argv read `--json`, or run it with `--run`. A cache hit logs at DEBUG, so `$(envy product x)`
 stays quiet; a lazy install still reports. `--run` executes the product instead, in the
 project's activation — what deployed scripts call (see `docs/commands.md`). With no argument it lists every product:
 aligned `name  value  provider (user-managed)` rows on stderr (a command as declared), or
-with `--json` a `{ name: resolved_value }` object on stdout, a command as its argv array —
+with `--json` a `{ name: resolved_value }` object on stdout, a command as its argv array
+(`null` where its `platforms` exclude the host, since nothing validated what it names) —
 which needs no install, since paths are recomputed from the providers' cache keys.

@@ -252,6 +252,12 @@ std::string util_normalized_path(std::filesystem::path path);
 
 std::string util_path_with_separator(std::filesystem::path const &path);
 
+// UTF-8 at the boundary where envy's narrow strings meet Lua's. A path's narrow string()
+// is the native encoding -- the ANSI code page on Windows -- while every Lua string, and
+// so every spec-written argument, is UTF-8. Identity on POSIX.
+std::string util_path_to_utf8(std::filesystem::path const &path);
+std::filesystem::path util_path_from_utf8(std::string_view utf8);
+
 // Forward-declared from platform.h (can't include here — platform.h includes util.h).
 enum class platform_id;
 

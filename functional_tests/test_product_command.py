@@ -113,11 +113,27 @@ class TestProductCommand(EnvyTestCase):
         self.assertEqual(_norm(argv[0]), _norm(pkg / "lib" / "tool.py"))
         self.assertEqual(argv[1:], rest)
 
-    def path_env(self) -> dict[str, str]:
+    def path_env(self, *first: Path | str) -> dict[str, str]:
         """The test env with this Python's directory on PATH, for bare program names."""
         env = dict(test_config.get_test_env())
-        env["PATH"] = str(PY.parent) + os.pathsep + env.get("PATH", "")
+        env["PATH"] = os.pathsep.join([*map(str, first), str(PY.parent),
+                                       env.get("PATH", "")])
         return env
+
+    def bare_python(self) -> Path:
+        """local.um@v1: `<python name>` names this Python bare; `tool` runs tool.py by it."""
+        name = PY.name
+        products = '{ ["%s"] = "%s", tool = { command = { "{{%s}}", "%s", "--fixed" } } }'
+        return self.write_spec("um.lua", self.user_spec(
+            "local.um@v1", products % (name, name, name, self.lua_path(self.tool_py))))
+
+    def decoy(self) -> Path:
+        """A wrapper in the bin dir named like this Python: reaching it is the bug."""
+        decoy = self.work / "envy-bin" / PY.name
+        decoy.parent.mkdir()
+        decoy.write_text("#!/bin/sh\necho '[\"decoy\"]'\n", encoding="utf-8")
+        decoy.chmod(decoy.stat().st_mode | stat.S_IXUSR)
+        return decoy.parent
 
     # -- running ------------------------------------------------------------
 
@@ -143,18 +159,20 @@ class TestProductCommand(EnvyTestCase):
     @unittest.skipIf(WINDOWS, "the decoy wrapper is a POSIX script")
     def test_run_skips_the_wrapper_of_the_product_that_supplied_the_program(self):
         """`{{python3}}` renders bare; the bin dir's `python3` wrapper is not it."""
-        name = PY.name
-        products = '{ ["%s"] = "%s", tool = { command = { "{{%s}}", "%s", "--fixed" } } }'
-        um = self.write_spec("um.lua", self.user_spec(
-            "local.um@v1", products % (name, name, name, self.lua_path(self.tool_py))))
-        m = self.manifest(("local.um@v1", um))
-        decoy = self.work / "envy-bin" / name
-        decoy.parent.mkdir()
-        decoy.write_text("#!/bin/sh\necho '[\"decoy\"]'\n", encoding="utf-8")
-        decoy.chmod(decoy.stat().st_mode | stat.S_IXUSR)
+        m = self.manifest(("local.um@v1", self.bare_python()))
+        self.decoy()
         argv = json.loads(self.ok("product", "--manifest", m, "--run", "tool",
                                   env=self.path_env()))
         self.assertEqual(argv[1:], ["--fixed"])
+
+    def test_run_carries_non_ascii_arguments(self):
+        """Spec-written (UTF-8) and command-line arguments reach the tool alike."""
+        tool = self.tool_spec('{ ["tool.py"] = { value = "lib/tool.py", script = false },\n'
+                              '  tool = { command = { "{{py}}", "{{tool.py}}", "caf\u00e9" } } }')
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool))
+        argv = json.loads(self.ok("product", "--manifest", m, "--run", "tool", "--",
+                                  "na\u00efve"))
+        self.assert_tool_argv(m, argv, ["caf\u00e9", "na\u00efve"])
 
     def test_user_managed_command_takes_arguments(self):
         """A user-managed product, its own interpreter included, gains fixed args."""
@@ -250,6 +268,64 @@ class TestProductCommand(EnvyTestCase):
         else:
             self.assert_tool_argv(m, out, ["", 'say "hi"'])
 
+    @unittest.skipIf(WINDOWS, "the decoy wrapper is a POSIX script")
+    def test_product_command_skips_the_products_wrapper_on_path(self):
+        """A bin dir already on PATH (CI adds it) holds the product's own wrapper."""
+        consumer = self.consumer_spec(
+            '{ product = "tool" }',
+            '  local r = envy.run(envy.product_command("tool"), { capture = true })\n'
+            "  out = envy.json.decode(r.stdout)")
+        m = self.manifest(("local.um@v1", self.bare_python()),
+                          ("local.consumer@v1", consumer))
+        env = self.path_env(self.decoy())
+        self.ok("install", "--manifest", m, env=env)
+        pkg = Path(self.ok("package", "local.consumer@v1", "--manifest", m,
+                           env=env).strip())
+        argv = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
+        self.assertEqual(argv, [self.lua_path(self.tool_py), "--fixed"])
+
+    @unittest.skipIf(WINDOWS, "the program it builds is a POSIX script")
+    def test_product_command_anchors_relative_path_entries_at_the_run_dir(self):
+        """envy.run runs from the phase's run dir; a relative PATH entry means there."""
+        um = self.write_spec("um.lua", self.user_spec(
+            "local.um@v1", '{ prog = "envy-test-rel-prog" }'))
+        consumer = self.consumer_spec(
+            '{ product = "prog" }',
+            "  envy.run([[mkdir -p rel && printf '#!/bin/sh\\necho hi\\n' "
+            "> rel/envy-test-rel-prog && chmod +x rel/envy-test-rel-prog]])\n"
+            '  local cmd = envy.product_command("prog")\n'
+            "  out = { cmd = cmd, ran = envy.run(cmd, { capture = true }).stdout }")
+        m = self.manifest(("local.um@v1", um), ("local.consumer@v1", consumer))
+        env = self.path_env("rel")
+        self.ok("install", "--manifest", m, env=env)
+        pkg = Path(self.ok("package", "local.consumer@v1", "--manifest", m,
+                           env=env).strip())
+        out = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
+        self.assertTrue(out["cmd"].startswith("/"), out)
+        self.assertTrue(out["cmd"].endswith("/rel/envy-test-rel-prog"), out)
+        self.assertEqual(out["ran"].strip(), "hi")
+
+    def test_a_pin_to_a_package_that_lacks_the_product_is_refused(self):
+        """`product = "py"` pinned to local.f@v1, which only depends on py's provider."""
+        f = self.write_spec(
+            "f.lua",
+            'IDENTITY = "local.f@v1"\n'
+            f'DEPENDENCIES = {{ {{ spec = "local.py@v1", '
+            f'source = "{self.lua_path(self.py_spec)}" }} }}\n'
+            "FETCH = function() end\nINSTALL = function() end\n")
+        pin = f'{{ product = "py", spec = "local.f@v1", source = "{self.lua_path(f)}" }}'
+        needle = "Product 'py' not found in provider 'local.f@v1'"
+
+        consumer = self.consumer_spec(
+            pin,
+            '  local ok, err = pcall(envy.product, "py")\n'
+            "  out = ok and \"allowed\" or err")
+        self.assertIn("envy.product: " + needle,
+                      self.out(self.manifest(("local.consumer@v1", consumer))))
+
+        tool = self.tool_spec('{ tool = { command = { "{{py}}", "x" } } }', deps=pin)
+        self.fails(self.manifest(("local.tool@v1", tool)), needle)
+
     @unittest.skipIf(WINDOWS, "a POSIX custom shell")
     def test_custom_default_shell_needs_a_named_shell(self):
         consumer = self.consumer_spec(
@@ -298,6 +374,11 @@ class TestProductCommand(EnvyTestCase):
         self.assertEqual(r.returncode, 0, f"{line}\n{r.stderr}")
         self.assert_tool_argv(m, json.loads(r.stdout), ["--fixed"])
 
+    def test_print_resolves_the_program_as_run_would(self):
+        m = self.manifest(("local.um@v1", self.bare_python()))
+        line = self.ok("product", "--manifest", m, "tool", env=self.path_env()).strip()
+        self.assertIn(_norm(PY.parent / PY.name), _norm(line.replace("'", "")))
+
     def test_json_lists_a_command_as_its_predicted_argv(self):
         m = self.standard()
         data = json.loads(self.ok("product", "--manifest", m, "--json"))
@@ -333,9 +414,18 @@ class TestProductCommand(EnvyTestCase):
                    "Product 'c' in spec 'local.tool@v1' is a command cycle: c -> b -> c")
 
     def test_command_for_another_platform_is_not_validated(self):
+        """Nor rendered: --json lists it as null, since nothing checked what it names."""
         other = "linux" if WINDOWS else "windows"
         tool = self.tool_spec(
             f'{{ tool = {{ command = {{ "{{{{nope}}}}" }}, platforms = {{ "{other}" }} }} }}')
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool))
+        self.ok("install", "--manifest", m)
+        self.assertIsNone(json.loads(self.ok("product", "--manifest", m, "--json"))["tool"])
+
+    def test_a_posix_absolute_program_loads_everywhere(self):
+        """`/usr/bin/env` has no drive on Windows, but it is not relative either."""
+        tool = self.tool_spec('{ tool = { command = { "/usr/bin/env", "true" }, '
+                              'platforms = { "linux", "darwin" } } }')
         m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool))
         self.ok("install", "--manifest", m)
 
@@ -363,6 +453,8 @@ class TestProductCommand(EnvyTestCase):
                 "PRODUCTS entry 'tool' command empty placeholder in '{{ }}'",
             '{ tool = { command = { "bin/tool" } } }':
                 "PRODUCTS entry 'tool' command starts with relative path 'bin/tool'",
+            '{ tool = { command = { "x", "a\\0b" } } }':
+                "Product 'tool' in spec 'local.tool@v1' renders an argument holding a NUL",
         }
         for products, needle in cases.items():
             with self.subTest(products=products):

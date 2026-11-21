@@ -4,6 +4,7 @@
 #include "env_ops.h"
 #include "lua_phase_context.h"
 #include "lua_shell.h"
+#include "manifest.h"
 #include "pkg.h"
 #include "pkg_env.h"
 #include "pkg_phase.h"
@@ -16,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <variant>
 
@@ -129,12 +131,23 @@ product_access authorize(char const *fn,
                    dep.provider->cfg->identity + "'");
   }
 
-  // A weak fallback may provide the product transitively, so the edge's package need not
-  // declare it; the declarer is in its closure, finished whenever the edge's package is.
-  if (pkg *const owner{ product_util_closure_provider(dep.provider, product_name) }) {
-    a.provider = owner;
-  }
+  // The declarer: the edge's package, or for a weak fallback one in its closure -- finished
+  // whenever the edge's package is. A pin to a package that lacks it is refused.
+  try {
+    if (pkg *const owner{ product_util_owner(consumer, product_name) }) {
+      a.provider = owner;
+    }
+  } catch (std::exception const &e) { throw a.refuse(e.what()); }
   return a;
+}
+
+// The project's bin dir, whose wrappers a product's own program must be searched past.
+std::filesystem::path bin_dir(engine const *eng) {
+  manifest const *const m{ eng ? eng->get_manifest() : nullptr };
+  if (!m || !m->meta.bin) { return {}; }
+  std::error_code ec;
+  auto bin{ std::filesystem::canonical(eng->project_root() / *m->meta.bin, ec) };
+  return ec ? std::filesystem::path{} : bin;
 }
 
 // The shell a product command is quoted for: the one named, else the phase's own, as
@@ -173,16 +186,23 @@ void lua_envy_product_install(sol::table &envy_table) {
     auto const a{ authorize("envy.product_command", product_name, ctx) };
     std::string const command{ [&] {
       try {
-        auto argv{ product_util_run_argv(a.provider, product_name) };
-        // A bare program resolves on the phase's PATH, as `--run` resolves it on the
-        // tool's: never a PowerShell alias (curl) or a cmd builtin (start) by that name.
-        if (!std::filesystem::path{ argv.front() }.has_parent_path()) {
+        std::string program;
+        auto argv{ product_util_run_argv(a.provider, product_name, &program) };
+        // A bare program resolves on the phase's PATH from its run dir, as `--run`
+        // resolves it on the tool's: never a PowerShell alias (curl), a cmd builtin
+        // (start), or the product's own wrapper by that name.
+        if (!util_path_from_utf8(argv.front()).has_parent_path()) {
           shell_env_t const env{ pkg_env_for_context(ctx) };
           std::string const *const path{ env_get(env, "PATH") };
-          auto const found{ shell_find_executable(argv.front(),
-                                                  path ? *path : std::string{}) };
+          auto const bin{ bin_dir(ctx->eng) };
+          auto found{ product_util_find_program(argv.front(),
+                                                program,
+                                                path ? *path : std::string{},
+                                                lua_phase_context_resolve(L, ".")
+                                                    .lexically_normal(),
+                                                bin.empty() ? nullptr : &bin) };
           if (!found) { throw std::runtime_error{ "'" + argv.front() + "' not on PATH" }; }
-          argv.front() = found->string();
+          argv.front() = std::move(*found);
         }
         return shell_quote_argv(argv, command_shell(shell_obj, ctx));
       } catch (std::exception const &e) { throw a.refuse(e.what()); }

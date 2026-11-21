@@ -9,6 +9,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <unordered_set>
 
 namespace envy {
 
@@ -264,6 +266,66 @@ TEST_CASE("product_util_argv refuses a self-cycle and a null provider") {
   CHECK_THROWS_WITH_AS(render(nullptr, "a"),
                        "Product 'a' has no provider",
                        std::runtime_error);
+}
+
+TEST_CASE("product_util_owner honors a pin, and only a weak fallback reaches further") {
+  auto app{ make_pkg("local.app@v1", pkg_type::CACHE_MANAGED) };
+  auto mid{ make_pkg("local.mid@v1", pkg_type::CACHE_MANAGED) };
+  auto leaf{ make_pkg("local.leaf@v1", pkg_type::CACHE_MANAGED) };
+  depend(app.get(), mid.get());
+  depend(mid.get(), leaf.get());
+  leaf->products["node"] = path("bin/node");
+  mid->products["npm"] = path("bin/npm");
+
+  CHECK(product_util_owner(app.get(), "node") == leaf.get());  // unpinned: the closure
+  CHECK(product_util_owner(app.get(), "nope") == nullptr);
+
+  app->product_dependencies["npm"] = { .name = "npm", .provider = mid.get() };
+  CHECK(product_util_owner(app.get(), "npm") == mid.get());  // pinned, declared
+
+  app->product_dependencies["node"] = { .name = "node", .provider = mid.get() };
+  CHECK_THROWS_WITH_AS(product_util_owner(app.get(), "node"),
+                       "Product 'node' not found in provider 'local.mid@v1'",
+                       std::runtime_error);
+  app->products["run"] = command({ "{{node}}" });  // a placeholder obeys the pin too
+  CHECK_THROWS_WITH_AS(render(app.get(), "run"),
+                       doctest::Contains("not found in provider 'local.mid@v1'"),
+                       std::runtime_error);
+
+  app->weak_references.push_back({ .query = "node",
+                                   .fallback = mid->cfg,
+                                   .resolved = mid.get(),
+                                   .is_product = true });
+  CHECK(product_util_owner(app.get(), "node") == leaf.get());  // the fallback's closure
+}
+
+TEST_CASE("product_util_validate walks each command once, however often spliced") {
+  // c0 splices c1 twice, c1 splices c2 twice, ...: expanded, 2^64 elements.
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  constexpr int kDepth{ 64 };
+  p->products["c" + std::to_string(kDepth)] = path("bin/leaf");
+  for (int i{ kDepth - 1 }; i >= 0; --i) {
+    std::string const next{ "{{c" + std::to_string(i + 1) + "}}" };
+    p->products["c" + std::to_string(i)] = command({ next, next });
+  }
+
+  std::unordered_set<std::string> validated;
+  product_util_validate(p.get(), "c0", validated);
+  CHECK(validated.size() == kDepth);
+  product_util_validate(p.get(), "c1", validated);  // already sound: no walk at all
+  CHECK(validated.size() == kDepth);
+}
+
+TEST_CASE("product_util_argv refuses a NUL, which no exec carries") {
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  p->products["tool"] = command({ "x", std::string{ "a\0b", 3 } });
+
+  CHECK_THROWS_WITH_AS(render(p.get(), "tool"),
+                       "Product 'tool' in spec 'local.p@v1' renders an argument holding "
+                       "a NUL, which no program receives intact",
+                       std::runtime_error);
+  std::unordered_set<std::string> validated;
+  CHECK_THROWS(product_util_validate(p.get(), "tool", validated));
 }
 
 TEST_CASE("product_util_argv refuses a name outside the provider's closure") {
