@@ -3,10 +3,7 @@
 #include "fetch.h"
 #include "util.h"
 
-#include <condition_variable>
-#include <exception>
 #include <filesystem>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -69,35 +66,6 @@ void aws_s3_upload(s3_upload_request const &request);
 // Throws, saying which sources failed and why, when transfers would go unsigned. Call
 // once before writes: unsigned ones fail per object, opaquely.
 void aws_credentials_require(std::string_view op);
-
-// Carries aws-c-* callbacks' throws across C frames: guard() keeps the first and runs
-// on_throw (cancel); wait() rethrows it once finish(), the library's last call, arrives.
-class c_completion : unmovable {
- public:
-  template <typename F, typename G>
-  void guard(F &&body, G &&on_throw) noexcept;
-  void finish() noexcept;
-  void wait();
-
- private:
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  bool done_{ false };
-  std::exception_ptr error_;
-};
-
-template <typename F, typename G>
-void c_completion::guard(F &&body, G &&on_throw) noexcept {
-  try {
-    body();
-  } catch (...) {
-    {
-      std::lock_guard const lock{ mutex_ };
-      if (!error_) { error_ = std::current_exception(); }
-    }
-    on_throw();
-  }
-}
 
 class aws_shutdown_guard : unmovable {
  public:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 import unittest
 
 from .env import EnvyTestCase
-from .s3_stub import BUCKET, S3Stub
+from .s3_stub import BUCKET, S3Stub, hermetic_env, s3_env
 
 
 class S3DownloadTest(EnvyTestCase):
@@ -25,7 +26,7 @@ class S3DownloadTest(EnvyTestCase):
             "fetch",
             f"s3://{bucket}/{key}",
             self.dest,
-            env={**os.environ, **(env if env is not None else self.stub.env())},
+            env=env if env is not None else self.stub.env(),
             timeout=60,
         )
 
@@ -138,10 +139,66 @@ class S3DownloadTest(EnvyTestCase):
         self.assertNotEqual(0, run.returncode)
         self.assertIn("HTTP 403", run.stderr)
         self.assertIn(
-            "SSO session for profile 'envy-test-expired' expired at 2020-01-01T00:00:00Z",
+            "SSO token for profile 'envy-test-expired' expired at 2020-01-01T00:00:00Z",
             run.stderr,
         )
         self.assertIn("aws sso login", run.stderr)
+
+    def test_checksum_s3_stored_is_validated(self) -> None:
+        payload = os.urandom(4096)
+        self.stub.objects["summed.bin"] = payload
+        self.stub.checksum = "good"
+        self.assertEqual(0, self.fetch("summed.bin").returncode)
+        self.assertEqual(payload, self.dest.read_bytes())
+
+        self.stub.checksum = "bad"
+        run = self.fetch("summed.bin")
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("checksum", run.stderr.lower())
+        self.assertFalse(self.dest.exists(), "bytes that failed their checksum were kept")
+
+    def test_throttled_request_is_retried_by_envy(self) -> None:
+        """aws-c-s3 retries only 500/503; 429/502/504 go through envy's fetch policy."""
+        self.stub.objects["busy.bin"] = b"after a pause"
+        self.stub.get_failures = 1
+        self.stub.get_failure_status = 429
+        env = {**self.stub.env(), "ENVY_FETCH_ATTEMPTS": "3", "ENVY_FETCH_RETRY_BASE_MS": "10"}
+
+        run = self.fetch("busy.bin", env=env)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(b"after a pause", self.dest.read_bytes())
+
+    def test_exhausted_retries_report_the_last_error(self) -> None:
+        self.stub.objects["down.bin"] = b"never"
+        self.stub.get_failures = 99
+
+        run = self.fetch("down.bin")
+
+        # aws-c-s3 ends a retried-out 500 with its own error and no status: name the host.
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("internal server error", run.stderr)
+        self.assertIn(f"http://127.0.0.1:{self.stub.port}", run.stderr)
+
+    def test_unreachable_endpoint_is_named(self) -> None:
+        with socket.socket() as s:  # a port nothing listens on once closed
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        run = self.fetch("key", env=hermetic_env(s3_env(port)))
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn(f"http://127.0.0.1:{port}", run.stderr)
+
+    def test_bucket_in_another_region_names_it(self) -> None:
+        self.stub.head_override = (301, {"x-amz-bucket-region": "eu-west-1"})
+
+        run = self.fetch("key")
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("HTTP 301", run.stderr)
+        self.assertIn("the bucket is in eu-west-1", run.stderr)
+        self.assertIn("AWS_DEFAULT_REGION=eu-west-1", run.stderr)
 
 
 if __name__ == "__main__":

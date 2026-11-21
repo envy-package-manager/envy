@@ -53,6 +53,7 @@ int main(int argc, char *argv[]) {
 
       cmd->execute();
     } catch (envy::reexec_request const &rr) {
+      envy::aws_shutdown();  // aws-c-io's sockets and pipes aren't close-on-exec
       return envy::reexec_exec(rr, argv);
     } catch (envy::exec_request &er) {
       exec = std::move(er);

@@ -106,7 +106,11 @@ void cmd_version::execute() {
   tui::info("  bzip2: %s", BZ2_bzlibVersion());
   tui::info("  zstd: %s", ZSTD_versionString());
   tui::info("  liblzma: %s", lzma_version_string());
-  tui::info("  aws-c-s3: %s", ENVY_AWS_C_S3_VERSION);
+  if constexpr (sizeof(ENVY_AWS_C_TLS) > 1) {  // Linux builds its own TLS for S3
+    tui::info("  aws-c-s3: %s (TLS: %s)", ENVY_AWS_C_S3_VERSION, ENVY_AWS_C_TLS);
+  } else {
+    tui::info("  aws-c-s3: %s", ENVY_AWS_C_S3_VERSION);
+  }
 
   nsv_semver_t const nsv_version = NSV_VERSION_LIT;
   tui::info("  nanosemver: %u.%u.%u",

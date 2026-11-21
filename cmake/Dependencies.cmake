@@ -203,6 +203,7 @@ endif()
 target_compile_definitions(envy_thirdparty INTERFACE
     $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:CURL_STATICLIB>
     ENVY_AWS_C_S3_VERSION="${ENVY_AWS_C_S3_VERSION}"
+    ENVY_AWS_C_TLS="${ENVY_AWS_C_TLS}"
 )
 
 target_include_directories(envy_thirdparty INTERFACE

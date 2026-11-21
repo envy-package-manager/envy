@@ -1,15 +1,20 @@
 #include "aws_util.h"
 
+#include "c_completion.h"
+#include "fetch_error.h"
+#include "tui.h"
 #include "util.h"
 
 #include "aws/auth/auth.h"
 #include "aws/auth/credentials.h"
+#include "aws/auth/private/credentials_utils.h"
 #include "aws/auth/private/sso_token_utils.h"
 #include "aws/auth/signing_config.h"
 #include "aws/common/date_time.h"
 #include "aws/common/error.h"
 #include "aws/common/thread.h"
 #include "aws/common/uri.h"
+#include "aws/http/connection_manager.h"
 #include "aws/http/proxy.h"
 #include "aws/http/request_response.h"
 #include "aws/io/channel_bootstrap.h"
@@ -23,6 +28,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -58,17 +64,22 @@ void append_hint(std::ostringstream &msg,
                  std::string_view name,
                  int http_code,
                  bool writing,
-                 std::string_view denied = {}) {
+                 std::string_view denied,
+                 std::string_view bucket_region) {
   if (name == "NoSuchBucket") {
     msg << "\n  Hint: the bucket does not exist. envy never creates buckets.";
   } else if (http_code == 404 && name.empty()) {  // a HEAD's 404 carries no S3 code
     msg << "\n  Hint: no such object, or no such bucket.";
   } else if (name == "PermanentRedirect" || name == "AuthorizationHeaderMalformed" ||
-             http_code == 301) {
-    // Region resolution falls back to us-east-1, so a bucket elsewhere fails as a
-    // redirect rather than as "region not set".
-    msg << "\n  Hint: the bucket is in a different region. Set AWS_REGION (or a profile"
-           " region); envy defaults to us-east-1.";
+             http_code == 301 || (http_code == 400 && !bucket_region.empty())) {
+    // S3 names the bucket's region in x-amz-bucket-region, even on a bodiless HEAD.
+    if (bucket_region.empty()) {
+      msg << "\n  Hint: the bucket is in a different region. Set AWS_DEFAULT_REGION (or a"
+             " profile region); envy defaults to us-east-1.";
+    } else {
+      msg << "\n  Hint: the bucket is in " << bucket_region << ". Set AWS_DEFAULT_REGION="
+          << bucket_region << " and retry.";
+    }
   } else if ((http_code == 401 || http_code == 403) && !denied.empty()) {
     msg << "\n  Hint: " << denied;
   } else if (http_code == 401 || http_code == 403) {
@@ -98,7 +109,9 @@ char const *content_type_for(std::filesystem::path const &p) {
 
 // --- aws-c-s3 ------------------------------------------------------------------------
 
-constexpr std::uint64_t kProgressInterval{ 1 << 17 };  // 128 KB between progress reports
+// Downloads use small ranges: aws-c-s3 reports progress only as each range completes.
+constexpr std::uint64_t kDownloadPartSize{ 2 * 1024 * 1024 };
+constexpr std::uint32_t kConnectionsPerTransfer{ 8 };  // of the client's 16: no hogging
 
 aws_byte_cursor to_cursor(std::string_view s) {
   return aws_byte_cursor_from_array(s.data(), s.size());
@@ -117,208 +130,251 @@ std::string_view env_value(char const *name) {  // unset and empty read alike
   throw_runtime_error({ op, ": ", what, ": ", aws_error_str(aws_last_error()) });
 }
 
+// Owning handles: each aws-c-* object envy holds is released exactly once, throw or not.
+template <auto Release>
+struct aws_release {
+  template <typename T>
+  void operator()(T *p) const noexcept {
+    Release(p);
+  }
+};
+template <typename T, auto Release>
+using aws_ptr = std::unique_ptr<T, aws_release<Release>>;
+using provider_ptr = aws_ptr<aws_credentials_provider, &aws_credentials_provider_release>;
+using string_ptr = aws_ptr<aws_string, &aws_string_destroy>;
+
+// aws-c-auth's credential HTTP bounds the connect but not the response, so a proxy that
+// accepts and never answers would stall signing forever; every provider builds here.
+aws_http_connection_manager *bounded_connection_manager(
+    aws_allocator *alloc,
+    aws_http_connection_manager_options const *options) noexcept {
+  auto bounded{ *options };
+  if (!bounded.response_first_byte_timeout_ms) {
+    bounded.response_first_byte_timeout_ms = 10'000;
+  }
+  return aws_http_connection_manager_new(alloc, &bounded);
+}
+
+aws_auth_http_system_vtable *auth_http() {  // static: providers shut down after envy lets go
+  static aws_auth_http_system_vtable table{ [] {
+    auto t{ *g_aws_credentials_provider_http_function_table };
+    t.aws_http_connection_manager_new = bounded_connection_manager;
+    return t;
+  }() };
+  return &table;
+}
+
+struct credentials_diagnosis {
+  std::vector<std::string> failures;  // "<source>: <why>"
+  std::string sso_expired_at;         // set when the SSO token has lapsed
+};
+
 // The aws-c-* stack behind S3, built on first use: one event loop group, resolver,
 // bootstrap, TLS context, credential chain and client serve every transfer.
 struct crt_stack : unmovable {
   aws_allocator *alloc{ aws_default_allocator() };
-  std::string profile;   // AWS_PROFILE, else "default"
-  std::string region;    // for requests that name none
-  std::string endpoint;  // AWS_ENDPOINT_URL_S3 / AWS_ENDPOINT_URL; empty means AWS
+  std::string profile;         // AWS_PROFILE, AWS_DEFAULT_PROFILE, else "default"
+  std::string region;          // for requests that name none
+  std::string endpoint;        // AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, profile; else AWS
+  std::string sso_expired_at;  // the profile's cached SSO token had lapsed at startup
   proxy_env_var_settings proxy{ .env_var_type = AWS_HPEV_ENABLE };  // HTTPS_PROXY et al.
-  aws_event_loop_group *elg{};
-  aws_host_resolver *resolver{};
-  aws_client_bootstrap *bootstrap{};
-  aws_tls_ctx *tls{};
-  aws_credentials_provider *credentials{};
-  aws_s3_client *client{};
+  aws_ptr<aws_event_loop_group, &aws_event_loop_group_release> elg;  // members release
+  aws_ptr<aws_host_resolver, &aws_host_resolver_release> resolver;  // bottom-up; aws-c-*
+  aws_ptr<aws_client_bootstrap, &aws_client_bootstrap_release> bootstrap;  // winds down
+  aws_ptr<aws_tls_ctx, &aws_tls_ctx_release> tls;  // on its own threads
+  provider_ptr credentials;
+  aws_ptr<aws_s3_client, &aws_s3_client_release> client;
+  std::once_flag diagnosed;  // credential failures are diagnosed once per run
+  credentials_diagnosis diagnosis;
 
   void build();
-
-  ~crt_stack() {  // Releases only: aws-c-* winds down on its own threads.
-    aws_s3_client_release(client);
-    aws_credentials_provider_release(credentials);
-    aws_tls_ctx_release(tls);
-    aws_client_bootstrap_release(bootstrap);
-    aws_host_resolver_release(resolver);
-    aws_event_loop_group_release(elg);
-  }
 };
 
 // A property of the active profile in the config file, or empty.
 std::string profile_property(aws_allocator *alloc,
                              std::string const &profile,
                              char const *property) {
-  aws_string *const path{ aws_get_config_file_path(alloc, nullptr) };
-  aws_profile_collection *const config{
-    path ? aws_profile_collection_new_from_file(alloc, path, AWS_PST_CONFIG) : nullptr
+  string_ptr const path{ aws_get_config_file_path(alloc, nullptr) };
+  aws_ptr<aws_profile_collection, &aws_profile_collection_release> const config{
+    path ? aws_profile_collection_new_from_file(alloc, path.get(), AWS_PST_CONFIG)
+         : nullptr
   };
-  aws_string *const name{ aws_string_new_from_c_str(alloc, profile.c_str()) };
-  aws_string *const key{ aws_string_new_from_c_str(alloc, property) };
-  auto const *const entry{ config ? aws_profile_collection_get_profile(config, name)
-                                  : nullptr };
-  auto const *const value{ entry ? aws_profile_get_property(entry, key) : nullptr };
-  std::string out{ value ? aws_string_c_str(aws_profile_property_get_value(value)) : "" };
-  aws_string_destroy(key);
-  aws_string_destroy(name);
-  aws_profile_collection_release(config);
-  aws_string_destroy(path);
-  return out;
+  string_ptr const name{ aws_string_new_from_c_str(alloc, profile.c_str()) };
+  string_ptr const key{ aws_string_new_from_c_str(alloc, property) };
+  auto const *const entry{
+    config && name ? aws_profile_collection_get_profile(config.get(), name.get()) : nullptr
+  };
+  auto const *const value{ entry && key ? aws_profile_get_property(entry, key.get())
+                                        : nullptr };
+  return value ? aws_string_c_str(aws_profile_property_get_value(value)) : "";
 }
 
 // The lapsed expiry (ISO 8601) of the profile's cached SSO token, else empty. Read here:
 // aws-c-auth dials the SSO portal before checking it, so offline it reads as a DNS error.
-std::string sso_expired_at(aws_allocator *alloc, std::string const &profile) {
+std::string lapsed_sso_token(aws_allocator *alloc, std::string const &profile) {
   auto const key{ [&] {  // what names the cache file
     auto session{ profile_property(alloc, profile, "sso_session") };
     return session.empty() ? profile_property(alloc, profile, "sso_start_url") : session;
   }() };
   if (key.empty()) { return {}; }
-  aws_string *const input{ aws_string_new_from_c_str(alloc, key.c_str()) };
-  aws_string *const path{ aws_construct_sso_token_path(alloc, input) };
-  aws_sso_token *const token{ path ? aws_sso_token_new_from_file(alloc, path) : nullptr };
+  string_ptr const input{ aws_string_new_from_c_str(alloc, key.c_str()) };
+  string_ptr const path{ input ? aws_construct_sso_token_path(alloc, input.get())
+                               : nullptr };
+  aws_ptr<aws_sso_token, &aws_sso_token_destroy> const token{
+    path ? aws_sso_token_new_from_file(alloc, path.get()) : nullptr
+  };
   aws_date_time now;
   aws_date_time_init_now(&now);
-  std::string const out{ [&]() -> std::string {
-    if (!token || aws_date_time_diff(&token->expiration, &now) > 0) { return {}; }
-    std::uint8_t text[AWS_DATE_TIME_STR_MAX_LEN]{};
-    auto buf{ aws_byte_buf_from_empty_array(text, sizeof text) };
-    return aws_date_time_to_utc_time_str(&token->expiration,
-                                         AWS_DATE_FORMAT_ISO_8601,
-                                         &buf)
-               ? std::string{ "an unknown time" }
-               : std::string{ to_view(aws_byte_cursor_from_buf(&buf)) };
-  }() };
-  aws_sso_token_destroy(token);
-  aws_string_destroy(path);
-  aws_string_destroy(input);
-  return out;
+  if (!token || aws_date_time_diff(&token->expiration, &now) > 0) { return {}; }
+  std::uint8_t text[AWS_DATE_TIME_STR_MAX_LEN]{};
+  auto buf{ aws_byte_buf_from_empty_array(text, sizeof text) };
+  return aws_date_time_to_utc_time_str(&token->expiration, AWS_DATE_FORMAT_ISO_8601, &buf)
+             ? std::string{ "an unknown time" }
+             : std::string{ to_view(aws_byte_cursor_from_buf(&buf)) };
 }
 
 // A credential source, by the name its failure is reported under.
 struct named_provider {
   char const *name;
-  aws_credentials_provider *provider;
+  provider_ptr provider;
 };
 
-// The AWS default chain minus IMDS and ECS, which blackhole off AWS; SSO explicit, as the
-// C profile provider skips it. Only configured sources (and environment) construct.
+// The AWS default chain minus IMDS and ECS, which blackhole off AWS. The profile source
+// runs credential_process itself; SSO is explicit, as the C profile provider skips it.
 std::vector<named_provider> credential_sources(crt_stack &s) {
   std::vector<named_provider> out;
   auto const add{ [&](char const *name, aws_credentials_provider *p) {
-    if (p) { out.push_back({ name, p }); }
+    provider_ptr owned{ p };  // owned before push_back can throw
+    if (owned) { out.push_back({ name, std::move(owned) }); }
   } };
+  auto const profile_name{ to_cursor(s.profile) };
   aws_credentials_provider_environment_options const env{};
   add("environment", aws_credentials_provider_new_environment(s.alloc, &env));
   aws_credentials_provider_profile_options profile{};
-  profile.bootstrap = s.bootstrap;
-  profile.tls_ctx = s.tls;
+  profile.profile_name_override = profile_name;
+  profile.bootstrap = s.bootstrap.get();
+  profile.tls_ctx = s.tls.get();
+  profile.function_table = auth_http();
   profile.proxy_ev_settings = &s.proxy;
   add("profile", aws_credentials_provider_new_profile(s.alloc, &profile));
-  aws_credentials_provider_process_options const process{};
-  add("credential_process", aws_credentials_provider_new_process(s.alloc, &process));
   aws_credentials_provider_sts_web_identity_options web{};
-  web.bootstrap = s.bootstrap;
-  web.tls_ctx = s.tls;
+  web.bootstrap = s.bootstrap.get();
+  web.tls_ctx = s.tls.get();
   web.proxy_ev_settings = &s.proxy;
+  web.function_table = auth_http();
+  web.profile_name_override = profile_name;
   web.region = to_cursor(s.region);
   add("web identity", aws_credentials_provider_new_sts_web_identity(s.alloc, &web));
-  aws_credentials_provider_sso_options sso{};
-  sso.bootstrap = s.bootstrap;
-  sso.tls_ctx = s.tls;
-  sso.proxy_ev_settings = &s.proxy;
-  add("sso", aws_credentials_provider_new_sso(s.alloc, &sso));
+  if (s.sso_expired_at.empty()) {  // a lapsed token would only send it to the portal
+    aws_credentials_provider_sso_options sso{};
+    sso.profile_name_override = profile_name;
+    sso.bootstrap = s.bootstrap.get();
+    sso.tls_ctx = s.tls.get();
+    sso.proxy_ev_settings = &s.proxy;
+    sso.function_table = auth_http();
+    add("sso", aws_credentials_provider_new_sso(s.alloc, &sso));
+  }
   return out;
 }
 
 void crt_stack::build() {
   constexpr std::string_view kOp{ "aws" };
-
-  aws_string *const name{ aws_get_profile_name(alloc, nullptr) };
-  profile = name ? aws_string_c_str(name) : "default";
-  aws_string_destroy(name);
-  region = [&] {  // The order the SDK resolves it in, IMDS excepted.
-    for (char const *var : { "AWS_DEFAULT_REGION", "AWS_REGION" }) {
+  auto const first_set{ [](std::initializer_list<char const *> vars) {
+    for (char const *var : vars) {
       if (auto const v{ env_value(var) }; !v.empty()) { return std::string{ v }; }
     }
-    auto from_profile{ profile_property(alloc, profile, "region") };
-    return from_profile.empty() ? std::string{ "us-east-1" } : from_profile;
-  }();
-  if (env_value("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") != "true") {
-    auto const s3{ env_value("AWS_ENDPOINT_URL_S3") };
-    endpoint = s3.empty() ? env_value("AWS_ENDPOINT_URL") : s3;
-  }
+    return std::string{};
+  } };
 
-  aws_event_loop_group_options const elg_options{};  // a loop per core
-  elg = aws_event_loop_group_new(alloc, &elg_options);
+  profile = first_set({ "AWS_PROFILE", "AWS_DEFAULT_PROFILE" });
+  if (profile.empty()) { profile = "default"; }
+  region = first_set({ "AWS_DEFAULT_REGION", "AWS_REGION" });  // the SDK's order, no IMDS
+  if (region.empty()) { region = profile_property(alloc, profile, "region"); }
+  if (region.empty()) { region = "us-east-1"; }
+  if (auto const ignore{ env_value("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") };
+      !(ignore.size() == 4 && istarts_with(ignore, "true"))) {
+    endpoint = first_set({ "AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL" });
+    if (endpoint.empty()) { endpoint = profile_property(alloc, profile, "endpoint_url"); }
+  }
+  sso_expired_at = lapsed_sso_token(alloc, profile);
+
+  aws_event_loop_group_options const elg_options{ .loop_count = 4 };  // for 16 connections
+  elg.reset(aws_event_loop_group_new(alloc, &elg_options));
   if (!elg) { throw_aws_error(kOp, "event loop group"); }
   aws_host_resolver_default_options const resolver_options{ .max_entries = 16,
-                                                            .el_group = elg };
-  resolver = aws_host_resolver_new_default(alloc, &resolver_options);
+                                                            .el_group = elg.get() };
+  resolver.reset(aws_host_resolver_new_default(alloc, &resolver_options));
   if (!resolver) { throw_aws_error(kOp, "host resolver"); }
-  aws_client_bootstrap_options const bootstrap_options{ .event_loop_group = elg,
-                                                        .host_resolver = resolver };
-  bootstrap = aws_client_bootstrap_new(alloc, &bootstrap_options);
+  aws_client_bootstrap_options const bootstrap_options{ .event_loop_group = elg.get(),
+                                                        .host_resolver = resolver.get() };
+  bootstrap.reset(aws_client_bootstrap_new(alloc, &bootstrap_options));
   if (!bootstrap) { throw_aws_error(kOp, "client bootstrap"); }
   aws_tls_ctx_options tls_options;
   aws_tls_ctx_options_init_default_client(&tls_options, alloc);
-  tls = aws_tls_client_ctx_new(alloc, &tls_options);
+  tls.reset(aws_tls_client_ctx_new(alloc, &tls_options));
   aws_tls_ctx_options_clean_up(&tls_options);
   if (!tls) { throw_aws_error(kOp, "TLS context"); }
 
   // Anonymous last: with nothing configured, requests go unsigned and public objects
-  // still download. Cached, so the chain runs once per expiry rather than per request.
+  // still download. The chain acquires each member; `chain` releases envy's refs.
   auto chain{ credential_sources(*this) };
   aws_credentials_provider_shutdown_options const no_shutdown{};
   chain.push_back(
-      { "anonymous", aws_credentials_provider_new_anonymous(alloc, &no_shutdown) });
+      { "anonymous",
+        provider_ptr{ aws_credentials_provider_new_anonymous(alloc, &no_shutdown) } });
   std::vector<aws_credentials_provider *> members;
   for (auto const &source : chain) {
-    if (source.provider) { members.push_back(source.provider); }
+    if (source.provider) { members.push_back(source.provider.get()); }
   }
   aws_credentials_provider_chain_options const chain_options{ .providers = members.data(),
                                                               .provider_count =
                                                                   members.size() };
-  auto *const linked{ aws_credentials_provider_new_chain(alloc, &chain_options) };
-  for (auto *member : members) { aws_credentials_provider_release(member); }
+  provider_ptr const linked{ aws_credentials_provider_new_chain(alloc, &chain_options) };
   if (!linked) { throw_aws_error(kOp, "credential chain"); }
-  aws_credentials_provider_cached_options const cached_options{ .source = linked };
-  credentials = aws_credentials_provider_new_cached(alloc, &cached_options);
-  aws_credentials_provider_release(linked);
+  // Cached, so the chain runs per expiry, not per request; the refresh bounds how long a
+  // transient failure (cached as anonymous) leaves requests unsigned.
+  aws_credentials_provider_cached_options const cached_options{
+    .source = linked.get(), .refresh_time_in_milliseconds = 60'000
+  };
+  credentials.reset(aws_credentials_provider_new_cached(alloc, &cached_options));
   if (!credentials) { throw_aws_error(kOp, "credential cache"); }
 
-  // AWS_MAX_ATTEMPTS as the SDK reads it; aws-c-io can't express zero retries.
-  aws_retry_strategy *const retry{ [&]() -> aws_retry_strategy * {
-    auto const text{ env_value("AWS_MAX_ATTEMPTS") };
-    std::size_t attempts{ 0 };
-    std::from_chars(text.data(), text.data() + text.size(), attempts);
-    if (attempts == 0) { return nullptr; }  // aws-c-s3's default: 5 retries
-    aws_standard_retry_options options{};
-    options.backoff_retry_options.el_group = elg;
-    options.backoff_retry_options.max_retries = std::max<std::size_t>(attempts - 1, 1);
-    auto *const strategy{ aws_retry_strategy_new_standard(alloc, &options) };
-    if (!strategy) { throw_aws_error(kOp, "retry strategy"); }
-    return strategy;
-  }() };
+  // AWS_MAX_ATTEMPTS as the SDK reads it; aws-c-io caps retries at 63.
+  aws_ptr<aws_retry_strategy, &aws_retry_strategy_release> const retry{
+    [&]() -> aws_retry_strategy * {
+      auto const text{ env_value("AWS_MAX_ATTEMPTS") };
+      std::size_t attempts{ 0 };
+      std::from_chars(text.data(), text.data() + text.size(), attempts);
+      if (attempts == 0) { return nullptr; }  // aws-c-s3's default: 5 retries
+      aws_no_retry_options const no_retry{};
+      aws_standard_retry_options standard{};
+      standard.backoff_retry_options.el_group = elg.get();
+      standard.backoff_retry_options.max_retries = std::min<std::size_t>(attempts - 1, 63);
+      auto *const strategy{ attempts == 1 ? aws_retry_strategy_new_no_retry(alloc, &no_retry)
+                                          : aws_retry_strategy_new_standard(alloc, &standard) };
+      if (!strategy) { throw_aws_error(kOp, "retry strategy"); }
+      return strategy;
+    }()
+  };
 
   aws_tls_connection_options tls_connection;
-  aws_tls_connection_options_init_from_ctx(&tls_connection, tls);
+  aws_tls_connection_options_init_from_ctx(&tls_connection, tls.get());
   aws_signing_config_aws signing;
-  aws_s3_init_default_signing_config(&signing, to_cursor(region), credentials);
+  aws_s3_init_default_signing_config(&signing, to_cursor(region), credentials.get());
   aws_s3_client_config client_config{};
   client_config.region = to_cursor(region);
-  client_config.client_bootstrap = bootstrap;
+  client_config.client_bootstrap = bootstrap.get();
   client_config.tls_mode = AWS_MR_TLS_ENABLED;
   client_config.tls_connection_options = &tls_connection;
   client_config.signing_config = &signing;
-  client_config.retry_strategy = retry;
-  // aws-sdk-cpp's TransferManager ran 8 threads of 5 MiB parts. Left alone, aws-c-s3 sizes
-  // ranges for 10 Gbps with up to 2 GiB of buffers; a package manager wants neither.
+  client_config.retry_strategy = retry.get();
+  // Uploads take 8 MiB parts (S3's floor is 5). Left alone, aws-c-s3 sizes ranges for
+  // 10 Gbps; capped, at most 16 connections x 4 in flight x part size are buffered.
   client_config.part_size = 8 * 1024 * 1024;
-  client_config.max_active_connections_override = 8;
+  client_config.max_active_connections_override = 2 * kConnectionsPerTransfer;
   client_config.proxy_ev_settings = &proxy;
-  client = aws_s3_client_new(alloc, &client_config);
+  client.reset(aws_s3_client_new(alloc, &client_config));
   aws_tls_connection_options_clean_up(&tls_connection);
-  aws_retry_strategy_release(retry);
   if (!client) { throw_aws_error(kOp, "S3 client"); }
 }
 
@@ -342,6 +398,7 @@ crt_stack &crt_get() {
 struct resolved_credentials {
   int error{ AWS_ERROR_SUCCESS };
   bool anonymous{ false };
+  bool expired{ false };  // a cache or credential_process can return lapsed ones
 };
 
 // One provider's answer, waited for.
@@ -350,17 +407,25 @@ resolved_credentials resolve_credentials(aws_credentials_provider *provider) {
     c_completion done;
     resolved_credentials result;
   } w;
-  auto const on_credentials{
-    +[](aws_credentials *credentials, int error, void *user) noexcept {
-      auto &w{ *static_cast<waiter *>(user) };
-      w.result =
-          credentials
-              ? resolved_credentials{ AWS_ERROR_SUCCESS,
-                                      aws_credentials_is_anonymous(credentials) }
-              : resolved_credentials{ error ? error : AWS_AUTH_SIGNING_NO_CREDENTIALS };
-      w.done.finish();
-    }
-  };
+  auto const on_credentials{ +[](aws_credentials *credentials,
+                                 int error,
+                                 void *user) noexcept {
+    auto &w{ *static_cast<waiter *>(user) };
+    auto const expiry{ credentials ? aws_credentials_get_expiration_timepoint_seconds(
+                                         credentials)
+                                   : UINT64_MAX };
+    auto const now{ static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count()) };
+    w.result = !credentials ? resolved_credentials{ error ? error
+                                                          : AWS_AUTH_SIGNING_NO_CREDENTIALS }
+               : expiry <= now
+                   ? resolved_credentials{ AWS_AUTH_SIGNING_INVALID_CREDENTIALS, false, true }
+                   : resolved_credentials{ AWS_ERROR_SUCCESS,
+                                           aws_credentials_is_anonymous(credentials) };
+    w.done.finish();
+  } };
   if (aws_credentials_provider_get_credentials(provider, on_credentials, &w)) {
     return { aws_last_error() };
   }
@@ -368,43 +433,50 @@ resolved_credentials resolve_credentials(aws_credentials_provider *provider) {
   return w.result;
 }
 
-struct credentials_diagnosis {
-  std::vector<std::string> failures;  // "<source>: <why>"
-  std::string sso_expired_at;         // set when the SSO session has lapsed
-};
-
 // Why no source produced credentials, source by source: the chain reports only its last
 // member's error. Empty when one works -- then credentials aren't the problem.
 credentials_diagnosis diagnose_credentials(crt_stack &s) {
-  credentials_diagnosis out;
-  bool any_worked{ false };
-  for (auto const &[name, provider] : credential_sources(s)) {
+  auto const sources{ credential_sources(s) };
+  bool const sso_profile{ !s.sso_expired_at.empty() ||
+                          std::ranges::any_of(sources, [](named_provider const &p) {
+                            return std::string_view{ p.name } == "sso";
+                          }) };
+  credentials_diagnosis out{ .sso_expired_at = s.sso_expired_at };
+  for (auto const &[name, provider] : sources) {
     std::string_view const source{ name };
-    auto const expired{ source == "sso" ? sso_expired_at(s.alloc, s.profile) : "" };
-    auto const result{ expired.empty()
-                           ? resolve_credentials(provider)
-                           : resolved_credentials{ AWS_AUTH_SSO_TOKEN_EXPIRED } };
-    aws_credentials_provider_release(provider);
-    any_worked |= result.error == AWS_ERROR_SUCCESS;
-    // The environment source always exists; quote it only when it was meant to answer.
-    if (result.error == AWS_ERROR_SUCCESS ||
-        (source == "environment" && env_value("AWS_ACCESS_KEY_ID").empty())) {
+    auto const result{ resolve_credentials(provider.get()) };
+    if (result.error == AWS_ERROR_SUCCESS) { return {}; }
+    // Quote only sources meant to answer: environment always constructs, and an SSO
+    // profile's static-key lookup fails by design.
+    if ((source == "environment" && env_value("AWS_ACCESS_KEY_ID").empty()) ||
+        (source == "profile" && sso_profile)) {
       continue;
     }
-    if (!expired.empty()) { out.sso_expired_at = expired; }
-    out.failures.push_back(std::string{ source } + ": " + aws_error_str(result.error));
+    out.failures.push_back(std::string{ source } + ": " +
+                           (result.expired ? "credentials have expired"
+                                           : aws_error_str(result.error)));
   }
-  return any_worked ? credentials_diagnosis{} : out;
+  return out;
+}
+
+credentials_diagnosis const &diagnosis_of(crt_stack &s) {
+  std::call_once(s.diagnosed, [&] { s.diagnosis = diagnose_credentials(s); });
+  return s.diagnosis;
 }
 
 std::string sso_expired_hint(crt_stack const &s, std::string const &expired_at) {
-  return "the AWS SSO session for profile '" + s.profile + "' expired at " + expired_at +
-         ". Run 'aws sso login' and retry.";
+  return "the cached AWS SSO token for profile '" + s.profile + "' expired at " +
+         expired_at + ". Run 'aws sso login' and retry.";
 }
 
-// What a 401/403 should say when the request went unsigned for want of credentials.
+// What a 401/403 should say when the request went unsigned for want of credentials;
+// empty when it was signed, since then the policy, not the credentials, refused it.
 std::string denied_hint(crt_stack &s) {
-  auto const diagnosis{ diagnose_credentials(s) };
+  if (auto const r{ resolve_credentials(s.credentials.get()) };
+      r.error == AWS_ERROR_SUCCESS && !r.anonymous) {
+    return {};
+  }
+  auto const &diagnosis{ diagnosis_of(s) };
   if (!diagnosis.sso_expired_at.empty()) {
     return sso_expired_hint(s, diagnosis.sso_expired_at);
   }
@@ -416,27 +488,53 @@ std::string denied_hint(crt_stack &s) {
       " AWS_SECRET_ACCESS_KEY.");
 }
 
+// How a meta request ended, as its finish callback reported it.
+struct s3_outcome {
+  int error_code{ AWS_ERROR_SUCCESS };
+  int status{ 0 };
+  std::string body;           // S3's XML error, when it sent one
+  std::string bucket_region;  // x-amz-bucket-region: where a misrouted bucket lives
+};
+
 [[noreturn]] void throw_s3_failure(crt_stack &crt,
                                    std::string_view op,
                                    bool writing,
-                                   int error_code,
-                                   int status,
-                                   std::string_view body) {
-  auto const error{ aws_s3_parse_error(body) };
+                                   s3_outcome const &outcome,
+                                   std::string_view url,
+                                   std::string_view local) {
+  auto const error{ aws_s3_parse_error(outcome.body) };
   std::ostringstream msg;
   msg << op << ": transfer failed";
-  if (!error.code.empty()) { msg << ": " << error.code; }
-  if (!error.message.empty() && error.message != error.code) {
-    msg << ": " << error.message;
-  } else if (error.code.empty() && error_code != AWS_ERROR_S3_INVALID_RESPONSE_STATUS) {
-    msg << ": " << aws_error_str(error_code);  // no response at all: say why
+  if (outcome.error_code == AWS_ERROR_S3_OBJECT_MODIFIED) {
+    msg << ": the object changed during the download; retry";
+  } else if (outcome.error_code == AWS_OP_ERR || outcome.error_code == AWS_ERROR_UNKNOWN) {
+    // aws-c-s3 reports a failed fwrite/fread as a bare -1.
+    msg << ": I/O failed on " << local << (writing ? "" : " (disk full, or not writable?)");
+  } else {
+    if (!error.code.empty()) { msg << ": " << error.code; }
+    if (!error.message.empty() && error.message != error.code) {
+      msg << ": " << error.message;
+    } else if (error.code.empty() &&
+               outcome.error_code != AWS_ERROR_S3_INVALID_RESPONSE_STATUS) {
+      msg << ": " << aws_error_str(outcome.error_code);  // no response at all: say why
+    }
   }
-  if (status > 0) { msg << " (HTTP " << status << ")"; }
+  if (outcome.status > 0) {
+    msg << " (HTTP " << outcome.status << ")";
+  } else {
+    msg << " (" << url << ")";
+  }
+  bool const denied{ outcome.status == 401 || outcome.status == 403 };
   append_hint(msg,
               error.code,
-              status,
+              outcome.status,
               writing,
-              status == 401 || status == 403 ? denied_hint(crt) : std::string{});
+              denied ? denied_hint(crt) : std::string{},
+              outcome.bucket_region);
+  // What aws-c-s3 won't retry but a server means as "later": envy's fetch policy will.
+  if (outcome.status == 429 || outcome.status == 502 || outcome.status == 504) {
+    throw fetch_error(fetch_error_kind::HTTP_STATUS, msg.str(), outcome.status);
+  }
   throw_runtime_error({ msg.str() });
 }
 
@@ -447,28 +545,29 @@ class s3_transfer : unmovable {
   s3_transfer(fetch_progress_cb_t const &progress, std::string_view op)
       : progress_{ progress }, op_{ op } {}
 
-  void run(crt_stack &crt, aws_s3_meta_request_options options, bool writing) {
+  // Returns the object's length as aws-c-s3 reported it, or 0 when it never said.
+  std::uint64_t run(aws_s3_client *client,
+                    aws_s3_meta_request_options options,
+                    function_ref<void(s3_outcome const &)> fail) {
     options.user_data = this;
     options.finish_callback = on_finish;
     options.shutdown_callback = on_shutdown;
-    if (progress_) { options.progress_callback = on_progress; }
-    if (!aws_s3_client_make_meta_request(crt.client, &options)) {  // no callbacks follow
-      throw_aws_error(op_, "cannot start the transfer");
+    options.progress_callback = on_progress;
+    if (!aws_s3_client_make_meta_request(client, &options)) {  // no callbacks follow
+      fail({ .error_code = aws_last_error() });  // throws
     }
     done_.wait();
 
-    std::unique_lock lock{ mutex_ };  // Uncontended: every callback has returned.
-    if (cancelled_) {
+    auto const [cancelled, outcome, last, total]{ [&] {
+      std::lock_guard const lock{ mutex_ };  // uncontended: every callback has returned
+      return std::tuple{ cancelled_, outcome_, snapshot(), total_ };
+    }() };
+    if (cancelled) {
       throw_runtime_error({ op_, ": transfer cancelled by progress callback" });
     }
-    if (error_code_ != AWS_ERROR_SUCCESS) {
-      auto const [code, status, body]{ std::tuple{ error_code_, status_, error_body_ } };
-      lock.unlock();  // Diagnosis may go to the network.
-      throw_s3_failure(crt, op_, writing, code, status, body);
-    }
-    auto const last{ snapshot() };
-    lock.unlock();
+    if (outcome.error_code != AWS_ERROR_SUCCESS) { fail(outcome); }
     if (progress_) { progress_(last); }  // Final callback so the bar reaches 100%.
+    return total;
   }
 
  private:
@@ -480,16 +579,15 @@ class s3_transfer : unmovable {
     };
   }
 
+  // Once per completed part, which is what bounds aws-c-s3's progress granularity.
   void report(aws_s3_meta_request *request, aws_s3_meta_request_progress const &p) {
-    auto const due{ [&]() -> std::optional<fetch_progress_t> {
+    auto const now{ [&] {
       std::lock_guard const lock{ mutex_ };
       transferred_ += p.bytes_transferred;
       if (p.content_length) { total_ = p.content_length; }
-      if (transferred_ - reported_ < kProgressInterval) { return std::nullopt; }
-      reported_ = transferred_;
       return snapshot();
     }() };
-    if (due && !progress_(*due)) {
+    if (progress_ && !progress_(now)) {
       {
         std::lock_guard const lock{ mutex_ };
         cancelled_ = true;
@@ -513,11 +611,16 @@ class s3_transfer : unmovable {
     self.done_.guard(
         [&] {
           std::lock_guard const lock{ self.mutex_ };
-          self.error_code_ = result->error_code;
-          self.status_ = result->response_status;
+          self.outcome_.error_code = result->error_code;
+          self.outcome_.status = result->response_status;
           if (result->error_response_body) {
-            self.error_body_ =
-                to_view(aws_byte_cursor_from_buf(result->error_response_body));
+            self.outcome_.body = to_view(aws_byte_cursor_from_buf(result->error_response_body));
+          }
+          if (aws_byte_cursor region{}; result->error_response_headers &&
+                                      !aws_http_headers_get(result->error_response_headers,
+                                                            to_cursor("x-amz-bucket-region"),
+                                                            &region)) {
+            self.outcome_.bucket_region = to_view(region);
           }
         },
         [] {});
@@ -534,30 +637,35 @@ class s3_transfer : unmovable {
   std::mutex mutex_;
   std::uint64_t transferred_{ 0 };
   std::uint64_t total_{ 0 };
-  std::uint64_t reported_{ 0 };
   bool cancelled_{ false };
-  int error_code_{ AWS_ERROR_SUCCESS };
-  int status_{ 0 };
-  std::string error_body_;
+  s3_outcome outcome_;
 };
 
 // One operation on s3://bucket/key: endpoint, Host and signing region from the URI and
-// environment; setup adds the operation's own headers and files.
-void s3_run(aws_byte_cursor method,
-            s3_uri_parts const &parts,
-            std::optional<std::string> const &region,
-            fetch_progress_cb_t const &progress,
-            std::string_view op,
-            bool writing,
-            function_ref<void(aws_s3_meta_request_options &, aws_http_message *)> setup) {
+// environment; setup adds the operation's own headers and files. local names the file
+// in messages. Returns the object length aws-c-s3 reported, or 0.
+std::uint64_t s3_run(
+    aws_byte_cursor method,
+    s3_uri_parts const &parts,
+    std::optional<std::string> const &region,
+    fetch_progress_cb_t const &progress,
+    std::string_view op,
+    bool writing,
+    std::string_view local,
+    function_ref<void(aws_s3_meta_request_options &, aws_http_message *)> setup) {
   auto &crt{ crt_get() };
   std::string const signing_region{ region && !region->empty() ? *region : crt.region };
   auto const endpoint{ aws_s3_endpoint(parts, signing_region, crt.endpoint) };
   std::string const url{ endpoint.scheme + "://" + endpoint.authority };
+  tui::debug("s3: %.*s %s%s (region %s)",
+             static_cast<int>(method.len),
+             reinterpret_cast<char const *>(method.ptr),
+             url.c_str(),
+             endpoint.path.c_str(),
+             signing_region.c_str());
 
-  std::unique_ptr<aws_http_message, decltype(&aws_http_message_release)> const message{
-    aws_http_message_new_request(crt.alloc),
-    aws_http_message_release
+  aws_ptr<aws_http_message, &aws_http_message_release> const message{
+    aws_http_message_new_request(crt.alloc)
   };
   struct uri_holder : unmovable {
     aws_uri uri{};
@@ -575,13 +683,18 @@ void s3_run(aws_byte_cursor method,
   }
 
   aws_signing_config_aws signing;
-  aws_s3_init_default_signing_config(&signing, to_cursor(signing_region), crt.credentials);
+  aws_s3_init_default_signing_config(&signing,
+                                     to_cursor(signing_region),
+                                     crt.credentials.get());
   aws_s3_meta_request_options options{};
   options.signing_config = &signing;
   options.message = message.get();
   options.endpoint = &uri.uri;
+  options.max_active_connections_override = kConnectionsPerTransfer;
   setup(options, message.get());
-  s3_transfer{ progress, op }.run(crt, options, writing);
+  return s3_transfer{ progress, op }.run(crt.client.get(), options, [&](s3_outcome const &o) {
+    throw_s3_failure(crt, op, writing, o, url, local);
+  });
 }
 
 }  // namespace
@@ -732,24 +845,14 @@ void aws_shutdown() {
   std::lock_guard const lock{ g_crt_mutex };
   g_crt.reset();
   if (std::exchange(g_library_live, false)) {
-    aws_thread_join_all_managed();  // aws-c-* winds down on its own threads
-    aws_s3_library_clean_up();
+    // aws-c-* winds down on its own threads; a resolver stuck in getaddrinfo can't be
+    // joined, so bound the wait, and leave the libraries up if one is still running.
+    aws_thread_set_managed_join_timeout_ns(5'000'000'000);
+    if (aws_thread_join_all_managed() == AWS_OP_SUCCESS) { aws_s3_library_clean_up(); }
   }
 }
 
 aws_shutdown_guard::~aws_shutdown_guard() { aws_shutdown(); }
-
-void c_completion::finish() noexcept {   // Notifies under the lock: wait()'s caller may
-  std::lock_guard const lock{ mutex_ };  // free *this the moment it returns.
-  done_ = true;
-  cv_.notify_all();
-}
-
-void c_completion::wait() {
-  std::unique_lock lock{ mutex_ };
-  cv_.wait(lock, [this] { return done_; });
-  if (error_) { std::rethrow_exception(error_); }
-}
 
 std::filesystem::path aws_s3_download(s3_download_request const &request) {
   constexpr std::string_view kOp{ "aws_s3_download" };
@@ -774,33 +877,45 @@ std::filesystem::path aws_s3_download(s3_download_request const &request) {
     }
   }
 
-  auto const local_str{ local.string() };
-  // Validated only when S3 stored a checksum; auto-ranged parts carry their own.
+  auto const local_utf8{ util_path_to_utf8(local) };  // aws-c-* paths are UTF-8
+  // Validated against the checksum S3 stored, if any, which the HEAD it implies returns.
   aws_s3_checksum_config const checksums{ .validate_response_checksum = true };
-  s3_run(aws_http_method_get,
-         parts,
-         request.region,
-         request.progress,
-         kOp,
-         /*writing=*/false,
-         [&](aws_s3_meta_request_options &options, aws_http_message *) {
-           options.type = AWS_S3_META_REQUEST_TYPE_GET_OBJECT;
-           options.recv_filepath = to_cursor(local_str);
-           options.recv_file_option = AWS_S3_RECV_FILE_CREATE_OR_REPLACE;
-           options.recv_file_delete_on_failure = true;
-           options.checksum_config = &checksums;
-         });
+  try {
+    auto const expected{ s3_run(aws_http_method_get,
+                                parts,
+                                request.region,
+                                request.progress,
+                                kOp,
+                                /*writing=*/false,
+                                local_utf8,
+                                [&](aws_s3_meta_request_options &options, aws_http_message *) {
+                                  options.type = AWS_S3_META_REQUEST_TYPE_GET_OBJECT;
+                                  options.part_size = kDownloadPartSize;
+                                  options.recv_filepath = to_cursor(local_utf8);
+                                  options.recv_file_option = AWS_S3_RECV_FILE_CREATE_OR_REPLACE;
+                                  options.recv_file_delete_on_failure = true;
+                                  options.checksum_config = &checksums;
+                                }) };
+    // aws-c-s3 never checks fclose, so a disk that fills on the last flush goes unnoticed.
+    if (std::error_code ec; expected && std::filesystem::file_size(local, ec) != expected) {
+      throw_runtime_error({ kOp, ": ", local, " is short of ", expected, " bytes (disk full?)" });
+    }
+  } catch (...) {  // A checksum mismatch is decided after aws-c-s3's own cleanup.
+    std::error_code ec;
+    std::filesystem::remove(local, ec);
+    throw;
+  }
 
   return local;
 }
 
 void aws_credentials_require(std::string_view op) {
   auto &crt{ crt_get() };
-  if (auto const resolved{ resolve_credentials(crt.credentials) };
+  if (auto const resolved{ resolve_credentials(crt.credentials.get()) };
       resolved.error == AWS_ERROR_SUCCESS && !resolved.anonymous) {
     return;
   }
-  auto const diagnosis{ diagnose_credentials(crt) };
+  auto const &diagnosis{ diagnosis_of(crt) };
   std::ostringstream msg;
   msg << op << ": no usable AWS credentials";
   if (!diagnosis.sso_expired_at.empty()) {
@@ -830,7 +945,7 @@ void aws_s3_upload(s3_upload_request const &request) {
     throw std::invalid_argument("aws_s3_upload: URI must include a key");
   }
 
-  auto const local_str{ local.string() };
+  auto const local_utf8{ util_path_to_utf8(local) };  // aws-c-* paths are UTF-8
   // CRC64NVME in a trailer, as the SDK sent it: S3 checks the bytes it stores.
   aws_s3_checksum_config const checksums{ .location = AWS_SCL_TRAILER,
                                           .checksum_algorithm = AWS_SCA_CRC64NVME };
@@ -840,9 +955,10 @@ void aws_s3_upload(s3_upload_request const &request) {
          request.progress,
          kOp,
          /*writing=*/true,
+         local_utf8,
          [&](aws_s3_meta_request_options &options, aws_http_message *message) {
            options.type = AWS_S3_META_REQUEST_TYPE_PUT_OBJECT;
-           options.send_filepath = to_cursor(local_str);
+           options.send_filepath = to_cursor(local_utf8);
            options.checksum_config = &checksums;
            if (aws_http_message_add_header(
                    message,

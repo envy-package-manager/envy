@@ -148,17 +148,19 @@ fetch_result fetch_single(fetch_request const &request,
           [&](fetch_request_https const &req) { return download(req, req.post_data); },
           [&](fetch_request_ftp const &req) { return download(req, std::nullopt); },
           [&](fetch_request_ftps const &req) { return download(req, std::nullopt); },
-          // aws-c-s3 retries internally.
-          [&](fetch_request_s3 const &req) -> fetch_result {
-            auto const info{ classify(req.source) };
-            return fetch_result{ .scheme = info.scheme,
-                                 .resolved_source =
-                                     std::filesystem::path{ info.canonical },
-                                 .resolved_destination = aws_s3_download(
-                                     s3_download_request{ .uri = info.canonical,
-                                                          .destination = req.destination,
-                                                          .region = req.region,
-                                                          .progress = req.progress }) };
+          // aws-c-s3 retries 500/503/SlowDown itself; only 429/502/504 come back as
+          // retryable fetch_errors for the shared policy.
+          [&](fetch_request_s3 const &req) {
+            return retrying(req, [&] {
+              auto const info{ classify(req.source) };
+              return fetch_result{ .scheme = info.scheme,
+                                   .resolved_source = std::filesystem::path{ info.canonical },
+                                   .resolved_destination = aws_s3_download(
+                                       s3_download_request{ .uri = info.canonical,
+                                                            .destination = req.destination,
+                                                            .region = req.region,
+                                                            .progress = req.progress }) };
+            });
           },
           [&](fetch_request_file const &req) -> fetch_result {
             return fetch_local_file(classify(req.source).canonical,
@@ -394,7 +396,7 @@ void fetch_await_release(std::filesystem::path const &path,
 
 // The single retry seam. Retrying here rather than inside a backend gives http, ftp
 // and git one policy; git calls in once per repository, so a tree of submodules never
-// restarts whole. s3 is deliberately absent: aws-c-s3 already retries internally. Safe
+// restarts whole. s3 joins only for the statuses aws-c-s3 won't retry itself. Safe
 // because fetches are idempotent GETs and payloads are sha256-verified by the caller
 // after transport, so a replay can never launder bad bytes.
 void fetch_retrying(function_ref<void()> once,

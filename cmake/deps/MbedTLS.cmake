@@ -71,7 +71,7 @@ endif()
 set(_envy_mbedtls_targets mbedtls mbedx509 mbedcrypto)
 foreach(_envy_target IN LISTS _envy_mbedtls_targets)
     if(TARGET ${_envy_target})
-        # Keep LTO off only under sanitizers (see AwsSdk.cmake); Release keeps
+        # Keep LTO off only under sanitizers (see AwsC.cmake); Release keeps
         # the global LTO so cross-module DCE can shrink mbedTLS.
         if(NOT ENVY_SANITIZER STREQUAL "NONE")
             set_property(TARGET ${_envy_target} PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)

@@ -7,7 +7,9 @@ endpoint host is an IP literal.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import os
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +18,34 @@ from xml.sax.saxutils import escape
 from . import test_config
 
 BUCKET = "test-bucket"
+
+
+_PROXY_VARS = {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
+
+
+def hermetic_env(extra: dict[str, str]) -> dict[str, str]:
+    """os.environ without the runner's AWS settings or proxies, then `extra` on top.
+
+    A developer's AWS_SESSION_TOKEN, AWS_IGNORE_CONFIGURED_ENDPOINT_URLS or HTTPS_PROXY
+    would otherwise sign, reroute or proxy requests meant for the stub.
+    """
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.upper().startswith("AWS_") and k.upper() not in _PROXY_VARS
+    }
+    env.update(extra)
+    return env
+
+
+def crc64nvme(data: bytes) -> int:
+    """S3's CRC64NVME: reflected 0x9A6C9329AC4BC9B5, all-ones init and final xor."""
+    crc = 0xFFFFFFFFFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0x9A6C9329AC4BC9B5 if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFFFFFFFFFF
 
 
 def s3_env(port: int) -> dict[str, str]:
@@ -42,9 +72,14 @@ class S3Stub:
         # (status, <Code>, <Message>) to answer every PutObject/GetObject with, or None.
         self.put_error: tuple[int, str, str] | None = None
         self.get_error: tuple[int, str, str] | None = None
-        self.get_failures = 0  # GETs answered 500 InternalError before serving any
+        self.get_failures = 0  # GETs answered get_failure_status before serving any
+        self.get_failure_status = 500
+        self.head_override: tuple[int, dict[str, str]] | None = None  # status, headers
         self.require_auth = False  # unsigned requests draw 403 AccessDenied
-        self.requests: list[dict[str, object]] = []  # method, key, signed, range
+        # Stored CRC64NVME sent on HEAD, as S3 does for single-part uploads: "good",
+        # "bad" (a checksum that doesn't match the bytes), or None.
+        self.checksum: str | None = None
+        self.requests: list[dict[str, object]] = []  # method, key, signed, range, headers
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -58,7 +93,7 @@ class S3Stub:
         self.stop()
 
     def env(self) -> dict[str, str]:
-        return s3_env(self.port)
+        return hermetic_env(s3_env(self.port))
 
     def start(self) -> int:
         parent = self
@@ -82,6 +117,7 @@ class S3Stub:
                             "key": obj,
                             "signed": signed,
                             "range": self.headers.get("Range"),
+                            "headers": {k.lower(): v for k, v in self.headers.items()},
                         }
                     )
                 return bucket, obj, signed
@@ -89,11 +125,11 @@ class S3Stub:
             def _read_body(self) -> bytes:
                 """Read the request body, unwrapping both framings the SDK applies.
 
-                A PutObject from aws-sdk-cpp arrives double-framed: HTTP
-                `Transfer-Encoding: chunked` on the outside, and `Content-Encoding:
-                aws-chunked` on the inside with an `x-amz-trailer` checksum after the
-                terminating zero chunk. There is no Content-Length. Reading the body fully
-                also keeps HTTP/1.1 keep-alive framing intact for the next request.
+                A PutObject with a trailing checksum arrives as `Content-Encoding:
+                aws-chunked`, with an `x-amz-trailer` checksum after the terminating zero
+                chunk, possibly inside HTTP `Transfer-Encoding: chunked` too. Reading the
+                body fully also keeps HTTP/1.1 keep-alive framing intact for the next
+                request.
                 """
                 if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
                     body = self._read_http_chunked()
@@ -186,7 +222,9 @@ class S3Stub:
                     failing = parent.get_failures > 0
                     parent.get_failures -= int(failing)
                 if failing:
-                    parent._send_error(self, 500, "InternalError", "Try again")
+                    status = parent.get_failure_status
+                    code = "TooManyRequests" if status == 429 else "InternalError"
+                    parent._send_error(self, status, code, "Try again")
                     return
                 if parent.get_error is not None:
                     parent._send_error(self, *parent.get_error)
@@ -217,6 +255,14 @@ class S3Stub:
 
             def do_HEAD(self) -> None:
                 bucket, obj, signed = self._record()
+                if parent.head_override is not None:
+                    status, headers = parent.head_override
+                    self.send_response(status)
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if parent.require_auth and not signed:
                     status = 403
                 elif bucket != BUCKET or obj not in parent.objects:
@@ -229,6 +275,11 @@ class S3Stub:
                 if status == 200:
                     self.send_header("ETag", f'"{hashlib.md5(body).hexdigest()}"')
                     self.send_header("Accept-Ranges", "bytes")
+                    if parent.checksum is not None:
+                        crc = crc64nvme(body) ^ (parent.checksum == "bad")
+                        digest = base64.b64encode(crc.to_bytes(8, "big")).decode()
+                        self.send_header("x-amz-checksum-crc64nvme", digest)
+                        self.send_header("x-amz-checksum-type", "FULL_OBJECT")
                 self.end_headers()
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

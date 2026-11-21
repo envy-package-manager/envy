@@ -22,7 +22,7 @@ from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
-from .s3_stub import S3Stub, s3_env
+from .s3_stub import S3Stub, hermetic_env, s3_env
 
 # Must stay byte-identical to kEnvyReleaseTargets in src/envy_release.h.
 RELEASE_ASSETS = [
@@ -103,8 +103,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         return self._source.as_uri()
 
     def _run(self, args: list[str], env_extra: dict[str, str] | None = None):
-        env = os.environ.copy()
-        env["ENVY_CACHE_ROOT"] = str(self._temp / "cache")
+        env = hermetic_env({"ENVY_CACHE_ROOT": str(self._temp / "cache")})
         if env_extra:
             env.update(env_extra)
         return test_config.run(
@@ -331,6 +330,18 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         # No double-slash keys: S3 keys are opaque, so "a//b" would be unreachable.
         for key in stub.objects:
             self.assertNotIn("//", key)
+        # Signed, typed, and checksummed in a trailer S3 verifies against what it stores.
+        puts = [r for r in stub.requests if r["method"] == "PUT"]
+        self.assertTrue(puts and all(r["signed"] for r in puts), stub.requests)
+        for put in puts:
+            headers = put["headers"]
+            self.assertEqual("x-amz-checksum-crc64nvme", headers.get("x-amz-trailer"))
+            expected = (
+                "application/gzip" if str(put["key"]).endswith(".tar.gz")
+                else "application/zip" if str(put["key"]).endswith(".zip")
+                else "application/octet-stream"
+            )
+            self.assertEqual(expected, headers.get("content-type"), put["key"])
 
     def test_uploads_to_bucket_root_without_prefix(self) -> None:
         stub = S3Stub()
@@ -486,7 +497,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
         self.assertIn("no usable AWS credentials", result.stderr)
         self.assertIn("aws sso login", result.stderr)
         self.assertIn(
-            "SSO session for profile 'envy-test-expired' expired at 2020-01-01T00:00:00Z",
+            "SSO token for profile 'envy-test-expired' expired at 2020-01-01T00:00:00Z",
             result.stderr,
         )
         # Once, up front -- not once per object, and never as an S3 protocol code.

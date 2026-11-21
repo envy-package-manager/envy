@@ -138,19 +138,23 @@ function(envy_patch_libarchive_cmakelists source_dir binary_dir)
     unset(LIBARCHIVE_SOURCE)
 endfunction()
 
-# Runs templates/<template>.py.in over an AWS C library's sources once per version: the
-# stamp sits beside the sources, so a re-pinned archive is patched afresh.
+# Runs templates/<template>.py.in over one AWS C library's sources. The stamp beside them
+# holds the configured script's hash, so a re-pin or an edited template patches afresh.
 function(envy_patch_aws_source source_dir template)
-    set(_stamp "${source_dir}/.envy-${template}.stamp")
-    if(EXISTS "${_stamp}")
-        return()
-    endif()
-    set(_script "${source_dir}/.envy-${template}.py")
+    get_filename_component(_tree "${source_dir}" NAME)
+    set(_script "${CMAKE_BINARY_DIR}/_deps/aws-c-patches/${_tree}-${template}.py")
     configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/${template}.py.in"
         "${_script}" @ONLY)
+    file(SHA256 "${_script}" _hash)
+    set(_stamp "${source_dir}/.envy-${template}.stamp")
+    if(EXISTS "${_stamp}")
+        file(READ "${_stamp}" _done)
+        if(_done STREQUAL _hash)
+            return()
+        endif()
+    endif()
     envy_run_python("${_script}")
-    file(REMOVE "${_script}")
-    file(WRITE "${_stamp}" "patched\n")
+    file(WRITE "${_stamp}" "${_hash}")
 endfunction()
 
 # Pin every aws-c-* configuration to the static release MSVC runtime, as envy builds.
@@ -168,17 +172,19 @@ endfunction()
 
 # Ensure s2n's feature probes include aws-lc headers instead of falling back to system
 # OpenSSL when evaluating libcrypto capabilities.
-function(envy_patch_s2n_feature_probes s2n_dir)
+function(envy_patch_s2n_feature_probes s2n_dir aws_lc_dir)
     set(S2N_CMAKELISTS "${s2n_dir}/CMakeLists.txt")
+    set(AWS_LC_INCLUDE_DIR "${aws_lc_dir}/include")
     envy_patch_aws_source("${s2n_dir}" s2n_feature_probe_patch)
 endfunction()
 
 # Remove -Wa,--noexecstack from aws-lc and s2n assembly builds to silence lto-wrapper
-# warnings during TSAN+LTO linking.
+# warnings during TSAN+LTO linking. Each tree is patched and stamped on its own.
 function(envy_patch_aws_noexecstack aws_lc_dir s2n_dir)
     set(AWS_LC_CRYPTO_CMAKELISTS "${aws_lc_dir}/crypto/CMakeLists.txt")
+    envy_patch_aws_source("${aws_lc_dir}" aws_lc_noexecstack_patch)
     set(S2N_CMAKELISTS "${s2n_dir}/CMakeLists.txt")
-    envy_patch_aws_source("${s2n_dir}" aws_noexecstack_patch)
+    envy_patch_aws_source("${s2n_dir}" s2n_noexecstack_patch)
 endfunction()
 
 # Make libcurl’s pkg-config metadata reference the actual zlib target we

@@ -545,6 +545,7 @@ endif() # ENVY_BUILD_FUNCTIONAL_TESTER
 set(ENVY_UNIT_TEST_SOURCES
     src/unit_test_main.cpp
     src/aws_util_tests.cpp
+    src/c_completion_tests.cpp
     src/envy_release_tests.cpp
     src/blake3_util_tests.cpp
     src/cache_tests.cpp

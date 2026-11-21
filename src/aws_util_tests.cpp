@@ -3,7 +3,6 @@
 #include "doctest.h"
 
 #include <stdexcept>
-#include <thread>
 
 // --- aws_s3_parse_uri ---
 
@@ -151,32 +150,4 @@ TEST_CASE("aws_s3_parse_error: absent elements and empty bodies read as empty") 
   auto const none{ envy::aws_s3_parse_error("") };
   CHECK(none.code.empty());
   CHECK(none.message.empty());
-}
-
-// --- c_completion ---
-
-TEST_CASE("c_completion: a callback's throw is rethrown on the waiting thread") {
-  envy::c_completion done;
-  bool cancelled{ false };
-  std::thread library{ [&] {  // a C library's event-loop thread
-    done.guard([] { throw std::runtime_error("from a callback"); },
-               [&] { cancelled = true; });
-    done.guard([] { throw std::logic_error("a later one"); }, [] {});
-    done.finish();
-  } };
-  CHECK_THROWS_WITH_AS(done.wait(), "from a callback", std::runtime_error);
-  library.join();
-  CHECK(cancelled);
-}
-
-TEST_CASE("c_completion: wait returns once finished when nothing threw") {
-  envy::c_completion done;
-  int ran{ 0 };
-  std::thread library{ [&] {
-    done.guard([&] { ++ran; }, [] { FAIL("on_throw ran without a throw"); });
-    done.finish();
-  } };
-  CHECK_NOTHROW(done.wait());
-  library.join();
-  CHECK(ran == 1);
 }
