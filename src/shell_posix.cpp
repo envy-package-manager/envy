@@ -3,6 +3,7 @@
 #else
 
 #include "shell.h"
+#include "termination.h"
 
 #include "tui.h"
 #include "util.h"
@@ -380,6 +381,17 @@ class inherited_fds {
 
 void shell_init() {
   // No-op on POSIX - no job object initialization needed
+}
+
+int shell_exec(std::vector<std::string> const &argv) {
+  if (argv.empty()) { throw std::invalid_argument("shell_exec: empty argv"); }
+  std::vector<char *> args;
+  args.reserve(argv.size() + 1);
+  for (auto const &a : argv) { args.push_back(const_cast<char *>(a.c_str())); }
+  args.push_back(nullptr);
+  termination_restore_inherited();
+  ::execvp(args[0], args.data());
+  throw_runtime_error({ "exec ", argv[0], ": ", std::strerror(errno) });
 }
 
 shell_env_t shell_getenv() {

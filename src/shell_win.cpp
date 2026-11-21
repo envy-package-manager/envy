@@ -644,8 +644,8 @@ shell_result child_result(HANDLE process) {
 }
 
 std::wstring quote_arg(std::wstring_view arg) {
-  // Windows command-line quoting: wrap in quotes if contains spaces or special chars
-  if (arg.find_first_of(L" \t\"") == std::wstring_view::npos) {
+  // Windows command-line quoting: wrap in quotes if empty, or holding spaces or quotes
+  if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring_view::npos) {
     return std::wstring{ arg };
   }
 
@@ -722,7 +722,134 @@ std::wstring build_command_line_custom(custom_shell_inline const &shell,
   return command;
 }
 
+// One argument as cmd reads it and as the native program a batch hands %* to parses it:
+// quotes doubled, backslashes doubled before any quote. % still expands in a /c line.
+std::wstring quote_arg_cmd(std::wstring_view arg) {
+  if (!arg.empty() && arg.find_first_of(L" \t\"&|<>^(),;=!") == std::wstring_view::npos) {
+    return std::wstring{ arg };
+  }
+  std::wstring out{ L"\"" };
+  size_t backslashes{ 0 };
+  for (wchar_t const c : arg) {
+    if (c == L'\\') {
+      ++backslashes;
+      out.push_back(c);
+      continue;
+    }
+    if (c == L'"') {
+      out.append(backslashes, L'\\').append(L"\"\"");
+    } else {
+      out.push_back(c);
+    }
+    backslashes = 0;
+  }
+  out.append(backslashes, L'\\').push_back(L'"');  // `dir with space\` stays one argument
+  return out;
+}
+
+std::wstring acp_to_wstring(std::string const &s) {
+  if (s.empty()) { return {}; }
+  int const n{
+    ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), nullptr, 0)
+  };
+  std::wstring out(static_cast<size_t>(n), L'\0');
+  ::MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+  return out;
+}
+
+std::string getenv_utf8(wchar_t const *name) {
+  DWORD const n{ ::GetEnvironmentVariableW(name, nullptr, 0) };
+  if (n == 0) { return {}; }
+  std::wstring value(n, L'\0');
+  DWORD const got{ ::GetEnvironmentVariableW(name, value.data(), n) };
+  value.resize(got);
+  return wstring_to_utf8(value);
+}
+
+// The child owns Ctrl-C: it decides whether to stop, and its exit code is ours. Without
+// this, envy's own handler exits 130 underneath a tool that is still cleaning up.
+BOOL WINAPI leave_ctrl_to_child(DWORD type) {
+  return type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT ? TRUE : FALSE;
+}
+
+std::wstring ascii_lower(std::wstring s) {
+  for (wchar_t &c : s) { c = (c >= L'A' && c <= L'Z') ? wchar_t(c - L'A' + L'a') : c; }
+  return s;
+}
+
 }  // namespace
+
+int shell_exec(std::vector<std::string> const &argv) {
+  if (argv.empty()) { throw std::invalid_argument("shell_exec: empty argv"); }
+
+  // PATHEXT always applies, the cwd first for a bare name, as _spawnvp and cmd search:
+  // `gradlew` is gradlew.bat, never the POSIX script beside it.
+  std::filesystem::path const program{ [&] {
+    std::filesystem::path const named{ argv[0] };
+    bool const bare{ !named.has_parent_path() };
+    std::string const where{ bare ? ".;" + getenv_utf8(L"PATH")
+                                  : named.parent_path().string() };
+    if (auto found{ shell_find_executable(named.filename().string(), where) }) {
+      return *found;
+    }
+    if (bare) { throw_runtime_error({ "exec ", argv[0], ": not found on PATH" }); }
+    return named;  // CreateProcess names what is wrong with it
+  }() };
+
+  // CreateProcess runs a .bat by quietly starting cmd.exe with the line as given, which
+  // lets an argument's & or | split it. Starting cmd.exe here quotes for cmd's rules.
+  std::wstring const ext{ ascii_lower(program.extension().wstring()) };
+  bool const batch{ ext == L".bat" || ext == L".cmd" };
+  std::wstring const cmd_exe{ [] {
+    std::wstring dir(MAX_PATH, L'\0');
+    UINT const n{ ::GetSystemDirectoryW(dir.data(), MAX_PATH) };
+    dir.resize(n);
+    return dir + L"\\cmd.exe";  // not %ComSpec%: a replacement shell quotes differently
+  }() };
+  auto const quote{ [batch](std::wstring_view a) {
+    return batch ? quote_arg_cmd(a) : quote_arg(a);
+  } };
+  std::wstring command_line{ batch ? L"cmd.exe /d /v:off /s /c \"" : L"" };
+  command_line.append(quote(program.wstring()));
+  for (size_t i{ 1 }; i < argv.size(); ++i) {  // main's argv: the ANSI code page
+    command_line.push_back(L' ');
+    command_line.append(quote(acp_to_wstring(argv[i])));
+  }
+  if (batch) { command_line.push_back(L'"'); }
+  std::vector<wchar_t> cmd_buffer{ command_line.begin(), command_line.end() };
+  cmd_buffer.push_back(L'\0');
+
+  ::SetConsoleCtrlHandler(leave_ctrl_to_child, TRUE);
+
+  // Environment and stdio inherited, as reexec's child gets them.
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  std::wstring const application{ batch ? cmd_exe : program.wstring() };
+  if (!::CreateProcessW(application.c_str(),
+                        cmd_buffer.data(),
+                        nullptr,
+                        nullptr,
+                        TRUE,
+                        0,
+                        nullptr,
+                        nullptr,
+                        &si,
+                        &pi)) {
+    throw_system_error(::GetLastError(), std::system_category(), { "exec ", argv[0] });
+  }
+  handle_closer const process{ pi.hProcess };
+  handle_closer const thread{ pi.hThread };
+
+  ::WaitForSingleObject(process.get(), INFINITE);
+  DWORD code{ 1 };
+  if (!::GetExitCodeProcess(process.get(), &code)) {
+    throw_system_error(::GetLastError(),
+                       std::system_category(),
+                       { "GetExitCodeProcess failed" });
+  }
+  return static_cast<int>(code);
+}
 
 void shell_init() {
   g_job_object = ::CreateJobObjectW(nullptr, nullptr);

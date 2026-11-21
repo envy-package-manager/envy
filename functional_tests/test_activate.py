@@ -7,8 +7,10 @@ environment after leaving must be byte-for-byte what it was before entering.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -537,6 +539,142 @@ class TestActivatePowerShell(_ActivateBase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("WHO=Jos\u00e9", result.stdout)
 
+
+
+_RT_VALUE = "a \"b\" $c %d% !e! & f; g's \\h"  # every shell's quoting, at once
+_DUMP_TO = "import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], 'w'))"
+
+
+class TestActivateRoundTrip(EnvyTestCase):
+    """Every dialect: nothing before, everything during, exactly the original after.
+
+    One package ENV exercises each op -- a set full of shell metacharacters, an unset,
+    a PATH prepend and append -- and the env is dumped before activate, after it, and
+    after deactivate, from inside the shell that evaluated the script.
+    """
+
+    use_production_binary = True
+    envy_watchdog_timeout = 120
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = self.make_temp_dir("rt").resolve()
+        self.env = {
+            k: v
+            for k, v in test_config.get_test_env().items()
+            if not k.startswith(("ENVY_SHELL_", "ENVY_ACTIVATE_", "ENVY_PROJECT_ROOT"))
+        }
+        self.env["ENVY_CACHE_ROOT"] = str(self.root / "cache")
+        self.env["UNSET_ME"] = "orig"
+        self.env["ENVY_SHELL_NO_ENTER_EXIT_ANNOUNCE"] = "1"
+        self.append_dir = str(self.root / "append-dir")
+        self.proj = self.root / "proj"
+        r = test_config.run([str(self.envy), "init", str(self.proj), str(self.proj / "tools")],
+                            capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(0, r.returncode, r.stderr)
+        manifest = self.proj / "envy.lua"
+        header = manifest.read_text().split("PACKAGES", 1)[0]
+        (self.proj / "rt.lua").write_text(
+            'IDENTITY = "local.rt@r0"\nFETCH = function() end\nINSTALL = function() end\n'
+            "ENV = function(pkg_path) return {\n"
+            f"  SET_ME = [[{_RT_VALUE}]],\n"
+            "  UNSET_ME = false,\n"
+            '  PATH = { prepend = envy.path.join(pkg_path, "pre"), '
+            f"append = [[{self.append_dir}]] }},\n"
+            "} end\n"
+        )
+        manifest.write_text(header + 'PACKAGES = {\n  { spec = "local.rt@r0", '
+                            'source = "rt.lua" },\n}\n')
+        r = test_config.run([str(self.launcher), "install"], capture_output=True, text=True,
+                            env=self.env, timeout=120)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.dumper = self.root / "dump.py"
+        self.dumper.write_text(_DUMP_TO)
+
+    @property
+    def launcher(self) -> Path:
+        return self.proj / "tools" / ("envy.bat" if sys.platform == "win32" else "envy")
+
+    def dumps(self) -> tuple[Path, Path, Path]:
+        return self.root / "before.json", self.root / "during.json", self.root / "after.json"
+
+    def check(self, result) -> None:
+        self.assertEqual(0, result.returncode, result.stderr)
+        before, during, after = (json.loads(p.read_text()) for p in self.dumps())
+        sep = os.pathsep
+
+        self.assertNotIn("SET_ME", before)
+        self.assertEqual("orig", before.get("UNSET_ME"))
+
+        self.assertEqual(_RT_VALUE, during.get("SET_ME"))
+        self.assertNotIn("UNSET_ME", during)
+        path = during.get("PATH", during.get("Path", "")).split(sep)
+        self.assertEqual(os.path.normcase(str((self.proj / "tools").resolve())),
+                         os.path.normcase(os.path.realpath(path[0])))
+        self.assertTrue(path[1].rstrip("\\/").endswith("pre"), path[:3])
+        self.assertEqual(self.append_dir, path[-1])
+        self.assertEqual(os.path.normcase(str(self.proj)),
+                         os.path.normcase(during.get("ENVY_PROJECT_ROOT", "")))
+        self.assertIn("ENVY_ACTIVATE_ROOT", during)
+
+        volatile = {"PWD", "OLDPWD", "_", "SHLVL"}
+        strip = lambda e: {k: v for k, v in e.items() if k not in volatile}  # noqa: E731
+        self.assertEqual(strip(before), strip(after), "deactivate left a difference")
+
+    def posix(self, argv: list[str], script: str):
+        b, d, a = self.dumps()
+        py, dump, L = sys.executable, self.dumper, self.launcher
+        body = script.format(before=f"'{py}' '{dump}' '{b}'", during=f"'{py}' '{dump}' '{d}'",
+                             after=f"'{py}' '{dump}' '{a}'", L=f"'{L}'")
+        return test_config.run([*argv, body], capture_output=True, text=True,
+                               env=self.env, timeout=120, cwd=self.root)
+
+    @unittest.skipIf(sys.platform == "win32", "envy activate bash is POSIX-only")
+    def test_bash(self) -> None:
+        self.check(self.posix(["bash", "--noprofile", "--norc", "-e", "-c"],
+                              '{before}\neval "$({L} activate bash)"\n{during}\n'
+                              'eval "$({L} deactivate bash)"\n{after}\n'))
+
+    @unittest.skipIf(sys.platform == "win32" or not shutil.which("zsh"), "zsh")
+    def test_zsh(self) -> None:
+        self.check(self.posix(["zsh", "-f", "-e", "-c"],
+                              '{before}\neval "$({L} activate zsh)"\n{during}\n'
+                              'eval "$({L} deactivate zsh)"\n{after}\n'))
+
+    @unittest.skipIf(sys.platform == "win32" or not shutil.which("fish"), "fish")
+    def test_fish(self) -> None:
+        self.check(self.posix(["fish", "--no-config", "-c"],
+                              "{before}\n{L} activate fish | source\n{during}\n"
+                              "{L} deactivate fish | source\n{after}\n"))
+
+    def powershell(self, exe: str):
+        b, d, a = self.dumps()
+        py, dump, L = sys.executable, self.dumper, self.launcher
+        script = (f"& '{py}' '{dump}' '{b}'\n"
+                  f"& '{L}' activate powershell | Out-String | Invoke-Expression\n"
+                  f"& '{py}' '{dump}' '{d}'\n"
+                  f"& '{L}' deactivate powershell | Out-String | Invoke-Expression\n"
+                  f"& '{py}' '{dump}' '{a}'\n")
+        return test_config.run_pwsh([exe, "-NoProfile", "-NonInteractive", "-Command", script],
+                                    capture_output=True, text=True, env=self.env, timeout=120,
+                                    cwd=self.root)
+
+    @unittest.skipIf(not shutil.which("pwsh"), "pwsh not installed")
+    def test_pwsh(self) -> None:
+        self.check(self.powershell("pwsh"))
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell")
+    def test_windows_powershell(self) -> None:
+        self.check(self.powershell("powershell"))
+
+    @unittest.skipUnless(sys.platform == "win32", "cmd.exe")
+    def test_cmd(self) -> None:
+        b, d, a = self.dumps()
+        py, dump, L = sys.executable, self.dumper, self.launcher
+        line = (f'"{py}" "{dump}" "{b}" && call "{L}" activate cmd && '
+                f'"{py}" "{dump}" "{d}" && call "{L}" deactivate cmd && "{py}" "{dump}" "{a}"')
+        self.check(subprocess.run(f'cmd /d /s /c "{line}"', capture_output=True, text=True,
+                                  env=self.env, timeout=120, cwd=self.root))
 
 if __name__ == "__main__":
     unittest.main()

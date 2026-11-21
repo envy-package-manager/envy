@@ -49,7 +49,7 @@ TEST_CASE("deploy: embedded POSIX template has version baked at build time") {
   CHECK(tmpl.find("@@ENVY_PRODUCT_SCRIPT_VERSION@@") == std::string_view::npos);
   CHECK(tmpl.find("@@ENVY_VERSION@@") == std::string_view::npos);
   CHECK(tmpl.find("envy-managed") != std::string_view::npos);
-  CHECK(tmpl.find("@@PROJECT_ROOT_REL@@") != std::string_view::npos);
+  CHECK(tmpl.find("@@PRODUCT_NAME@@") != std::string_view::npos);
 }
 
 TEST_CASE("deploy: embedded Windows template has version baked at build time") {
@@ -60,13 +60,12 @@ TEST_CASE("deploy: embedded Windows template has version baked at build time") {
   CHECK(tmpl.find("@@ENVY_PRODUCT_SCRIPT_VERSION@@") == std::string_view::npos);
   CHECK(tmpl.find("@@ENVY_VERSION@@") == std::string_view::npos);
   CHECK(tmpl.find("envy-managed") != std::string_view::npos);
-  CHECK(tmpl.find("@@PROJECT_ROOT_REL@@") != std::string_view::npos);
+  CHECK(tmpl.find("@@PRODUCT_NAME@@") != std::string_view::npos);
 }
 
 TEST_CASE("deploy: stamp_product_script substitutes product name on POSIX") {
-  std::string const stamped{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
+  std::string const stamped{ envy::deploy_stamp_product_script("foo",
+                                                               envy::platform_id::POSIX) };
   CHECK(stamped.find("foo") != std::string::npos);
   CHECK(stamped.find("@@PRODUCT_NAME@@") == std::string::npos);
   CHECK(stamped.find("envy-managed") != std::string::npos);
@@ -75,7 +74,7 @@ TEST_CASE("deploy: stamp_product_script substitutes product name on POSIX") {
 
 TEST_CASE("deploy: stamp_product_script substitutes product name on Windows") {
   std::string const stamped{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "..")
+    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS)
   };
   CHECK(stamped.find("foo") != std::string::npos);
   CHECK(stamped.find("@@PRODUCT_NAME@@") == std::string::npos);
@@ -87,9 +86,7 @@ TEST_CASE("deploy: stamps LF for both targets; the policy is what makes .bat CRL
   // The stamper stays template-focused: util_write_script applies the newline policy, so
   // it is the single point a future script writer cannot bypass. What the writer produces
   // for a .bat is checked end to end in functional_tests -- here, only the composition.
-  std::string win{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "..")
-  };
+  std::string win{ envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS) };
   CHECK(win.find('\n') != std::string::npos);
   CHECK(win.find('\r') == std::string::npos);
 
@@ -105,31 +102,25 @@ TEST_CASE("deploy: stamps LF for both targets; the policy is what makes .bat CRL
     }
   }
 
-  std::string posix{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
+  std::string posix{ envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX) };
   CHECK(posix.find('\n') != std::string::npos);
   envy::util_apply_script_eol(posix, envy::platform_id::POSIX);
   CHECK(posix.find('\r') == std::string::npos);
 }
 
 TEST_CASE("deploy: stamp_product_script is deterministic") {
-  std::string const a{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
-  std::string const b{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
+  std::string const a{ envy::deploy_stamp_product_script("foo",
+                                                         envy::platform_id::POSIX) };
+  std::string const b{ envy::deploy_stamp_product_script("foo",
+                                                         envy::platform_id::POSIX) };
   CHECK(a == b);
 }
 
 TEST_CASE("deploy: stamp_product_script differs by product name") {
-  std::string const foo{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
-  std::string const bar{
-    envy::deploy_stamp_product_script("bar", envy::platform_id::POSIX, "..")
-  };
+  std::string const foo{ envy::deploy_stamp_product_script("foo",
+                                                           envy::platform_id::POSIX) };
+  std::string const bar{ envy::deploy_stamp_product_script("bar",
+                                                           envy::platform_id::POSIX) };
   CHECK(foo != bar);
   CHECK(foo.find("foo") != std::string::npos);
   CHECK(foo.find("bar") == std::string::npos);
@@ -138,52 +129,29 @@ TEST_CASE("deploy: stamp_product_script differs by product name") {
 }
 
 TEST_CASE("deploy: stamp_product_script differs by platform") {
-  std::string const posix{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
-  std::string const win{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "..")
-  };
+  std::string const posix{ envy::deploy_stamp_product_script("foo",
+                                                             envy::platform_id::POSIX) };
+  std::string const win{ envy::deploy_stamp_product_script("foo",
+                                                           envy::platform_id::WINDOWS) };
   CHECK(posix != win);
   CHECK(posix.find("#!/usr/bin/env bash") != std::string::npos);
   CHECK(win.find("@echo off") != std::string::npos);
 }
 
-TEST_CASE("deploy: stamp_product_script substitutes the project root hop") {
-  for (auto const plat : { envy::platform_id::POSIX, envy::platform_id::WINDOWS }) {
-    std::string const stamped{ envy::deploy_stamp_product_script("foo", plat, "../..") };
-    CHECK(stamped.find("@@PROJECT_ROOT_REL@@") == std::string::npos);
-    CHECK(stamped.find("../..") != std::string::npos);
-    // A relative hop, never an absolute path: the bin dir is committed, so the tree gets
-    // cloned to a different prefix than the one that deployed it.
-    CHECK(stamped.find("ENVY_PROJECT_ROOT") != std::string::npos);
-  }
-}
+TEST_CASE("deploy: product scripts hand the tool to `envy product --run`") {
+  // The wrapper sets nothing itself: PATH, ENVY_PROJECT_ROOT and the project's ENV all
+  // come from envy, so a caller inside another project's activation gets this one's.
+  std::string const posix{ envy::deploy_stamp_product_script("foo",
+                                                             envy::platform_id::POSIX) };
+  CHECK(posix.find("exec \"$ENVY_SCRIPT_DIR/envy\" product --run \"foo\" -- \"$@\"") !=
+        std::string::npos);
+  CHECK(posix.find("export") == std::string::npos);
 
-TEST_CASE("deploy: stamp_product_script leaves the root unset for an empty hop") {
-  // What deploy stamps for an '@envy root "false"' manifest: which project its scripts
-  // resolve depends on where the tree is nested, so the caller's value has to stand.
-  std::string const posix{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "")
-  };
-  CHECK(posix.find("@@PROJECT_ROOT_REL@@") == std::string::npos);
-  CHECK(posix.find("ENVY_PROJECT_ROOT_HOP=\"\"") != std::string::npos);
-
-  std::string const win{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::WINDOWS, "")
-  };
-  CHECK(win.find("@@PROJECT_ROOT_REL@@") == std::string::npos);
-  CHECK(win.find("set \"ENVY_PROJECT_ROOT_HOP=\"") != std::string::npos);
-}
-
-TEST_CASE("deploy: stamp_product_script differs by project root hop") {
-  std::string const up{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, "..")
-  };
-  std::string const here{
-    envy::deploy_stamp_product_script("foo", envy::platform_id::POSIX, ".")
-  };
-  CHECK(up != here);
+  std::string const win{ envy::deploy_stamp_product_script("foo",
+                                                           envy::platform_id::WINDOWS) };
+  CHECK(win.find("\n\"%~dp0envy.bat\" product --run \"foo\" -- %*") != std::string::npos);
+  CHECK(win.find("call ") == std::string::npos);  // call doubles carets in arguments
+  CHECK(win.find("set \"") == std::string::npos);
 }
 
 TEST_CASE("deploy: verify_bin_dir accepts a bin dir under its own manifest") {

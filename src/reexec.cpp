@@ -5,6 +5,7 @@
 #include "extract.h"
 #include "fetch.h"
 #include "platform.h"
+#include "termination.h"
 #include "tui.h"
 #include "tui_actions.h"
 #include "util.h"
@@ -123,6 +124,7 @@ int reexec_exec(reexec_request const &request, char **argv) {
   tui::sections_clear();
   tui::trace_file_handoff();
   tui::interactive_mode_guard const terminal_handoff;
+  termination_restore_inherited();  // else the child records envy's SIGPIPE as inherited
 
   return platform::exec_process(request.binary, child_argv.data(), build_child_env());
 }

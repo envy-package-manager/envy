@@ -60,11 +60,15 @@ struct env_state_fields {
   std::string exe;      // binary that wrote the state; deactivation runs it
   std::string genfile;  // per-project counter file envy install bumps
   std::string gen;      // its contents at activation
+  std::string pkgs;     // ':'-joined digests of the packages whose ENV it applied
 };
 
-// `live` with any activation undone: every recorded name back to its backup (or unset),
-// every ENVY_ACTIVATE_ variable removed. Throws on a state schema this envy cannot read.
-shell_env_t env_restore(shell_env_t const &live);
+// `live` with any activation undone: recorded names back to their backups, state removed.
+// A schema this envy can't read throws -- or with `lenient`, only the state is dropped.
+shell_env_t env_restore(shell_env_t const &live, bool lenient = false);
+
+// Make this process's environment `to`, given it is `from` now: only differences written.
+void env_write_process(shell_env_t const &from, shell_env_t const &to);
 
 // The process's pre-activation environment, captured once. What phases and Lua see.
 shell_env_t const &env_pristine();
@@ -78,10 +82,22 @@ shell_env_t env_with_state(shell_env_t const &base,
 // Names whose value differs between `a` and `b`, the ENVY_ACTIVATE_ state excluded.
 std::vector<std::string> env_changed_names(shell_env_t const &a, shell_env_t const &b);
 
-enum class env_shell { BASH, ZSH, FISH, POWERSHELL };
+// `env` holds an activation of `root` (canonical manifest dir) this envy can read.
+bool env_activation_of(shell_env_t const &env, std::string_view root);
+
+// ...at generation `gen`: nothing to do or undo before running in it.
+bool env_activation_current(shell_env_t const &env,
+                            std::string_view root,
+                            std::string_view gen);
+
+// The package digests an activation in `env` recorded; nullopt when it recorded none.
+std::optional<std::string> env_activation_pkgs(shell_env_t const &env);
+
+enum class env_shell { BASH, ZSH, FISH, POWERSHELL, CMD };
 std::optional<env_shell> env_shell_parse(std::string_view name);
 
-// A script that, evaluated by `sh`, turns environment `from` into `to`.
+// A script that, evaluated by `sh`, turns `from` into `to`. CMD: `set "NAME=value"` lines
+// for envy.bat's `for /f`, then `exit /b 0`; a line break or 8191+ chars throws.
 std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const &to);
 
 }  // namespace envy

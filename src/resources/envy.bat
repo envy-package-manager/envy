@@ -479,6 +479,19 @@ exit /b 0
 
 REM --project ahead of the caller's argv: this script belongs to one project; take_last
 REM means a hand-typed --project wins. The dot keeps %~dp0's backslash off the quote.
-REM envy sync may rewrite this script; single line ensures cmd.exe never reads past here.
+REM envy sync may rewrite this script; single lines ensure cmd.exe never reads past them.
 :run
-"!ENVY_BIN!" --project "%~dp0." %* & exit /b !ERRORLEVEL!
+if /i "%~1"=="activate" goto :cmd_session
+if /i "%~1"=="deactivate" goto :cmd_session
+goto :exec
+:cmd_session
+if /i "%~2"=="cmd" goto :apply
+goto :exec
+REM `activate cmd`/`deactivate cmd` change the caller's session: cmd expands the line, then
+REM `endlocal` drops our scope; envy's last line, `exit /b 0`, is the only way out with 0.
+:apply
+endlocal & (for /f "delims=" %%L in ('^""%ENVY_BIN%" --project "%~dp0." %*^"') do %%L) & exit /b 1
+REM `endlocal` first: envy gets the caller's env, and a `!` argument survives. The failed
+REM goto ends this batch (npm's cmd-shim trick): envy runs last, so its code is ours.
+:exec
+endlocal & goto #_undefined_# 2>nul || title %COMSPEC% & "%ENVY_BIN%" --project "%~dp0." %*

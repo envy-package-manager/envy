@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace envy {
 
@@ -16,6 +17,8 @@ class cmd_product : public cmd {
     std::string product_name;  // Optional: if empty, list all products
     std::optional<std::filesystem::path> manifest_path;
     bool json{ false };  // JSON output mode
+    bool run{ false };   // run the product in the project's activated environment
+    std::vector<std::string> args;  // the product's arguments, with run
   };
 
   static cli_cmd &register_cli(cli_cmd &app, cfg &c);
@@ -25,6 +28,8 @@ class cmd_product : public cmd {
   void execute() override;
 
  private:
+  void run() const;
+
   cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;
 };

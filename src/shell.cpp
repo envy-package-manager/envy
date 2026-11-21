@@ -1,14 +1,89 @@
 #include "shell.h"
+#include "platform.h"
 #include "util.h"
 
 #include "sol/sol.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
+#include <system_error>
 #include <variant>
 #include <vector>
 
 namespace envy {
+
+std::optional<std::filesystem::path> shell_find_executable(
+    std::string_view name,
+    std::string_view path_list,
+    std::filesystem::path const *skip_dir) {
+#ifdef _WIN32
+  constexpr char kSep{ ';' };
+  std::vector<std::string> const names{ [&] {
+    auto const lower{ [](std::string_view s) {
+      std::string out{ s };
+      for (char &c : out) { c = (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; }
+      return out;
+    } };
+    char const *env{ std::getenv("PATHEXT") };
+    std::string const have{ lower(std::filesystem::path{ name }.extension().string()) };
+    std::vector<std::string> out;
+    std::string_view rest{ env && *env ? env : ".COM;.EXE;.BAT;.CMD" };
+    while (!rest.empty()) {
+      size_t const semi{ rest.find(';') };
+      std::string const ext{ lower(rest.substr(0, semi)) };
+      rest = semi == std::string_view::npos ? std::string_view{} : rest.substr(semi + 1);
+      if (ext.empty()) { continue; }
+      if (ext == have) { out.insert(out.begin(), std::string{ name }); }  // `tool.bat`
+      out.push_back(std::string{ name } + ext);
+    }
+    return out;
+  }() };
+#else
+  constexpr char kSep{ ':' };
+  std::vector<std::string> const names{ std::string{ name } };
+#endif
+
+#ifdef _WIN32
+  // A Store alias (python.exe in WindowsApps) is an empty reparse point: present and not a
+  // directory is all CreateProcess needs. Entries decode as UTF-8, as the env reads.
+  auto const runnable{ [](std::filesystem::path const &p) {
+    std::error_code ec;
+    auto const st{ std::filesystem::symlink_status(p, ec) };
+    return !ec && std::filesystem::exists(st) && !std::filesystem::is_directory(st);
+  } };
+  auto const dir_of{ [](std::string_view e) {
+    return std::filesystem::path{
+      std::u8string_view{ reinterpret_cast<char8_t const *>(e.data()), e.size() }
+    };
+  } };
+#else
+  auto const runnable{ [](std::filesystem::path const &p) {
+    return platform::can_execute_file(p);
+  } };
+  auto const dir_of{ [](std::string_view e) { return std::filesystem::path{ e }; } };
+#endif
+
+  for (std::string_view rest{ path_list }; !rest.empty();) {
+    size_t const sep{ rest.find(kSep) };
+    std::string_view entry{ rest.substr(0, sep) };
+    rest = sep == std::string_view::npos ? std::string_view{} : rest.substr(sep + 1);
+#ifdef _WIN32
+    if (entry.size() >= 2 && entry.front() == '"' && entry.back() == '"') {
+      entry = entry.substr(1, entry.size() - 2);
+    }
+#endif
+    if (entry.empty()) { continue; }  // the cwd: a hijack nobody opted into
+    std::filesystem::path const dir{ dir_of(entry) };
+    if (std::error_code ec; skip_dir && std::filesystem::equivalent(dir, *skip_dir, ec)) {
+      continue;
+    }
+    for (auto const &n : names) {
+      if (auto candidate{ dir / n }; runnable(candidate)) { return candidate; }
+    }
+  }
+  return std::nullopt;
+}
 
 resolved_shell shell_resolve_default(default_shell_cfg_t const *cfg) {
   if (cfg && *cfg) {

@@ -13,21 +13,17 @@ namespace envy {
 
 struct product_info;
 
-// 4: `set -Eeuo pipefail`, so a failed cd or a missing envy aborts instead of exec'ing
-// whatever the half-built path happens to name. 3 prefixed every variable with ENVY_.
-inline constexpr int kProductScriptVersion = 4;
+// 5: one line, `envy product --run`, which owns PATH, ENVY_PROJECT_ROOT and the project's
+// activation. 4 added `set -Eeuo pipefail`; 3 prefixed every variable with ENVY_.
+inline constexpr int kProductScriptVersion = 5;
 
-// project_root_rel is the bin dir -> manifest dir hop, generic-separator: relative so a
-// re-cloned tree still resolves, stamped because '@envy bin' can name any depth.
 std::string deploy_stamp_product_script(std::string_view product_name,
-                                        platform_id platform,
-                                        std::string_view project_root_rel);
+                                        platform_id platform);
 
 void deploy_product_scripts(std::filesystem::path const &bin_dir,
                             std::vector<product_info> const &products,
                             bool strict,
-                            std::vector<platform_id> const &platforms,
-                            std::string_view project_root_rel);
+                            std::vector<platform_id> const &platforms);
 
 // Refuse a bin dir whose own upward walk does not land on the manifest that owns it: the
 // scripts written there resolve their project that way, so a layout that cannot
@@ -41,7 +37,7 @@ void deploy_verify_bin_dir(std::filesystem::path const &bin_dir,
 // Shared tail of `sync` and `deploy`: refresh the bootstrap script for each platform,
 // then either deploy product scripts ('@envy deploy') or explain how to turn deployment
 // on. manifest_path names the file in the disabled hint; meta supplies the '@envy version'
-// the stamp is checked against and the '@envy root' the project-root stamp depends on.
+// the stamp is checked against.
 void deploy_finalize(std::filesystem::path const &bin_dir,
                      std::vector<product_info> const &products,
                      std::vector<platform_id> const &platforms,

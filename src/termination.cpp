@@ -28,6 +28,8 @@ namespace envy {
 
 void termination_handler_install() { ::SetConsoleCtrlHandler(console_ctrl_handler, TRUE); }
 
+void termination_restore_inherited() {}  // console handlers are never inherited
+
 }  // namespace envy
 
 #else  // POSIX
@@ -38,6 +40,10 @@ void termination_handler_install() { ::SetConsoleCtrlHandler(console_ctrl_handle
 #include <tuple>
 
 namespace {
+
+struct sigaction s_inherited_int{};
+struct sigaction s_inherited_term{};
+struct sigaction s_inherited_pipe{};
 
 void signal_handler(int sig) {
   // Restore cursor visibility and auto-wrap before exit
@@ -54,13 +60,19 @@ void termination_handler_install() {
   sa.sa_handler = signal_handler;
   sigemptyset(&sa.sa_mask);
 
-  sigaction(SIGINT, &sa, nullptr);
-  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGINT, &sa, &s_inherited_int);
+  sigaction(SIGTERM, &sa, &s_inherited_term);
 
   // Ignore SIGPIPE: libgit2/libcurl/libssh2 can write to broken sockets
   // during network operations; the default SIGPIPE kills the process.
   sa.sa_handler = SIG_IGN;
-  sigaction(SIGPIPE, &sa, nullptr);
+  sigaction(SIGPIPE, &sa, &s_inherited_pipe);
+}
+
+void termination_restore_inherited() {
+  sigaction(SIGINT, &s_inherited_int, nullptr);
+  sigaction(SIGTERM, &s_inherited_term, nullptr);
+  sigaction(SIGPIPE, &s_inherited_pipe, nullptr);
 }
 
 }  // namespace envy

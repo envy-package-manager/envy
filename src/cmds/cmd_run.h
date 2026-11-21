@@ -25,9 +25,6 @@ class cmd_run : public cmd {
   void execute() override;
 
  private:
-  void activate_process_env(std::filesystem::path const &start_dir) const;
-  void prepend_bin_dir(std::filesystem::path const &start_dir, bool hint_sentinel) const;
-
   cfg cfg_;
   std::optional<std::filesystem::path> cli_cache_root_;
 };

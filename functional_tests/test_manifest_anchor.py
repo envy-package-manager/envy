@@ -116,11 +116,6 @@ class _AnchorTestBase(EnvyTestCase):
     def launcher(self, bin_dir: Path) -> Path:
         return bin_dir / self.launcher_name()
 
-    def hop_assignment(self, value: str) -> str:
-        """How the stamped project-root hop reads in this platform's dialect."""
-        return (f'set "ENVY_PROJECT_ROOT_HOP={value}"' if sys.platform == "win32"
-                else f'ENVY_PROJECT_ROOT_HOP="{value}"')
-
 
 class TestAnchorPrecedence(_AnchorTestBase):
     """Two projects, each providing `tool`, plus a directory in neither."""
@@ -387,7 +382,7 @@ class TestNestedSubprojectScripts(_AnchorTestBase):
     The nested tree's bin dir is deployed in its own standalone checkout and comes along
     as committed content, so its scripts run nested without ever being deployed there.
     They must resolve the enclosing project -- that is what `root "false"` declares --
-    and must not claim the nested directory as ENVY_PROJECT_ROOT.
+    and ENVY_PROJECT_ROOT is that project, never the nested directory.
     """
 
     @unittest.skipIf(sys.platform == "win32", "POSIX launcher and product script")
@@ -409,8 +404,6 @@ class TestNestedSubprojectScripts(_AnchorTestBase):
         )
         (sub / ".git").mkdir()
         self.assertEqual(0, self.sync(sub / "envy.lua", cwd=sub, env=env).returncode)
-        self.assertIn('ENVY_PROJECT_ROOT_HOP=""',
-                      (sub / "tools" / "subtool").read_text(encoding="utf-8"))
 
         # Now nest it, superproject providing the same product, as a superproject reusing
         # the subproject's PACKAGES table does.
@@ -438,10 +431,10 @@ class TestNestedSubprojectScripts(_AnchorTestBase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         # Not the nested directory: the manifest that resolved is the superproject's.
-        self.assertNotIn("src/sub", result.stdout)
+        self.assertEqual(f"ROOT={super_root}", result.stdout.strip())
 
     @unittest.skipIf(sys.platform == "win32", "POSIX launcher")
-    def test_a_root_project_does_stamp_its_own_root(self):
+    def test_a_root_project_gets_its_own_root(self):
         payload = self.tree / "payload.sh"
         payload.write_text(
             '#!/usr/bin/env bash\necho "ROOT=$ENVY_PROJECT_ROOT"\n', encoding="utf-8"
@@ -585,7 +578,7 @@ class TestProductScriptFailures(_AnchorTestBase):
 
     @unittest.skipIf(sys.platform == "win32", "POSIX product script")
     def test_a_dropped_product_propagates_envys_own_error(self):
-        """`|| exit $?`: envy's diagnosis reaches the user instead of an exec failure."""
+        """envy's diagnosis reaches the user instead of an exec failure."""
         b, env = self._deployed()
         # Drop the product but leave the script, as anyone editing a manifest without
         # re-syncing does.
@@ -599,65 +592,20 @@ class TestProductScriptFailures(_AnchorTestBase):
         self.assertIn("'tool' has no provider", result.stderr)
         self.assertNotIn("exec:", result.stderr)
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
-    def test_an_empty_resolution_is_reported_not_exec_d(self):
-        """The other half of the guard: a success with no path on stdout."""
-        b, env = self._deployed()
-        stub = b / "tools" / "envy"
-        stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        stub.chmod(0o755)
-
-        result = test_config.run(
-            [str(b / "tools" / "tool")],
-            cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
-        )
-        self.assertEqual(1, result.returncode)
-        self.assertIn("envy: failed to resolve product 'tool'", result.stderr)
-
 
 class TestWindowsProductScript(_AnchorTestBase):
     """The .bat cannot run here; assert the shape cmd.exe will be handed."""
 
-    def test_bat_stamps_the_project_root_and_calls_its_sibling_launcher(self):
+    def test_bat_hands_the_tool_to_its_sibling_launcher_and_writes_nothing(self):
+        """envy owns PATH, ENVY_PROJECT_ROOT and the activation; the .bat sets nothing."""
         p = self.project("winny", '{ tool = "W-tool" }', bin_value="build/tools")
         run = self.sync(p / "envy.lua", "--platform", "all", cwd=p)
         self.assertEqual(0, run.returncode, run.stderr)
 
         script = (p / "build" / "tools" / "tool.bat").read_text(encoding="utf-8")
         self.assertNotIn("@@", script)
-        # %~dp0 keeps its own trailing backslash here, so the hop concatenates cleanly and
-        # the closing quote is never the escaped one.
-        self.assertIn('set "ENVY_PROJECT_ROOT_HOP=../.."', script)
-        self.assertIn(
-            'for %%I in ("%~dp0%ENVY_PROJECT_ROOT_HOP%") do '
-            'set "ENVY_PROJECT_ROOT=%%~fI"',
-            script,
-        )
-        self.assertIn('set "PATH=%~dp0.;%PATH%"', script)
-        self.assertIn('call "%~dp0envy.bat" product "tool"', script)
-        self.assertIn("if not defined ENVY_PRODUCT_PATH", script)
-        # Cleared before the `for /f`, so the guard tests what this invocation resolved
-        # rather than a value inherited from an ancestor product script.
-        self.assertIn('set "ENVY_PRODUCT_PATH="', script)
-
-    def test_bat_scopes_its_environment_writes(self):
-        """Without setlocal the PATH and ENVY_PRODUCT_PATH writes escape into the caller.
-
-        PATH would gain a copy of the bin dir per invocation, and a sibling product
-        reached through that PATH would inherit ENVY_PRODUCT_PATH -- passing the guard and
-        re-running the first script's payload forever.
-        """
-        p = self.project("winny", '{ tool = "W-tool" }')
-        run = self.sync(p / "envy.lua", "--platform", "all", cwd=p)
-        self.assertEqual(0, run.returncode, run.stderr)
-
-        script = (p / "tools" / "tool.bat").read_text(encoding="utf-8")
-        lines = [ln.strip() for ln in script.splitlines()]
-        self.assertIn("setlocal", lines)
-        # Before any write, and plain: EnableDelayedExpansion would eat a '!' in a path.
-        self.assertLess(lines.index("setlocal"),
-                        next(i for i, ln in enumerate(lines) if ln.startswith("set ")))
-        self.assertNotIn("setlocal EnableDelayedExpansion", lines)
+        self.assertIn('\n"%~dp0envy.bat" product --run "tool" -- %*', script)
+        self.assertNotIn("set ", script.lower())
 
     def test_bat_launcher_injects_the_anchor(self):
         p = self.project("winny", '{ tool = "W-tool" }')
@@ -666,6 +614,18 @@ class TestWindowsProductScript(_AnchorTestBase):
 
         launcher = (p / "tools" / "envy.bat").read_text(encoding="utf-8")
         self.assertIn('--project "%~dp0."', launcher)
+
+    def test_bat_launcher_starts_envy_outside_its_own_scope(self):
+        """endlocal first: no launcher variable reaches envy, and a `!` argument survives.
+        The failed goto ends the batch, so envy runs last and its exit code is the batch's."""
+        p = self.project("winny", '{ tool = "W-tool" }')
+        run = self.sync(p / "envy.lua", "--platform", "all", cwd=p)
+        self.assertEqual(0, run.returncode, run.stderr)
+
+        lines = (p / "tools" / "envy.bat").read_text(encoding="utf-8").splitlines()
+        self.assertEqual('endlocal & goto #_undefined_# 2>nul || title %COMSPEC% & '
+                         '"%ENVY_BIN%" --project "%~dp0." %*',
+                         lines[-1].strip())  # last: a rewrite mid-run is never read
 
 
 class TestBinDirRoundTrip(_AnchorTestBase):
@@ -708,9 +668,9 @@ class TestBinDirRoundTrip(_AnchorTestBase):
     def test_a_nested_deploy_matches_a_standalone_one_byte_for_byte(self):
         """Why deploying nested is safe: nothing in a non-root bin dir names its tree.
 
-        No absolute path, and the project-root stamp is empty for '@envy root "false"',
-        so the files a superproject checkout writes are the ones a standalone clone
-        writes. If that ever stops holding, the in-place restamp becomes a lie.
+        No absolute path and no project-root stamp, so the files a superproject checkout
+        writes are the ones a standalone clone writes. If that ever stops holding, the
+        in-place restamp becomes a lie.
         """
         directives = '-- @envy root "false"\n'
         standalone = self.project("alone", '{ tool = "T" }', directives=directives)
@@ -781,13 +741,11 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         self.assertPathContains(run.stderr, "repo/tools")
 
     def test_bin_dir_equal_to_the_manifest_dir(self):
-        """'@envy bin "."' -- the relative hop to the project root is "." itself."""
+        """'@envy bin "."' -- the bin dir is the project root itself."""
         p = self.project("flat", '{ tool = "FLAT-tool" }', bin_value=".")
         run = self.sync(p / "envy.lua", cwd=p)
         self.assertEqual(0, run.returncode, run.stderr)
-        script = self.product(p, "tool").read_text(encoding="utf-8")
-        self.assertNotIn("@@PROJECT_ROOT_REL@@", script)
-        self.assertIn(self.hop_assignment("."), script)
+        self.assertNotIn("@@", self.product(p, "tool").read_text(encoding="utf-8"))
 
     def test_an_ordinary_layout_is_silent(self):
         p = self.project("plain", '{ tool = "PLAIN-tool" }', bin_value="build/tools")
@@ -795,9 +753,6 @@ class TestBinDirRoundTrip(_AnchorTestBase):
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertNotIn("would resolve", run.stderr)
         self.assertNotIn("no manifest", run.stderr)
-        # The stamped hop has to climb out of a nested bin dir, not assume one level.
-        script = self.product(p / "build" / "tools", "tool").read_text(encoding="utf-8")
-        self.assertIn(self.hop_assignment("../.."), script)
 
 
 class TestAnchoredExecutionEnvironment(_AnchorTestBase):
@@ -837,13 +792,12 @@ class TestAnchoredExecutionEnvironment(_AnchorTestBase):
 class TestDeepBinDir(_AnchorTestBase):
     """A bin dir may sit at any depth under its manifest, not only one level down.
 
-    Depth is what the stamped hop and the launcher's upward walk each encode, and the
-    two have to agree: an off-by-one in either names a directory that is not the
-    project. Everything here is the deployed artifact doing the resolving, not envy.
+    Depth is what the launcher's upward walk encodes: an off-by-one names a directory
+    that is not the project. Everything here is the deployed artifact doing the
+    resolving.
     """
 
     DEEP = "a/b/c/bin"
-    HOP = "../../../.."
 
     def deep_project(self, products: str = '{ tool = "DEEP-tool" }', **kw) -> Path:
         return self.project("deep", products, bin_value=self.DEEP, **kw)
@@ -852,33 +806,17 @@ class TestDeepBinDir(_AnchorTestBase):
     def deep_bin(root: Path) -> Path:
         return root / "a" / "b" / "c" / "bin"
 
-    def payload(self, body: str) -> Path:
-        """An executable a product can point at, so the script's environment is visible."""
+    def payload(self, body: str, bat: str = "") -> Path:
+        """An executable a product can point at, so the script's environment is visible:
+        `body` in bash, or `bat` in cmd on Windows."""
+        if sys.platform == "win32":
+            path = self.tree / "payload.bat"
+            path.write_text(f"@echo off\r\n{bat}\r\n", encoding="utf-8")
+            return path
         path = self.tree / "payload.sh"
         path.write_text(f'#!/usr/bin/env bash\n{body}\n', encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
-
-    # -- the stamp ----------------------------------------------------------
-
-    def test_the_stamped_hop_counts_every_level(self):
-        """One `..` per component of '@envy bin', however many that is."""
-        for bin_value, hop in (
-            ("tools", ".."),
-            ("build/tools", "../.."),
-            ("a/b/c/bin", "../../../.."),
-            ("a/b/c/d/e/bin", "../../../../../.."),
-        ):
-            with self.subTest(bin=bin_value):
-                name = f"depth{bin_value.count('/')}"
-                root = self.project(name, '{ tool = "T" }', bin_value=bin_value)
-                run = self.sync(root / "envy.lua", cwd=root)
-                self.assertEqual(0, run.returncode, run.stderr)
-                script = self.product(root / bin_value, "tool").read_text(
-                    encoding="utf-8"
-                )
-                self.assertNotIn("@@", script)
-                self.assertIn(self.hop_assignment(hop), script)
 
     def test_a_deep_bin_dir_deploys_both_scripts_without_complaint(self):
         root = self.deep_project()
@@ -889,28 +827,11 @@ class TestDeepBinDir(_AnchorTestBase):
         self.assertTrue(self.launcher(self.deep_bin(root)).exists())
         self.assertTrue(self.product(self.deep_bin(root), "tool").exists())
 
-    def test_bat_stamps_the_full_hop_and_joins_it_onto_dp0(self):
-        """The .bat cannot run here; assert the shape cmd.exe will be handed."""
-        root = self.deep_project()
-        run = self.sync(root / "envy.lua", "--platform", "all", cwd=root)
-        self.assertEqual(0, run.returncode, run.stderr)
-        script = (self.deep_bin(root) / "tool.bat").read_text(encoding="utf-8")
-        self.assertNotIn("@@", script)
-        self.assertIn(f'set "ENVY_PROJECT_ROOT_HOP={self.HOP}"', script)
-        # %~dp0 keeps its trailing backslash, so a four-level hop concatenates cleanly
-        # and %%~fI collapses the mixed separators into one absolute path.
-        self.assertIn(
-            'for %%I in ("%~dp0%ENVY_PROJECT_ROOT_HOP%") do '
-            'set "ENVY_PROJECT_ROOT=%%~fI"',
-            script,
-        )
-
     # -- what the deployed scripts resolve at runtime ------------------------
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
     def test_the_product_script_resolves_the_project_root_at_depth(self):
-        """The gap a stamp test cannot close: the hop is joined and walked for real."""
-        payload = self.payload('echo "ROOT=$ENVY_PROJECT_ROOT"')
+        """The launcher walks four levels up; envy hands the tool that project's root."""
+        payload = self.payload('echo "ROOT=$ENVY_PROJECT_ROOT"', "echo ROOT=%ENVY_PROJECT_ROOT%")
         env = self.seed_launcher_binary()
         root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
         self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
@@ -920,13 +841,13 @@ class TestDeepBinDir(_AnchorTestBase):
             cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        # Exact, not a containment: an off-by-one hop still contains the project root.
-        self.assertEqual(f"ROOT={root}", result.stdout.strip())
+        # Exact, not a containment: an off-by-one walk still contains the project root.
+        got = result.stdout.strip().removeprefix("ROOT=")
+        self.assertEqual(os.path.normcase(str(root)), os.path.normcase(got))
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX product script")
     def test_the_product_script_puts_the_deep_bin_dir_first_on_path(self):
         """So a product at depth still shells out to its siblings."""
-        payload = self.payload('echo "FIRST=${PATH%%:*}"')
+        payload = self.payload('echo "FIRST=${PATH%%:*}"', "echo FIRST=%PATH%")
         env = self.seed_launcher_binary()
         root = self.deep_project(f'{{ tool = "{self.lua_path(payload)}" }}')
         self.assertEqual(0, self.sync(root / "envy.lua", cwd=root, env=env).returncode)
@@ -936,7 +857,8 @@ class TestDeepBinDir(_AnchorTestBase):
             cwd=self.outside, env=env, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(f"FIRST={self.deep_bin(root)}", result.stdout.strip())
+        first = result.stdout.strip().removeprefix("FIRST=").split(os.pathsep)[0]
+        self.assertEqual(os.path.normcase(str(self.deep_bin(root))), os.path.normcase(first))
 
     @unittest.skipIf(sys.platform == "win32", "POSIX launcher")
     def test_the_launcher_walks_out_of_a_deep_bin_dir_to_its_manifest(self):
@@ -989,8 +911,7 @@ class TestDeepBinDir(_AnchorTestBase):
         )
         run = self.sync(root / "envy.lua", cwd=root)
         self.assertEqual(0, run.returncode, run.stderr)
-        script = self.product(self.deep_bin(root), "tool").read_text(encoding="utf-8")
-        self.assertIn(self.hop_assignment(self.HOP), script)
+        self.assertTrue(self.product(self.deep_bin(root), "tool").exists())
 
     def test_a_git_between_the_deep_bin_dir_and_its_manifest_is_reported(self):
         """A repo boundary halts the walk, so the scripts resolve nothing at all."""
