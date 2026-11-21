@@ -186,8 +186,11 @@ exec_request plan_run(cmd_product::cfg const &cfg,
   shell_env_t to{ activation_for_tool(eng, *m, anchor, live, provider) };
   auto argv{ [&] {
     auto out{ product_util_run_argv(provider, cfg.product_name) };
-    out.front() =
-        resolve_program(out.front(), cfg.product_name, anchor, m->meta, env_get(to, "PATH"));
+    out.front() = resolve_program(out.front(),
+                                  cfg.product_name,
+                                  anchor,
+                                  m->meta,
+                                  env_get(to, "PATH"));
     out.insert(out.end(), cfg.args.begin(), cfg.args.end());
     return out;
   }() };

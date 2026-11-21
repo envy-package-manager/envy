@@ -189,12 +189,14 @@ TEST_CASE("product_util_argv renders products of the provider and its closure") 
   depend(yarn.get(), node.get());
   node->products["node"] = path("bin/node");
   yarn->products["yarn.cjs"] = path("lib/yarn.cjs");  // its own
-  yarn->products["yarn"] = command({ "{{node}}", "{{yarn.cjs}}", "--node={{node}}", "-q" });
+  yarn->products["yarn"] =
+      command({ "{{node}}", "{{yarn.cjs}}", "--node={{node}}", "-q" });
 
-  CHECK(render(yarn.get(), "yarn") == std::vector<std::string>{ "local.node@v1:node",
-                                                                "local.yarn@v1:yarn.cjs",
-                                                                "--node=local.node@v1:node",
-                                                                "-q" });
+  CHECK(render(yarn.get(), "yarn") ==
+        std::vector<std::string>{ "local.node@v1:node",
+                                  "local.yarn@v1:yarn.cjs",
+                                  "--node=local.node@v1:node",
+                                  "-q" });
   CHECK(render(node.get(), "node") == std::vector<std::string>{ "local.node@v1:node" });
 }
 
@@ -207,8 +209,9 @@ TEST_CASE("product_util_argv splices a whole-element command from the closure") 
   node->products["npm"] = command({ "{{node}}", "{{npm-cli.js}}" });
   app->products["install"] = command({ "{{npm}}", "ci" });
 
-  CHECK(render(app.get(), "install") ==
-        std::vector<std::string>{ "local.node@v1:node", "local.node@v1:npm-cli.js", "ci" });
+  CHECK(
+      render(app.get(), "install") ==
+      std::vector<std::string>{ "local.node@v1:node", "local.node@v1:npm-cli.js", "ci" });
 }
 
 TEST_CASE("product_util_argv refuses a name outside the provider's closure") {

@@ -601,7 +601,8 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 [[noreturn]] void fail_product_command(std::string const &key,
                                        std::string const &id,
                                        std::string_view why) {
-  throw_runtime_error({ "PRODUCTS entry '", key, "' command ", why, " in spec '", id, "'" });
+  throw_runtime_error(
+      { "PRODUCTS entry '", key, "' command ", why, " in spec '", id, "'" });
 }
 
 // A PRODUCTS `command`: a non-empty list of strings whose placeholders parse. Which
