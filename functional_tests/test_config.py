@@ -1,6 +1,5 @@
 """Shared configuration for functional tests."""
 
-import functools
 import os
 import shlex
 import shutil
@@ -252,11 +251,10 @@ def _get_executable(name: str, label: str) -> Path:
     return exe
 
 
-@functools.cache
-def envy_has_tsan() -> bool:
-    """True when the functional tester is built with ThreadSanitizer: instrumented code,
-    gcc's or clang's, always calls __tsan_init."""
-    return b"__tsan_init" in get_envy_executable().read_bytes()
+def sanitizer() -> str:
+    """The sanitizer the functional tester carries (asan, ubsan, tsan), as the build's
+    owner declares it in ENVY_TEST_SANITIZER -- CI sets it per shard. Empty if none."""
+    return os.environ.get("ENVY_TEST_SANITIZER", "")
 
 
 def get_envy_executable() -> Path:

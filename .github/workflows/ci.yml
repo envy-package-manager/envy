@@ -53,7 +53,7 @@ jobs:
           - name: linux-x64-asan
             os: ubuntu-latest
             shard: func-asan
-            build_args: --sanitizer=asan
+            sanitizer: asan
             cache_group: linux-x64-asan
             cache_writer: true
           # Stamped so version bugs land here, not at tag time; a tag's own -D still wins. Keep
@@ -61,7 +61,8 @@ jobs:
           - name: linux-x64-ubsan
             os: ubuntu-latest
             shard: func-ubsan
-            build_args: --sanitizer=ubsan -DENVY_VERSION=0.6.0
+            sanitizer: ubsan
+            build_args: -DENVY_VERSION=0.6.0
             cache_group: linux-x64-ubsan
             cache_writer: true
           # Pinned: on ubuntu-26.04 TSan aborts at startup ("incompatible memory layout")
@@ -69,25 +70,25 @@ jobs:
           - name: linux-x64-tsan
             os: ubuntu-24.04
             shard: func-tsan
-            build_args: --sanitizer=tsan
+            sanitizer: tsan
             cache_group: linux-x64-tsan
             cache_writer: true
           - name: linux-arm64-asan
             os: ubuntu-24.04-arm
             shard: func-asan
-            build_args: --sanitizer=asan
+            sanitizer: asan
             cache_group: linux-arm64-asan
             cache_writer: true
           - name: linux-arm64-ubsan
             os: ubuntu-24.04-arm
             shard: func-ubsan
-            build_args: --sanitizer=ubsan
+            sanitizer: ubsan
             cache_group: linux-arm64-ubsan
             cache_writer: true
           - name: linux-arm64-tsan
             os: ubuntu-24.04-arm
             shard: func-tsan
-            build_args: --sanitizer=tsan
+            sanitizer: tsan
             cache_group: linux-arm64-tsan
             cache_writer: true
           # Unsanitized build that also produces envy_functional_tester, so it is the
@@ -168,6 +169,9 @@ jobs:
         id: build
         run: |
           BUILD_ARGS="${{ matrix.build_args }}"
+          if [[ -n "${{ matrix.sanitizer }}" ]]; then
+            BUILD_ARGS="$BUILD_ARGS --sanitizer=${{ matrix.sanitizer }}"
+          fi
           if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
             BUILD_ARGS="$BUILD_ARGS -DENVY_VERSION=${GITHUB_REF_NAME#v}"
           fi
@@ -218,6 +222,7 @@ jobs:
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
+          ENVY_TEST_SANITIZER: ${{ matrix.sanitizer }}  # what the tester carries; empty if none
 
       - name: Save sccache cache
         id: sccache-save

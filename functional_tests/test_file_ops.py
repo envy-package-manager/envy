@@ -113,7 +113,7 @@ class TestEnvyWriteMkdir(EnvyTestCase):
     @POSIX_MODES
     def test_a_failed_write_keeps_the_old_file(self):
         """A file-size limit fails the write at flush; the old content must survive."""
-        if test_config.envy_has_tsan():
+        if test_config.sanitizer() == "tsan":
             self.skipTest("TSan's runtime dies (SIGBUS) under a file-size limit")
         target = self.work / "kept.txt"
         t = self.lua_path(target)
