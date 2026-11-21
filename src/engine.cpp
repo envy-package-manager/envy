@@ -1517,14 +1517,21 @@ void engine::validate_product_fallbacks() {
 
 void engine::validate_product_commands() {
   // Rendering with stand-in leaves walks exactly what a run renders: every placeholder a
-  // product of its provider's closure, no cycle, no command embedded mid-element.
+  // product of its provider's closure, no cycle, no command embedded mid-element. Only
+  // commands this host can run: a spec may declare a platform's interpreter only there.
   std::vector<std::pair<pkg *, std::string>> commands;
   {
     std::lock_guard const lock(mutex_);
     for (auto &[_, package] : packages_) {
       std::lock_guard const deps_lock(package->deps_mutex);
       for (auto const &[name, entry] : package->products) {
-        if (!entry.command.empty()) { commands.emplace_back(package.get(), name); }
+        if (!entry.command.empty() &&
+            util_platform_matches(
+                util_platform_intersect(entry.platforms, package->resolved_platforms),
+                platform::os_name(),
+                platform::arch_name())) {
+          commands.emplace_back(package.get(), name);
+        }
       }
     }
   }

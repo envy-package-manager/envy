@@ -606,21 +606,30 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 }
 
 // A PRODUCTS `command`: a non-empty list of strings whose placeholders parse. Which
-// products they name is checked once the graph resolves.
+// products they name is checked once the graph resolves. A cache-managed spec's files are
+// path products, so a literal relative program there names nothing every surface agrees
+// on: `--run` would anchor it at the project root, a phase at its run dir.
 std::vector<std::string> parse_product_command(sol::object const &obj,
                                                std::string const &key,
-                                               std::string const &id) {
+                                               std::string const &id,
+                                               bool user_managed) {
   if (obj.get_type() != sol::type::table) {
     fail_product_command(key, id, "must be a list of strings");
   }
   sol::table const t{ obj.as<sol::table>() };
-  std::vector<std::string> out;
-  for (std::size_t i{ 1 }; i <= t.size(); ++i) {
-    sol::object const elem{ t[i] };
-    if (!elem.is<std::string>()) {
+  std::size_t entries{ 0 };
+  for (auto const &kv : t) {
+    if (!kv.first.is<std::size_t>() || !kv.second.is<std::string>()) {
       fail_product_command(key, id, "must be a list of strings");
     }
-    std::string s{ elem.as<std::string>() };
+    ++entries;
+  }
+  if (entries != t.size()) { fail_product_command(key, id, "must not have holes"); }
+
+  std::vector<std::string> out;
+  out.reserve(entries);
+  for (std::size_t i{ 1 }; i <= entries; ++i) {
+    std::string s{ t.get<std::string>(i) };
     try {
       product_util_placeholders(s);
     } catch (std::exception const &e) { fail_product_command(key, id, e.what()); }
@@ -628,6 +637,14 @@ std::vector<std::string> parse_product_command(sol::object const &obj,
   }
   if (out.empty() || out.front().empty()) {
     fail_product_command(key, id, "must be a non-empty list starting with a program");
+  }
+  std::filesystem::path const program{ out.front() };
+  if (!user_managed && product_util_placeholders(out.front()).empty() &&
+      program.has_parent_path() && !program.is_absolute()) {
+    fail_product_command(key,
+                         id,
+                         "starts with relative path '" + out.front() +
+                             "'; declare the file as a path product and use its {{name}}");
   }
   return out;
 }
@@ -704,7 +721,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
                                 id,
                                 "'" });
         }
-        command = parse_product_command(command_field, key_str, id);
+        command = parse_product_command(command_field, key_str, id, user_managed);
       } else if (!val_field.is<std::string>()) {
         throw_runtime_error({ "PRODUCTS table entry '",
                               key_str,

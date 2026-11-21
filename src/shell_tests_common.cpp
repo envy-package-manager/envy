@@ -16,25 +16,65 @@ TEST_CASE("shell_getenv captures PATH") {
 #endif
 }
 
-TEST_CASE("shell_quote_argv quotes only what each shell needs") {
+TEST_CASE("shell_quote_argv: POSIX quotes everything outside a bare set") {
   using envy::shell_choice;
   using envy::shell_quote_argv;
-  std::vector<std::string> const argv{ "/opt/node", "a b", "it's", "", "-x=1", "50%" };
+  for (char c{ 0x21 }; c < 0x7f; ++c) {  // every printable but space
+    std::string const arg{ 'a', c };
+    bool const bare{ (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') ||
+                     std::string_view{ "_-.:+/@," }.find(c) != std::string_view::npos };
+    std::string const quoted{ c == '\'' ? std::string{ "'a'\\'''" } : "'" + arg + "'" };
+    CAPTURE(arg);
+    CHECK(shell_quote_argv({ arg }, shell_choice::bash) == (bare ? arg : quoted));
+  }
+  CHECK(shell_quote_argv({ "/opt/node", "a b", "it's", "", "-x=1" }, shell_choice::sh) ==
+        "/opt/node 'a b' 'it'\\''s' '' '-x=1'");
+}
 
-  CHECK(shell_quote_argv(argv, shell_choice::bash) ==
-        "/opt/node 'a b' 'it'\\''s' '' '-x=1' '50%'");
-  CHECK(shell_quote_argv(argv, shell_choice::sh) ==
-        shell_quote_argv(argv, shell_choice::bash));
-  CHECK(shell_quote_argv(argv, shell_choice::powershell) ==
-        "& /opt/node 'a b' 'it''s' '' '-x=1' '50%'");
-  CHECK(shell_quote_argv({ "C:\\n\\node.exe", "a b", "", "-x=1", "50%" },
-                         shell_choice::cmd) ==
-        "C:\\n\\node.exe \"a b\" \"\" \"-x=1\" \"50%%\"");
-  CHECK(shell_quote_argv({ "C:\\n\\node.exe" }, shell_choice::powershell) ==
-        "& C:\\n\\node.exe");
+TEST_CASE("shell_quote_argv: PowerShell") {
+  using envy::shell_choice;
+  using envy::shell_quote_argv;
+  auto const q{ [](std::vector<std::string> const &argv) {
+    return shell_quote_argv(argv, shell_choice::powershell);
+  } };
 
-  CHECK_THROWS_WITH(shell_quote_argv({ "say \"hi\"" }, shell_choice::cmd),
-                    "cmd cannot quote 'say \"hi\"'");
-  CHECK_THROWS_WITH(shell_quote_argv({ "wow!" }, shell_choice::cmd),
-                    "cmd cannot quote 'wow!'");
+  CHECK(q({ "C:\\n\\node.exe", "a b", "it's", "50%", "/x" }) ==
+        "& C:\\n\\node.exe 'a b' 'it''s' '50%' /x");
+  CHECK(q({ "C:\\Program Files\\x.exe" }) == "& 'C:\\Program Files\\x.exe'");
+  CHECK(q({ "x", "-Djava.awt.headless", "@args", "$HOME", "a`b" }) ==
+        "& x '-Djava.awt.headless' '@args' '$HOME' 'a`b'");
+  CHECK(q({ "x", "O\xE2\x80\x99"
+                 "Brien" }) == "& x 'O\xE2\x80\x99\xE2\x80\x99"
+                               "Brien'");
+  CHECK(q({ "x", "C:\\no-space\\" }) == "& x C:\\no-space\\");
+
+  CHECK_THROWS_WITH(q({ "x", "" }),
+                    "PowerShell cannot quote '': powershell.exe drops an empty argument");
+  CHECK_THROWS_WITH(q({ "x", "say \"hi\"" }),
+                    doctest::Contains("passes '\"' to a program unescaped"));
+  CHECK_THROWS_WITH(q({ "x", "C:\\a b\\" }),
+                    doctest::Contains("turns a trailing '\\' into an escaped quote"));
+  CHECK_THROWS_WITH(q({ "x", "a\nb" }), doctest::Contains("a line break"));
+}
+
+TEST_CASE("shell_quote_argv: cmd") {
+  using envy::shell_choice;
+  using envy::shell_quote_argv;
+  auto const q{ [](std::vector<std::string> const &argv) {
+    return shell_quote_argv(argv, shell_choice::cmd);
+  } };
+
+  CHECK(q({ "C:\\n\\node.exe", "a b", "50%", "-x=1", "C:/fwd" }) ==
+        "C:\\n\\node.exe \"a b\" \"50%%\" \"-x=1\" \"C:/fwd\"");
+  CHECK(q({ "x", "C:\\a b\\", "a b\\\\" }) == "x \"C:\\a b\\\\\" \"a b\\\\\\\\\"");
+  CHECK(q({ "C:\\w\\gradlew.BAT", "build", "a b" }) ==
+        "call C:\\w\\gradlew.BAT build \"a b\"");
+  CHECK(q({ "g.exe", "a^b" }) == "g.exe \"a^b\"");
+
+  CHECK_THROWS_WITH(q({ "say \"hi\"" }), doctest::Contains("cmd cannot quote"));
+  CHECK_THROWS_WITH(q({ "wow!" }), doctest::Contains("cmd cannot quote 'wow!'"));
+  CHECK_THROWS_WITH(q({ "x", "a\r\nb" }), doctest::Contains("a line break"));
+  CHECK_THROWS_WITH(q({ "g.cmd", "50%" }), doctest::Contains("'call' expands '%'"));
+  CHECK_THROWS_WITH(q({ "g.cmd", "a^b" }), doctest::Contains("'call' expands '%'"));
 }

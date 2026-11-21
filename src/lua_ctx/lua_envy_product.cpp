@@ -1,15 +1,18 @@
 #include "lua_envy_product.h"
 
 #include "engine.h"
+#include "env_ops.h"
 #include "lua_phase_context.h"
 #include "lua_shell.h"
 #include "pkg.h"
+#include "pkg_env.h"
 #include "pkg_phase.h"
 #include "product_util.h"
 #include "shell.h"
 #include "trace.h"
 #include "util.h"
 
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -54,7 +57,9 @@ product_access authorize(char const *fn,
                          std::string const &product_name,
                          phase_context const *ctx) {
   pkg *const consumer{ ctx ? ctx->p : nullptr };
-  if (!consumer) { throw_runtime_error({ fn, ": not in phase context (missing pkg)" }); }
+  if (!consumer) {
+    throw_runtime_error({ fn, ": not in phase context (missing pkg)" });
+  }
   if (product_name.empty()) {
     throw_runtime_error({ fn, ": product name cannot be empty" });
   }
@@ -126,6 +131,11 @@ product_access authorize(char const *fn,
                    dep.provider->cfg->identity + "'");
   }
 
+  // A weak fallback may provide the product transitively, so the edge's package need not
+  // declare it; the declarer is in its closure, finished whenever the edge's package is.
+  if (pkg *const owner{ product_util_closure_provider(dep.provider, product_name) }) {
+    a.provider = owner;
+  }
   return a;
 }
 
@@ -133,15 +143,15 @@ product_access authorize(char const *fn,
 // envy.run picks it. A custom shell has no quoting envy knows, so it must be named.
 shell_choice command_shell(sol::optional<sol::object> const &shell_obj,
                            phase_context const *ctx) {
-  resolved_shell const shell{ shell_obj && shell_obj->valid()
-                                  ? parse_shell_config_from_lua(*shell_obj,
-                                                                "envy.product_command")
-                              : ctx->builtin_shell ? shell_resolve_default(nullptr)
-                                                   : pkg_default_shell(ctx->p) };
+  resolved_shell const shell{
+    shell_obj && shell_obj->valid()
+        ? parse_shell_config_from_lua(*shell_obj, "shell")
+    : ctx->builtin_shell ? shell_resolve_default(nullptr)
+                         : pkg_default_shell(ctx->p)
+  };
   if (auto const *choice{ std::get_if<shell_choice>(&shell) }) { return *choice; }
   throw_runtime_error(
-      { "envy.product_command: the shell is custom; pass an ENVY_SHELL "
-        "constant to quote for" });
+      { "the shell is custom; pass an ENVY_SHELL constant to quote for" });
 }
 
 }  // namespace
@@ -166,9 +176,22 @@ void lua_envy_product_install(sol::table &envy_table) {
                                      sol::this_state L) -> std::string {
     phase_context const *ctx{ lua_phase_context_get(L) };
     auto const a{ authorize("envy.product_command", product_name, ctx) };
-    std::string const command{ shell_quote_argv(
-        product_util_run_argv(a.provider, product_name),
-        command_shell(shell_obj, ctx)) };
+    std::string const command{ [&] {
+      try {
+        auto argv{ product_util_run_argv(a.provider, product_name) };
+        // A bare program resolves on the phase's PATH, as `--run` resolves it on the
+        // tool's: never a PowerShell alias (curl) or a cmd builtin (start) by that name.
+        if (!std::filesystem::path{ argv.front() }.has_parent_path()) {
+          shell_env_t const env{ pkg_env_for_context(ctx) };
+          std::string const *const path{ env_get(env, "PATH") };
+          auto const found{ shell_find_executable(argv.front(),
+                                                  path ? *path : std::string{}) };
+          if (!found) { throw std::runtime_error{ "'" + argv.front() + "' not on PATH" }; }
+          argv.front() = found->string();
+        }
+        return shell_quote_argv(argv, command_shell(shell_obj, ctx));
+      } catch (std::exception const &e) { throw a.refuse(e.what()); }
+    }() };
     a.trace(true, command);
     return command;
   };

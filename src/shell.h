@@ -77,9 +77,17 @@ struct shell_run_cfg {
 
 shell_choice shell_parse_choice(std::optional<std::string_view> value);
 
-// argv as one command line for `shell`, quoting only elements that need it: POSIX single
-// quotes; PowerShell single quotes behind `&`; cmd double quotes, `%` doubled because
-// envy.run hands cmd a batch file. Throws on '"' or '!', which cmd cannot quote.
+// `v` as one single-quoted word: POSIX sh escapes `'` as `'\''`; PowerShell doubles `'`
+// and U+2018..U+201B, which it also reads as single quotes.
+void shell_append_quoted_posix(std::string &out, std::string_view v);
+void shell_append_quoted_pwsh(std::string &out, std::string_view v);
+
+// argv as one line of an envy.run script for `shell`, quoting only what needs it. POSIX:
+// single quotes. PowerShell: single quotes behind `&`; refuses what powershell.exe 5.1
+// cannot hand a native program intact (empty, `"`, a spaced argument ending in `\`).
+// cmd: double quotes, `%` doubled for the batch file, backslashes doubled before a closing
+// quote, `call` before a .bat/.cmd so the script resumes; refuses `"` and `!`, and `%`/`^`
+// behind `call`. Line breaks are refused outside POSIX.
 std::string shell_quote_argv(std::vector<std::string> const &argv, shell_choice shell);
 
 // Validate custom shell configuration (checks executable exists and is accessible)

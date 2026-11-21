@@ -1,6 +1,6 @@
 #include "product_util.h"
 
-#include "engine.h"
+#include "engine.h"  // pkg_type
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "pkg_env.h"
@@ -47,6 +47,12 @@ struct argv_builder {
   product_render render;
   std::vector<std::pair<pkg *, std::string>> stack;  // products being rendered: cycles
   std::vector<std::string> out;
+  std::string program;  // the product that rendered out[0]
+
+  void push(std::string arg, std::string const &from) {
+    if (out.empty()) { program = from; }
+    out.push_back(std::move(arg));
+  }
 
   // The closure member providing `name` for `provider`'s product `of`; throws if none.
   pkg *closure_provider(pkg *provider, std::string const &of, std::string const &name) {
@@ -65,7 +71,7 @@ struct argv_builder {
   void append(pkg *provider, std::string const &name) {
     product_entry const entry{ entry_of(provider, name) };
     if (entry.command.empty()) {
-      out.push_back(render(provider, name));
+      push(render(provider, name), name);
       return;
     }
 
@@ -110,12 +116,13 @@ struct argv_builder {
         at = h.end;
       }
       rendered.append(element, at);
-      out.push_back(std::move(rendered));
+      push(std::move(rendered), name);
     }
     stack.pop_back();
   }
 };
 
+// A user-managed value is host state; a cache-managed one lands where check will put it.
 std::string predicted_value(pkg *provider, std::string const &name) {
   product_entry const entry{ entry_of(provider, name) };
   require_renderable_type(provider->type, name, provider->cfg->identity);
@@ -125,19 +132,6 @@ std::string predicted_value(pkg *provider, std::string const &name) {
 }
 
 }  // namespace
-
-std::string product_util_predict(product_info const &pi, pkg *provider) {
-  require_renderable_type(pi.type, pi.product_name, pi.provider_canonical);
-  if (pi.type == pkg_type::USER_MANAGED) { return pi.value; }
-
-  if (!provider) {
-    throw_runtime_error({ "Product '", pi.product_name, "' has no provider" });
-  }
-
-  // Where the payload will land: the same hash and label check will use when it installs
-  // it, so the printed path is the one that appears.
-  return util_normalized_path(pkg_predicted_path(provider) / pi.value);
-}
 
 std::string product_util_resolve(pkg *provider, std::string const &product_name) {
   if (!provider) {
@@ -224,17 +218,22 @@ pkg *product_util_closure_provider(pkg *root, std::string const &name) {
 
 std::vector<std::string> product_util_argv(pkg *provider,
                                            std::string const &name,
-                                           product_render render) {
+                                           product_render render,
+                                           std::string *program) {
   if (!provider) { throw_runtime_error({ "Product '", name, "' has no provider" }); }
-  argv_builder b{ .render = render, .stack = {}, .out = {} };
+  argv_builder b{ .render = render, .stack = {}, .out = {}, .program = {} };
   b.append(provider, name);
+  if (program) { *program = std::move(b.program); }
   return std::move(b.out);
 }
 
-std::vector<std::string> product_util_run_argv(pkg *provider, std::string const &name) {
-  return product_util_argv(provider, name, [](pkg *p, std::string const &n) {
+std::vector<std::string> product_util_run_argv(pkg *provider,
+                                               std::string const &name,
+                                               std::string *program) {
+  auto const resolve{ [](pkg *p, std::string const &n) {
     return product_util_resolve(p, n);
-  });
+  } };
+  return product_util_argv(provider, name, resolve, program);
 }
 
 std::vector<std::string> product_util_predict_argv(pkg *provider,

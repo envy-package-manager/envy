@@ -384,9 +384,14 @@ it, naming `envy.product_command`.
 
 The command line that runs a product, authorized as `envy.product` is. A command
 product renders its argv; a path product is a one-element command, so a consumer stays
-provider-agnostic. Quoted for `shell` (an `ENVY_SHELL` constant), else the phase's own:
-POSIX single quotes, PowerShell `& '…'`, cmd `"…"`. A custom `DEFAULT_SHELL` has no quoting
-envy knows; pass `shell`.
+provider-agnostic. A bare program resolves on the phase's `PATH`. Quoted for `shell` (an
+`ENVY_SHELL` constant), else the phase's own: POSIX single quotes; PowerShell `& '…'`; cmd
+`"…"`, with `call` before a `.bat`/`.cmd`. A custom `DEFAULT_SHELL` has no quoting envy
+knows; pass `shell`. What a shell cannot carry intact is refused, never mangled: a line
+break outside POSIX; under `powershell.exe` 5.1 an empty argument, a `"`, or a spaced one
+ending in `\`; under cmd a `"` or `!`, and `%`/`^` behind `call`. PowerShell hands a
+`.bat`/`.cmd` program its arguments through cmd, so cmd metacharacters there are cmd's.
+Failures trace as refusals, like `envy.product`'s.
 
 ```lua
 DEPENDENCIES = { { product = "yarn" } }

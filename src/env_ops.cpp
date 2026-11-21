@@ -144,37 +144,11 @@ std::optional<env_op> parse_value(sol::object const &v, std::string const &conte
   }
 }
 
-void append_quoted_posix(std::string &out, std::string_view v) {
-  out += '\'';
-  for (char const c : v) {
-    out += (c == '\'') ? std::string_view{ "'\\''" } : std::string_view{ &c, 1 };
-  }
-  out += '\'';
-}
-
 void append_quoted_fish(std::string &out, std::string_view v) {
   out += '\'';
   for (char const c : v) {
     if (c == '\'' || c == '\\') { out += '\\'; }
     out += c;
-  }
-  out += '\'';
-}
-
-// PowerShell treats U+2018..U+201B as single quotes too; each doubles to escape.
-void append_quoted_pwsh(std::string &out, std::string_view v) {
-  out += '\'';
-  for (size_t i{ 0 }; i < v.size(); ++i) {
-    if (v[i] == '\'') {
-      out += "''";
-    } else if (i + 2 < v.size() && v.substr(i, 2) == "\xE2\x80" &&
-               static_cast<unsigned char>(v[i + 2]) >= 0x98 &&
-               static_cast<unsigned char>(v[i + 2]) <= 0x9B) {
-      out.append(v.substr(i, 3)).append(v.substr(i, 3));
-      i += 2;
-    } else {
-      out += v[i];
-    }
   }
   out += '\'';
 }
@@ -410,7 +384,7 @@ std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const 
       case env_shell::ZSH:
         if (v) {
           out.append("export ").append(name).append("=");
-          append_quoted_posix(out, *v);
+          shell_append_quoted_posix(out, *v);
         } else {
           out.append("unset ").append(name);
         }
@@ -436,7 +410,7 @@ std::string env_script(env_shell sh, shell_env_t const &from, shell_env_t const 
       case env_shell::POWERSHELL:
         if (v) {
           out.append("$env:").append(name).append(" = ");
-          append_quoted_pwsh(out, *v);
+          shell_append_quoted_pwsh(out, *v);
         } else {
           out.append("Remove-Item -LiteralPath 'Env:")
               .append(name)

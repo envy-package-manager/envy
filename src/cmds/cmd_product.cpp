@@ -63,16 +63,13 @@ void print_products_json(engine &eng) {
 
   picojson::object obj;
   for (auto const &pi : products) {
-    pkg *const provider{ eng.find_product_provider(pi.product_name) };
+    auto argv{ product_util_predict_argv(eng.find_product_provider(pi.product_name),
+                                         pi.product_name) };
     obj[pi.product_name] = [&] {
-      if (pi.command.empty()) {
-        return picojson::value(product_util_predict(pi, provider));
-      }
-      picojson::array argv;
-      for (auto &arg : product_util_predict_argv(provider, pi.product_name)) {
-        argv.emplace_back(std::move(arg));
-      }
-      return picojson::value(std::move(argv));
+      if (pi.command.empty()) { return picojson::value(std::move(argv.front())); }
+      picojson::array arr;
+      for (auto &arg : argv) { arr.emplace_back(std::move(arg)); }
+      return picojson::value(std::move(arr));
     }();
   }
 
@@ -142,7 +139,7 @@ bool same_command_name(std::string_view a, std::string_view b) {
 
 // The program a product runs: an absolute path as is (every cache-managed path); a
 // relative one anchors at the project root, where SETUP runs; a bare name is searched on
-// `path_list`.
+// `path_list`. `product` is the one whose value or command supplied it.
 std::string resolve_program(std::string const &value,
                             std::string const &product,
                             activation_anchor const &anchor,
@@ -185,12 +182,10 @@ exec_request plan_run(cmd_product::cfg const &cfg,
   auto const anchor{ activation_anchor_read(eng.cache_root(), m->manifest_path) };
   shell_env_t to{ activation_for_tool(eng, *m, anchor, live, provider) };
   auto argv{ [&] {
-    auto out{ product_util_run_argv(provider, cfg.product_name) };
-    out.front() = resolve_program(out.front(),
-                                  cfg.product_name,
-                                  anchor,
-                                  m->meta,
-                                  env_get(to, "PATH"));
+    std::string program;
+    auto out{ product_util_run_argv(provider, cfg.product_name, &program) };
+    out.front() =
+        resolve_program(out.front(), program, anchor, m->meta, env_get(to, "PATH"));
     out.insert(out.end(), cfg.args.begin(), cfg.args.end());
     return out;
   }() };

@@ -10,7 +10,6 @@
 namespace envy {
 
 struct pkg;
-struct product_info;
 
 // Compute the rendered product value for a provider pkg.
 // Returns pkg_path/value for cache-managed providers, raw value for user-managed.
@@ -21,12 +20,6 @@ struct product_info;
 // user-managed" as "cache-managed" is what printed an absolute path into a user-managed
 // package's non-existent payload.
 std::string product_util_resolve(pkg *provider, std::string const &product_name);
-
-// What a listing prints, before anything is installed: the raw value for a user-managed
-// provider, else where the payload *will* land, predicted from the provider's cache key.
-// `envy product` runs after resolution but before any payload phase, so there is no
-// pkg_path to read yet -- which is why this cannot be product_util_resolve.
-std::string product_util_predict(product_info const &pi, pkg *provider);
 
 // Whether `provider` declares `name` as a command rather than a path.
 bool product_util_is_command(pkg *provider, std::string const &name);
@@ -53,15 +46,21 @@ using product_render = function_ref<std::string(pkg *provider, std::string const
 // `name` of `provider` as argv: a path product is one element; a command renders each
 // element, every `{{name}}` a product of the provider or its closure, splicing a command
 // that fills a whole element. Throws on a name the closure lacks, a cycle, or a command
-// embedded in part of an element.
+// embedded in part of an element. `program`, if given, receives the product whose value
+// or command put argv[0] there -- what a PATH search must not find as its own wrapper.
 std::vector<std::string> product_util_argv(pkg *provider,
                                            std::string const &name,
-                                           product_render render);
+                                           product_render render,
+                                           std::string *program = nullptr);
 
 // product_util_argv over installed paths (product_util_resolve).
-std::vector<std::string> product_util_run_argv(pkg *provider, std::string const &name);
+std::vector<std::string> product_util_run_argv(pkg *provider,
+                                               std::string const &name,
+                                               std::string *program = nullptr);
 
-// product_util_argv over predicted paths, as product_util_predict renders a path product.
+// product_util_argv before anything is installed: a user-managed value raw, a cache-managed
+// path where the payload *will* land, predicted from the provider's cache key. `envy
+// product` lists after resolution but before any payload phase, so no pkg_path exists yet.
 std::vector<std::string> product_util_predict_argv(pkg *provider, std::string const &name);
 
 }  // namespace envy
