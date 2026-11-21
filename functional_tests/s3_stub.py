@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import threading
@@ -79,6 +80,18 @@ class S3Stub:
         # Stored CRC64NVME sent on HEAD, as S3 does for single-part uploads: "good",
         # "bad" (a checksum that doesn't match the bytes), or None.
         self.checksum: str | None = None
+        # SSO-OIDC CreateToken (POST /token), reached via AWS_ENDPOINT_URL_SSO_OIDC: the
+        # (status, JSON) answer, and every request body received.
+        self.oidc_reply: tuple[int, dict[str, object]] = (
+            200,
+            {
+                "accessToken": "refreshed-access-token",
+                "expiresIn": 3600,
+                "refreshToken": "rotated-refresh-token",
+                "tokenType": "Bearer",
+            },
+        )
+        self.oidc_requests: list[dict[str, object]] = []
         self.requests: list[dict[str, object]] = []  # method, key, signed, range, headers
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
@@ -210,7 +223,18 @@ class S3Stub:
                 self.end_headers()
 
             def do_POST(self) -> None:
-                self._read_body()
+                body = self._read_body()
+                if self.path == "/token":
+                    with parent._lock:
+                        parent.oidc_requests.append(json.loads(body or b"{}"))
+                    status, reply = parent.oidc_reply
+                    payload = json.dumps(reply).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 self._record()
                 parent._send_error(self, 501, "NotImplemented")
 

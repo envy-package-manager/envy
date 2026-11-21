@@ -14,6 +14,7 @@
 #include "aws/common/error.h"
 #include "aws/common/thread.h"
 #include "aws/common/uri.h"
+#include "aws/http/connection.h"
 #include "aws/http/connection_manager.h"
 #include "aws/http/proxy.h"
 #include "aws/http/request_response.h"
@@ -21,10 +22,14 @@
 #include "aws/io/event_loop.h"
 #include "aws/io/host_resolver.h"
 #include "aws/io/retry_strategy.h"
+#include "aws/io/socket.h"
+#include "aws/io/stream.h"
 #include "aws/io/tls_channel_handler.h"
 #include "aws/s3/s3.h"
 #include "aws/s3/s3_client.h"
 #include "aws/sdkutils/aws_profile.h"
+
+#include "picojson.h"
 
 #include <algorithm>
 #include <charconv>
@@ -32,6 +37,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -191,23 +197,38 @@ struct crt_stack : unmovable {
   void build();
 };
 
-// A property of the active profile in the config file, or empty.
-std::string profile_property(aws_allocator *alloc,
-                             std::string const &profile,
-                             char const *property) {
+// A property of a config-file section (a profile, an sso-session), or empty.
+std::string config_property(aws_allocator *alloc,
+                            aws_profile_section_type type,
+                            std::string const &section,
+                            char const *property) {
   string_ptr const path{ aws_get_config_file_path(alloc, nullptr) };
   aws_ptr<aws_profile_collection, &aws_profile_collection_release> const config{
     path ? aws_profile_collection_new_from_file(alloc, path.get(), AWS_PST_CONFIG)
          : nullptr
   };
-  string_ptr const name{ aws_string_new_from_c_str(alloc, profile.c_str()) };
+  string_ptr const name{ aws_string_new_from_c_str(alloc, section.c_str()) };
   string_ptr const key{ aws_string_new_from_c_str(alloc, property) };
   auto const *const entry{
-    config && name ? aws_profile_collection_get_profile(config.get(), name.get()) : nullptr
+    config && name ? aws_profile_collection_get_section(config.get(), type, name.get())
+                   : nullptr
   };
   auto const *const value{ entry && key ? aws_profile_get_property(entry, key.get())
                                         : nullptr };
   return value ? aws_string_c_str(aws_profile_property_get_value(value)) : "";
+}
+
+std::string profile_property(aws_allocator *alloc,
+                             std::string const &profile,
+                             char const *property) {
+  return config_property(alloc, AWS_PROFILE_SECTION_TYPE_PROFILE, profile, property);
+}
+
+std::string first_env(std::initializer_list<char const *> vars) {  // first one set
+  for (char const *var : vars) {
+    if (auto const v{ env_value(var) }; !v.empty()) { return std::string{ v }; }
+  }
+  return {};
 }
 
 // The lapsed expiry (ISO 8601) of the profile's cached SSO token, else empty. Read here:
@@ -232,6 +253,247 @@ std::string lapsed_sso_token(aws_allocator *alloc, std::string const &profile) {
   return aws_date_time_to_utc_time_str(&token->expiration, AWS_DATE_FORMAT_ISO_8601, &buf)
              ? std::string{ "an unknown time" }
              : std::string{ to_view(aws_byte_cursor_from_buf(&buf)) };
+}
+
+// An AWS service's endpoint override, in the SDKs' order: AWS_ENDPOINT_URL_<SERVICE>,
+// AWS_ENDPOINT_URL, the profile's endpoint_url. Empty means the service's own.
+std::string configured_endpoint(crt_stack const &s, char const *service_var) {
+  if (auto const ignore{ env_value("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") };
+      ignore.size() == 4 && istarts_with(ignore, "true")) {
+    return {};
+  }
+  auto url{ first_env({ service_var, "AWS_ENDPOINT_URL" }) };
+  return url.empty() ? profile_property(s.alloc, s.profile, "endpoint_url") : url;
+}
+
+// --- SSO token refresh -------------------------------------------------------------
+// Every AWS SDK renews an sso-session's cached token with its refresh token as expiry
+// nears; aws-c-auth doesn't (its TODO), so envy does, once, before building the chain.
+
+constexpr double kSsoRefreshWindowSeconds{ 600 };  // aws-sdk-cpp's, which envy shipped
+constexpr std::size_t kHttpReplyMax{ 1 << 16 };      // a token reply is a few hundred bytes
+
+struct http_reply {
+  int status{ 0 };
+  std::string body;
+};
+
+// One request on its own connection, waited for. aws-c-http calls back on one event-loop
+// thread; a connection is done once it has shut down and been released.
+class http_exchange : unmovable {
+ public:
+  http_reply send(crt_stack &s, aws_uri const &uri, aws_http_message *request) {
+    request_ = request;
+    bool const https{ !aws_byte_cursor_eq_c_str_ignore_case(aws_uri_scheme(&uri), "http") };
+    auto const host{ *aws_uri_host_name(&uri) };
+    aws_socket_options const socket_options{ .type = AWS_SOCKET_STREAM,
+                                             .connect_timeout_ms = 3000 };
+    aws_tls_connection_options tls;
+    aws_tls_connection_options_init_from_ctx(&tls, s.tls.get());
+    aws_http_client_connection_options options AWS_HTTP_CLIENT_CONNECTION_OPTIONS_INIT;
+    options.allocator = s.alloc;
+    options.bootstrap = s.bootstrap.get();
+    options.host_name = host;
+    options.port = aws_uri_port(&uri) ? aws_uri_port(&uri) : (https ? 443u : 80u);
+    options.socket_options = &socket_options;
+    options.tls_options = https ? &tls : nullptr;
+    options.proxy_ev_settings = &s.proxy;
+    options.response_first_byte_timeout_ms = 10'000;
+    options.user_data = this;
+    options.on_setup = on_setup;
+    options.on_shutdown = on_shutdown;
+    int const started{ aws_tls_connection_options_set_server_name(&tls, s.alloc, &host)
+                           ? AWS_OP_ERR
+                           : aws_http_client_connect(&options) };  // copies tls
+    aws_tls_connection_options_clean_up(&tls);
+    if (started) { throw_aws_error("sso", "cannot connect"); }  // no callbacks follow
+    done_.wait();
+    if (error_) {
+      throw_runtime_error({ "sso: request failed: ", aws_error_str(error_) });
+    }
+    return std::move(reply_);
+  }
+
+ private:
+  static void on_setup(aws_http_connection *connection, int error, void *user) noexcept {
+    auto &self{ *static_cast<http_exchange *>(user) };
+    if (error) {  // no shutdown follows a failed setup
+      self.error_ = error;
+      self.done_.finish();
+      return;
+    }
+    aws_http_make_request_options request{};
+    request.self_size = sizeof request;
+    request.request = self.request_;
+    request.user_data = &self;
+    request.on_response_body = on_body;
+    request.on_complete = on_complete;
+    if (auto *const stream{ aws_http_connection_make_request(connection, &request) };
+        !stream || aws_http_stream_activate(stream)) {
+      self.error_ = aws_last_error();
+      aws_http_stream_release(stream);
+      aws_http_connection_release(connection);  // shutdown follows
+    }
+  }
+
+  static int on_body(aws_http_stream *, aws_byte_cursor const *data, void *user) noexcept {
+    auto &self{ *static_cast<http_exchange *>(user) };
+    if (self.reply_.body.size() + data->len > kHttpReplyMax) {
+      return aws_raise_error(AWS_ERROR_INVALID_ARGUMENT);  // ends the stream
+    }
+    self.done_.guard([&] { self.reply_.body.append(to_view(*data)); }, [] {});
+    return AWS_OP_SUCCESS;
+  }
+
+  static void on_complete(aws_http_stream *stream, int error, void *user) noexcept {
+    auto &self{ *static_cast<http_exchange *>(user) };
+    self.error_ = error;
+    aws_http_stream_get_incoming_response_status(stream, &self.reply_.status);
+    aws_http_connection *const connection{ aws_http_stream_get_connection(stream) };
+    aws_http_stream_release(stream);
+    aws_http_connection_release(connection);  // shutdown follows
+  }
+
+  static void on_shutdown(aws_http_connection *, int, void *user) noexcept {
+    static_cast<http_exchange *>(user)->done_.finish();
+  }
+
+  aws_http_message *request_{};
+  c_completion done_;  // publishes error_ and reply_, written on the connection's thread
+  int error_{ AWS_ERROR_SUCCESS };
+  http_reply reply_;
+};
+
+std::string iso8601(aws_date_time const &t) {
+  std::uint8_t text[AWS_DATE_TIME_STR_MAX_LEN]{};
+  auto buf{ aws_byte_buf_from_empty_array(text, sizeof text) };
+  return aws_date_time_to_utc_time_str(&t, AWS_DATE_FORMAT_ISO_8601, &buf)
+             ? std::string{}
+             : std::string{ to_view(aws_byte_cursor_from_buf(&buf)) };
+}
+
+// Seconds from now until an ISO 8601 time in the token cache; nullopt when absent or bad.
+std::optional<double> seconds_until(picojson::object const &cache, char const *field) {
+  auto const it{ cache.find(field) };
+  if (it == cache.end() || !it->second.is<std::string>()) { return std::nullopt; }
+  auto const cursor{ to_cursor(it->second.get<std::string>()) };
+  aws_date_time when;
+  aws_date_time now;
+  if (aws_date_time_init_from_str_cursor(&when, &cursor, AWS_DATE_FORMAT_ISO_8601)) {
+    return std::nullopt;
+  }
+  aws_date_time_init_now(&now);
+  return aws_date_time_as_epoch_secs(&when) - aws_date_time_as_epoch_secs(&now);
+}
+
+std::string cache_string(picojson::object const &cache, char const *field) {
+  auto const it{ cache.find(field) };
+  return it != cache.end() && it->second.is<std::string>() ? it->second.get<std::string>()
+                                                          : std::string{};
+}
+
+// Renews the profile's sso-session token in ~/.aws/sso/cache when it is within the refresh
+// window, via SSO-OIDC CreateToken as the SDKs do. Returns what happened, for the log.
+std::string refresh_sso_token(crt_stack &s) {
+  auto const session{ profile_property(s.alloc, s.profile, "sso_session") };
+  if (session.empty()) { return {}; }  // legacy profiles carry no refresh token
+  string_ptr const name{ aws_string_new_from_c_str(s.alloc, session.c_str()) };
+  string_ptr const path{ name ? aws_construct_sso_token_path(s.alloc, name.get()) : nullptr };
+  if (!path) { return {}; }
+  auto const file{ util_path_from_utf8(aws_string_c_str(path.get())) };  // aws-c is UTF-8
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(file, ec)) { return {}; }
+
+  auto const bytes{ util_load_file(file) };
+  picojson::value doc;
+  if (!picojson::parse(doc, std::string{ bytes.begin(), bytes.end() }).empty() ||
+      !doc.is<picojson::object>()) {
+    return "the cached token is not JSON";
+  }
+  auto &cache{ doc.get<picojson::object>() };
+  auto const left{ seconds_until(cache, "expiresAt") };
+  if (left && *left > kSsoRefreshWindowSeconds) { return {}; }
+  auto const refresh_token{ cache_string(cache, "refreshToken") };
+  auto const client_id{ cache_string(cache, "clientId") };
+  auto const client_secret{ cache_string(cache, "clientSecret") };
+  if (refresh_token.empty() || client_id.empty() || client_secret.empty()) {
+    return "the cached token can't be refreshed";
+  }
+  if (auto const registered{ seconds_until(cache, "registrationExpiresAt") };
+      registered && *registered <= 0) {
+    return "the cached token's client registration has expired";
+  }
+
+  auto const region{ [&] {
+    auto r{ config_property(s.alloc, AWS_PROFILE_SECTION_TYPE_SSO_SESSION, session,
+                            "sso_region") };
+    return r.empty() ? cache_string(cache, "region") : r;
+  }() };
+  auto const base{ configured_endpoint(s, "AWS_ENDPOINT_URL_SSO_OIDC") };
+  std::string const url{ (base.empty() ? "https://oidc." + region + ".amazonaws.com"
+                                       : std::string{ base }) +
+                         "/token" };
+  struct uri_holder : unmovable {
+    aws_uri uri{};
+    ~uri_holder() { aws_uri_clean_up(&uri); }
+  } uri;
+  auto const url_cursor{ to_cursor(url) };
+  if (aws_uri_init_parse(&uri.uri, s.alloc, &url_cursor)) { return "bad endpoint " + url; }
+
+  std::string const body{ picojson::value{ picojson::object{
+                              { "grantType", picojson::value{ "refresh_token" } },
+                              { "clientId", picojson::value{ client_id } },
+                              { "clientSecret", picojson::value{ client_secret } },
+                              { "refreshToken", picojson::value{ refresh_token } } } }
+                              .serialize() };
+  auto body_cursor{ to_cursor(body) };
+  aws_ptr<aws_input_stream, &aws_input_stream_release> const stream{
+    aws_input_stream_new_from_cursor(s.alloc, &body_cursor)
+  };
+  aws_ptr<aws_http_message, &aws_http_message_release> const message{
+    aws_http_message_new_request(s.alloc)
+  };
+  std::string const length{ std::to_string(body.size()) };
+  auto const header{ [&](std::string_view n, std::string_view v) {
+    return aws_http_message_add_header(message.get(),
+                                       aws_http_header{ .name = to_cursor(n),
+                                                        .value = to_cursor(v) });
+  } };
+  auto const *const path_cursor{ aws_uri_path(&uri.uri) };
+  if (!stream || !message || aws_http_message_set_request_method(message.get(), aws_http_method_post) ||
+      aws_http_message_set_request_path(message.get(), *path_cursor) ||
+      header("Host", to_view(*aws_uri_authority(&uri.uri))) ||
+      header("Content-Type", "application/json") || header("Content-Length", length)) {
+    return "cannot build the request";
+  }
+  aws_http_message_set_body_stream(message.get(), stream.get());
+
+  auto const reply{ http_exchange{}.send(s, uri.uri, message.get()) };
+  picojson::value answer;
+  if (reply.status != 200 || !picojson::parse(answer, reply.body).empty() ||
+      !answer.is<picojson::object>()) {
+    return "SSO-OIDC answered HTTP " + std::to_string(reply.status);
+  }
+  auto const &token{ answer.get<picojson::object>() };
+  auto const access{ cache_string(token, "accessToken") };
+  auto const expires_in{ token.find("expiresIn") };
+  if (access.empty() || expires_in == token.end() || !expires_in->second.is<double>()) {
+    return "SSO-OIDC's reply has no token";
+  }
+  aws_date_time now;
+  aws_date_time_init_now(&now);
+  aws_date_time expires;
+  aws_date_time_init_epoch_secs(&expires,
+                                aws_date_time_as_epoch_secs(&now) +
+                                    expires_in->second.get<double>());
+  cache["accessToken"] = picojson::value{ access };
+  cache["expiresAt"] = picojson::value{ iso8601(expires) };
+  if (auto const rotated{ cache_string(token, "refreshToken") }; !rotated.empty()) {
+    cache["refreshToken"] = picojson::value{ rotated };
+  }
+  // Atomic and 0600, as the AWS CLI keeps it: the file holds the client secret.
+  util_write_file(file, doc.serialize(), util_file_mode::OWNER_ONLY);
+  return "refreshed";
 }
 
 // A credential source, by the name its failure is reported under.
@@ -280,24 +542,12 @@ std::vector<named_provider> credential_sources(crt_stack &s) {
 
 void crt_stack::build() {
   constexpr std::string_view kOp{ "aws" };
-  auto const first_set{ [](std::initializer_list<char const *> vars) {
-    for (char const *var : vars) {
-      if (auto const v{ env_value(var) }; !v.empty()) { return std::string{ v }; }
-    }
-    return std::string{};
-  } };
-
-  profile = first_set({ "AWS_PROFILE", "AWS_DEFAULT_PROFILE" });
+  profile = first_env({ "AWS_PROFILE", "AWS_DEFAULT_PROFILE" });
   if (profile.empty()) { profile = "default"; }
-  region = first_set({ "AWS_DEFAULT_REGION", "AWS_REGION" });  // the SDK's order, no IMDS
+  region = first_env({ "AWS_DEFAULT_REGION", "AWS_REGION" });  // the SDK's order, no IMDS
   if (region.empty()) { region = profile_property(alloc, profile, "region"); }
   if (region.empty()) { region = "us-east-1"; }
-  if (auto const ignore{ env_value("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") };
-      !(ignore.size() == 4 && istarts_with(ignore, "true"))) {
-    endpoint = first_set({ "AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL" });
-    if (endpoint.empty()) { endpoint = profile_property(alloc, profile, "endpoint_url"); }
-  }
-  sso_expired_at = lapsed_sso_token(alloc, profile);
+  endpoint = configured_endpoint(*this, "AWS_ENDPOINT_URL_S3");
 
   aws_event_loop_group_options const elg_options{ .loop_count = 4 };  // for 16 connections
   elg.reset(aws_event_loop_group_new(alloc, &elg_options));
@@ -315,6 +565,16 @@ void crt_stack::build() {
   tls.reset(aws_tls_client_ctx_new(alloc, &tls_options));
   aws_tls_ctx_options_clean_up(&tls_options);
   if (!tls) { throw_aws_error(kOp, "TLS context"); }
+
+  // Before anything reads ~/.aws/sso/cache: the lapse check and the chain's SSO source.
+  try {  // best effort: a token that stays lapsed is named when a request needs it
+    if (auto const outcome{ refresh_sso_token(*this) }; !outcome.empty()) {
+      tui::debug("sso: profile '%s': %s", profile.c_str(), outcome.c_str());
+    }
+  } catch (std::exception const &e) {
+    tui::debug("sso: profile '%s': refresh failed: %s", profile.c_str(), e.what());
+  }
+  sso_expired_at = lapsed_sso_token(alloc, profile);
 
   // Anonymous last: with nothing configured, requests go unsigned and public objects
   // still download. The chain acquires each member; `chain` releases envy's refs.

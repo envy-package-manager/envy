@@ -166,7 +166,7 @@ std::vector<unsigned char> util_load_file(std::filesystem::path const &path) {
 
 void util_write_file(std::filesystem::path const &path,
                      std::string_view content,
-                     bool executable) {
+                     util_file_mode mode) {
   namespace fs = std::filesystem;
   // Exclusive create: a file or symlink already at the temp name is skipped, never
   // truncated or followed. The name omits the destination's, so it never nears NAME_MAX.
@@ -191,16 +191,18 @@ void util_write_file(std::filesystem::path const &path,
     err = errno;
   }
 #ifndef _WIN32
-  if (!err && executable) {  // before the rename: the file never appears without exec bits
-    int const fd{ ::fileno(file.get()) };
+  // Before the rename: the file never appears with the wrong mode.
+  if (int const fd{ ::fileno(file.get()) }; !err && mode == util_file_mode::EXECUTABLE) {
     struct stat st{};
     if (::fstat(fd, &st) != 0 ||
         ::fchmod(fd, (st.st_mode & 07777) | S_IXUSR | S_IXGRP | S_IXOTH) != 0) {
       err = errno;
     }
+  } else if (!err && mode == util_file_mode::OWNER_ONLY && ::fchmod(fd, 0600) != 0) {
+    err = errno;
   }
 #else
-  static_cast<void>(executable);
+  static_cast<void>(mode);
 #endif
   if (std::fclose(file.release()) != 0 && !err) { err = errno; }
 
@@ -674,7 +676,10 @@ script_write util_write_script(std::filesystem::path const &path,
 
   // A WINDOWS-target script is data on a POSIX host -- cross-deploying one and then
   // marking it executable only invites the shell to try to run a batch file.
-  util_write_file(path, content, plat != platform_id::WINDOWS);
+  util_write_file(path,
+                  content,
+                  plat == platform_id::WINDOWS ? util_file_mode::DEFAULT
+                                               : util_file_mode::EXECUTABLE);
   return existing.empty() ? script_write::CREATED : script_write::UPDATED;
 }
 

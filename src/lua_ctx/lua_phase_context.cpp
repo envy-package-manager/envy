@@ -43,7 +43,9 @@ void lua_phase_context_write_file(sol::this_state ts,
   std::filesystem::path const p{ lua_phase_context_resolve(ts, path) };
   try {
     if (p.has_parent_path()) { std::filesystem::create_directories(p.parent_path()); }
-    util_write_file(p, content, executable);
+    util_write_file(p,
+                    content,
+                    executable ? util_file_mode::EXECUTABLE : util_file_mode::DEFAULT);
   } catch (std::exception const &e) {
     throw_runtime_error({ fn, ": cannot write ", p, ": ", e.what() });
   }

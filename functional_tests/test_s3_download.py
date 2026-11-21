@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
+import json
 import os
 import socket
+import stat
+import sys
 import unittest
+from pathlib import Path
 
 from .env import EnvyTestCase
 from .s3_stub import BUCKET, S3Stub, hermetic_env, s3_env
 
 
-class S3DownloadTest(EnvyTestCase):
+class S3Case(EnvyTestCase):
+    """envy against a fresh S3 stub; subclasses hold the tests."""
+
     envy_watchdog_timeout = 30
 
     def setUp(self) -> None:
@@ -54,6 +61,8 @@ class S3DownloadTest(EnvyTestCase):
             "USERPROFILE": str(home),
         }
 
+
+class S3DownloadTest(S3Case):
     def test_downloads_an_object_byte_for_byte_with_signed_requests(self) -> None:
         payload = os.urandom(4096)
         self.stub.objects["dir/payload.bin"] = payload
@@ -199,6 +208,121 @@ class S3DownloadTest(EnvyTestCase):
         self.assertIn("HTTP 301", run.stderr)
         self.assertIn("the bucket is in eu-west-1", run.stderr)
         self.assertIn("AWS_DEFAULT_REGION=eu-west-1", run.stderr)
+
+
+class SsoTokenRefreshTest(S3Case):
+    """An sso-session's cached token is renewed near expiry, as the AWS SDKs do."""
+
+    SESSION = "envy-session"
+
+    def sso_session_env(
+        self,
+        expires_at: str = "2020-01-01T00:00:00Z",
+        registration_expires_at: str = "2099-01-01T00:00:00Z",
+    ) -> tuple[dict[str, str], Path]:
+        env = {
+            **self.no_credentials_env(),
+            "AWS_PROFILE": "envy-sso",
+            "AWS_ENDPOINT_URL_SSO_OIDC": f"http://127.0.0.1:{self.stub.port}",
+        }
+        aws_dir = Path(env["AWS_CONFIG_FILE"]).parent
+        Path(env["AWS_CONFIG_FILE"]).write_text(
+            "[profile envy-sso]\n"
+            f"sso_session = {self.SESSION}\n"
+            "sso_account_id = 123456789012\n"
+            "sso_role_name = EnvyTest\n"
+            "region = us-east-1\n"
+            f"[sso-session {self.SESSION}]\n"
+            "sso_start_url = https://envy-test.awsapps.com/start\n"
+            "sso_region = us-west-2\n"
+        )
+        cache = aws_dir / "sso" / "cache" / (
+            hashlib.sha1(self.SESSION.encode()).hexdigest() + ".json"
+        )
+        cache.parent.mkdir(parents=True)
+        cache.write_text(
+            json.dumps(
+                {
+                    "startUrl": "https://envy-test.awsapps.com/start",
+                    "region": "us-west-2",
+                    "accessToken": "stale-access-token",
+                    "expiresAt": expires_at,
+                    "clientId": "envy-client",
+                    "clientSecret": "envy-secret",
+                    "registrationExpiresAt": registration_expires_at,
+                    "refreshToken": "envy-refresh-token",
+                }
+            )
+        )
+        return env, cache
+
+    def test_lapsed_token_is_renewed_in_place(self) -> None:
+        env, cache = self.sso_session_env()
+        self.stub.objects["public.bin"] = b"public"
+
+        run = self.fetch("public.bin", env=env)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(
+            [
+                {
+                    "grantType": "refresh_token",
+                    "clientId": "envy-client",
+                    "clientSecret": "envy-secret",
+                    "refreshToken": "envy-refresh-token",
+                }
+            ],
+            self.stub.oidc_requests,
+        )
+        token = json.loads(cache.read_text())
+        self.assertEqual("refreshed-access-token", token["accessToken"])
+        self.assertEqual("rotated-refresh-token", token["refreshToken"])
+        self.assertEqual("https://envy-test.awsapps.com/start", token["startUrl"])
+        expires = datetime.datetime.fromisoformat(token["expiresAt"].replace("Z", "+00:00"))
+        self.assertGreater(expires, datetime.datetime.now(datetime.timezone.utc))
+        if sys.platform != "win32":  # it holds the client secret, as the AWS CLI keeps it
+            self.assertEqual(0o600, stat.S_IMODE(cache.stat().st_mode))
+
+    def test_token_far_from_expiry_is_left_alone(self) -> None:
+        env, cache = self.sso_session_env(expires_at="2099-01-01T00:00:00Z")
+        before = cache.read_text()
+        self.stub.objects["public.bin"] = b"public"
+
+        run = self.fetch("public.bin", env=env)
+
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual([], self.stub.oidc_requests)
+        self.assertEqual(before, cache.read_text())
+
+    def test_expired_registration_still_says_to_log_in(self) -> None:
+        env, cache = self.sso_session_env(registration_expires_at="2020-01-01T00:00:00Z")
+        before = cache.read_text()
+        self.stub.objects["private.bin"] = b"secret"
+        self.stub.require_auth = True
+
+        run = self.fetch("private.bin", env=env)
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertEqual([], self.stub.oidc_requests)
+        self.assertEqual(before, cache.read_text())
+        self.assertIn("expired at 2020-01-01T00:00:00Z", run.stderr)
+        self.assertIn("aws sso login", run.stderr)
+
+    def test_refused_refresh_still_says_to_log_in(self) -> None:
+        """The session itself ended: SSO-OIDC refuses the grant, and envy says so."""
+        env, cache = self.sso_session_env()
+        before = cache.read_text()
+        self.stub.oidc_reply = (400, {"error": "invalid_grant"})
+        self.stub.objects["private.bin"] = b"secret"
+        self.stub.require_auth = True
+
+        run = self.fetch("private.bin", env=env)
+
+        self.assertNotEqual(0, run.returncode)
+        self.assertEqual(1, len(self.stub.oidc_requests))
+        self.assertEqual(before, cache.read_text())
+        self.assertIn("expired at 2020-01-01T00:00:00Z", run.stderr)
+        self.assertIn("aws sso login", run.stderr)
 
 
 if __name__ == "__main__":
