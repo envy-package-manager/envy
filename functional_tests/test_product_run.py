@@ -721,10 +721,9 @@ class TestWindowsShells(_ProductRunBase):
 
 @unittest.skipIf(WINDOWS, "the bash launcher and product script")
 class TestWrapperExecsOnlyEnvy(_ProductRunBase):
-    """With envy cached, a product script starts bash, envy and the tool, and nothing else.
+    """With envy cached, a wrapper starts only bash, envy and the tool.
 
-    The script and its launcher run on every tool call, where each extra process (uname,
-    sed, dirname, cat) adds measurably to its cost. With only bash on PATH, any such call
+    Wrapper and launcher run on every tool call; with only bash on PATH, any other program
     fails.
     """
 
@@ -742,19 +741,21 @@ class TestWrapperExecsOnlyEnvy(_ProductRunBase):
 
     def test_an_unpinned_project_in_the_user_wide_cache(self) -> None:
         # No ENVY_CACHE_ROOT and no pin: the launcher finds the platform's cache dir and
-        # reads the version from its `latest` file.
+        # reads `latest`, which names a version other than the launcher's own fallback.
         env = test_config.sandbox_home_env(self.tree / "home", self.env)
         root = test_config.sandbox_user_wide_root(env)
-        (root / "envy" / PINNED_VERSION).mkdir(parents=True)
-        os.symlink(self.envy, root / "envy" / PINNED_VERSION / BINARY_NAME)
-        (root / "envy" / "latest").write_text(PINNED_VERSION + "\n", encoding="utf-8")
+        env["OSTYPE"] = "linux-gnu" if sys.platform == "darwin" else "darwin"  # misleads bash
+        latest = "999.0.0"
+        (root / "envy" / latest).mkdir(parents=True)
+        os.symlink(self.envy, root / "envy" / latest / BINARY_NAME)
+        (root / "envy" / "latest").write_text(latest + "\n", encoding="utf-8")
         proj = self.simple("unpinned", "unpinned", "nil")
         manifest = proj / "envy.lua"
         pin = f'-- @envy version "{PINNED_VERSION}"\n'
         self.assertIn(pin, manifest.read_text(encoding="utf-8"))
         manifest.write_text(manifest.read_text(encoding="utf-8").replace(pin, ""),
                             encoding="utf-8")
-        seen = self.tool(proj, "arg", env=self.bash_only(env))  # first call installs
+        seen = self.tool(proj, "arg", env=self.bash_only(env))  # product --run installs it
         self.assertEqual(["arg"], seen["argv"])
 
 

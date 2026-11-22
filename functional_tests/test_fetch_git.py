@@ -81,6 +81,23 @@ class TestFetchGit(EnvyTestCase):
                 (dest / ".git").exists(), ".git directory should be present"
             )
 
+    def test_https_reached_through_insteadof_gets_ca_certificates(self):
+        """CI rewrites ssh to https with insteadOf: certificates follow the rewritten url."""
+        home = self.make_temp_dir("home")
+        (home / ".gitconfig").write_text(
+            '[url "https://github.com/"]\n\tinsteadOf = git@github.com:\n', encoding="utf-8"
+        )
+        env = {**self._network_env(), "HOME": str(home), "USERPROFILE": str(home),
+               "XDG_CONFIG_HOME": str(home / ".config")}
+        result = test_config.run(
+            [str(self.envy), "git-resolve", "git@github.com:ninja-build/ninja.git", "v1.13.2"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertRegex(result.stdout.strip(), r"^[0-9a-f]{40}$")
+
     def test_clone_public_https_branch(self):
         """Clone a public HTTPS repository with a branch ref."""
         with tempfile.TemporaryDirectory() as temp_dir:

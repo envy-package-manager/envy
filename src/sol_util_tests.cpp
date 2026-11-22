@@ -67,7 +67,7 @@ TEST_CASE("sol_util_make_lua_state overrides assert to include stack trace") {
 
 TEST_CASE("sol_util_make_lua_state's prelude is named and keeps its lines") {
   // Build-time bytecode keeps debug info, so tracebacks through it stay readable.
-  auto lua = envy::sol_util_make_lua_state();
+  auto lua{ envy::sol_util_make_lua_state() };
   auto const info{ lua->safe_script(
       "local i = debug.getinfo(error, 'S'); return i.source, i.linedefined") };
   CHECK(info.get<std::string>(0) == "=envy.prelude");

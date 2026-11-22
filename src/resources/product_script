@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # envy-managed schema "@@ENVY_PRODUCT_SCRIPT_VERSION@@"
 set -Eeuo pipefail
-# Locates the launcher beside this script without starting a process (this runs on every
-# tool call); the launcher resolves symlinks itself.
+# Finds the launcher with no subshell (this runs on every tool call); the launcher
+# resolves its own symlinks.
 ENVY_SCRIPT_DIR=.
 case "${BASH_SOURCE[0]}" in */*) ENVY_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;; esac
 # The sibling launcher injects --project; `product --run` installs the tool if needed and

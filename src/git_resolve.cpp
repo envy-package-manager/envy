@@ -2,7 +2,6 @@
 
 #include "libgit2_util.h"
 #include "trace.h"
-#include "uri.h"
 #include "util.h"
 
 #include <git2.h>
@@ -142,9 +141,6 @@ std::string git_resolve_remote(std::string const &repo, std::string const &ref) 
   }
 
   libgit2_ensure();
-  // HTTPS requires CA certificates be configured (matches fetch_git_repo).
-  if (uri_is_https_scheme(repo)) { libgit2_require_ssl_certs(); }
-
   std::unique_ptr<git_remote, decltype(&git_remote_free)> const remote{ [&] {
     git_remote *raw{ nullptr };
     if (git_remote_create_detached(&raw, repo.c_str())) {
@@ -152,6 +148,8 @@ std::string git_resolve_remote(std::string const &repo, std::string const &ref) 
     }
     return std::unique_ptr<git_remote, decltype(&git_remote_free)>{ raw, git_remote_free };
   }() };
+  char const *const url{ git_remote_url(remote.get()) };
+  libgit2_ca_certs_for(url ? url : "");  // insteadOf may have turned it into https
 
   git_remote_callbacks callbacks;
   git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);

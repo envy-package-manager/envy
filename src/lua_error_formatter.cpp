@@ -2,7 +2,9 @@
 
 #include "pkg_cfg.h"
 
+#include <algorithm>
 #include <sstream>
+#include <string_view>
 
 namespace envy {
 
@@ -67,9 +69,17 @@ parsed_lua_error parse_lua_error(std::string const &msg) {
     if (start == std::string::npos) { continue; }
     line = line.substr(start);
 
-    // Drop noisy frames that don't help users
+    // Drop noisy frames that don't help users: C functions and envy's own Lua, whose chunk
+    // names CMakeLists.txt gives envy_luac.
+    constexpr std::string_view kEnvyChunks[]{ "envy.prelude:",
+                                              "envy.extend:",
+                                              "envy.template:" };
     if (line.rfind("[C]:", 0) == 0) { continue; }
     if (line.find("[string \"...\"]") != std::string::npos) { continue; }
+    if (std::ranges::any_of(kEnvyChunks,
+                            [&](std::string_view c) { return line.starts_with(c); })) {
+      continue;
+    }
 
     parsed.stack_frames.push_back(line);
   }

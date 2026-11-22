@@ -179,7 +179,7 @@ class TestGitResolve(EnvyTestCase):
         self.assertEqual(sha_events[0].raw["method"], "sha")
 
     def test_libgit2_starts_only_for_git_work(self) -> None:
-        # A full sha resolves without a remote, so libgit2 never starts; a name starts it once.
+        # A full sha needs no remote, so libgit2 stays down; a tag starts it once.
         for ref, starts in ((self.c1, 0), ("v1.0", 1)):
             with self.subTest(ref=ref):
                 trace = self._work / f"init-{ref.replace('.', '_')}.jsonl"

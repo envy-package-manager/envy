@@ -8,18 +8,18 @@ ENVY_ENV_MIRROR="${ENVY_MIRROR:-}"
 ENVY_FALLBACK_VERSION="@@ENVY_VERSION@@"
 ENVY_MIN_DIRECTIVE_VERSION="@@MIN_DIRECTIVE_VERSION@@"
 
-# Every product script call runs this, so with envy cached it starts no program but envy:
-# no uname/sed/dirname/cat. test_product_run.py runs it with only bash on PATH.
+# Runs on every tool call: with envy cached, it starts no program but envy (and readlink,
+# for a symlinked launcher). test_product_run.py runs it with only bash on PATH.
 
 # Sets REPLY to `dirname "$1"` without starting a dirname process.
 dir_of() {
     case "$1" in */*) REPLY="${1%/*}"; REPLY="${REPLY:-/}" ;; *) REPLY=. ;; esac
 }
 
-# Sets ENVY_SCRIPT_DIR: this script's directory, every symlink resolved. `pwd -P` runs in a
-# subshell, which forks but starts no program.
+# Sets ENVY_SCRIPT_DIR to this script's real directory. `pwd -P` forks but starts no
+# program; only a symlinked launcher runs readlink.
 resolve_script_dir() {
-    local src="${BASH_SOURCE[0]}" dir
+    local src="${BASH_SOURCE[0]}" dir REPLY
     while [[ -L "$src" ]]; do
         dir_of "$src"; dir="$(cd -P "$REPLY" && pwd -P)"
         src="$(readlink "$src")"
@@ -28,8 +28,8 @@ resolve_script_dir() {
     dir_of "$src"; ENVY_SCRIPT_DIR="$(cd -P "$REPLY" && pwd -P)"
 }
 
-# Calls `$2 key value` for each `-- @envy key "value"` line in $1's header: the blank and
-# comment lines before the first code line, as parse_envy_meta (src/manifest.cpp) reads.
+# Calls `$2 key value` per known `-- @envy key "value"` in $1's header (blank and comment
+# lines up to the first code line), matching parse_envy_meta in src/manifest.cpp.
 manifest_directives() {
     local line val ws=$' \t' re='^[[:space:]]*--[[:space:]]*@envy[[:space:]]+(version|cache-local|cache-mode|state-dir|mirror|sha256sums|root)[[:space:]]+"(([^"\\]|\\.)*)"'
     # `||`: `read` fails on a final line lacking a newline; it may still be a directive.
@@ -52,7 +52,7 @@ root_directive() { if [[ "$1" == root && "$2" == false ]]; then ENVY_ROOT=false;
 # Sets ENVY_MANIFEST: walking up from ENVY_SCRIPT_DIR, the first root manifest, else the
 # topmost `root "false"` one. Fails if there is neither.
 find_manifest() {
-    local d="$ENVY_SCRIPT_DIR"
+    local d="$ENVY_SCRIPT_DIR" ENVY_ROOT
     local candidates=()
     while [[ "$d" != / ]]; do
         if [[ -f "$d/envy.lua" ]]; then
@@ -73,7 +73,7 @@ resolve_script_dir
 find_manifest || { echo "ERROR: envy.lua not found" >&2; exit 1; }
 
 ENVY_VERSION="" ENVY_CACHE_LOCAL="" ENVY_CACHE_MODE="" ENVY_STATE_DIR_REL="" ENVY_MANIFEST_MIRROR="" ENVY_SUMS_PIN=""
-# Stores one directive the bootstrap uses, its \" and \\ escapes undone.
+# Stores a directive this script reads, undoing \" and \\ escapes.
 header_directive() {
     local val="${2//\\\"/\"}"
     val="${val//\\\\/\\}"
@@ -170,7 +170,7 @@ if [[ -n "${ENVY_CACHE_ROOT:-}" ]]; then
     fi
 else
     # The user's own root; a local tree borrows from it read-only. Guarded: set -u.
-    if [[ "$OSTYPE" == darwin* ]]; then
+    if [[ "${BASH_VERSINFO[5]}" == *darwin* ]]; then  # read-only, unlike an exported OSTYPE
         # XDG_CACHE_HOME is not consulted on Darwin, matching platform_posix.cpp.
         if [[ -n "${HOME:-}" ]]; then ENVY_SHARED_CACHE="$HOME/Library/Caches/envy"; fi
     elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then ENVY_SHARED_CACHE="$XDG_CACHE_HOME/envy"
@@ -285,8 +285,7 @@ if usable_envy "$ENVY_BIN"; then
     exec "$ENVY_BIN" "${ENVY_ARGS[@]}" "$@"
 fi
 
-# Platform and arch only pick which archive to download, so they're checked here, after a
-# cached envy would already have run.
+# Platform and arch only pick the archive to download; checked after the cached-envy exec.
 case "$(uname -s)" in
     Darwin) ENVY_PLATFORM=darwin ;; Linux) ENVY_PLATFORM=linux ;;
     *) echo "ERROR: Unsupported platform: $(uname -s)" >&2; exit 1 ;;

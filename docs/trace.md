@@ -68,7 +68,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `download_skipped` | url:str, reason:str |
 | `fetch_release_wait` | path:str, duration_ms:i64, holders:str (`name.exe (pid N), ...`; may be empty), released:bool |
 | `git_resolve` | url:str, ref:str, sha:str, method:str (sha\|ls-remote) |
-| `libgit2_init` | duration_ms:i64 — libgit2 set up on first git use; absent from a run with no git work |
+| `libgit2_init` | duration_ms:i64 (at most once per run, on first git use) |
 | `git_fetch` | url:str, path:str (from the root; "" = root), sha:str, strategy:str (local\|tip\|oid\|full), depth:i64 (0 = full) |
 | `extract_start` | archive:str, destination:str, strip_components:i64 |
 | `extract_complete` | archive:str, files_extracted:i64, duration_ms:i64 |

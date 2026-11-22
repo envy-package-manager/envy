@@ -167,6 +167,23 @@ TEST_CASE("format_lua_error includes error message") {
   CHECK(result.find("assertion failed: version required") != std::string::npos);
 }
 
+TEST_CASE("format_lua_error drops frames inside envy's own Lua") {
+  formatter_test_fixture f;
+  lua_error_context ctx{ .lua_error_message =
+                             "boom\nstack traceback:\n"
+                             "\t[C]: in function 'error'\n"
+                             "\tenvy.prelude:7: in function 'error'\n"
+                             "\tenvy.template:31: in function <envy.template:2>\n"
+                             "\t/specs/x.lua:5: in function 'BUILD'\n",
+                         .r = f.p.get(),
+                         .phase = "" };
+
+  std::string const result{ format_lua_error(ctx) };
+  CHECK(result.find("/specs/x.lua:5") != std::string::npos);
+  CHECK(result.find("envy.prelude:") == std::string::npos);
+  CHECK(result.find("envy.template:") == std::string::npos);
+}
+
 TEST_CASE("format_lua_error includes spec_file_path when present") {
   formatter_test_fixture f;
   f.p->spec_file_path = std::filesystem::path("/home/user/.envy/specs/test.lua");

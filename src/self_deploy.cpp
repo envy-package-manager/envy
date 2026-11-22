@@ -89,8 +89,8 @@ bool copy_binary(path const &src, path const &dst) {
 std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
   auto c{ std::make_unique<cache>(root) };
 
-  // main deploys before the command runs, and cmd_startup_load again once the manifest has
-  // named its root: almost always the same tree, which one deploy per process covers.
+  // Called from main and again from cmd_startup_load, once the manifest names its root;
+  // each (root, mode) deploys once per process.
   static std::mutex done_mutex;
   static std::vector<std::pair<path, cache_mode>> done;
   bool const first{ [&] {

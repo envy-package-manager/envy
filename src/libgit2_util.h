@@ -2,10 +2,12 @@
 
 #include "util.h"
 
+#include <string_view>
+
 namespace envy {
 
 // Initializes libgit2 on first call, from any thread; call before any other libgit2 API.
-// Lazy because its TLS setup loads CA certificates, which commands without git don't need.
+// Lazy, so commands without git skip libgit2's global setup.
 void libgit2_ensure();
 
 // Shuts libgit2 down at scope exit, if libgit2_ensure ever initialized it.
@@ -14,8 +16,8 @@ struct libgit2_scope : unmovable {
   ~libgit2_scope();
 };
 
-// Initializes libgit2, then on Linux and macOS throws if SSL certificates required for
-// HTTPS git operations are not found (no-op on Windows). Call before HTTPS git fetches.
-void libgit2_require_ssl_certs();
+// Before connecting to `url` -- git_remote_url, after insteadOf -- loads CA certificates
+// off Windows: required for https, best effort for http, which may redirect to https.
+void libgit2_ca_certs_for(std::string_view url);
 
 }  // namespace envy

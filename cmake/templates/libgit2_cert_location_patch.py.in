@@ -1,9 +1,7 @@
 import pathlib
 
-# With mbedTLS and no CERT_LOCATION, libgit2's configure runs the build host's
-# `openssl version -d` and compiles that machine's CA bundle path in as the default, which
-# every git_libgit2_init then parses. envy sets its own CA certificates before any https
-# fetch (libgit2_require_ssl_certs), so skip the probe: no default, and no openssl needed.
+# Without CERT_LOCATION, configure bakes in the build host's `openssl version -d` CA path;
+# envy loads CA certificates itself for each http(s) remote (libgit2_ca_certs_for).
 
 OLD = "\t\tif(NOT CERT_LOCATION)\n"
 NEW = "\t\tif(FALSE) # envy: no default CA path from the build host\n"

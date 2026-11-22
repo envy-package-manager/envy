@@ -1,5 +1,6 @@
 #include "libgit2_util.h"
 #include "trace.h"
+#include "uri.h"
 
 #include <git2.h>
 
@@ -155,11 +156,14 @@ libgit2_scope::~libgit2_scope() {
   if (g_initialized) { git_libgit2_shutdown(); }
 }
 
-void libgit2_require_ssl_certs() {
+void libgit2_ca_certs_for(std::string_view url) {
   libgit2_ensure();
-#ifndef _WIN32
+#ifdef _WIN32
+  (void)url;  // WinHTTP uses the system store
+#else
+  if (!uri_is_http_scheme(url)) { return; }  // http or https
   ensure_ssl_certs_configured();
-  if (!g_ssl_certs_configured) {
+  if (uri_is_https_scheme(url) && !g_ssl_certs_configured) {
     throw_runtime_error(
         { "No CA certificate bundle found. Install ca-certificates package." });
   }

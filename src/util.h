@@ -226,7 +226,7 @@ void util_write_file(std::filesystem::path const &path,
                      util_file_mode mode = util_file_mode::DEFAULT);
 
 // One embedded resource: bytes [offset, offset + size) of the xz stream `pack`, as emitted
-// by cmake/scripts/embed_resource.py --compress. `sha256` lets a copy be checked unpacked.
+// by cmake/scripts/embed_resource.py --compress; `sha256` checks a copy without unpacking.
 struct packed_resource {
   unsigned char const *pack;
   size_t pack_size;

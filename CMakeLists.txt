@@ -192,8 +192,8 @@ embed_resources(envy_embedded_resources
         product_script_windows=src/resources/product_script.bat
 )
 
-# envy's own Lua (src/resources/lua/), compiled by a host tool linked against the same Lua
-# and embedded as bytecode: no state parses it at run time, and a syntax error fails here.
+# envy_luac compiles src/resources/lua/ to bytecode against envy's own Lua: nothing parses
+# it at run time, and a syntax error fails the build.
 add_executable(envy_luac cmake/tools/envy_luac.cpp)
 target_compile_features(envy_luac PRIVATE cxx_std_20)
 target_link_libraries(envy_luac PRIVATE lua::lua)

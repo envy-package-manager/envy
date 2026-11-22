@@ -6,6 +6,7 @@
 #include "util.h"
 #include "version.h"
 
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -50,12 +51,14 @@ hook_stamp stamp_of(std::string_view content) {
              : hook_stamp{ token.substr(0, colon), token.substr(colon + 1) };
 }
 
-// Whether `path` already holds exactly `res`, judged by its digest: every command checks,
-// a hook is nearly always current, and unpacking one means decoding the pack up to it.
+// True if `path` already holds `res`, by size and sha256: every command checks, and this
+// skips decoding the xz pack up to the hook. Unreadable counts as not held: rewrite it.
 bool holds(std::filesystem::path const &path, packed_resource const &res) {
   std::error_code ec;
   auto const size{ std::filesystem::file_size(path, ec) };
-  return !ec && size == res.size && sha256(path) == res.sha256;
+  try {
+    return !ec && size == res.size && sha256(path) == res.sha256;
+  } catch (std::exception const &) { return false; }
 }
 
 std::string read_text(std::filesystem::path const &path) {

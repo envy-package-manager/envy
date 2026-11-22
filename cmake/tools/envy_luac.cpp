@@ -1,6 +1,5 @@
-// Build-time Lua compiler for envy's own scripts: envy_luac <name> <in.lua> <out.luac>.
-// Linked against envy's Lua, so the bytecode matches what the binary loads; debug info is
-// kept, so tracebacks name the chunk `name` and its lines. A syntax error fails the build.
+// envy_luac <name> <in.lua> <out.luac>, linked against envy's Lua so the bytecode loads;
+// debug info stays, so tracebacks name chunk `name` and its lines.
 
 #include "lua.hpp"
 
@@ -22,11 +21,13 @@ int append(lua_State *, void const *piece, size_t size, void *out) noexcept {
 
 std::optional<std::string> read_file(char const *path) {
   std::unique_ptr<std::FILE, decltype(&std::fclose)> const f{ std::fopen(path, "rb"),
-                                                               &std::fclose };
+                                                              &std::fclose };
   if (!f) { return std::nullopt; }
   std::string out;
   char buf[4096];
-  for (size_t n; (n = std::fread(buf, 1, sizeof buf, f.get())) > 0;) { out.append(buf, n); }
+  for (size_t n; (n = std::fread(buf, 1, sizeof buf, f.get())) > 0;) {
+    out.append(buf, n);
+  }
   return std::ferror(f.get()) ? std::nullopt : std::optional{ std::move(out) };
 }
 
@@ -57,9 +58,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::unique_ptr<std::FILE, decltype(&std::fclose)> const out{ std::fopen(argv[3], "wb"),
-                                                                 &std::fclose };
-  if (!out || std::fwrite(bytecode.data(), 1, bytecode.size(), out.get()) != bytecode.size()) {
+  std::FILE *const out{ std::fopen(argv[3], "wb") };
+  bool const written{ out && std::fwrite(bytecode.data(), 1, bytecode.size(), out) ==
+                                 bytecode.size() };
+  // fclose flushes, so a full disk fails there.
+  if (!out || std::fclose(out) != 0 || !written) {
     std::fprintf(stderr, "envy_luac: cannot write %s\n", argv[3]);
     return 1;
   }
