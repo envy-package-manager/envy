@@ -8,66 +8,84 @@ ENVY_ENV_MIRROR="${ENVY_MIRROR:-}"
 ENVY_FALLBACK_VERSION="@@ENVY_VERSION@@"
 ENVY_MIN_DIRECTIVE_VERSION="@@MIN_DIRECTIVE_VERSION@@"
 
+# Every product script call runs this, so with envy cached it starts no program but envy:
+# no uname/sed/dirname/cat. test_product_run.py runs it with only bash on PATH.
+
+# Sets REPLY to `dirname "$1"` without starting a dirname process.
+dir_of() {
+    case "$1" in */*) REPLY="${1%/*}"; REPLY="${REPLY:-/}" ;; *) REPLY=. ;; esac
+}
+
+# Sets ENVY_SCRIPT_DIR: this script's directory, every symlink resolved. `pwd -P` runs in a
+# subshell, which forks but starts no program.
 resolve_script_dir() {
-    local src="${BASH_SOURCE[0]}"
+    local src="${BASH_SOURCE[0]}" dir
     while [[ -L "$src" ]]; do
-        local dir; dir="$(cd -P "$(dirname "$src")" && pwd -P)"
+        dir_of "$src"; dir="$(cd -P "$REPLY" && pwd -P)"
         src="$(readlink "$src")"
         [[ "$src" != /* ]] && src="$dir/$src"
     done
-    cd -P "$(dirname "$src")" && pwd -P
+    dir_of "$src"; ENVY_SCRIPT_DIR="$(cd -P "$REPLY" && pwd -P)"
 }
 
-# Header directives only -- blank lines and comments up to the first line of code, the rule
-# parse_envy_meta in src/manifest.cpp applies. No line cap; `q` bounds the read.
+# Calls `$2 key value` for each `-- @envy key "value"` line in $1's header: the blank and
+# comment lines before the first code line, as parse_envy_meta (src/manifest.cpp) reads.
 manifest_directives() {
-    sed -nE '
-        /^[[:space:]]*$/d
-        /^[[:space:]]*--/!q
-        s/^[[:space:]]*--[[:space:]]*@envy[[:space:]]+(version|cache-local|cache-mode|state-dir|mirror|sha256sums|root)[[:space:]]+"(([^"\\]|\\.)*)".*/\1 \2/p
-    ' "$1"
+    local line val ws=$' \t' re='^[[:space:]]*--[[:space:]]*@envy[[:space:]]+(version|cache-local|cache-mode|state-dir|mirror|sha256sums|root)[[:space:]]+"(([^"\\]|\\.)*)"'
+    # `||`: `read` fails on a final line lacking a newline; it may still be a directive.
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^[[:space:]]*$ ]]; then continue; fi
+        if [[ ! "$line" =~ ^[[:space:]]*-- ]]; then break; fi
+        if [[ "$line" =~ $re ]]; then
+            # Spaces and tabs at either end are dropped; parse_envy_meta keeps them.
+            val="${BASH_REMATCH[2]}"
+            val="${val#"${val%%[!$ws]*}"}"; val="${val%"${val##*[!$ws]}"}"
+            "$2" "${BASH_REMATCH[1]}" "$val"
+        fi
+    done < "$1"
 }
 
+# Any `root "false"` makes the manifest non-root, as in envy.bat; parse_envy_meta and the
+# shell hooks take the last `root` instead.
+root_directive() { if [[ "$1" == root && "$2" == false ]]; then ENVY_ROOT=false; fi; }
+
+# Sets ENVY_MANIFEST: walking up from ENVY_SCRIPT_DIR, the first root manifest, else the
+# topmost `root "false"` one. Fails if there is neither.
 find_manifest() {
-    local d; d="$(resolve_script_dir)"
+    local d="$ENVY_SCRIPT_DIR"
     local candidates=()
     while [[ "$d" != / ]]; do
         if [[ -f "$d/envy.lua" ]]; then
-            # `if`, not `&&`: a nonzero last command in the body is a `set -e` kill.
-            local is_root="true" key val
-            while read -r key val || [[ -n "$key$val" ]]; do
-                if [[ "$key" == "root" && "$val" == "false" ]]; then is_root="false"; fi
-            done < <(manifest_directives "$d/envy.lua")
-            if [[ "$is_root" == "true" ]]; then
-                echo "$d/envy.lua" && return
-            else
-                candidates+=("$d/envy.lua")
-            fi
+            ENVY_ROOT=true
+            manifest_directives "$d/envy.lua" root_directive
+            if [[ "$ENVY_ROOT" == true ]]; then ENVY_MANIFEST="$d/envy.lua"; return 0; fi
+            candidates+=("$d/envy.lua")
         fi
         # A repo is a hard boundary, matching discover() in src/manifest.cpp.
         if [[ -d "$d/.git" ]]; then break; fi
         d="${d%/*}"; d="${d:-/}"
     done
-    [[ ${#candidates[@]} -gt 0 ]] && echo "${candidates[${#candidates[@]}-1]}" && return
-    return 1
+    if [[ ${#candidates[@]} -eq 0 ]]; then return 1; fi
+    ENVY_MANIFEST="${candidates[${#candidates[@]}-1]}"
 }
 
-ENVY_MANIFEST=$(find_manifest) || { echo "ERROR: envy.lua not found" >&2; exit 1; }
+resolve_script_dir
+find_manifest || { echo "ERROR: envy.lua not found" >&2; exit 1; }
 
 ENVY_VERSION="" ENVY_CACHE_LOCAL="" ENVY_CACHE_MODE="" ENVY_STATE_DIR_REL="" ENVY_MANIFEST_MIRROR="" ENVY_SUMS_PIN=""
-# `|| [[ -n ... ]]`: a bare `read` returns nonzero on an unterminated last line, dropping
-# the directive on it -- a final `sha256sums` line would bootstrap with no pin at all.
-while read -r ENVY_KEY ENVY_VAL || [[ -n "$ENVY_KEY$ENVY_VAL" ]]; do
-    ENVY_VAL="${ENVY_VAL//\\\"/\"}"
-    ENVY_VAL="${ENVY_VAL//\\\\/\\}"
-    case "$ENVY_KEY" in
-        version) ENVY_VERSION="$ENVY_VAL" ;; cache-local) ENVY_CACHE_LOCAL="$ENVY_VAL" ;;
-        cache-mode) ENVY_CACHE_MODE="$ENVY_VAL" ;;
-        state-dir) ENVY_STATE_DIR_REL="$ENVY_VAL" ;;
-        mirror) ENVY_MANIFEST_MIRROR="$ENVY_VAL" ;;
-        sha256sums) ENVY_SUMS_PIN="$ENVY_VAL" ;;
+# Stores one directive the bootstrap uses, its \" and \\ escapes undone.
+header_directive() {
+    local val="${2//\\\"/\"}"
+    val="${val//\\\\/\\}"
+    case "$1" in
+        version) ENVY_VERSION="$val" ;; cache-local) ENVY_CACHE_LOCAL="$val" ;;
+        cache-mode) ENVY_CACHE_MODE="$val" ;;
+        state-dir) ENVY_STATE_DIR_REL="$val" ;;
+        mirror) ENVY_MANIFEST_MIRROR="$val" ;;
+        sha256sums) ENVY_SUMS_PIN="$val" ;;
     esac
-done < <(manifest_directives "$ENVY_MANIFEST")
+}
+manifest_directives "$ENVY_MANIFEST" header_directive
 ENVY_PINNED_VERSION="$ENVY_VERSION"  # a pin is meaningless against a resolved version
 
 # Fail closed before any network: a pin that silently stops verifying is worse than none.
@@ -152,7 +170,7 @@ if [[ -n "${ENVY_CACHE_ROOT:-}" ]]; then
     fi
 else
     # The user's own root; a local tree borrows from it read-only. Guarded: set -u.
-    if [[ $(uname) == Darwin ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         # XDG_CACHE_HOME is not consulted on Darwin, matching platform_posix.cpp.
         if [[ -n "${HOME:-}" ]]; then ENVY_SHARED_CACHE="$HOME/Library/Caches/envy"; fi
     elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then ENVY_SHARED_CACHE="$XDG_CACHE_HOME/envy"
@@ -192,7 +210,8 @@ fi
 
 if [[ -z "$ENVY_VERSION" ]]; then
     if [[ -f "$ENVY_CACHE/envy/latest" ]]; then
-        ENVY_LATEST_VER="$(cat "$ENVY_CACHE/envy/latest" 2>/dev/null)"
+        ENVY_LATEST_VER=""  # first line only; stays empty if the file can't be read
+        { IFS= read -r ENVY_LATEST_VER < "$ENVY_CACHE/envy/latest"; } 2>/dev/null || true
         ENVY_LATEST_VER="${ENVY_LATEST_VER%%[[:space:]]*}"
         [[ -n "$ENVY_LATEST_VER" && -x "$ENVY_CACHE/envy/$ENVY_LATEST_VER/envy" ]] && ENVY_VERSION="$ENVY_LATEST_VER"
     fi
@@ -246,19 +265,9 @@ if [[ -n "$ENVY_CACHE_LOCAL$ENVY_CACHE_MODE$ENVY_STATE_DIR_REL$ENVY_MODE_FROM_MA
     exit 1
 fi
 
-case "$(uname -s)" in
-    Darwin) ENVY_PLATFORM=darwin ;; Linux) ENVY_PLATFORM=linux ;;
-    *) echo "ERROR: Unsupported platform: $(uname -s)" >&2; exit 1 ;;
-esac
-
-case "$(uname -m)" in
-    x86_64) ENVY_ARCH=x86_64 ;; aarch64|arm64) ENVY_ARCH=arm64 ;;
-    *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-
 # --project ahead of the caller's argv: this script belongs to one project. take_last on
 # the option side means a hand-typed --project still wins.
-ENVY_ARGS=(--project "$(resolve_script_dir)")
+ENVY_ARGS=(--project "$ENVY_SCRIPT_DIR")
 
 ENVY_BIN="$ENVY_CACHE/envy/$ENVY_VERSION/envy"
 
@@ -275,6 +284,18 @@ fi
 if usable_envy "$ENVY_BIN"; then
     exec "$ENVY_BIN" "${ENVY_ARGS[@]}" "$@"
 fi
+
+# Platform and arch only pick which archive to download, so they're checked here, after a
+# cached envy would already have run.
+case "$(uname -s)" in
+    Darwin) ENVY_PLATFORM=darwin ;; Linux) ENVY_PLATFORM=linux ;;
+    *) echo "ERROR: Unsupported platform: $(uname -s)" >&2; exit 1 ;;
+esac
+
+case "$(uname -m)" in
+    x86_64) ENVY_ARCH=x86_64 ;; aarch64|arm64) ENVY_ARCH=arm64 ;;
+    *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 
 echo "Downloading envy $ENVY_VERSION..." >&2
 # mktemp, not $$: a predictable name in a sticky /tmp is another user's to pre-create.

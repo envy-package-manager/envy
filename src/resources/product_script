@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # envy-managed schema "@@ENVY_PRODUCT_SCRIPT_VERSION@@"
 set -Eeuo pipefail
-ENVY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Locates the launcher beside this script without starting a process (this runs on every
+# tool call); the launcher resolves symlinks itself.
+ENVY_SCRIPT_DIR=.
+case "${BASH_SOURCE[0]}" in */*) ENVY_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;; esac
 # The sibling launcher injects --project; `product --run` installs the tool if needed and
 # execs it in the project's activation.
 exec "$ENVY_SCRIPT_DIR/envy" product --run "@@PRODUCT_NAME@@" -- "$@"
