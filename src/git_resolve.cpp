@@ -141,6 +141,7 @@ std::string git_resolve_remote(std::string const &repo, std::string const &ref) 
     return lower;
   }
 
+  libgit2_ensure();
   // HTTPS requires CA certificates be configured (matches fetch_git_repo).
   if (uri_is_https_scheme(repo)) { libgit2_require_ssl_certs(); }
 

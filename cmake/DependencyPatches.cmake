@@ -389,6 +389,34 @@ function(envy_patch_libgit2_https_transport source_dir binary_dir)
     unset(LIBGIT2_SRC_DIR)
 endfunction()
 
+# Keep the build host's CA bundle path out of libgit2: envy configures certificates itself.
+function(envy_patch_libgit2_cert_location source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_cert_location_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${binary_dir}/envy_patch_libgit2_cert_location.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_cert_location_patch.py.in")
+
+    set(SELECT_HTTPS_PATH "${source_dir}/cmake/SelectHTTPSBackend.cmake")
+    if(NOT EXISTS "${SELECT_HTTPS_PATH}")
+        message(FATAL_ERROR "libgit2 cert location patch: ${SELECT_HTTPS_PATH} not found")
+    endif()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(SELECT_HTTPS_PATH)
+endfunction()
+
 # Strip libgit2 install()/export() calls for the same reason—keep it scoped
 # to Envy's build tree with no accidental installs.
 function(envy_patch_libgit2_install source_dir binary_dir)

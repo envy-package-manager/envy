@@ -787,6 +787,7 @@ void fetch_git(fetch_request_git const &req,
                std::filesystem::path const &dest,
                std::string const &trace_spec,
                std::mutex &predicates) {
+  libgit2_ensure();
   // Absolute, so relative submodule urls resolve the same from any working directory.
   std::string url{
     git_url_is_local(req.source) && !req.source.starts_with("file://")

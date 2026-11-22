@@ -87,6 +87,7 @@ EVENT_REGISTRY = {
         "released:bool",
     ],
     "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
+    "libgit2_init": ["duration_ms:i64"],
     "git_fetch": ["url:str", "path:str", "sha:str", "strategy:str", "depth:i64"],
     "extract_start": ["archive:str", "destination:str", "strip_components:i64"],
     "extract_complete": ["archive:str", "files_extracted:i64", "duration_ms:i64"],
