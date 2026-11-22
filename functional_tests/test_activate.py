@@ -21,11 +21,11 @@ from .env import EnvyTestCase
 _RUST = """IDENTITY = "local.rust@r0"
 FETCH = function() end
 INSTALL = function(install_dir) envy.run("mkdir -p bin", { cwd = install_dir }) end
-ENV = function(pkg_path, root, options)
+ENV = function(pkg_dir, pkg_state_dir, options)
   return {
-    RUSTUP_HOME = envy.path.join(pkg_path, "rustup"),
-    CARGO_HOME = envy.path.join(root, ".cargo"),
-    PATH = { prepend = envy.path.join(pkg_path, "bin") },
+    RUSTUP_HOME = envy.path.join(pkg_dir, "rustup"),
+    CARGO_HOME = pkg_state_dir,
+    PATH = { prepend = envy.path.join(pkg_dir, "bin") },
     TRICKY = "it's $HOME \\"q\\" \\\\ ;\\nsecond line",
     PYTHONHOME = false,
   }
@@ -128,7 +128,7 @@ class TestActivateBash(_ActivateBase):
             f'env -0 > "{after}"\n'
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f"CARGO_HOME={self.rust.resolve()}/.cargo", result.stdout)
+        self.assertIn(f"CARGO_HOME={self.rust.resolve()}/.envy/state/local.rust/", result.stdout)
         self.assertIn("TRICKY=it's $HOME \"q\" \\ ;\nsecond line", result.stdout)
         self.assertIn("PYTHONHOME=unset", result.stdout)
         self.assertIn(str((self.rust / "tools").resolve()), result.stdout)
@@ -148,7 +148,7 @@ class TestActivateBash(_ActivateBase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("warning", result.stderr)  # shims install lazily: nothing to nag
         self.assertIn("BEFORE=unset", result.stdout)
-        self.assertIn(f"AFTER={self.rust.resolve()}/.cargo", result.stdout)
+        self.assertIn(f"AFTER={self.rust.resolve()}/.envy/state/local.rust/", result.stdout)
         self.assertIn("envy: refreshed rusty", result.stderr)
 
     def test_lazy_install_refreshes_and_cache_hit_does_not(self) -> None:
@@ -216,7 +216,7 @@ class TestActivateBash(_ActivateBase):
             f'env -0 > "{after}"\n'
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f"FIRST={self.rust.resolve()}/.cargo", result.stdout)
+        self.assertIn(f"FIRST={self.rust.resolve()}/.envy/state/local.rust/", result.stdout)
         self.assertIn(f"SECOND=unset ROOT={other.resolve()}", result.stdout)
         self.assertEqual(_env_dump(before.read_bytes()), _env_dump(after.read_bytes()))
 
@@ -285,7 +285,7 @@ class TestActivateBash(_ActivateBase):
             capture_output=True, text=True, env=self.env, timeout=60,
         )
         self.assertEqual(0, activated.returncode, activated.stderr)
-        self.assertEqual(f"{self.rust.resolve()}/.cargo", activated.stdout.strip())
+        self.assertEqual(f"{self.rust.resolve()}/.envy/state/local.rust/", activated.stdout.strip())
 
         plain = test_config.run(
             [str(launcher), "run", "printenv", "CARGO_HOME"],
@@ -490,7 +490,7 @@ class TestActivateZsh(_ActivateBase):
             f'env -0 > "{after}"\n',
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f"CARGO_HOME={rust.resolve()}/.cargo", result.stdout)
+        self.assertIn(f"CARGO_HOME={rust.resolve()}/.envy/state/local.rust/", result.stdout)
         self.assertEqual(_env_dump(before.read_bytes()), _env_dump(after.read_bytes()))
 
     def test_env_names_that_match_hook_locals_reach_the_shell(self) -> None:
@@ -576,10 +576,10 @@ class TestActivateRoundTrip(EnvyTestCase):
         header = manifest.read_text().split("PACKAGES", 1)[0]
         (self.proj / "rt.lua").write_text(
             'IDENTITY = "local.rt@r0"\nFETCH = function() end\nINSTALL = function() end\n'
-            "ENV = function(pkg_path) return {\n"
+            "ENV = function(pkg_dir) return {\n"
             f"  SET_ME = [[{_RT_VALUE}]],\n"
             "  UNSET_ME = false,\n"
-            '  PATH = { prepend = envy.path.join(pkg_path, "pre"), '
+            '  PATH = { prepend = envy.path.join(pkg_dir, "pre"), '
             f"append = [[{self.append_dir}]] }},\n"
             "} end\n"
         )

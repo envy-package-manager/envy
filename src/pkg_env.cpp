@@ -46,10 +46,12 @@ std::optional<env_ops> pkg_env_eval(pkg *p,
     pkg_path ? sol::make_object(lua, util_path_with_separator(*pkg_path))
              : sol::make_object(lua, sol::lua_nil)
   };
+  std::string const &id{ p->cfg->identity };
+  auto const pkg_state_dir{ root / ".envy" / "state" / id.substr(0, id.find('@')) };
   sol::object const opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
   sol::object const result{ call_lua_function_with_enriched_errors(p, "ENV", [&] {
     return env_obj.as<sol::protected_function>()(path_arg,
-                                                 util_path_with_separator(root),
+                                                 util_path_with_separator(pkg_state_dir),
                                                  opts);
   }) };
 

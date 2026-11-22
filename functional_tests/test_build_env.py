@@ -19,8 +19,8 @@ from .env import EnvyTestCase
 _C = """IDENTITY = "local.c@r0"
 FETCH = function() end
 INSTALL = function() end
-ENV = function(pkg_path, root, options)
-  return { CARGO_HOME = envy.path.join(root, ".cargo"), DEPTH = "c", ONLY_C = "c" }
+ENV = function(pkg_dir, pkg_state_dir, options)
+  return { CARGO_HOME = pkg_state_dir, DEPTH = "c", ONLY_C = "c" }
 end
 """
 
@@ -39,8 +39,8 @@ echo "ACTIVE=${ENVY_ACTIVATE_ROOT-none}"
 TOOL
 chmod +x bin/btool]], { cwd = install_dir })
 end
-ENV = function(pkg_path)
-  return { DEPTH = "b", PATH = { prepend = envy.path.join(pkg_path, "bin") } }
+ENV = function(pkg_dir)
+  return { DEPTH = "b", PATH = { prepend = envy.path.join(pkg_dir, "bin") } }
 end
 """
 
@@ -61,6 +61,10 @@ INSTALL = 'btool > "$ENVY_TEST_OUT"'
 
 def _report(path: Path) -> dict[str, str]:
     return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+
+
+def _is_c_state(path: str) -> bool:
+    return Path(path).parts[-3:] == (".envy", "state", "local.c")  # keyed sans revision
 
 
 @unittest.skipIf(sys.platform == "win32", "the fixture tool is a POSIX shell script")
@@ -86,13 +90,13 @@ class TestBuildEnv(EnvyTestCase):
         report = self._install(self._project(_A_FUNCTION))
         self.assertEqual("b", report["DEPTH"])  # B is nearer to A than C is
         self.assertEqual("c", report["ONLY_C"])  # C reaches A through B
-        cargo_home = Path(report["CARGO_HOME"])
-        self.assertEqual(".cargo", cargo_home.name)
-        self.assertIn("local.a@r0", cargo_home.as_posix())  # A's own sandbox
+        self.assertTrue(_is_c_state(report["CARGO_HOME"]), report["CARGO_HOME"])
+        self.assertIn("local.a@r0", report["CARGO_HOME"])  # A's own sandbox
 
     def test_string_verb_gets_the_same_env(self) -> None:
         report = self._install(self._project(_A_STRING))
         self.assertEqual("b", report["DEPTH"])
+        self.assertTrue(_is_c_state(report["CARGO_HOME"]), report["CARGO_HOME"])
         self.assertIn("local.a@r0", report["CARGO_HOME"])
 
     def test_dependency_cache_hit_still_contributes(self) -> None:
@@ -135,7 +139,7 @@ SETUP = {
         )
         report = self._install(manifest)
         self.assertEqual("c", report["ONLY_C"])
-        self.assertTrue(report["CARGO_HOME"].endswith(".cargo"))
+        self.assertTrue(_is_c_state(report["CARGO_HOME"]), report["CARGO_HOME"])
 
     def test_malformed_env_fails_the_spec(self) -> None:
         self.write_spec("bad.lua", 'IDENTITY = "local.bad@r0"\nFETCH = function() end\nENV = 3\n')
