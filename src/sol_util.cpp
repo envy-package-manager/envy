@@ -1,5 +1,6 @@
 #include "sol_util.h"
 
+#include "embedded_lua.h"
 #include "util.h"
 
 #include <algorithm>
@@ -10,6 +11,15 @@
 #include <vector>
 
 namespace envy {
+
+sol::protected_function_result sol_util_run_bytecode(sol::state_view lua,
+                                                     std::span<unsigned char const> bytecode) {
+  return lua.safe_script(std::string_view{ reinterpret_cast<char const *>(bytecode.data()),
+                                           bytecode.size() },
+                         sol::script_pass_on_error,
+                         "=bytecode",  // unused: the bytecode carries its own chunk name
+                         sol::load_mode::binary);
+}
 
 sol_state_ptr sol_util_make_lua_state() {
   auto lua{ std::make_unique<sol::state>() };
@@ -24,26 +34,11 @@ sol_state_ptr sol_util_make_lua_state() {
                       sol::lib::bit32,
                       sol::lib::io);
 
-  // Override error() and assert() to automatically include stack traces
-  lua->script(R"lua(
-do
-  local orig_error = error
-  local orig_assert = assert
-
-  _G.error = function(message, level)
-    level = (level or 1) + 1
-    return orig_error(debug.traceback(tostring(message), level), 0)
-  end
-
-  _G.assert = function(condition, message, ...)
-    if not condition then
-      message = message or "assertion failed"
-      return orig_assert(false, debug.traceback(tostring(message), 2))
-    end
-    return condition, message, ...
-  end
-end
-)lua");
+  if (sol::protected_function_result const r{
+          sol_util_run_bytecode(*lua, embedded::kLuaPrelude) };
+      !r.valid()) {
+    throw_runtime_error({ "Lua prelude: ", r.get<sol::error>().what() });
+  }
 
   return lua;
 }
