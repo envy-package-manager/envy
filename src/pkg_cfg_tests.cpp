@@ -328,9 +328,8 @@ TEST_CASE("pkg_cfg::parse errors on identity missing name") {
 
 TEST_CASE("pkg_cfg::parse errors on identity whose name ends in a dot") {
   sol::state lua;  // Win32 strips the dot, so 'local.tool.' would share local.tool's state
-  auto lua_val{
-    lua_eval("result = { spec = 'local.tool.@r1', source = '/fake/r.lua' }", lua)
-  };
+  auto lua_val{ lua_eval("result = { spec = 'local.tool.@r1', source = '/fake/r.lua' }",
+                         lua) };
 
   CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
                                             fs::path("/fake"),
