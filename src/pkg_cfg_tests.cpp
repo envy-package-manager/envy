@@ -326,6 +326,19 @@ TEST_CASE("pkg_cfg::parse errors on identity missing name") {
                        std::runtime_error);
 }
 
+TEST_CASE("pkg_cfg::parse errors on identity whose name ends in a dot") {
+  sol::state lua;  // Win32 strips the dot, so 'local.tool.' would share local.tool's state
+  auto lua_val{
+    lua_eval("result = { spec = 'local.tool.@r1', source = '/fake/r.lua' }", lua)
+  };
+
+  CHECK_THROWS_WITH_AS(envy::pkg_cfg::parse(lua_val,
+                                            fs::path("/fake"),
+                                            envy::pkg_entry_shape::MANIFEST_PACKAGE),
+                       "Invalid spec identity format: local.tool.@r1",
+                       std::runtime_error);
+}
+
 TEST_CASE("pkg_cfg::parse errors on identity missing version") {
   sol::state lua;
   auto lua_val{ lua_eval("result = { spec = 'arm.gcc@', source = '/fake/r.lua' }", lua) };

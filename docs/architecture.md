@@ -365,7 +365,7 @@ Two consumers, one syntax:
 - **Wrappers:** `envy product --run` (every deployed product script) runs the tool in that activation, built from the engine that installed the provider. A caller already in it keeps its env, plus any closure `ENV` it lacks. `./tools/go` sees `GOTOOLCHAIN` in CI as in an activated shell.
 - **Phases:** a package's verbs (string forms, `envy.run`, SETUP pairs) see the `ENV` of everything reached through the edges their phase waits on, with `<root>` = that package's tmp dir (a SETUP pair's: a scratch dir gone when it returns); deepest applies first, so nearer dependencies win, ties by key. A's INSTALL running B's tool that runs C's cargo gets C's `CARGO_HOME`, sandboxed under A's build.
 
-**Same hash, same bytes:** nothing project- or shell-specific reaches a phase. Phases and Lua `os.getenv` see the pre-activation environment—an activated shell's variables are undone before envy runs any verb—and `pkg_state_dir` in a phase is never under a project. A dependency's `ENV` derives only from its own path, options and spec, all already behind the dependent's key. Project layout (e.g. `CARGO_HOME` under `out/`) belongs in no package's `options`.
+**Same hash, same bytes:** nothing project- or shell-specific reaches a phase. Phases and Lua `os.getenv` see the pre-activation environment—an activated shell's variables are undone before envy runs any verb—and `pkg_state_dir` in a phase is never the project's. A dependency's `ENV` derives only from its own path, options and spec, all already behind the dependent's key. Project layout (e.g. `CARGO_HOME` under `out/`) belongs in no package's `options`.
 
 ## Unified DAG Execution Model
 

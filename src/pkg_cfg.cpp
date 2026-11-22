@@ -24,12 +24,14 @@ pkg_cfg_pool g_default_pkg_cfg_pool;
 
 std::atomic<std::uint64_t> g_custom_fetch_decl_seq{ 0 };
 
-// "namespace.name@revision", with all three parts non-empty and path-safe.
+// "namespace.name@revision", with all three parts non-empty and path-safe. "namespace.name"
+// alone names a state dir, so it can't end in '.': Win32 strips it, aliasing another spec.
 bool identity_is_valid(std::string const &identity) {
   if (!util_is_safe_path_component(identity)) { return false; }
 
   auto const at_pos{ identity.find('@') };
-  if (at_pos == std::string::npos || at_pos == 0 || at_pos == identity.size() - 1) {
+  if (at_pos == std::string::npos || at_pos == 0 || at_pos == identity.size() - 1 ||
+      identity[at_pos - 1] == '.') {
     return false;
   }
 
