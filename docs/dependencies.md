@@ -26,11 +26,11 @@
 
 ## Mbed TLS
 
-**Version:** 3.6.7
+**Version:** 3.6.8
 **License:** Apache-2.0
 **Purpose:** Crypto (SHA-256) and the TLS client behind libgit2, libssh2, and Linux libcurl
 **Integration:** `cmake/templates/mbedtls_user_config.h.in` layers TLS 1.3 and threading atop the stock config and `#undef`s `MBEDTLS_SSL_SRV_C`; every consumer compiles against the same file, so struct layouts agree
-**Rationale:** envy only dials out; the TLS server state machines cost ~35 KB
+**Rationale:** envy only dials out; the TLS server state machines cost ~35 KB. Stays on 3.6 LTS (EOL 2027-03)—libgit2 1.9 and libssh2 1.11 need `ctr_drbg`/`entropy`, gone in 4.x
 
 ## libgit2
 
@@ -42,7 +42,7 @@
 
 ## AWS C libraries
 
-**Version:** aws-c-s3 0.13.1, aws-c-auth 0.10.4, aws-c-http 0.11.0, aws-c-io 0.27.4 and their deps—the set aws-sdk-cpp 1.11.850 pinned; Linux adds aws-lc 5.2.0 and s2n-tls 1.7.5
+**Version:** aws-c-s3 0.13.7, aws-c-auth 0.10.5, aws-c-http 0.11.1, aws-c-io 0.27.7 and their deps—each library's last 0.x, the code its 1.0.0 retagged; Linux adds aws-lc 5.5.0 and s2n-tls 1.7.7, the pair aws-crt-cpp 0.43.8 pinned atop 0.x
 **License:** Apache-2.0 (aws-c-common's `THIRD-PARTY-LICENSES.txt` covers its cJSON and libcbor)
 **Purpose:** S3 transfers (auto-ranged GET/PUT, CRC64NVME) and the credential chain
 **Integration:** `cmake/deps/AwsC.cmake` fetches each pinned release archive (`ENVY_AWS_C_DEPS`), extracts it to `out/cache/aws-c/<repo>-<tag>`, drops the archive, prunes unpinned trees, and adds them in-tree as aws-crt-cpp's `BUILD_DEPS` did; macOS and Windows use the OS's TLS and never fetch aws-lc/s2n-tls; `AWS_STATIC_LOG_LEVEL=0`; patches (stamped with their script's hash beside the sources): static MSVC runtime, AVX2 base64 signature, s2n feature probes, aws-lc and s2n noexecstack; `src/aws_util.cpp` uses private `aws/auth/private/{sso_token_utils,credentials_utils}.h` to name a lapsed SSO token offline and to bound credential HTTP responses; `refresh_sso_token` renews an sso-session's cached token near expiry via SSO-OIDC `CreateToken` (aws-c-auth's TODO), as every AWS SDK does
