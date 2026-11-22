@@ -8,14 +8,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "lua-src" OUTPUT_VARIABLE lua_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "lua-build" OUTPUT_VARIABLE lua_BINARY_DIR)
 
-if(NOT EXISTS "${lua_SOURCE_DIR}/lapi.c" AND NOT EXISTS "${lua_SOURCE_DIR}/src/lapi.c")
-    FetchContent_Populate(lua
-        SOURCE_DIR "${lua_SOURCE_DIR}"
-        BINARY_DIR "${lua_BINARY_DIR}"
-        URL ${_lua_url}
-        URL_HASH SHA256=${ENVY_LUA_SHA256}
-    )
-endif()
+envy_populate_pinned(lua "${lua_SOURCE_DIR}" "${lua_BINARY_DIR}"
+    ${_lua_url} ${ENVY_LUA_SHA256})
 
 if(NOT TARGET lua)
     set(_lua_source_root "${lua_SOURCE_DIR}")

@@ -8,14 +8,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "blake3-src" OUTPUT_VARIABLE blake3_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "blake3-build" OUTPUT_VARIABLE blake3_BINARY_DIR)
 
-if(NOT EXISTS "${blake3_SOURCE_DIR}/c/blake3.c")
-    FetchContent_Populate(blake3
-        SOURCE_DIR "${blake3_SOURCE_DIR}"
-        BINARY_DIR "${blake3_BINARY_DIR}"
-        URL ${_blake3_url}
-        URL_HASH SHA256=${ENVY_BLAKE3_SHA256}
-    )
-endif()
+envy_populate_pinned(blake3 "${blake3_SOURCE_DIR}" "${blake3_BINARY_DIR}"
+    ${_blake3_url} ${ENVY_BLAKE3_SHA256})
 
 if(NOT TARGET blake3::blake3)
     set(BLAKE3_SOURCES

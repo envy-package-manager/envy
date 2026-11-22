@@ -26,10 +26,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Third-party version catalog
 # ---------------------------------------------------------------------------
-set(ENVY_MBEDTLS_VERSION "3.6.7")
+set(ENVY_MBEDTLS_VERSION "3.6.8")
 set(ENVY_MBEDTLS_ARCHIVE "mbedtls-${ENVY_MBEDTLS_VERSION}.tar.bz2")
 set(ENVY_MBEDTLS_URL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${ENVY_MBEDTLS_VERSION}/${ENVY_MBEDTLS_ARCHIVE}")
-set(ENVY_MBEDTLS_SHA256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6)
+set(ENVY_MBEDTLS_SHA256 bc54b818e87f49c0b3281dd85d24adaede0e63b4e822e3fbd49c005a38b9595b)
 
 set(ENVY_LIBSSH2_VERSION "1.11.1")
 set(ENVY_LIBSSH2_ARCHIVE "libssh2-${ENVY_LIBSSH2_VERSION}.tar.gz")
@@ -41,53 +41,53 @@ set(ENVY_LIBGIT2_ARCHIVE "libgit2-${ENVY_LIBGIT2_VERSION}.tar.gz")
 set(ENVY_LIBGIT2_URL "https://github.com/libgit2/libgit2/archive/refs/tags/v${ENVY_LIBGIT2_VERSION}.tar.gz")
 set(ENVY_LIBGIT2_SHA256 1a4fbe7589e814777ae76b64734ad80f4ecad22cd33a22682a2aaea4ae5375e7)
 
-set(ENVY_LIBCURL_VERSION "8.21.0")
+set(ENVY_LIBCURL_VERSION "8.23.0")
 set(ENVY_LIBCURL_ARCHIVE "curl-${ENVY_LIBCURL_VERSION}.tar.xz")
 set(ENVY_LIBCURL_URL "https://curl.se/download/${ENVY_LIBCURL_ARCHIVE}")
-set(ENVY_LIBCURL_SHA256 aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6)
+set(ENVY_LIBCURL_SHA256 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5)
 
 # S3 and the AWS C libraries beneath it: "<github org/repo> <tag> <archive sha256>".
 # aws-lc and s2n-tls are Linux's TLS; macOS and Windows use the OS's.
 set(ENVY_AWS_C_DEPS
-    "awslabs/aws-c-common v0.14.2 da518accb60eb08e0d56f641f00c3ea856c36a0972394770c978e5ff3bfc3728"
-    "aws/aws-lc v5.2.0 f9ad6bde29eb9c8ce585085d9a12bb2ffe89bfd940a631f760eeb1b2d9b2d1a7"
-    "aws/s2n-tls v1.7.5 841f67cb1eb4ce71c829fa12ce940ae33556429c7e137be5c16461999bb7f666"
-    "awslabs/aws-c-cal v0.9.14 0e96e0067fa921768e07b5b4ebad82011ccf474903e9286419ef428d68f317ea"
-    "awslabs/aws-c-io v0.27.4 0f2ce32de3685ca5ba3a8395d461c783253c1718cf70d31378eb6be890db1e3e"
-    "awslabs/aws-checksums v0.2.10 cb6509f75e42ee25c372a6d379e8582ce5179e5335183842e808f7d8abb0c314"
-    "awslabs/aws-c-compression v0.3.2 f93f5a5d8b3fee3a6d97b14ba279efacd4d4016ef9cc7dc4be7d43519ecfbe93"
-    "awslabs/aws-c-http v0.11.0 4ccbdd33c798b590288330dec9e93abe2ff6cfb198b7a4db036c9d362f2e6506"
-    "awslabs/aws-c-sdkutils v0.2.7 802b8c4169da2b4cf5c48f9598fb778faccd3e052e443a482089193411c2b7bb"
-    "awslabs/aws-c-auth v0.10.4 6fb567f496a450d4b6d3f5749d735977a0156957e8ccbca9af7a5ee15d1ffda7"
-    "awslabs/aws-c-s3 v0.13.1 30cd8deec12a6995b8dda32d8f3a53b3c1f2d2dcad56287aab64dfee80eb7630"
+    "awslabs/aws-c-common v0.14.5 103273767fea478545b75a0835c7dc60842baee0a191a112c72f904d22693c84"
+    "aws/aws-lc v5.5.0 d79a5beb1c2f7fd86a17d91eb230ae12da71dc28bedeb775c179863cf279c650"
+    "aws/s2n-tls v1.7.7 a6f77d2e3343b554bfc2cce27e0407b3c758bb105533c8f0a56e233036b7541d"
+    "awslabs/aws-c-cal v0.9.15 215dd31c12ea49c4f40aa7882a800f9648e4095cfcb2d6abdd27e957574ad6e2"
+    "awslabs/aws-c-io v0.27.7 cc84b1639c64af41ec7ea7397b020483f9bf73e3b07a72b16b4051b421079aa5"
+    "awslabs/aws-checksums v0.2.11 6917e18b8d6079c02f36478ac59174eb3c47dc3bf040ea63bd93d127837f873f"
+    "awslabs/aws-c-compression v0.3.3 33a91db709a547f417b1b23fdb76a64727ee8fb7ed88dd1a43be117f402db356"
+    "awslabs/aws-c-http v0.11.1 2988843d5c95d92249d40e59480c2a4376533a91d8e38a5106dc4da5a8720ce5"
+    "awslabs/aws-c-sdkutils v0.2.10 23bfb010c7a5becc48b7e36212a4f401319a46ec3e981eb9adb9d6b215e7a65e"
+    "awslabs/aws-c-auth v0.10.5 1ddd1dc476debdbf9ff083e254396fdc3ea0846dccf7d5f983a6571303abcb35"
+    "awslabs/aws-c-s3 v0.13.7 f15b0696d915a3189b4eee6b750fe8d1fbc84b33f94518071725a0f3a8ffc63d"
 )
 
-set(ENVY_LIBARCHIVE_VERSION "3.8.8")
+set(ENVY_LIBARCHIVE_VERSION "3.8.11")
 set(ENVY_LIBARCHIVE_ARCHIVE "libarchive-${ENVY_LIBARCHIVE_VERSION}.tar.gz")
 set(ENVY_LIBARCHIVE_URL "https://www.libarchive.org/downloads/libarchive-${ENVY_LIBARCHIVE_VERSION}.tar.gz")
-set(ENVY_LIBARCHIVE_SHA256 038918ea315cdd446cc63acfe880d6011832bbe1711c887de5de5441b306c190)
+set(ENVY_LIBARCHIVE_SHA256 900fe9fc7237c2b04f090f3c3648de8fe597525771f5035016537ce2d667d12b)
 
 set(ENVY_BLAKE3_VERSION "1.8.5")
 set(ENVY_BLAKE3_ARCHIVE "blake3-${ENVY_BLAKE3_VERSION}.tar.gz")
 set(ENVY_BLAKE3_URL "https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/${ENVY_BLAKE3_VERSION}.tar.gz")
 set(ENVY_BLAKE3_SHA256 220bd81286e2a0585beac66d41ac3f4c2c33ae8a4e339fc88cf22d5e00514fe9)
 
-set(ENVY_LUA_VERSION "5.4.8")
+set(ENVY_LUA_VERSION "5.4.9")
 set(ENVY_LUA_ARCHIVE "lua-${ENVY_LUA_VERSION}.tar.gz")
 set(ENVY_LUA_URL "https://www.lua.org/ftp/lua-${ENVY_LUA_VERSION}.tar.gz")
-set(ENVY_LUA_SHA256 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae)
+set(ENVY_LUA_SHA256 2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6)
 
 set(ENVY_SOL2_GIT_TAG "c1f95a773c6f8f4fde8ca3efe872e7286afe4444")
 
-set(ENVY_ZLIB_VERSION "1.3.2")
+set(ENVY_ZLIB_VERSION "1.4")
 set(ENVY_ZLIB_ARCHIVE "zlib-${ENVY_ZLIB_VERSION}.tar.gz")
 set(ENVY_ZLIB_URL "https://github.com/madler/zlib/releases/download/v${ENVY_ZLIB_VERSION}/${ENVY_ZLIB_ARCHIVE}")
-set(ENVY_ZLIB_SHA256 bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16)
+set(ENVY_ZLIB_SHA256 02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584)
 
-set(ENVY_LIBLZMA_VERSION "5.8.3")
+set(ENVY_LIBLZMA_VERSION "5.8.4")
 set(ENVY_LIBLZMA_ARCHIVE "xz-${ENVY_LIBLZMA_VERSION}.tar.gz")
 set(ENVY_LIBLZMA_URL "https://github.com/tukaani-project/xz/releases/download/v${ENVY_LIBLZMA_VERSION}/${ENVY_LIBLZMA_ARCHIVE}")
-set(ENVY_LIBLZMA_SHA256 3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0)
+set(ENVY_LIBLZMA_SHA256 0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9)
 
 set(ENVY_LIBBZ2_VERSION "1.0.8")
 set(ENVY_LIBBZ2_ARCHIVE "bzip2-${ENVY_LIBBZ2_VERSION}.tar.gz")

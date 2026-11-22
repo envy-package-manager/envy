@@ -8,14 +8,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "bzip2-src" OUTPUT_VARIABLE envy_libbz2_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "bzip2-build" OUTPUT_VARIABLE envy_libbz2_BINARY_DIR)
 
-if(NOT EXISTS "${envy_libbz2_SOURCE_DIR}/bzlib.h")
-    FetchContent_Populate(envy_libbz2
-        SOURCE_DIR "${envy_libbz2_SOURCE_DIR}"
-        BINARY_DIR "${envy_libbz2_BINARY_DIR}"
-        URL ${_libbz2_url}
-        URL_HASH SHA256=${ENVY_LIBBZ2_SHA256}
-    )
-endif()
+envy_populate_pinned(envy_libbz2 "${envy_libbz2_SOURCE_DIR}" "${envy_libbz2_BINARY_DIR}"
+    ${_libbz2_url} ${ENVY_LIBBZ2_SHA256})
 
 if(DEFINED envy_libbz2_SOURCE_DIR AND DEFINED envy_libbz2_BINARY_DIR)
     add_library(bz2 STATIC

@@ -80,14 +80,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "libcurl-src" OUTPUT_VARIABLE libcurl_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "libcurl-build" OUTPUT_VARIABLE libcurl_BINARY_DIR)
 
-if(NOT EXISTS "${libcurl_SOURCE_DIR}/CMakeLists.txt")
-    FetchContent_Populate(libcurl
-        SOURCE_DIR "${libcurl_SOURCE_DIR}"
-        BINARY_DIR "${libcurl_BINARY_DIR}"
-        URL ${_curl_url}
-        URL_HASH SHA256=${ENVY_LIBCURL_SHA256}
-    )
-endif()
+envy_populate_pinned(libcurl "${libcurl_SOURCE_DIR}" "${libcurl_BINARY_DIR}"
+    ${_curl_url} ${ENVY_LIBCURL_SHA256})
 
 if(DEFINED libcurl_SOURCE_DIR AND DEFINED libcurl_BINARY_DIR AND _envy_zlib_real_target)
     envy_patch_libcurl_cmakelists("${libcurl_SOURCE_DIR}" "${libcurl_BINARY_DIR}" "${_envy_zlib_real_target}")

@@ -66,7 +66,7 @@ if(DEFINED envy_zlib_BINARY_DIR)
     set(ZLIB_VERSION_STRING "${ENVY_ZLIB_VERSION}" CACHE STRING "" FORCE)
 
     if(DEFINED envy_zlib_SOURCE_DIR AND EXISTS "${envy_zlib_BINARY_DIR}/zconf.h")
-        # zlib 1.3.2's generated zconf.h hard-defines HAVE_UNISTD_H/HAVE_STDARG_H;
+        # zlib's (1.3.2+) generated zconf.h hard-defines HAVE_UNISTD_H/HAVE_STDARG_H;
         # guard them so consumers whose config headers define these valueless
         # (libssh2_config.h) don't trip macro-redefinition warnings.
         file(READ "${envy_zlib_BINARY_DIR}/zconf.h" _envy_zconf)
