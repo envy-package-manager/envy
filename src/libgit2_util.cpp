@@ -1,9 +1,14 @@
 #include "libgit2_util.h"
+#include "trace.h"
+#include "uri.h"
 
 #include <git2.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -11,7 +16,6 @@
 #include <sys/stat.h>
 
 #include <filesystem>
-#include <mutex>
 #include <vector>
 #endif
 
@@ -111,7 +115,13 @@ void ensure_ssl_certs_configured() {
 }  // namespace
 #endif
 
-libgit2_scope::libgit2_scope() {
+namespace {
+
+std::once_flag g_init_once;
+std::atomic<bool> g_initialized{ false };
+
+void init() {
+  auto const start{ std::chrono::steady_clock::now() };
   if (git_libgit2_init() < 0) { throw_runtime_error({ "Failed to initialize libgit2" }); }
 
   // libgit2 waits on a silent server forever by default. Bound it as curl and WinINet are:
@@ -127,16 +137,33 @@ libgit2_scope::libgit2_scope() {
   }() };
   if (git_libgit2_opts(GIT_OPT_SET_SERVER_CONNECT_TIMEOUT, std::min(timeout_ms, 30000)) ||
       git_libgit2_opts(GIT_OPT_SET_SERVER_TIMEOUT, timeout_ms)) {
+    git_libgit2_shutdown();
     throw_runtime_error({ "Failed to set libgit2 network timeouts" });
   }
+  g_initialized = true;
+  ENVY_TRACE(libgit2_init,
+             "",
+             .duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - start)
+                                .count());
 }
 
-libgit2_scope::~libgit2_scope() { git_libgit2_shutdown(); }
+}  // namespace
 
-void libgit2_require_ssl_certs() {
-#ifndef _WIN32
+void libgit2_ensure() { std::call_once(g_init_once, init); }
+
+libgit2_scope::~libgit2_scope() {
+  if (g_initialized) { git_libgit2_shutdown(); }
+}
+
+void libgit2_ca_certs_for(std::string_view url) {
+  libgit2_ensure();
+#ifdef _WIN32
+  (void)url;  // WinHTTP uses the system store
+#else
+  if (!uri_is_http_scheme(url)) { return; }  // http or https
   ensure_ssl_certs_configured();
-  if (!g_ssl_certs_configured) {
+  if (uri_is_https_scheme(url) && !g_ssl_certs_configured) {
     throw_runtime_error(
         { "No CA certificate bundle found. Install ca-certificates package." });
   }

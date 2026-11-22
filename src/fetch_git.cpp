@@ -4,7 +4,6 @@
 #include "libgit2_util.h"
 #include "trace.h"
 #include "tui.h"
-#include "uri.h"
 #include "util.h"
 
 #include "git2.h"
@@ -272,15 +271,16 @@ class git_tree : unmovable {
   // Connect, pick a plan from the advertisement, download, and check the commit out
   // detached. The retry wraps the network half only: a repository is created once.
   void fetch_repo(git_job const &job) {
-    if (uri_is_https_scheme(job.url)) { libgit2_require_ssl_certs(); }
-
     // One remote per connection: libgit2 cannot reconnect one whose fetch failed.
     auto const origin{ [&] {
       git_remote *raw{ nullptr };
       if (git_remote_lookup(&raw, job.repo.get(), "origin")) {
         throw_git_error({ "fetch_git: no origin for ", job.url, ": " });
       }
-      return remote_ptr{ raw, git_remote_free };
+      remote_ptr r{ raw, git_remote_free };
+      char const *const url{ git_remote_url(r.get()) };
+      libgit2_ca_certs_for(url ? url : "");  // insteadOf may have turned it into https
+      return r;
     } };
 
     git_progress::repo *const prog{ progress_.track(job.path) };
@@ -787,6 +787,7 @@ void fetch_git(fetch_request_git const &req,
                std::filesystem::path const &dest,
                std::string const &trace_spec,
                std::mutex &predicates) {
+  libgit2_ensure();
   // Absolute, so relative submodule urls resolve the same from any working directory.
   std::string url{
     git_url_is_local(req.source) && !req.source.starts_with("file://")

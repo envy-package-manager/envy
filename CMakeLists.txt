@@ -192,6 +192,33 @@ embed_resources(envy_embedded_resources
         product_script_windows=src/resources/product_script.bat
 )
 
+# envy_luac compiles src/resources/lua/ to bytecode against envy's own Lua: nothing parses
+# it at run time, and a syntax error fails the build.
+add_executable(envy_luac cmake/tools/envy_luac.cpp)
+target_compile_features(envy_luac PRIVATE cxx_std_20)
+target_link_libraries(envy_luac PRIVATE lua::lua)
+set(_envy_lua_resources)
+foreach(_chunk IN ITEMS prelude extend template)
+    set(_source "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/lua/${_chunk}.lua")
+    set(_bytecode "${CMAKE_CURRENT_BINARY_DIR}/envy_lua_${_chunk}.luac")
+    add_custom_command(
+        OUTPUT "${_bytecode}"
+        COMMAND envy_luac "envy.${_chunk}" "${_source}" "${_bytecode}"
+        DEPENDS envy_luac "${_source}"
+        COMMENT "Compiling src/resources/lua/${_chunk}.lua"
+        VERBATIM
+    )
+    list(APPEND _envy_lua_resources "lua_${_chunk}=${_bytecode}")
+endforeach()
+embed_resources(envy_embedded_lua
+    OUTPUT embedded_lua.h
+    RESOURCES ${_envy_lua_resources}
+)
+unset(_chunk)
+unset(_source)
+unset(_bytecode)
+unset(_envy_lua_resources)
+
 # Discover and compress third-party licenses for embedding
 include(cmake/FindLicenses.cmake)
 
@@ -398,7 +425,8 @@ function(configure_envy_compile TARGET_NAME)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_BINARY_DIR}/generated
     )
-    add_dependencies(${TARGET_NAME} envy_embedded_resources envy_embedded_licenses)
+    add_dependencies(${TARGET_NAME}
+        envy_embedded_resources envy_embedded_licenses envy_embedded_lua)
     target_compile_options(${TARGET_NAME} PRIVATE ${ENVY_COMMON_COMPILE_OPTIONS})
     set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
     target_link_libraries(${TARGET_NAME} PRIVATE envy::thirdparty)

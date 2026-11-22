@@ -191,6 +191,10 @@ ENVY_TRACE_EVENT(git_resolve,
                  ENVY_TRACE_FIELD_STR(sha)
                  ENVY_TRACE_FIELD_STR(method))  // sha | ls-remote
 
+// libgit2's one-time setup, done on first git use; a run without git work has none.
+ENVY_TRACE_EVENT(libgit2_init,
+                 ENVY_TRACE_FIELD_I64(duration_ms))
+
 ENVY_TRACE_EVENT(git_fetch,
                  ENVY_TRACE_FIELD_STR(url)
                  ENVY_TRACE_FIELD_STR(path)      // from the root, '/'-joined; "" = root

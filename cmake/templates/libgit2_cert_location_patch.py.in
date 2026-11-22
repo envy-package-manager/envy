@@ -1,0 +1,14 @@
+import pathlib
+
+# Without CERT_LOCATION, configure bakes in the build host's `openssl version -d` CA path;
+# envy loads CA certificates itself for each http(s) remote (libgit2_ca_certs_for).
+
+OLD = "\t\tif(NOT CERT_LOCATION)\n"
+NEW = "\t\tif(FALSE) # envy: no default CA path from the build host\n"
+
+path = pathlib.Path(r"@SELECT_HTTPS_PATH@")
+text = path.read_text(encoding="utf-8")
+if NEW not in text:
+    if text.count(OLD) != 1:
+        raise SystemExit(f"libgit2 cert location patch: expected one '{OLD.strip()}' in {path}")
+    path.write_text(text.replace(OLD, NEW), encoding="utf-8")

@@ -1,10 +1,12 @@
 #include "shell_hooks.h"
 
 #include "embedded_init_resources.h"
+#include "sha256.h"
 #include "tui.h"
 #include "util.h"
 #include "version.h"
 
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -49,6 +51,16 @@ hook_stamp stamp_of(std::string_view content) {
              : hook_stamp{ token.substr(0, colon), token.substr(colon + 1) };
 }
 
+// True if `path` already holds `res`, by size and sha256: every command checks, and this
+// skips decoding the xz pack up to the hook. Unreadable counts as not held: rewrite it.
+bool holds(std::filesystem::path const &path, packed_resource const &res) {
+  std::error_code ec;
+  auto const size{ std::filesystem::file_size(path, ec) };
+  try {
+    return !ec && size == res.size && sha256(path) == res.sha256;
+  } catch (std::exception const &) { return false; }
+}
+
 std::string read_text(std::filesystem::path const &path) {
   std::ifstream in{ path, std::ios::binary };
   return { std::istreambuf_iterator<char>{ in }, std::istreambuf_iterator<char>{} };
@@ -86,9 +98,9 @@ int ensure(std::filesystem::path const &cache_root) {
   for (auto const &h : kHooks) {
     fs::path const hook_path{ shell_dir / ("hook." + std::string{ h.ext }) };
     try {
+      if (holds(hook_path, h.res)) { continue; }
       std::string const want{ util_unpack_resource(h.res) };
       std::string const have{ read_text(hook_path) };
-      if (have == want) { continue; }
 
       // Binaries live in <root>/envy/<version>/, yet every one writes this one file: a
       // pinned project and a newer envy meet here, and must not trade writes forever.

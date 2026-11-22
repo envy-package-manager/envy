@@ -1,5 +1,6 @@
 #include "lua_envy.h"
 
+#include "embedded_lua.h"
 #include "env_ops.h"
 #include "lua_ctx/lua_envy_extract.h"
 #include "lua_ctx/lua_envy_fetch.h"
@@ -19,90 +20,13 @@
 #endif
 #include "platform.h"
 #include "shell.h"
+#include "sol_util.h"
 #include "tui.h"
 #include "util.h"
 
 #include <sstream>
 
 namespace envy {
-namespace {
-
-constexpr char kEnvyExtendLua[] = R"lua(
-return function(target, ...)
-  if type(target) ~= "table" then
-    error("envy.extend: first argument must be a table", 2)
-  end
-  for i = 1, select("#", ...) do
-    local list = select(i, ...)
-    if type(list) ~= "table" then
-      error("envy.extend: argument " .. (i + 1) .. " must be a table", 2)
-    end
-    for _, item in ipairs(list) do
-      target[#target + 1] = item
-    end
-  end
-  return target
-end
-)lua";
-
-constexpr char kEnvyTemplateLua[] = R"lua(
-return function(str, values)
-  if type(str) ~= "string" then
-    error("envy.template: first argument must be a string", 2)
-  end
-  if type(values) ~= "table" then
-    error("envy.template: second argument must be a table", 2)
-  end
-
-  local function normalize_key(raw)
-    local trimmed = raw:match("^%s*(.-)%s*$")
-    if not trimmed or trimmed == "" then
-      error("envy.template: placeholder cannot be empty", 2)
-    end
-    if not trimmed:match("^[%a_][%w_]*$") then
-      error("envy.template: placeholder '" .. trimmed .. "' contains invalid characters", 2)
-    end
-    return trimmed
-  end
-
-  local function ensure_pairs(str)
-    local open_count = 0
-    local i = 1
-    while i <= #str do
-      if str:sub(i, i+1) == "{{" then
-        open_count = open_count + 1
-        i = i + 2
-      elseif str:sub(i, i+1) == "}}" then
-        open_count = open_count - 1
-        if open_count < 0 then
-          error("envy.template: unmatched '}}' at position " .. i, 2)
-        end
-        i = i + 2
-      else
-        i = i + 1
-      end
-    end
-    if open_count > 0 then
-      error("envy.template: unmatched '{{' (missing closing '}}')", 2)
-    end
-  end
-
-  ensure_pairs(str)
-
-  local function replacer(token)
-    local key = normalize_key(token)
-    local value = values[key]
-    if value == nil then
-      error("envy.template: missing value for placeholder '" .. key .. "'", 2)
-    end
-    return tostring(value)
-  end
-
-  return (str:gsub("{{(.-)}}", replacer))
-end
-)lua";
-
-}  // namespace
 
 void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root) {
   // Override print to route through TUI
@@ -127,7 +51,7 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
 
   // envy.extend (load Lua code)
   sol::protected_function_result extend_result{
-    lua.safe_script(kEnvyExtendLua, sol::script_pass_on_error)
+    sol_util_run_bytecode(lua, embedded::kLuaExtend)
   };
   if (extend_result.valid()) {
     envy_table["extend"] = extend_result;
@@ -138,7 +62,7 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
 
   // envy.template (load Lua code)
   sol::protected_function_result template_result{
-    lua.safe_script(kEnvyTemplateLua, sol::script_pass_on_error)
+    sol_util_run_bytecode(lua, embedded::kLuaTemplate)
   };
   if (template_result.valid()) {
     envy_table["template"] = template_result;

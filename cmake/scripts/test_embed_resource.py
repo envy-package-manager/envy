@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for embed_resource.py — verifies CRLF normalization and substitution."""
 
+import hashlib
 import lzma
 import re
 import subprocess
@@ -111,13 +112,15 @@ class TestCompression(EmbedRunner, unittest.TestCase):
         xz = self._extract_bytes(header, packs[0])
         self.assertEqual(xz[:6], b"\xfd7zXZ\x00", "missing xz magic")
         raw = lzma.decompress(xz)
-        slices = re.findall(r"packed_resource (k\w+)\{ (\w+), sizeof\((\w+)\), (\d+), (\d+) \}",
-                            header)
+        slices = re.findall(r"packed_resource (k\w+)\{ (\w+), sizeof\((\w+)\), (\d+), (\d+),"
+                            r"\s*\{ ([^}]*) \} \}", header)
         self.assertTrue(slices, f"Could not find packed_resource in header:\n{header}")
         out = {}
-        for name, pack, sized, offset, size in slices:
+        for name, pack, sized, offset, size, digest in slices:
             self.assertEqual((pack, sized), (packs[0], packs[0]))
             out[name] = raw[int(offset):int(offset) + int(size)]
+            got = bytes(int(b, 16) for b in digest.split(", "))
+            self.assertEqual(hashlib.sha256(out[name]).digest(), got, f"{name}: wrong sha256")
         self.assertEqual(sum(len(v) for v in out.values()), len(raw), "slices must tile")
         return out
 
@@ -164,8 +167,8 @@ class TestCompression(EmbedRunner, unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             header = out_file.read_text()
         self.assertEqual(self._unpack(header), {"kResA": b"first\n", "kResB": b"second\n"})
-        self.assertIn("kResA{ kOutXz, sizeof(kOutXz), 0, 6 }", header)
-        self.assertIn("kResB{ kOutXz, sizeof(kOutXz), 6, 7 }", header)
+        self.assertIn("kResA{ kOutXz, sizeof(kOutXz), 0, 6,", header)
+        self.assertIn("kResB{ kOutXz, sizeof(kOutXz), 6, 7,", header)
 
     def test_header_includes_util(self):
         """Compressed headers need packed_resource and util_unpack_resource."""

@@ -16,6 +16,12 @@ namespace envy {
 using sol_state_ptr = std::unique_ptr<sol::state>;
 sol_state_ptr sol_util_make_lua_state();  // with std libs
 
+// Runs Lua that envy_luac compiled at build time (src/resources/lua/, embedded_lua.h);
+// returns what the chunk returns, or its error, as safe_script would.
+sol::protected_function_result sol_util_run_bytecode(
+    sol::state_view lua,
+    std::span<unsigned char const> bytecode);
+
 // Owns a Lua state plus the mutex serializing access to it. lock() is the only path
 // to the state, so unsynchronized cross-thread access is structurally impossible.
 // Policy: acquire the accessor once at the entry point of any Lua interaction, hold

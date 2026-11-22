@@ -112,12 +112,12 @@ def _get_bash_find_manifest_script() -> str:
     real script's first use of the result onward is dropped, so nothing downloads.
     """
     src = (_LAUNCHER_DIR / "envy").read_text(encoding="utf-8")
-    anchor = "ENVY_MANIFEST=$(find_manifest)"
+    anchor = "\nresolve_script_dir\nfind_manifest "
     if anchor not in src:
         raise AssertionError(f"launcher no longer contains {anchor!r}; update this harness")
-    # resolve_script_dir takes no arguments, so the start directory arrives in a global.
+    # find_manifest walks up from ENVY_SCRIPT_DIR, so the start directory goes there.
     return src.split(anchor)[0] + (
-        'ENVY_START_DIR="$1"\nresolve_script_dir() { echo "$ENVY_START_DIR"; }\nfind_manifest\n'
+        '\nENVY_SCRIPT_DIR="$1"\nfind_manifest\necho "$ENVY_MANIFEST"\n'
     )
 
 
@@ -526,7 +526,7 @@ def _get_bash_cache_root_script() -> str:
         src,
         "resolve_script_dir() {",
         'ENVY_START_DIR="${1:-}"\n'
-        'resolve_script_dir() { echo "$ENVY_START_DIR"; return; }\n'
+        'resolve_script_dir() { ENVY_SCRIPT_DIR="$ENVY_START_DIR"; return; }\n'
         "_unused_resolve_script_dir() {",
     )
     anchor = 'if [[ -z "$ENVY_VERSION" ]]; then'

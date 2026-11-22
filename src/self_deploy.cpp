@@ -7,9 +7,13 @@
 #include "util.h"
 #include "version.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <mutex>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #ifndef ENVY_VERSION_STR
 #error "ENVY_VERSION_STR must be defined by the build system"
@@ -84,6 +88,20 @@ bool copy_binary(path const &src, path const &dst) {
 
 std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
   auto c{ std::make_unique<cache>(root) };
+
+  // Called from main and again from cmd_startup_load, once the manifest names its root;
+  // each (root, mode) deploys once per process.
+  static std::mutex done_mutex;
+  static std::vector<std::pair<path, cache_mode>> done;
+  bool const first{ [&] {
+    std::lock_guard const lock{ done_mutex };
+    if (std::ranges::find(done, std::pair{ c->root(), mode }) != done.end()) {
+      return false;
+    }
+    done.emplace_back(c->root(), mode);
+    return true;
+  }() };
+  if (!first) { return c; }
 
   try {
     auto result{ c->ensure_envy(ENVY_VERSION_STR) };

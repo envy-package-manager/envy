@@ -12,7 +12,8 @@ Outputs a header with:
 With --compress, every resource lands in one xz stream (shared context compresses far
 better than per-file streams), and each resource names its slice of the unpacked bytes:
   inline constexpr unsigned char kOutputStemXz[] = { 0xfd, ... };
-  inline constexpr packed_resource kVarName{ kOutputStemXz, sizeof(kOutputStemXz), 0, 123 };
+  inline constexpr packed_resource kVarName{ kOutputStemXz, sizeof(kOutputStemXz), 0, 123,
+      { <sha256 of the unpacked bytes> } };
 Decoding stops at a resource's end, so list hot resources first. Compressed headers pull
 in envy's util.h for packed_resource and util_unpack_resource.
 """
@@ -81,7 +82,8 @@ def generate_pack(pack_name: str, resources: list[tuple[str, bytes]]) -> str:
     offset = 0
     for varname, data in resources:
         parts.append(f"inline constexpr packed_resource k{to_pascal_case(varname)}{{ "
-                     f"{pack_name}, sizeof({pack_name}), {offset}, {len(data)} }};")
+                     f"{pack_name}, sizeof({pack_name}), {offset}, {len(data)},\n"
+                     f"    {{ {format_bytes(hashlib.sha256(data).digest())} }} }};")
         offset += len(data)
     return "\n".join(parts) + "\n"
 

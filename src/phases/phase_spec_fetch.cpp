@@ -389,18 +389,28 @@ constexpr std::string_view kSpecGlobals[]{
   "PRODUCTS",   "SETUP",   "STAGE",    "USER_MANAGED", "VENDOR",
 };  // CHECK is read only so validate_phases can point it at SETUP
 
+// Raw lua_next, not sol's iterator, which takes a registry reference per key and value;
+// runs for every spec.
 std::vector<std::string> all_caps_globals(sol::state_view lua) {
+  lua_State *const L{ lua.lua_state() };
   std::vector<std::string> names;
-  for (auto const &[key, _] : lua.globals()) {
-    if (sol::object const k(key); k.get_type() == sol::type::string) {
-      std::string name{ k.as<std::string>() };
-      if (name[0] >= 'A' && name[0] <= 'Z' &&
-          name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
-              std::string::npos) {
-        names.push_back(std::move(name));
-      }
+  lua_pushglobaltable(L);
+  lua_pushnil(L);
+  while (lua_next(L, -2)) {
+    lua_pop(L, 1);  // the value; lua_next needs the key
+
+    // Strings only: lua_tolstring would convert a number key in place and break lua_next.
+    if (lua_type(L, -1) != LUA_TSTRING) { continue; }
+    size_t len{ 0 };
+    char const *const s{ lua_tolstring(L, -1, &len) };
+    if (std::string_view const name{ s, len };
+        !name.empty() && name[0] >= 'A' && name[0] <= 'Z' &&
+        name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
+            std::string_view::npos) {
+      names.emplace_back(name);
     }
   }
+  lua_pop(L, 1);  // the globals table
   return names;
 }
 

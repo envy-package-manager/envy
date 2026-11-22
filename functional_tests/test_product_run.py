@@ -719,5 +719,45 @@ class TestWindowsShells(_ProductRunBase):
         self.assertEqual("a", seen["env"].get("A_VAR"))
 
 
+@unittest.skipIf(WINDOWS, "the bash launcher and product script")
+class TestWrapperExecsOnlyEnvy(_ProductRunBase):
+    """With envy cached, a wrapper starts only bash, envy and the tool.
+
+    Wrapper and launcher run on every tool call; with only bash on PATH, any other program
+    fails.
+    """
+
+    def bash_only(self, env: dict[str, str]) -> dict[str, str]:
+        d = self.tree / "bash-only"
+        d.mkdir(exist_ok=True)
+        os.symlink(shutil.which("bash", path=env.get("PATH")), d / "bash")
+        return dict(env, PATH=str(d))
+
+    def test_a_pinned_project_under_cache_root(self) -> None:
+        proj = self.simple("pinned", "pinned", "nil")
+        self.install(proj)
+        seen = self.tool(proj, "arg", env=self.bash_only(self.env))
+        self.assertEqual(["arg"], seen["argv"])
+
+    def test_an_unpinned_project_in_the_user_wide_cache(self) -> None:
+        # No ENVY_CACHE_ROOT and no pin: the launcher finds the platform's cache dir and
+        # reads `latest`, which names a version other than the launcher's own fallback.
+        env = test_config.sandbox_home_env(self.tree / "home", self.env)
+        root = test_config.sandbox_user_wide_root(env)
+        env["OSTYPE"] = "linux-gnu" if sys.platform == "darwin" else "darwin"  # misleads bash
+        latest = "999.0.0"
+        (root / "envy" / latest).mkdir(parents=True)
+        os.symlink(self.envy, root / "envy" / latest / BINARY_NAME)
+        (root / "envy" / "latest").write_text(latest + "\n", encoding="utf-8")
+        proj = self.simple("unpinned", "unpinned", "nil")
+        manifest = proj / "envy.lua"
+        pin = f'-- @envy version "{PINNED_VERSION}"\n'
+        self.assertIn(pin, manifest.read_text(encoding="utf-8"))
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace(pin, ""),
+                            encoding="utf-8")
+        seen = self.tool(proj, "arg", env=self.bash_only(env))  # product --run installs it
+        self.assertEqual(["arg"], seen["argv"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,9 @@
 #include "doctest.h"
 
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 TEST_CASE("sol_util_make_lua_state creates state with standard libraries") {
   auto lua = envy::sol_util_make_lua_state();
@@ -61,6 +63,15 @@ TEST_CASE("sol_util_make_lua_state overrides assert to include stack trace") {
   std::string msg = err.what();
   CHECK(msg.find("test assertion") != std::string::npos);
   CHECK(msg.find("stack traceback:") != std::string::npos);
+}
+
+TEST_CASE("sol_util_make_lua_state's prelude is named and keeps its lines") {
+  // Build-time bytecode keeps debug info, so tracebacks through it stay readable.
+  auto lua{ envy::sol_util_make_lua_state() };
+  auto const info{ lua->safe_script(
+      "local i = debug.getinfo(error, 'S'); return i.source, i.linedefined") };
+  CHECK(info.get<std::string>(0) == "=envy.prelude");
+  CHECK(info.get<int>(1) > 0);
 }
 
 TEST_CASE("sol_util_get_optional returns value when present and correct type") {
