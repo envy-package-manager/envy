@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -224,14 +225,14 @@ void util_write_file(std::filesystem::path const &path,
                      std::string_view content,
                      util_file_mode mode = util_file_mode::DEFAULT);
 
-// A gzip stream plus the byte count it inflates to; instances are emitted by
-// cmake/scripts/embed_resource.py --compress.
-// One embedded resource: bytes [offset, offset + size) of the xz stream `pack`.
+// One embedded resource: bytes [offset, offset + size) of the xz stream `pack`, as emitted
+// by cmake/scripts/embed_resource.py --compress. `sha256` lets a copy be checked unpacked.
 struct packed_resource {
   unsigned char const *pack;
   size_t pack_size;
   size_t offset;
   size_t size;
+  std::array<unsigned char, 32> sha256;  // of the resource's unpacked bytes
 };
 
 // Unpack an embedded resource. Throws std::runtime_error on a malformed stream.
