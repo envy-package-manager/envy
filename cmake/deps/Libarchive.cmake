@@ -38,14 +38,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "libarchive-src" OUTPUT_VARIABLE libarchive_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "libarchive-build" OUTPUT_VARIABLE libarchive_BINARY_DIR)
 
-if(NOT EXISTS "${libarchive_SOURCE_DIR}/CMakeLists.txt")
-    FetchContent_Populate(libarchive
-        SOURCE_DIR "${libarchive_SOURCE_DIR}"
-        BINARY_DIR "${libarchive_BINARY_DIR}"
-        URL ${_libarchive_url}
-        URL_HASH SHA256=${ENVY_LIBARCHIVE_SHA256}
-    )
-endif()
+envy_populate_pinned(libarchive "${libarchive_SOURCE_DIR}" "${libarchive_BINARY_DIR}"
+    ${_libarchive_url} ${ENVY_LIBARCHIVE_SHA256})
 
 if(DEFINED libarchive_SOURCE_DIR AND DEFINED libarchive_BINARY_DIR)
     if(NOT WIN32)

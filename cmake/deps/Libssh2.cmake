@@ -24,14 +24,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "libssh2-src" OUTPUT_VARIABLE libssh2_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "libssh2-build" OUTPUT_VARIABLE libssh2_BINARY_DIR)
 
-if(NOT EXISTS "${libssh2_SOURCE_DIR}/CMakeLists.txt")
-    FetchContent_Populate(libssh2
-        SOURCE_DIR "${libssh2_SOURCE_DIR}"
-        BINARY_DIR "${libssh2_BINARY_DIR}"
-        URL ${_libssh2_url}
-        URL_HASH SHA256=${ENVY_LIBSSH2_SHA256}
-    )
-endif()
+envy_populate_pinned(libssh2 "${libssh2_SOURCE_DIR}" "${libssh2_BINARY_DIR}"
+    ${_libssh2_url} ${ENVY_LIBSSH2_SHA256})
 
 if(DEFINED libssh2_SOURCE_DIR AND DEFINED libssh2_BINARY_DIR)
     envy_patch_libssh2("${libssh2_SOURCE_DIR}" "${libssh2_BINARY_DIR}")

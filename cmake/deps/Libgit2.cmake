@@ -24,14 +24,8 @@ endif()
 cmake_path(APPEND ENVY_CACHE_DIR "libgit2-src" OUTPUT_VARIABLE libgit2_SOURCE_DIR)
 cmake_path(APPEND CMAKE_BINARY_DIR "_deps" "libgit2-build" OUTPUT_VARIABLE libgit2_BINARY_DIR)
 
-if(NOT EXISTS "${libgit2_SOURCE_DIR}/CMakeLists.txt")
-    FetchContent_Populate(libgit2
-        SOURCE_DIR "${libgit2_SOURCE_DIR}"
-        BINARY_DIR "${libgit2_BINARY_DIR}"
-        URL ${_libgit2_url}
-        URL_HASH SHA256=${ENVY_LIBGIT2_SHA256}
-    )
-endif()
+envy_populate_pinned(libgit2 "${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}"
+    ${_libgit2_url} ${ENVY_LIBGIT2_SHA256})
 
 if(DEFINED libgit2_SOURCE_DIR AND DEFINED libgit2_BINARY_DIR AND
         DEFINED libssh2_SOURCE_DIR AND DEFINED libssh2_BINARY_DIR)
