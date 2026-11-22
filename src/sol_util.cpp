@@ -12,13 +12,14 @@
 
 namespace envy {
 
-sol::protected_function_result sol_util_run_bytecode(sol::state_view lua,
-                                                     std::span<unsigned char const> bytecode) {
-  return lua.safe_script(std::string_view{ reinterpret_cast<char const *>(bytecode.data()),
-                                           bytecode.size() },
-                         sol::script_pass_on_error,
-                         "=bytecode",  // unused: the bytecode carries its own chunk name
-                         sol::load_mode::binary);
+sol::protected_function_result sol_util_run_bytecode(
+    sol::state_view lua,
+    std::span<unsigned char const> bytecode) {
+  return lua.safe_script(
+      std::string_view{ reinterpret_cast<char const *>(bytecode.data()), bytecode.size() },
+      sol::script_pass_on_error,
+      "=bytecode",  // unused: the bytecode carries its own chunk name
+      sol::load_mode::binary);
 }
 
 sol_state_ptr sol_util_make_lua_state() {

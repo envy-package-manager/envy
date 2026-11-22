@@ -95,7 +95,9 @@ std::unique_ptr<cache> self_deploy::ensure(path const &root, cache_mode mode) {
   static std::vector<std::pair<path, cache_mode>> done;
   bool const first{ [&] {
     std::lock_guard const lock{ done_mutex };
-    if (std::ranges::find(done, std::pair{ c->root(), mode }) != done.end()) { return false; }
+    if (std::ranges::find(done, std::pair{ c->root(), mode }) != done.end()) {
+      return false;
+    }
     done.emplace_back(c->root(), mode);
     return true;
   }() };

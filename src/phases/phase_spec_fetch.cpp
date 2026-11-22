@@ -397,12 +397,12 @@ std::vector<std::string> all_caps_globals(sol::state_view lua) {
   lua_pushglobaltable(L);
   lua_pushnil(L);
   while (lua_next(L, -2)) {
-    lua_pop(L, 1);  // the value; lua_next needs the key
+    lua_pop(L, 1);                                     // the value; lua_next needs the key
     if (lua_type(L, -1) != LUA_TSTRING) { continue; }  // tolstring would convert a number
     size_t len{ 0 };
     char const *const s{ lua_tolstring(L, -1, &len) };
-    if (std::string_view const name{ s, len }; !name.empty() && name[0] >= 'A' &&
-        name[0] <= 'Z' &&
+    if (std::string_view const name{ s, len };
+        !name.empty() && name[0] >= 'A' && name[0] <= 'Z' &&
         name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
             std::string_view::npos) {
       names.emplace_back(name);
