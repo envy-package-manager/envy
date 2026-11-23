@@ -15,7 +15,7 @@ namespace {
 // UTF-8 both ways: on Windows a path's narrow string() is the ANSI code page.
 std::string trimmed_path(std::filesystem::path const &p) {
   std::filesystem::path t{ p.has_relative_path() && !p.has_filename() ? p.parent_path()
-                                                                       : p };
+                                                                      : p };
   return util_path_to_utf8(t.make_preferred());
 }
 
