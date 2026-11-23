@@ -6,19 +6,21 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace envy {
 namespace {
 
 // Drops trailing separators, keeping a root ("/", "C:\"); parent_path drops all of them.
+// UTF-8 both ways: on Windows a path's narrow string() is the ANSI code page.
 std::string trimmed_path(std::filesystem::path const &p) {
-  return util_normalized_path(p.has_relative_path() && !p.has_filename() ? p.parent_path()
-                                                                         : p);
+  std::filesystem::path t{ p.has_relative_path() && !p.has_filename() ? p.parent_path()
+                                                                       : p };
+  return util_path_to_utf8(t.make_preferred());
 }
 
 std::string path_trim(sol::stack_object path) {
-  return trimmed_path(
-      std::filesystem::path{ sol_util_string_arg(path, "envy.path.trim") });
+  return trimmed_path(util_path_from_utf8(sol_util_string_arg(path, "envy.path.trim")));
 }
 
 }  // namespace
@@ -33,14 +35,15 @@ void lua_envy_path_install(sol::table &envy_table) {
       if (!arg.is<std::string>()) {
         throw_runtime_error({ "envy.path.join: all arguments must be strings" });
       }
-      std::string const part{ arg.as<std::string>() };
+      std::filesystem::path const part{ util_path_from_utf8(arg.as<std::string_view>()) };
       if (result.empty()) {
         result = part;
       } else {
         result /= part;
       }
     }
-    return va.size() == 1 ? trimmed_path(result) : util_normalized_path(result);
+    return va.size() == 1 ? trimmed_path(result)
+                          : util_path_to_utf8(result.make_preferred());
   };
 
   path_table.set_function("trim", &path_trim);  // envy.path.trim(path)

@@ -52,6 +52,15 @@ TEST_CASE("envy.path.trim follows the platform's separators") {
   )lua");
 }
 
+TEST_CASE("envy.path.trim and join keep Lua's UTF-8, never the ANSI code page") {
+  auto lua{ make_lua() };
+  check_lua(*lua, R"lua(
+    local d = "/caf\u{e9}/\u{65e5}\u{672c}"
+    return envy.path.trim(d .. "/") == P(d) and envy.path.join(d .. "/") == P(d)
+      and envy.path.join(d, "na\u{ef}ve") == P(d .. "/na\u{ef}ve")
+  )lua");
+}
+
 TEST_CASE("envy.path.trim raises a catchable error on a non-string, number included") {
   auto lua{ make_lua() };
   check_lua(*lua, R"lua(
