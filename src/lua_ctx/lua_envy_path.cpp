@@ -17,7 +17,8 @@ std::string trimmed_path(std::filesystem::path const &p) {
 }
 
 std::string path_trim(sol::stack_object path) {
-  return trimmed_path(std::filesystem::path{ sol_util_string_arg(path, "envy.path.trim") });
+  return trimmed_path(
+      std::filesystem::path{ sol_util_string_arg(path, "envy.path.trim") });
 }
 
 }  // namespace
