@@ -1,17 +1,31 @@
 #include "lua_envy_path.h"
 
 #include "lua_envy_module.h"
+#include "sol_util.h"
 #include "util.h"
 
 #include <filesystem>
 #include <string>
 
 namespace envy {
+namespace {
+
+// Drops trailing separators, keeping a root ("/", "C:\"); parent_path drops all of them.
+std::string trimmed_path(std::filesystem::path const &p) {
+  return util_normalized_path(p.has_relative_path() && !p.has_filename() ? p.parent_path()
+                                                                         : p);
+}
+
+std::string path_trim(sol::stack_object path) {
+  return trimmed_path(std::filesystem::path{ sol_util_string_arg(path, "envy.path.trim") });
+}
+
+}  // namespace
 
 void lua_envy_path_install(sol::table &envy_table) {
   sol::table path_table{ envy_table.lua_state(), sol::create };
 
-  // envy.path.join(...) - Variadic path joining
+  // envy.path.join(...) - Variadic path joining; one argument comes back trimmed
   path_table["join"] = [](sol::variadic_args va) -> std::string {
     std::filesystem::path result;
     for (auto const &arg : va) {
@@ -25,8 +39,10 @@ void lua_envy_path_install(sol::table &envy_table) {
         result /= part;
       }
     }
-    return util_normalized_path(result);
+    return va.size() == 1 ? trimmed_path(result) : util_normalized_path(result);
   };
+
+  path_table.set_function("trim", &path_trim);  // envy.path.trim(path)
 
   // envy.path.basename(path) - Extract filename with extension
   path_table["basename"] = [](std::string const &path_str) -> std::string {
