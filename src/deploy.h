@@ -13,9 +13,9 @@ namespace envy {
 
 struct product_info;
 
-// 6 finds the launcher without a subshell; 5 is one `envy product --run` line owning PATH,
-// ENVY_PROJECT_ROOT and activation; 4 added `set -Eeuo pipefail`; 3 prefixed vars ENVY_.
-inline constexpr int kProductScriptVersion = 6;
+// 7 sources the launcher; 6 finds it without a subshell; 5 is one `envy product --run`
+// line owning PATH, ENVY_PROJECT_ROOT and activation; 4 strict bash; 3 prefixed ENVY_.
+inline constexpr int kProductScriptVersion = 7;
 
 std::string deploy_stamp_product_script(std::string_view product_name,
                                         platform_id platform);

@@ -143,8 +143,8 @@ TEST_CASE("deploy: product scripts hand the tool to `envy product --run`") {
   // come from envy, so a caller inside another project's activation gets this one's.
   std::string const posix{ envy::deploy_stamp_product_script("foo",
                                                              envy::platform_id::POSIX) };
-  CHECK(posix.find("exec \"$ENVY_SCRIPT_DIR/envy\" product --run \"foo\" -- \"$@\"") !=
-        std::string::npos);
+  CHECK(posix.find("\n. \"$ENVY_SCRIPT_DIR/envy\" product --run \"foo\" -- \"$@\"") !=
+        std::string::npos);  // sourced: one bash per call
   CHECK(posix.find("export") == std::string::npos);
 
   std::string const win{ envy::deploy_stamp_product_script("foo",
