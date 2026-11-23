@@ -627,6 +627,40 @@ class BootstrapIntegrationTest(EnvyTestCase):
         # envy version outputs to stderr
         self.assertIn("envy version", result.stderr)
 
+    @unittest.skipIf(sys.platform == "win32", "the bash product script")
+    def test_a_product_scripts_first_call_downloads_envy(self) -> None:
+        """A fresh clone's first tool call downloads envy; stdout and argv stay intact."""
+        project = self._setup_test_project("simple.lua").parent.parent
+        payload = self._temp_dir / "payload"
+        payload.mkdir()
+        (payload / "tool").write_text('#!/bin/sh\nprintf "[%s]" "$@"\nexit 7\n')
+        (payload / "tool").chmod(0o755)
+        self._write_verbatim(
+            project / "t.lua",
+            'IDENTITY = "local.t@r1"\nPRODUCTS = { tool = "bin/tool" }\n'
+            "FETCH = function() end\n"
+            f'INSTALL = function(d) envy.copy("{payload.as_posix()}", d .. "/bin") end\n',
+        )
+        self._write_verbatim(  # the served binary's own version, which it self-deploys as
+            project / "envy.lua",
+            f'-- @envy version "{test_config.get_envy_version()}"\n-- @envy bin "tools"\n'
+            'PACKAGES = { { spec = "local.t@r1", source = "t.lua" } }\n',
+        )
+        wrapper = project / "tools" / "tool"
+        script = (self._project_root / "src/resources/product_script").read_text(
+            encoding="utf-8"
+        )
+        self._write_verbatim(wrapper, script.replace("@@PRODUCT_NAME@@", "tool"))
+        wrapper.chmod(0o755)
+
+        for call in ("downloads", "cached"):
+            with self.subTest(call=call):
+                result = self._run_bootstrap(wrapper, ["a b", "", "--"])
+                self.assertEqual(7, result.returncode, result.stderr)
+                self.assertEqual("[a b][][--]", result.stdout)
+                self.assertEqual(call == "downloads", "Downloading envy" in result.stderr)
+                self.assertEqual(1, len(self._archive_requests()))
+
     # A loadable project: the anchor tests below run a real subcommand, so the manifest has
     # to carry '@envy bin' the way every other fixture here deliberately does not.
     _ANCHORED_MANIFEST = '-- @envy version "1.2.3"\n-- @envy bin "tools"\nPACKAGES = {}\n'

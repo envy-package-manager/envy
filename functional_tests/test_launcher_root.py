@@ -712,6 +712,17 @@ class _CacheRootParityMixin:
         # all -- empty is what turns the borrow off. `--user-wide-root` still answers.
         self.assertEqual("", str(user_wide))
 
+    def test_parity_without_xdg_cache_home(self) -> None:
+        """Most Linux boxes leave XDG_CACHE_HOME unset: both readers fall back to HOME."""
+        project = self._make_project("no-xdg", "", ())
+        env = self._sandbox_env(project)
+        env.pop("XDG_CACHE_HOME")
+
+        root, user_wide = self._launcher_roots(project, env)
+        self.assertEqual(self._binary_root(project, env).resolve(), root.resolve())
+        self.assertEqual(self._binary_user_wide_root(project, env).resolve(),
+                         Path(user_wide).resolve())
+
     def test_no_user_wide_root_without_home(self) -> None:
         """A HOME-less box must still run a project whose cache is inside its own tree.
 

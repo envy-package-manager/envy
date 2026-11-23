@@ -673,6 +673,117 @@ class TestProcessHandoff(_ProductRunBase):
             self.assertIn("only on Windows", r.stderr)
 
 
+@unittest.skipIf(WINDOWS, "the bash launcher and product script")
+class TestWrapperCallForms(_ProductRunBase):
+    """How Makefiles, CI steps and people actually reach a wrapper or the launcher."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = self.simple("a", "A", _env_a())
+
+    def assertRanA(self, r: subprocess.CompletedProcess, argv: list[str]) -> None:
+        self.assertEqual(0, r.returncode, r.stderr)
+        seen = json.loads(r.stdout)
+        self.assertEqual("A", seen["marker"])
+        self.assertEqual(argv, seen["argv"])
+        self.assertSamePath(self.a, seen["env"].get("ENVY_PROJECT_ROOT"))
+
+    def test_relative_calls_find_their_project(self) -> None:
+        (self.a / "sub").mkdir()
+        tools = self.a / "tools"
+        for argv, cwd in ((["tools/tool"], self.a), (["./tool"], tools),
+                          (["bash", "tool"], tools), (["../tools/tool"], self.a / "sub")):
+            with self.subTest(argv=argv):
+                self.assertRanA(self.call([*argv, "x y"], cwd=cwd), ["x y"])
+
+    def test_an_exported_cdpath_does_not_redirect_the_launcher(self) -> None:
+        """`cd tools` honors CDPATH; a decoy with its own tools/ must not win."""
+        decoy = self.tree / "decoy"
+        (decoy / "tools").mkdir(parents=True)
+        env = dict(self.env, CDPATH=str(decoy))
+        self.assertRanA(self.call(["tools/tool", "x"], env=env, cwd=self.a), ["x"])
+
+    def test_a_symlinked_launcher_resolves_its_project(self) -> None:
+        links = self.tree / "links"
+        links.mkdir()
+        (links / "abs").symlink_to(self.launcher(self.a))
+        (links / "rel").symlink_to(os.path.relpath(self.launcher(self.a), links))
+        (links / "chain").symlink_to("abs")
+        for argv, cwd in (([links / "abs"], self.tree), (["./rel"], links),
+                          ([links / "chain"], self.tree)):
+            with self.subTest(argv=argv):
+                r = self.call([*argv, "product", "--run", "tool", "--", "x"], cwd=cwd)
+                self.assertRanA(r, ["x"])
+
+
+class TestWrapperReachesEnvy(_ProductRunBase):
+    """The launcher hop itself, on both launchers."""
+
+    def test_launcher_errors_surface_through_the_wrapper(self) -> None:
+        """A launcher error is the call's: exit 1, its message, nothing on stdout."""
+        a = self.simple("a", "A", _env_a())
+        manifest = a / "envy.lua"
+        pinned = manifest.read_text(encoding="utf-8")
+        pin = f'-- @envy version "{PINNED_VERSION}"\n'
+        self.assertIn(pin, pinned)
+        home = test_config.sandbox_home_env(self.tree / "home", self.env)
+        cases = (
+            ("relative ENVY_CACHE_ROOT", dict(self.env, ENVY_CACHE_ROOT="rel/cache"),
+             pinned, (), "ENVY_CACHE_ROOT must be an absolute path"),
+            ("sums pin without a version", self.env,
+             pinned.replace(pin, f'-- @envy sha256sums "{"0" * 64}"\n'), (),
+             "'@envy sha256sums' requires '@envy version'"),
+            ("both cache markers", home, pinned,
+             (".envy-cache-local", ".envy-cache-shared"), "envy never writes both"),
+        )
+        for name, env, text, markers, message in cases:
+            with self.subTest(case=name):
+                manifest.write_text(text, encoding="utf-8")
+                for m in markers:
+                    (a / m).touch()
+                try:
+                    r = self.call([self.wrapper(a)], env=env)
+                finally:
+                    manifest.write_text(pinned, encoding="utf-8")
+                    for m in markers:
+                        (a / m).unlink()
+                self.assertEqual(1, r.returncode, r.stderr)
+                self.assertIn(message, r.stderr)
+                self.assertEqual("", r.stdout)
+
+    def test_launcher_variables_stay_out_of_the_tool(self) -> None:
+        a = self.simple("a", "A", _env_a())
+        manifest = a / "envy.lua"
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+            '-- @envy bin "tools"\n',
+            '-- @envy bin "tools"\n-- @envy mirror "https://mirror.invalid"\n'),
+            encoding="utf-8")
+        seen = self.tool(a)
+        leaked = {k for k in seen["env"] if k.upper().startswith("ENVY_")
+                  and k not in self.env and k.upper() != "ENVY_PROJECT_ROOT"
+                  and not k.upper().startswith("ENVY_ACTIVATE_")}
+        self.assertEqual(set(), leaked)
+
+    def test_the_default_user_wide_cache_serves_the_call(self) -> None:
+        """No ENVY_CACHE_ROOT: the launcher finds envy under HOME or LOCALAPPDATA."""
+        a = self.simple("a", "A", _env_a())
+        env = test_config.sandbox_home_env(self.tree / "home", self.env)
+        root = test_config.sandbox_user_wide_root(env)
+        test_config.seed_cached_envy(root, PINNED_VERSION, self.envy)
+        r = self.call([self.wrapper(a), "x"], env=env)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertEqual(["x"], json.loads(r.stdout)["argv"])
+        self.assertNotIn("Downloading", r.stderr)
+
+    def test_a_project_path_with_spaces_and_parens(self) -> None:
+        proj = self.project("my tools (v2)",
+                            {"a.lua": self.tool_spec("local.a@r1", "A", _env_a())},
+                            ['{ spec = "local.a@r1", source = "a.lua" }'])
+        seen = self.tool(proj, "x")
+        self.assertEqual(["x"], seen["argv"])
+        self.assertSamePath(proj, seen["env"].get("ENVY_PROJECT_ROOT"))
+
+
 @unittest.skipUnless(WINDOWS, "cmd.exe and PowerShell")
 class TestWindowsShells(_ProductRunBase):
     def setUp(self) -> None:
@@ -691,6 +802,22 @@ class TestWindowsShells(_ProductRunBase):
         self.assertEqual(0, r.returncode, r.stderr)
         lines = [ln.strip() for ln in r.stdout.splitlines() if ln.startswith("A=")]
         self.assertEqual(["A=a", "A=%A_VAR%"], lines, r.stdout + r.stderr)
+
+    def test_a_calling_batch_file_gets_the_code_and_continues(self) -> None:
+        """CI scripts `call` the wrapper and launcher: each returns its code, scope kept."""
+        parent = self.tree / "parent.bat"
+        parent.write_bytes((
+            "@echo off\r\nsetlocal\r\nset P=kept\r\n"
+            f'call "{self.wrapper(self.a)}" x\r\n'
+            "echo RC=%ERRORLEVEL% P=%P%\r\n"
+            f'call "{self.launcher(self.a)}" product --run tool -- y\r\n'
+            "echo RC=%ERRORLEVEL% P=%P%\r\n"
+        ).encode("utf-8"))
+        r = subprocess.run(["cmd", "/d", "/c", str(parent)], capture_output=True, text=True,
+                           env=dict(self.env, DUMP_EXIT="7"), timeout=90)
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.startswith("RC=")]
+        self.assertEqual(["RC=7 P=kept", "RC=7 P=kept"], lines, r.stdout + r.stderr)
+        self.assertNotIn("batch label", r.stderr)
 
     def test_a_failed_cmd_activation_fails_the_launcher(self) -> None:
         """No `exit /b 0` from envy means no success: `activate cmd || exit` must fire."""
@@ -721,17 +848,34 @@ class TestWindowsShells(_ProductRunBase):
 
 @unittest.skipIf(WINDOWS, "the bash launcher and product script")
 class TestWrapperExecsOnlyEnvy(_ProductRunBase):
-    """With envy cached, a wrapper starts only bash, envy and the tool.
+    """With envy cached, a wrapper starts only one bash, envy and the tool.
 
     Wrapper and launcher run on every tool call; with only bash on PATH, any other program
     fails.
     """
 
-    def bash_only(self, env: dict[str, str]) -> dict[str, str]:
+    def bash_only(self, env: dict[str, str], log: Path | None = None) -> dict[str, str]:
         d = self.tree / "bash-only"
         d.mkdir(exist_ok=True)
-        os.symlink(shutil.which("bash", path=env.get("PATH")), d / "bash")
+        real = shutil.which("bash", path=env.get("PATH"))
+        if log is None:
+            os.symlink(real, d / "bash")
+        else:  # a bash that first logs the script it was started for
+            sh = d / "bash"
+            sh.write_text(f'#!{real}\nprintf "%s\\n" "${{1:-}}" >> "{log}"\n'
+                          f'exec "{real}" "$@"\n', encoding="utf-8")
+            sh.chmod(sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         return dict(env, PATH=str(d))
+
+    def test_the_launcher_runs_in_the_wrappers_bash(self) -> None:
+        """The wrapper sources the launcher: one bash per tool call."""
+        proj = self.simple("one", "one", "nil")
+        self.install(proj)
+        log = self.tree / "bash-starts"
+        self.tool(proj, env=self.bash_only(self.env, log))
+        started = log.read_text(encoding="utf-8").splitlines()
+        scripts = [Path(s).name for s in started if s[:1] != "-"]  # -c: the SIGPIPE probe
+        self.assertEqual(["tool"], scripts, started)
 
     def test_a_pinned_project_under_cache_root(self) -> None:
         proj = self.simple("pinned", "pinned", "nil")
