@@ -62,10 +62,15 @@ function envy.extend(target, ...) end
 ---@class envy.path
 envy.path = {}
 
----Join path components with platform-appropriate separator
+---Join path components with platform-appropriate separator; one component comes back trimmed
 ---@param ... string Path components
 ---@return string
 function envy.path.join(...) end
+
+---Drop trailing separators, keeping a root ("/", "C:\")
+---@param path string
+---@return string
+function envy.path.trim(path) end
 
 ---Extract filename with extension from path
 ---@param path string

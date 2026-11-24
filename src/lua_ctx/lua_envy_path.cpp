@@ -1,32 +1,52 @@
 #include "lua_envy_path.h"
 
 #include "lua_envy_module.h"
+#include "sol_util.h"
 #include "util.h"
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace envy {
+namespace {
+
+// Drops trailing separators, keeping a root ("/", "C:\"); parent_path drops all of them.
+// UTF-8 both ways: on Windows a path's narrow string() is the ANSI code page.
+std::string trimmed_path(std::filesystem::path const &p) {
+  std::filesystem::path t{ p.has_relative_path() && !p.has_filename() ? p.parent_path()
+                                                                      : p };
+  return util_path_to_utf8(t.make_preferred());
+}
+
+std::string path_trim(sol::stack_object path) {
+  return trimmed_path(util_path_from_utf8(sol_util_string_arg(path, "envy.path.trim")));
+}
+
+}  // namespace
 
 void lua_envy_path_install(sol::table &envy_table) {
   sol::table path_table{ envy_table.lua_state(), sol::create };
 
-  // envy.path.join(...) - Variadic path joining
+  // envy.path.join(...) - Variadic path joining; one argument comes back trimmed
   path_table["join"] = [](sol::variadic_args va) -> std::string {
     std::filesystem::path result;
     for (auto const &arg : va) {
       if (!arg.is<std::string>()) {
         throw_runtime_error({ "envy.path.join: all arguments must be strings" });
       }
-      std::string const part{ arg.as<std::string>() };
+      std::filesystem::path const part{ util_path_from_utf8(arg.as<std::string_view>()) };
       if (result.empty()) {
         result = part;
       } else {
         result /= part;
       }
     }
-    return util_normalized_path(result);
+    return va.size() == 1 ? trimmed_path(result)
+                          : util_path_to_utf8(result.make_preferred());
   };
+
+  path_table.set_function("trim", &path_trim);  // envy.path.trim(path)
 
   // envy.path.basename(path) - Extract filename with extension
   path_table["basename"] = [](std::string const &path_str) -> std::string {

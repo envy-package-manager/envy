@@ -630,7 +630,11 @@ project across files is `envy.loadenv`'s job.
 ## Path Utilities
 
 ### envy.path.join(...) → string
-Join path components.
+Join path components. A lone component comes back trimmed, like `trim`.
+
+### envy.path.trim(path) → string
+Drop trailing separators, keeping a root (`/`, `C:\`). envy's directories end in a
+separator for `..`; env values usually want the bare path.
 
 ### envy.path.basename(path) → string
 Extract filename with extension.
@@ -647,6 +651,9 @@ Extract file extension (with dot).
 ```lua
 local p = envy.path.join(stage_dir, "bin", "tool" .. envy.EXE_EXT)
 local ext = envy.path.extension("archive.tar.gz")  -- ".gz"
+ENV = function(pkg_dir, pkg_state_dir)  -- go prints these back; "/src" appends cleanly
+  return { GOROOT = envy.path.trim(pkg_dir), GOPATH = envy.path.join(pkg_state_dir) }
+end
 ```
 
 ---

@@ -616,6 +616,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/lua_ctx/lua_envy_dep_util_tests.cpp
     src/lua_ctx/lua_envy_json_tests.cpp
     src/lua_ctx/lua_envy_options_tests.cpp
+    src/lua_ctx/lua_envy_path_tests.cpp
     src/lua_ctx/lua_envy_toml_tests.cpp
     src/lua_envy_tests.cpp
     src/platform_tests.cpp
