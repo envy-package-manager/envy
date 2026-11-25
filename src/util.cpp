@@ -41,6 +41,12 @@ bool util_is_safe_path_component(std::string_view s) {
   return true;
 }
 
+std::string util_join(std::vector<std::string> const &parts, std::string_view sep) {
+  std::string out;
+  for (auto const &p : parts) { out.append(out.empty() ? "" : sep).append(p); }
+  return out;
+}
+
 std::string util_bytes_to_hex(void const *data, size_t length) {
   static constexpr char hex_chars[] = "0123456789abcdef";
 

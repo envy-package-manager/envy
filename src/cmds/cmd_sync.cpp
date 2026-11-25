@@ -5,6 +5,7 @@
 #include "engine.h"
 #include "luarc.h"
 #include "manifest.h"
+#include "pkg_state.h"
 #include "reexec.h"
 #include "self_deploy.h"
 #include "util.h"
@@ -83,6 +84,11 @@ void cmd_sync::execute() {
   // Before the run, so a collision fails with nothing copied.
   eng.set_vendor_plan(m->resolve_vendor_plan());
   eng.run_full(targets);  // Throws on any failure
+
+  // Activation keeps state under the top project; the report reads this host's graph.
+  if (cfg_.queries.empty() && !cfg_.manifest_path && !cfg_.subproject) {
+    pkg_state_report_unused(eng, *m);
+  }
 
   // Resolve non-host targets so deploy knows about their products for script generation.
   // run_full only resolves host-platform packages; without this, deploy cleanup would

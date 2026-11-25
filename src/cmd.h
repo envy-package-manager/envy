@@ -2,6 +2,7 @@
 
 #include "util.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -52,6 +53,24 @@ inline std::optional<std::filesystem::path> subproject_anchor(
     std::optional<std::filesystem::path> const &project_dir) {
   return subproject ? std::nullopt : project_dir;
 }
+
+// One line of a size report: the tree at `path` measured, else `bytes` as given; `note`
+// prints after the size.
+struct cmd_size_row {
+  std::string label;
+  std::filesystem::path path;
+  std::uint64_t bytes{ 0 };
+  std::string note{};
+};
+
+struct cmd_size_section {
+  char const *title;  // nullptr prints the rows alone
+  std::vector<cmd_size_row> rows;
+};
+
+// Measures every row behind a spinner labeled `label`, counting files and bytes as it
+// walks, then prints each section largest first and a TOTAL line.
+void cmd_print_sizes(char const *label, std::vector<cmd_size_section> const &sections);
 
 // Points fd 1 at stderr until restore(), so nothing a command doesn't mean to print -- a
 // spec's envy.stdout, queued tui output -- reaches stdout.

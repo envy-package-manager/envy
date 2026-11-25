@@ -1,6 +1,7 @@
 #include "cache.h"
 
 #include "blake3_util.h"
+#include "pkg_state.h"
 #include "platform.h"
 #include "trace.h"
 #include "tree_hash.h"
@@ -27,6 +28,17 @@ path normalized(path p) { return p.lexically_normal().make_preferred(); }
 bool strictly_inside(path const &inner, path const &outer) {
   auto const rel{ inner.lexically_relative(outer) };
   return !rel.empty() && rel != "." && *rel.begin() != "..";
+}
+
+// `envy state clean` empties .envy/state, so markers and caches live beside it.
+void require_outside_pkg_state(char const *directive,
+                               path const &dir,
+                               path const &manifest_dir) {
+  auto const pkg_state{ normalized(pkg_state_root(manifest_dir)) };
+  if (dir == pkg_state || strictly_inside(dir, pkg_state)) {
+    throw_runtime_error(
+        { "'@envy ", directive, "' is inside ", pkg_state, ": '", dir, "'" });
+  }
 }
 
 }  // namespace
@@ -97,7 +109,9 @@ std::optional<path> resolve_state_dir(std::optional<std::string> const &state_di
   if (auto const bad{ validate_project_relative_path(*state_dir) }) {
     throw_runtime_error({ "'@envy state-dir' ", *bad, ": '", *state_dir, "'" });
   }
-  return normalized(manifest_dir / *state_dir);
+  auto dir{ normalized(manifest_dir / *state_dir) };
+  require_outside_pkg_state("state-dir", dir, manifest_dir);
+  return dir;
 }
 
 char const *cache_root_tier_name(cache_root_tier tier) {
@@ -124,21 +138,19 @@ void cache_announce_root_once(cache_root_resolution const &resolved,
   // back after a teardown or a mode switch, which is when the notice is useful again.
   if (std::filesystem::exists(resolved.root / "packages")) { return; }
 
-  // Native name and separator, as cmd_init's "Next steps" already does: the launcher is
-  // envy.bat on Windows, and `./tools/envy` is not something cmd.exe can run.
-  auto const launcher{ [&] {
-    std::filesystem::path p{ "." };
-    p /= bin_dir ? *bin_dir : std::string{ "bin" };
-    p /= (platform::native() == platform_id::WINDOWS) ? "envy.bat" : "envy";
-    return p.make_preferred().string();
-  }() };
-
   // tui::info, not print_stdout: log lines go to stderr (see the drain in tui.cpp), which
   // keeps `envy cache --root` parseable, and `-q` correctly silences a courtesy notice.
   tui::info("Caching packages in %s", resolved.root.string().c_str());
   tui::info("  These packages live inside the project, so deleting it deletes them.");
   tui::info("  To share one cache across all your projects, run: %s cache --shared",
-            launcher.c_str());
+            project_launcher(bin_dir).c_str());
+}
+
+std::string project_launcher(std::optional<std::string> const &bin_dir) {
+  std::filesystem::path p{ "." };
+  p /= bin_dir ? *bin_dir : std::string{ "bin" };
+  p /= (platform::native() == platform_id::WINDOWS) ? "envy.bat" : "envy";
+  return p.make_preferred().string();
 }
 
 namespace {
@@ -178,6 +190,10 @@ project_trees resolve_project_trees(cache_root_request const &req) {
     }
   }
 
+  if (req.cache_local) {
+    require_outside_pkg_state("cache-local", local, req.manifest_dir);
+  }
+
   return { std::move(state), std::move(local) };
 }
 
@@ -210,6 +226,10 @@ std::optional<cache_root_resolution> override_resolution(cache_root_request cons
 }
 
 }  // namespace
+
+void cache_validate_project_dirs(cache_root_request const &req) {
+  (void)resolve_project_trees(req);
+}
 
 cache_root_resolution resolve_cache_root(cache_root_request const &req) {
   if (auto ovr{ override_resolution(req) }) { return std::move(*ovr); }

@@ -294,6 +294,7 @@ set(ENVY_BASE_SOURCES
     src/cmds/cmd_run.cpp
     src/cmds/cmd_sync.cpp
     src/cmds/cmd_shell.cpp
+    src/cmds/cmd_state.cpp
     src/cmds/cmd_use.cpp
     src/cmds/cmd_vendor.cpp
     src/cmds/cmd_version.cpp
@@ -357,6 +358,7 @@ set(ENVY_BASE_SOURCES
     src/package_depot.cpp
     src/pkg_cfg.cpp
     src/pkg_env.cpp
+    src/pkg_state.cpp
     src/bundle.cpp
     src/spec_util.cpp
     $<$<PLATFORM_ID:Windows>:src/sha256_win.cpp>

@@ -6,6 +6,7 @@
 #include "lua_error_formatter.h"
 #include "phases/phase_check.h"
 #include "pkg.h"
+#include "pkg_state.h"
 #include "platform.h"
 #include "sol_util.h"
 #include "tui.h"
@@ -26,11 +27,6 @@ std::filesystem::path pkg_predicted_path(pkg *p) {
                                         platform::os_name(),
                                         platform::arch_name(),
                                         pkg_cache_hash(*p).substr(0, 16));
-}
-
-std::filesystem::path pkg_state_dir(pkg const *p, std::filesystem::path const &root) {
-  std::string const &id{ p->cfg->identity };
-  return root / ".envy" / "state" / id.substr(0, id.find('@'));
 }
 
 std::optional<std::filesystem::path> pkg_env_root(phase_context const *ctx) {

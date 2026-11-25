@@ -346,7 +346,7 @@ end
 
 ### Environment (`ENV`)
 
-A spec publishes variables; a string sets, `false` unsets, an edit wraps the current value (`sep` defaults to the platform path separator), `nil` leaves a name alone. `ENVY_*` names are reserved. Table form for constants; the function form gets the payload, the package's `pkg_state_dir`, and options. `pkg_state_dir` is `<root>/.envy/state/<namespace.name>/`, keyed sans revision—a spec rev or version bump keeps the tool's caches, option variants share it; the tool creates it, not envy.
+A spec publishes variables; a string sets, `false` unsets, an edit wraps the current value (`sep` defaults to the platform path separator), `nil` leaves a name alone. `ENVY_*` names are reserved. Table form for constants; the function form gets the payload, the package's `pkg_state_dir`, and options. `pkg_state_dir` is `<root>/.envy/state/<namespace.name>/`, keyed sans revision—a spec rev or version bump keeps the tool's caches, option variants share it; the tool creates it. `envy state` lists them; `envy state clean` deletes them whatever their permissions.
 
 ```lua
 ENV = function(pkg_dir, pkg_state_dir, options)    -- pkg_dir is nil when user-managed

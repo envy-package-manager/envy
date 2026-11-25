@@ -4,6 +4,7 @@
 #include "engine.h"
 #include "manifest.h"
 #include "pkg_key.h"
+#include "pkg_state.h"
 #include "platform.h"
 #include "reexec.h"
 #include "self_deploy.h"
@@ -76,6 +77,10 @@ void cmd_install::execute() {
   // Before the run, so a collision fails with nothing copied.
   eng.set_vendor_plan(m->resolve_vendor_plan());
   eng.run_full(targets);  // Throws on any failure
+
+  if (cfg_.queries.empty() && !cfg_.manifest_path) {  // the top project's host graph
+    pkg_state_report_unused(eng, *m);
+  }
 }
 
 }  // namespace envy
