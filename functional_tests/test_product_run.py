@@ -769,7 +769,7 @@ class TestWrapperReachesEnvy(_ProductRunBase):
         a = self.simple("a", "A", _env_a())
         env = test_config.sandbox_home_env(self.tree / "home", self.env)
         root = test_config.sandbox_user_wide_root(env)
-        test_config.seed_cached_envy(root, PINNED_VERSION, self.envy)
+        test_config.seed_cached_envy(root, PINNED_VERSION)
         r = self.call([self.wrapper(a), "x"], env=env)
         self.assertEqual(0, r.returncode, r.stderr)
         self.assertEqual(["x"], json.loads(r.stdout)["argv"])

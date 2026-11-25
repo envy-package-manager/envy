@@ -2260,7 +2260,7 @@ PACKAGES = {{
 
     def test_init_then_sync_preserves_bootstrap_mtime(self):
         """Init creates bootstrap, sync preserves it when unchanged (mtime test)."""
-        envy_main = test_config.get_envy_production_executable()
+        envy_main = test_config.get_envy_executable()
         env = test_config.get_test_env()
         env["ENVY_CACHE_ROOT"] = str(self.cache_root)
 

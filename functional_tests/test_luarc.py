@@ -30,7 +30,7 @@ class TestLuarcTypesPathUpdate(EnvyTestCase):
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "project" / "tools"
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
         self._version = test_config.get_envy_version()
 
     def tearDown(self) -> None:

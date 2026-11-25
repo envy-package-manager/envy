@@ -130,8 +130,6 @@ class PlatformFilterBase(EnvyTestCase):
         super().setUp()
         self.test_dir = self.make_temp_dir("test_dir")
         self.specs_dir = self.make_temp_dir("specs_dir")
-        # Some cases here are specifically about the shipped binary's behavior.
-        self.envy_main = test_config.get_envy_production_executable()
 
         self.archive_path = self.specs_dir / "test.tar.gz"
         self.archive_hash = create_test_archive(self.archive_path)
@@ -157,10 +155,8 @@ class PlatformFilterBase(EnvyTestCase):
         subcmd: str,
         manifest: Path,
         args: Optional[List[str]] = None,
-        use_main_binary: bool = False,
     ) -> "test_config.subprocess.CompletedProcess[str]":
-        binary = str(self.envy_main if use_main_binary else self.envy)
-        cmd = [binary, "--cache-root", str(self.cache_root), subcmd]
+        cmd = [str(self.envy), "--cache-root", str(self.cache_root), subcmd]
         if args:
             cmd.extend(args)
         cmd.extend(["--manifest", str(manifest)])

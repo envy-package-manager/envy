@@ -414,3 +414,15 @@ TEST_CASE("sol_util_reject_unknown_keys accepts only the listed string keys") {
                        "Entry: unknown key 'sourc'; allowed keys are source, spec",
                        std::runtime_error);
 }
+
+TEST_CASE("a throw from the C++ runtime's own code reaches Lua as its message") {
+  // std::stoi throws from libc++.dylib on macOS; under -fno-rtti, envy can't match it
+  // (#425).
+  auto lua{ envy::sol_util_make_lua_state() };
+  lua->set_function("stdlib_throw", [] { static_cast<void>(std::stoi("x")); });
+  auto const result{ lua->safe_script("return pcall(stdlib_throw)",
+                                      sol::script_pass_on_error) };
+  REQUIRE(result.valid());
+  CHECK_FALSE(result.get<bool>(0));
+  CHECK(result.get<std::string>(1).find("stoi") != std::string::npos);
+}

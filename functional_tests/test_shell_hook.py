@@ -116,7 +116,7 @@ class TestBashHook(EnvyTestCase):
     def setUp(self) -> None:
         self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
         # Trigger self-deploy to get hook files
         project_dir = self._temp_dir / "setup-project"
@@ -664,7 +664,7 @@ class TestZshHook(EnvyTestCase):
     def setUp(self) -> None:
         self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
         project_dir = self._temp_dir / "setup-project"
         bin_dir = self._temp_dir / "setup-bin"
@@ -1134,7 +1134,7 @@ class TestFishHook(EnvyTestCase):
     def setUp(self) -> None:
         self._temp_dir = self.make_temp_dir("_temp_dir")
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
         project_dir = self._temp_dir / "setup-project"
         bin_dir = self._temp_dir / "setup-bin"
@@ -1430,7 +1430,7 @@ class TestPowerShellHook(EnvyTestCase):
         # (runneradmin) so Python paths match PowerShell's Resolve-Path output.
         self._temp_dir = self.make_temp_dir("_temp_dir").resolve()
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
         project_dir = self._temp_dir / "setup-project"
         bin_dir = self._temp_dir / "setup-bin"

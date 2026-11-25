@@ -19,21 +19,11 @@ from . import test_config
 from .env import EnvyTestCase
 from .trace_parser import TraceParser
 
-if sys.platform != "win32":
-    import fcntl
-
 USER_MANAGED = (  # no payload, so a spec lock is its only lock; the pair never runs
     "USER_MANAGED = true\n"
     "SETUP = { main = { CHECK = function() return true end, "
     "INSTALL = function() end } }\n"
 )
-
-
-def lock_exclusive(path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
-    fcntl.lockf(fd, fcntl.LOCK_EX)
-    return fd
 
 
 @unittest.skipIf(sys.platform == "win32", "fcntl locks are POSIX")
@@ -135,11 +125,11 @@ class TestCacheLockContention(EnvyTestCase):
         proc = self.start(manifest, trace)
         self.assertIsNotNone(self.await_seq(trace, "lock_acquired", "local.cyc_b@v1"))
 
-        fd_a = lock_exclusive(locks / names["local.cyc_a@v1"])
+        fd_a = test_config.lock_exclusive(locks / names["local.cyc_a@v1"])
         got_b = threading.Event()
 
         def wait_on_b():  # parks behind envy's cyc_b, then lets go at once
-            os.close(lock_exclusive(locks / names["local.cyc_b@v1"]))
+            os.close(test_config.lock_exclusive(locks / names["local.cyc_b@v1"]))
             got_b.set()
 
         threading.Thread(target=wait_on_b, daemon=True).start()
@@ -180,7 +170,7 @@ class TestCacheLockContention(EnvyTestCase):
         )
         names = self.lock_names(manifest)
 
-        fd = lock_exclusive(self.cache_root / "locks" / names["local.shared@v1"])
+        fd = test_config.lock_exclusive(self.cache_root / "locks" / names["local.shared@v1"])
         trace = self.work / "trace.jsonl"
         proc = self.start(manifest, trace)
         late_seq = self.await_seq(trace, "lock_acquired", "local.late@v1")

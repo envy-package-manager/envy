@@ -17,10 +17,7 @@ on:
 #
 # `cache_group` names the set of compilations a job performs, so jobs that compile the
 # same translation units share one sccache namespace instead of hoarding private copies.
-# Within a group exactly one job sets `cache_writer` -- it must be the one whose compile
-# set is a superset of its groupmates' (the shard that builds envy_functional_tester,
-# since that target recompiles ENVY_COMMON_SOURCES with ENVY_FUNCTIONAL_TESTER=1).
-# Readers restore via the shared prefix.
+# Within a group exactly one job sets `cache_writer`; readers restore via the shared prefix.
 #
 # `deps_writer` marks the single job per runner.os/runner.arch allowed to save out/cache;
 # the others would race for the same key and lose with "Unable to reserve cache".
@@ -40,14 +37,12 @@ jobs:
           - name: linux-x64-main
             os: ubuntu-latest
             shard: main
-            build_args: --no-functional-tester
             cache_group: linux-x64-none
             cache_writer: true
             deps_writer: true
           - name: linux-arm64-main
             os: ubuntu-24.04-arm
             shard: main
-            build_args: --no-functional-tester
             cache_group: linux-arm64-none
             deps_writer: true
           - name: linux-x64-asan
@@ -91,9 +86,8 @@ jobs:
             sanitizer: tsan
             cache_group: linux-arm64-tsan
             cache_writer: true
-          # Unsanitized build that also produces envy_functional_tester, so it is the
-          # superset writer for linux-arm64-none rather than linux-arm64-main. A worker per
-          # core: memcheck pins each envy to one, so serial runs left three of four idle.
+          # A worker per core: memcheck pins each envy to one, so serial runs left three of
+          # four idle.
           - name: linux-arm64-valgrind
             os: ubuntu-24.04-arm
             shard: func-valgrind
@@ -219,7 +213,7 @@ jobs:
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
           ENVY_TEST_TIMEOUT: ${{ matrix.test_timeout || '60' }}
-          ENVY_TEST_SANITIZER: ${{ matrix.sanitizer }}  # what the tester carries; empty if none
+          ENVY_TEST_SANITIZER: ${{ matrix.sanitizer }}  # what envy carries; empty if none
 
       - name: Save sccache cache
         id: sccache-save
@@ -293,7 +287,6 @@ jobs:
           - name: macos-arm64-main
             os: macos-latest
             shard: main
-            build_args: --no-functional-tester
             cache_group: macos-arm64-none
             deps_writer: true
           - name: macos-arm64-func
@@ -304,7 +297,6 @@ jobs:
           - name: macos-x64-main
             os: macos-15-intel
             shard: main
-            build_args: --no-functional-tester
             cache_group: macos-x64-none
             deps_writer: true
           - name: macos-x64-func
@@ -470,7 +462,6 @@ jobs:
             os: windows-latest
             arch: amd64
             shard: main
-            build_args: --no-functional-tester
             cache_group: windows-x64-none
             deps_writer: true
           - name: windows-x64-func
@@ -483,7 +474,6 @@ jobs:
             os: windows-11-arm
             arch: arm64
             shard: main
-            build_args: --no-functional-tester
             cache_group: windows-arm64-none
             deps_writer: true
           - name: windows-arm64-func

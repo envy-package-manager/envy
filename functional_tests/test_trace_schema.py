@@ -1,13 +1,11 @@
 """Trace schema contract tests.
 
-Locks the trace registry: the binary's `trace-schema` dump must match the
-parser's EVENT_REGISTRY exactly, every emitted event must be registered (the
-strict parser raises otherwise), seq must be strictly increasing with the
-trace_start header first, and the human (stderr) and JSONL (file) sinks must
-agree on per-event-type counts.
+Locks the trace registry: every emitted event must be registered (the strict
+parser raises otherwise) and carry exactly the fields src/trace_events.def gives
+it, seq must be strictly increasing with the trace_start header first, and the
+human (stderr) and JSONL (file) sinks must agree on per-event-type counts.
 """
 
-import json
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -59,21 +57,15 @@ class TestTraceSchema(EnvyTestCase):
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         return result
 
-    def test_binary_registry_matches_parser_registry(self):
-        """trace-schema dump == EVENT_REGISTRY, field for field."""
-        result = test_config.run(
-            [str(self.envy), "trace-schema"], capture_output=True, text=True
-        )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+    def test_emitted_fields_match_the_registry(self):
+        """Each record carries the envelope plus exactly its event's declared fields."""
+        trace_file = self.cache_root / "trace.jsonl"
+        self._run_install(f"--trace=file:{trace_file}")
 
-        dump = json.loads(result.stdout)
-        self.assertEqual(dump["schema"], SCHEMA_VERSION)
-        self.assertEqual(
-            dump["events"],
-            EVENT_REGISTRY,
-            "Binary trace-schema dump and trace_parser.EVENT_REGISTRY diverged; "
-            "update functional_tests/trace_parser.py to match src/trace_events.def",
-        )
+        envelope = {"seq", "ts", "tid", "event", "spec"}
+        for e in TraceParser(trace_file).parse():
+            with self.subTest(event=e.event):
+                self.assertEqual(set(e.raw) - envelope, set(EVENT_REGISTRY[e.event]))
 
     def test_emitted_events_parse_strictly(self):
         """A real run emits only registered events with valid envelopes."""

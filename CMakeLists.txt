@@ -109,8 +109,6 @@ add_compile_options(
 )
 
 option(ENABLE_LTO "Enable interprocedural optimization" ON)
-option(ENVY_BUILD_ENVY "Build the main envy executable" ON)
-option(ENVY_BUILD_FUNCTIONAL_TESTER "Build the functional test executable" ON)
 set(ENVY_SANITIZER "NONE" CACHE STRING "Sanitizer configuration (NONE, ASAN, UBSAN, TSAN)")
 set_property(CACHE ENVY_SANITIZER PROPERTY STRINGS NONE ASAN UBSAN TSAN)
 if(ENABLE_LTO)
@@ -386,16 +384,6 @@ set(ENVY_BASE_SOURCES
     src/version.cpp
 )
 
-# Add main for production/functional binaries
-set(ENVY_COMMON_SOURCES ${ENVY_BASE_SOURCES} src/main.cpp)
-
-# Functional test-specific sources
-set(ENVY_FUNCTIONAL_TEST_SOURCES
-    src/cmds/cmd_cache_functional_test.cpp
-    src/cmds/cmd_trace_schema.cpp
-    src/lua_ctx/lua_envy_functional_test.cpp
-)
-
 # Enable ARC for Objective-C++ files
 if(APPLE)
     set_source_files_properties(src/ssl_certs_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
@@ -420,8 +408,8 @@ set(ENVY_COMMON_COMPILE_OPTIONS
     $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-Wno-deprecated-declarations>
 )
 
-# Compile configuration for any target that builds envy's sources (no sanitizers)
-function(configure_envy_compile TARGET_NAME)
+# Function to configure an envy executable (base configuration, no sanitizers)
+function(configure_envy_executable TARGET_NAME)
     target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
     target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -432,11 +420,6 @@ function(configure_envy_compile TARGET_NAME)
     target_compile_options(${TARGET_NAME} PRIVATE ${ENVY_COMMON_COMPILE_OPTIONS})
     set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
     target_link_libraries(${TARGET_NAME} PRIVATE envy::thirdparty)
-endfunction()
-
-# Function to configure an envy executable (base configuration, no sanitizers)
-function(configure_envy_executable TARGET_NAME)
-    configure_envy_compile(${TARGET_NAME})
     # UTF-8 code page: narrow strings (paths, Lua's own file IO) agree with envy's UTF-8.
     if(MSVC)
         target_sources(${TARGET_NAME} PRIVATE
@@ -500,26 +483,13 @@ function(apply_sanitizers TARGET_NAME)
     endif()
 endfunction()
 
-# envy and the tester differ only in TUs that see ENVY_FUNCTIONAL_TESTER; the rest compile
-# once, linked straight into each single-file executable. Built only when one links it.
-set(ENVY_TESTER_VARIANT_SOURCES src/cli.cpp src/lua_envy.cpp src/main.cpp src/tui.cpp)
-set(ENVY_SHARED_SOURCES ${ENVY_COMMON_SOURCES})
-list(REMOVE_ITEM ENVY_SHARED_SOURCES ${ENVY_TESTER_VARIANT_SOURCES})
-add_library(envy_shared_objects OBJECT EXCLUDE_FROM_ALL ${ENVY_SHARED_SOURCES})
-target_compile_definitions(envy_shared_objects PRIVATE
-    ENVY_VERSION_STR=\"${PROJECT_VERSION}\")
-configure_envy_compile(envy_shared_objects)
-# PIE like the executables these objects only ever join, not the PIC CMake gives libraries
-set_target_properties(envy_shared_objects PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-target_compile_options(envy_shared_objects PRIVATE ${CMAKE_CXX_COMPILE_OPTIONS_PIE})
-
-# Production executable -------------------------------------------------------
-if(ENVY_BUILD_ENVY)
+# envy executable --------------------------------------------------------------
+# One binary for users and functional tests alike; a sanitizer build instruments it.
 add_executable(envy)
-target_sources(envy PRIVATE ${ENVY_TESTER_VARIANT_SOURCES})
-target_link_libraries(envy PRIVATE envy_shared_objects)
+target_sources(envy PRIVATE ${ENVY_BASE_SOURCES} src/main.cpp)
 target_compile_definitions(envy PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\")
 configure_envy_executable(envy)
+apply_sanitizers(envy)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CMAKE_C_LINK_GROUP_USING_RESCAN_SUPPORTED TRUE CACHE BOOL "" FORCE)
@@ -542,8 +512,10 @@ target_link_options(envy PRIVATE
     $<$<PLATFORM_ID:Windows>:/MAP:$<TARGET_FILE_DIR:envy>/envy.map>
 )
 
+# A sanitizer report needs the symbols to name its frames
 if((CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo)$")
+        AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo)$"
+        AND ENVY_SANITIZER STREQUAL "NONE")
     if(NOT CMAKE_STRIP)
         find_program(CMAKE_STRIP NAMES strip)
     endif()
@@ -556,26 +528,6 @@ if((CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         )
     endif()
 endif()
-endif() # ENVY_BUILD_ENVY
-
-# Functional tester executable ------------------------------------------------
-if(ENVY_BUILD_FUNCTIONAL_TESTER)
-add_executable(envy_functional_tester)
-target_sources(envy_functional_tester PRIVATE ${ENVY_FUNCTIONAL_TEST_SOURCES})
-# A sanitized tester needs instrumented objects of its own; envy's stay uninstrumented
-if(ENVY_SANITIZER STREQUAL "NONE")
-    target_sources(envy_functional_tester PRIVATE ${ENVY_TESTER_VARIANT_SOURCES})
-    target_link_libraries(envy_functional_tester PRIVATE envy_shared_objects)
-else()
-    target_sources(envy_functional_tester PRIVATE ${ENVY_COMMON_SOURCES})
-endif()
-target_compile_definitions(envy_functional_tester PRIVATE
-    ENVY_VERSION_STR=\"${PROJECT_VERSION}\"
-    ENVY_FUNCTIONAL_TESTER=1
-)
-configure_envy_executable(envy_functional_tester)
-apply_sanitizers(envy_functional_tester)
-endif() # ENVY_BUILD_FUNCTIONAL_TESTER
 
 set(ENVY_UNIT_TEST_SOURCES
     src/unit_test_main.cpp
@@ -643,11 +595,9 @@ set(ENVY_UNIT_TEST_SOURCES
     src/version_tests.cpp
 )
 
-# The test-only cache drivers build here too: their CLI surface is only registered
-# under ENVY_FUNCTIONAL_TESTER, so cli_tests.cpp cannot reach it otherwise.
 add_executable(envy_unit_tests)
-target_sources(envy_unit_tests PRIVATE ${ENVY_BASE_SOURCES} ${ENVY_FUNCTIONAL_TEST_SOURCES} ${ENVY_UNIT_TEST_SOURCES})
-target_compile_definitions(envy_unit_tests PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\" ENVY_UNIT_TEST ENVY_FUNCTIONAL_TESTER=1)
+target_sources(envy_unit_tests PRIVATE ${ENVY_BASE_SOURCES} ${ENVY_UNIT_TEST_SOURCES})
+target_compile_definitions(envy_unit_tests PRIVATE ENVY_VERSION_STR=\"${PROJECT_VERSION}\" ENVY_UNIT_TEST)
 target_link_libraries(envy_unit_tests PRIVATE doctest::doctest)
 configure_envy_executable(envy_unit_tests)
 apply_sanitizers(envy_unit_tests)
@@ -710,5 +660,4 @@ add_custom_target(run_script_tests ALL
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/script_tests.timestamp"
 )
 
-# Functional test executables are built but not run automatically
-# Run manually with: python -m functional_tests
+# Functional tests drive out/build/envy; run them with: python3.13 -m functional_tests

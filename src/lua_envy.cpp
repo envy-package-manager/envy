@@ -15,9 +15,6 @@
 #include "lua_ctx/lua_envy_product.h"
 #include "lua_ctx/lua_envy_run.h"
 #include "lua_ctx/lua_envy_toml.h"
-#ifdef ENVY_FUNCTIONAL_TESTER
-#include "lua_ctx/lua_envy_functional_test.h"
-#endif
 #include "platform.h"
 #include "shell.h"
 #include "sol_util.h"
@@ -94,9 +91,6 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
   lua_envy_options_install(envy_table);
   lua_envy_json_install(envy_table);
   lua_envy_toml_install(envy_table);
-#ifdef ENVY_FUNCTIONAL_TESTER
-  lua_envy_functional_test_install(envy_table);
-#endif
 
   lua["envy"] = envy_table;
 

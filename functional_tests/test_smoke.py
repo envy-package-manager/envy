@@ -13,7 +13,7 @@ from pathlib import Path
 class EnvyBinarySmokeTest(unittest.TestCase):
     def setUp(self) -> None:
         self._project_root = Path(__file__).resolve().parent.parent
-        self._envy_binary = test_config.get_envy_production_executable()
+        self._envy_binary = test_config.get_envy_executable()
 
     def test_envy_help_executes(self) -> None:
 

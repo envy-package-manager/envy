@@ -157,35 +157,4 @@ std::string trace_record_to_json(trace_record const &rec) {
   return out;
 }
 
-std::vector<trace_event_schema> trace_schema() {
-  std::vector<trace_event_schema> out;
-  out.reserve(kTraceEventCount);
-
-  auto const add{ [&out](auto const &e, std::string_view name) {
-    trace_event_schema schema{ .name = name, .fields = {} };
-    trace_event_for_each_field(e, [&](std::string_view key, auto const &value) {
-      using T = std::remove_cvref_t<decltype(value)>;
-      char const *const type{ [] {
-        if constexpr (std::is_same_v<T, std::string>) {
-          return "str";
-        } else if constexpr (std::is_same_v<T, bool>) {
-          return "bool";
-        } else if constexpr (std::is_same_v<T, pkg_phase>) {
-          return "phase";
-        } else {
-          return "i64";
-        }
-      }() };
-      schema.fields.push_back(std::string{ key } + ":" + type);
-    });
-    out.push_back(std::move(schema));
-  } };
-
-#define ENVY_TRACE_EVENT(name, fields) add(trace_events::name{}, #name);
-#include "trace_events.def"
-#undef ENVY_TRACE_EVENT
-
-  return out;
-}
-
 }  // namespace envy

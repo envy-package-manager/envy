@@ -122,13 +122,6 @@ std::string_view trace_event_name(trace_event_t const &event);
 std::string trace_record_to_string(trace_record const &rec);  // human key=value
 std::string trace_record_to_json(trace_record const &rec);    // JSONL
 
-// Schema registry (for the trace-schema dump + registry-sync tests).
-struct trace_event_schema {
-  std::string_view name;
-  std::vector<std::string> fields;  // "name:str|i64|bool|phase"
-};
-std::vector<trace_event_schema> trace_schema();
-
 namespace tui {
 // Atomic because the re-exec handoff clears it with the tui worker already running.
 extern std::atomic_bool g_trace_enabled;

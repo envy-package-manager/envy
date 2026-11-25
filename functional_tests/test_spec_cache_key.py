@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .trace_parser import TraceParser
 
 SPEC = """IDENTITY = "{identity}"
 DEPENDENCIES = {{}}
@@ -458,41 +459,51 @@ class TestLocalArchiveKeyLocation(EnvyTestCase):
         link = shared / "current.tar.gz"
         link.symlink_to("a.tar.gz")
         root = self.make_temp_dir("a") / "proj"
-        barriers = self.make_temp_dir("barriers")
 
-        # Hold the old target's entry so the run, if it keys on that, waits for it.
-        held = test_config.popen(
-            [str(self.envy), "--cache-root", str(self.cache_root), "cache-test",
-             "ensure-spec", self.IDENTITY,
-             "--source", "local\n" + Path(os.path.realpath(old)).as_posix(),
-             f"--barrier-dir={barriers}", "--barrier-signal-after=held",
-             "--barrier-wait-after=release", "--fail-before-complete"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        self.addCleanup(lambda: held.poll() is None and held.kill())
-        self.wait_for(lambda: (barriers / "held").exists())
-
-        trace = self.work / "retarget.jsonl"
-        run = test_config.popen(
-            [str(self.envy), "--cache-root", str(self.cache_root), f"--trace=file:{trace}",
-             "install", "--manifest", str(self.project(root, f'"{self.lua_path(link)}"'))],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        self.addCleanup(lambda: run.poll() is None and run.kill())
-        started = f'"spec":"{self.IDENTITY}"'  # its fetch phase began: the key is fixed
-        self.wait_for(
-            lambda: run.poll() is not None
-            or (trace.exists() and any(
-                "phase_start" in line and started in line
-                for line in trace.read_text(encoding="utf-8").splitlines()))
-        )
-        link.unlink()
-        link.symlink_to("b.tar.gz")
-        (barriers / "release").touch()
-        held.communicate(timeout=30)
+        # Hold the old target's entry lock so the run, if it keys on that, waits for it.
+        fd = test_config.lock_exclusive(self.cache_root / "locks" / self.spec_lock(old))
+        try:
+            trace = self.work / "retarget.jsonl"
+            run = test_config.popen(
+                [str(self.envy), "--cache-root", str(self.cache_root), f"--trace=file:{trace}",
+                 "install", "--manifest", str(self.project(root, f'"{self.lua_path(link)}"'))],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.addCleanup(lambda: run.poll() is None and run.kill())
+            started = f'"spec":"{self.IDENTITY}"'  # its fetch phase began: the key is fixed
+            self.wait_for(
+                lambda: run.poll() is not None
+                or (trace.exists() and any(
+                    "phase_start" in line and started in line
+                    for line in trace.read_text(encoding="utf-8").splitlines()))
+            )
+            link.unlink()
+            link.symlink_to("b.tar.gz")
+        finally:
+            os.close(fd)
         run.communicate(timeout=30)
 
         self.install_ok(self.project(root, f'"{self.lua_path(old)}"'))
+
+    def spec_lock(self, archive: Path) -> str:
+        """The name of the lock a run keyed on `archive`'s real path takes for the bundle."""
+        trace = self.work / "discovery.jsonl"
+        source = self.lua_path(Path(os.path.realpath(archive)))
+        result = test_config.run(
+            [str(self.envy), "--cache-root", str(self.make_temp_dir("discovery-cache")),
+             f"--trace=file:{trace}", "install", "--manifest",
+             str(self.project(self.make_temp_dir("discovery") / "proj", f'"{source}"'))],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        names = {
+            Path(e.raw["lock_path"]).name
+            for e in TraceParser(trace).parse()
+            if e.event == "lock_acquired" and e.spec == self.IDENTITY
+        }
+        spec_locks = [n for n in names if n.startswith("spec.")]
+        self.assertEqual(1, len(spec_locks), names)
+        return spec_locks[0]
 
     def wait_for(self, done, timeout: float = 30.0):
         deadline = time.monotonic() + timeout

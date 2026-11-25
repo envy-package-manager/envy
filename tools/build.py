@@ -159,14 +159,6 @@ def download_ninja(cache_dir: Path) -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Build envy project")
     parser.add_argument(
-        "--no-envy", action="store_true", help="Skip building main envy executable"
-    )
-    parser.add_argument(
-        "--no-functional-tester",
-        action="store_true",
-        help="Skip building functional tester",
-    )
-    parser.add_argument(
         "--sanitizer",
         choices=["none", "asan", "ubsan", "tsan"],
         default="none",
@@ -199,7 +191,7 @@ def main():
 
     # Build current state string for comparison
     extra_str = ",".join(extra_cmake_args) if extra_cmake_args else ""
-    current_state = f"envy={not args.no_envy},functional={not args.no_functional_tester},sanitizer={args.sanitizer},extra={extra_str}"
+    current_state = f"sanitizer={args.sanitizer},extra={extra_str}"
 
     # Check if we need to configure
     need_configure = True
@@ -214,8 +206,6 @@ def main():
             "--preset",
             "release-lto-on",
             f"-DCMAKE_MAKE_PROGRAM={ninja_bin}",
-            f"-DENVY_BUILD_ENVY={'OFF' if args.no_envy else 'ON'}",
-            f"-DENVY_BUILD_FUNCTIONAL_TESTER={'OFF' if args.no_functional_tester else 'ON'}",
             f"-DENVY_SANITIZER={args.sanitizer.upper()}",
             "--log-level=STATUS",
             *extra_cmake_args,

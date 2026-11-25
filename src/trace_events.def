@@ -1,5 +1,5 @@
-// Trace event registry — single source of truth for structs, names, serializers,
-// and the trace-schema dump. Fields: ENVY_TRACE_FIELD_{STR,I64,BOOL,PHASE}.
+// Trace event registry — single source of truth for structs, names, serializers, and
+// functional_tests/trace_parser.py. Fields: ENVY_TRACE_FIELD_{STR,I64,BOOL,PHASE}.
 // Adding an event here requires adding it to trace_event_t in trace.h
 // (enforced by static_assert on kTraceEventCount).
 

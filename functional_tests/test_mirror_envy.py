@@ -58,7 +58,7 @@ class MirrorEnvyFunctionalTest(EnvyTestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._envy = test_config.get_envy_production_executable()
+        cls._envy = test_config.get_envy_executable()
 
     def setUp(self) -> None:
         self._temp = self.make_temp_dir("_temp")
@@ -570,7 +570,7 @@ class InitMirrorSurvivesSyncTest(EnvyTestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._envy = test_config.get_envy_production_executable()
+        cls._envy = test_config.get_envy_executable()
 
     def setUp(self) -> None:
         self._temp = self.make_temp_dir("_temp")

@@ -90,22 +90,11 @@ class EnvyRun:
 
 
 class EnvyTestCase(unittest.TestCase):
-    """Base for tests that drive `envy` against a scratch cache.
-
-    Prefer the truest envy: `use_production_binary = True` runs the shipped artifact.
-    The functional tester is for intrusive testing -- sanitizers, test-only subcommands,
-    interruption hooks -- that the shipped binary cannot do.
-    """
-
-    use_production_binary = False
+    """Base for tests that drive `envy` against a scratch cache."""
 
     def setUp(self):
         super().setUp()
-        self.envy = (
-            test_config.get_envy_production_executable()
-            if self.use_production_binary
-            else test_config.get_envy_executable()
-        )
+        self.envy = test_config.get_envy_executable()
         self.project_root = Path(__file__).resolve().parent.parent
         self.cache_root = self.make_temp_dir("cache")
         self.work = self.make_temp_dir("work")

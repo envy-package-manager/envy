@@ -88,7 +88,7 @@ class TestLauncherStamp(EnvyTestCase):
         self._temp_dir = self.make_temp_dir("_temp_dir")
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._project_dir / "bin"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
         self._version = test_config.get_envy_version()
 
     def test_init_stamps_the_running_version(self) -> None:

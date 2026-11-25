@@ -61,8 +61,6 @@ def _writable(root: Path) -> None:
 
 
 class TestState(EnvyTestCase):
-    use_production_binary = True
-
     def setUp(self) -> None:
         super().setUp()
         self.state = self.work / ".envy" / "state"
