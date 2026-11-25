@@ -95,8 +95,10 @@ std::vector<std::string> call_command_fn(pkg *provider,
       provider,
       "PRODUCTS['" + name + "'].command",
       [&] { return fn(pkg_dir, state_dir, opts); }) };
-  return product_util_parse_command(
-      result, name, id, provider->type == pkg_type::USER_MANAGED);
+  return product_util_parse_command(result,
+                                    name,
+                                    id,
+                                    provider->type == pkg_type::USER_MANAGED);
 }
 
 struct argv_builder {

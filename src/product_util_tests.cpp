@@ -400,7 +400,10 @@ void give_functions(pkg *p, char const *fns, char const *options = "{}") {
 }
 
 product_entry function_command() {
-  return product_entry{ .value = {}, .script = true, .platforms = {}, .command = {},
+  return product_entry{ .value = {},
+                        .script = true,
+                        .platforms = {},
+                        .command = {},
                         .command_fn = true };
 }
 

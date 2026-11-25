@@ -9,7 +9,7 @@ namespace envy {
 // Lua registry indices for envy runtime state
 inline constexpr int ENVY_OPTIONS_RIDX = 100;    // Options table for phase execution
 inline constexpr int ENVY_PHASE_CTX_RIDX = 103;  // Phase context pointer for envy.* APIs
-inline constexpr int ENVY_SUBPROJECT_ENVS_RIDX = 105;  // {path, env} of every subproject
+inline constexpr int ENVY_SUBPROJECT_ENVS_RIDX = 105;   // {path, env} of every subproject
 inline constexpr int ENVY_PRODUCT_COMMANDS_RIDX = 106;  // PRODUCTS' command functions
 
 // Install envy globals, platform constants, and custom functions into Lua state.
