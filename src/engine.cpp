@@ -687,7 +687,6 @@ std::vector<product_info> engine::collect_all_products() const {
             .script = prod_entry.script,
             .platforms =
                 util_platform_intersect(prod_entry.platforms, package->resolved_platforms),
-            .command = prod_entry.command,
         });
       }
     }
@@ -1523,9 +1522,10 @@ void engine::validate_product_commands() {
   {
     std::lock_guard const lock(mutex_);
     for (auto &[_, package] : packages_) {
+      if (!package->spec_fetch_completed) { continue; }  // half-loaded; each render checks
       std::lock_guard const deps_lock(package->deps_mutex);
       for (auto const &[name, entry] : package->products) {
-        if (!entry.command.empty() &&
+        if (entry.is_command() &&
             util_platform_matches(
                 util_platform_intersect(entry.platforms, package->resolved_platforms),
                 platform::os_name(),
@@ -1543,7 +1543,7 @@ void engine::validate_product_commands() {
   std::string errors;
   for (auto const &[p, name] : commands) {
     try {
-      product_util_validate(p, name, validated);
+      product_util_validate(p, name, project_root(), validated);
     } catch (std::exception const &e) {
       errors += errors.empty() ? "" : "\n";
       errors += e.what();

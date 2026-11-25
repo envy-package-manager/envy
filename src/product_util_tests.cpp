@@ -1,9 +1,12 @@
 #include "product_util.h"
 
 #include "engine.h"
+#include "lua_envy.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
+#include "pkg_env.h"
 #include "pkg_key.h"
+#include "sol_util.h"
 
 #include "doctest.h"
 
@@ -16,10 +19,12 @@ namespace envy {
 
 namespace {
 
-std::unique_ptr<pkg> make_pkg(std::string identity, pkg_type type) {
+std::unique_ptr<pkg> make_pkg(std::string identity,
+                              pkg_type type,
+                              std::string options = "{}") {
   pkg_cfg *cfg{ pkg_cfg::pool()->emplace(std::move(identity),
                                          pkg_cfg::weak_ref{},
-                                         "{}",
+                                         std::move(options),
                                          std::nullopt,
                                          nullptr,
                                          nullptr,
@@ -119,7 +124,7 @@ TEST_CASE("product_util_predict_argv prints a user-managed value verbatim") {
   auto provider{ make_pkg("local.provider@v1", pkg_type::USER_MANAGED) };
   provider->products["tool"] = product_entry{ "programmatic-tool", true };
 
-  CHECK(product_util_predict_argv(provider.get(), "tool") ==
+  CHECK(product_util_predict_argv(provider.get(), "tool", {}) ==
         std::vector<std::string>{ "programmatic-tool" });
 }
 
@@ -127,7 +132,7 @@ TEST_CASE("product_util_predict_argv refuses a product whose type is unresolved"
   auto provider{ make_pkg("local.provider@v1", pkg_type::UNKNOWN) };
   provider->products["tool"] = product_entry{ "programmatic-tool", true };
 
-  CHECK_THROWS_WITH_AS(product_util_predict_argv(provider.get(), "tool"),
+  CHECK_THROWS_WITH_AS(product_util_predict_argv(provider.get(), "tool", {}),
                        "Product 'tool' provider 'local.provider@v1' has no resolved "
                        "package type; its spec did not finish loading",
                        std::runtime_error);
@@ -138,14 +143,21 @@ TEST_CASE("product_util_predict_argv refuses a product whose type is unresolved"
 
 namespace {
 
+auto const kLeaf{ [](pkg *p, std::string const &n) {
+  return p->cfg->identity + ":" + n;
+} };
+auto const kPkgPath{ [](pkg *p) {
+  return std::filesystem::path{ "pkgs" } / p->cfg->identity;
+} };
+
+product_render const kRender{ .pkg_path = kPkgPath, .state_root = "proj", .leaf = kLeaf };
+
 std::vector<std::string> render(pkg *provider, std::string const &name) {
-  return product_util_argv(provider, name, [](pkg *p, std::string const &n) {
-    return p->cfg->identity + ":" + n;
-  });
+  return product_util_argv(provider, name, kRender);
 }
 
 product_entry command(std::vector<std::string> argv) {
-  return product_entry{ .value = {}, .script = true, .platforms = {}, .command = argv };
+  return product_entry{ .value = std::move(argv) };
 }
 
 product_entry path(std::string value) {
@@ -243,11 +255,11 @@ TEST_CASE("product_util_argv names the product that supplied argv[0]") {
 
   auto const program_of{ [&](std::string const &name) {
     std::string program;
-    product_util_argv(
-        app.get(),
-        name,
-        [](pkg *, std::string const &n) { return n; },
-        &program);
+    auto const bare{ [](pkg *, std::string const &n) { return n; } };
+    product_util_argv(app.get(),
+                      name,
+                      { .pkg_path = kPkgPath, .state_root = {}, .leaf = bare },
+                      &program);
     return program;
   } };
   CHECK(program_of("node") == "node");    // a path product supplies itself
@@ -310,9 +322,9 @@ TEST_CASE("product_util_validate walks each command once, however often spliced"
   }
 
   std::unordered_set<std::string> validated;
-  product_util_validate(p.get(), "c0", validated);
+  product_util_validate(p.get(), "c0", {}, validated);
   CHECK(validated.size() == kDepth);
-  product_util_validate(p.get(), "c1", validated);  // already sound: no walk at all
+  product_util_validate(p.get(), "c1", {}, validated);  // already sound: no walk at all
   CHECK(validated.size() == kDepth);
 }
 
@@ -325,7 +337,7 @@ TEST_CASE("product_util_argv refuses a NUL, which no exec carries") {
                        "a NUL, which no program receives intact",
                        std::runtime_error);
   std::unordered_set<std::string> validated;
-  CHECK_THROWS(product_util_validate(p.get(), "tool", validated));
+  CHECK_THROWS(product_util_validate(p.get(), "tool", {}, validated));
 }
 
 TEST_CASE("product_util_argv refuses a name outside the provider's closure") {
@@ -373,6 +385,142 @@ TEST_CASE("a command product is not a path") {
   CHECK_FALSE(product_util_is_command(p.get(), "missing"));
   CHECK_THROWS_WITH_AS(product_util_resolve(p.get(), "tool"),
                        "Product 'tool' in provider 'local.p@v1' is a command, not a path",
+                       std::runtime_error);
+}
+
+namespace {
+
+// `fns` defines PRODUCTS' command functions by name in p's state, as spec_fetch stashes
+// them.
+void give_functions(pkg *p, char const *fns) {
+  auto lua{ sol_util_make_lua_state() };
+  lua->registry()[ENVY_PRODUCT_COMMANDS_RIDX] =
+      lua->safe_script(std::string{ "return " } + fns).get<sol::table>();
+  p->lua.set(std::move(lua));
+}
+
+product_entry function_command() { return product_entry{ .value = product_command_fn{} }; }
+
+}  // namespace
+
+TEST_CASE("a command function gets ENV's arguments and renders like a table") {
+  auto yarn{ make_pkg("local.yarn@v1", pkg_type::CACHE_MANAGED, "{ x = 'y' }") };
+  auto node{ make_pkg("local.node@v1", pkg_type::CACHE_MANAGED) };
+  depend(yarn.get(), node.get());
+  node->products["node"] = path("bin/node");
+  yarn->products["yarn"] = function_command();
+  yarn->products["ci"] = command({ "{{yarn}}", "install" });  // splices the function's
+  give_functions(yarn.get(),
+                 R"({ yarn = function(pkg_dir, pkg_state_dir, options)
+                        local x = options.x
+                        options.x = "mutated"  -- a copy: the next call sees 'y' again
+                        return { "{{node}}", pkg_dir .. "lib/yarn.cjs",
+                                 "--state=" .. pkg_state_dir, "--x=" .. x }
+                      end })");
+
+  std::string const pkg_dir{ util_path_to_utf8(kPkgPath(yarn.get()).make_preferred() /
+                                               "") };
+  std::string const state{ util_path_to_utf8(
+      pkg_state_dir(yarn.get(), "proj").make_preferred() / "") };
+  std::vector<std::string> const expected{ "local.node@v1:node",
+                                           pkg_dir + "lib/yarn.cjs",
+                                           "--state=" + state,
+                                           "--x=y",
+                                           "install" };
+  CHECK(render(yarn.get(), "ci") == expected);
+  CHECK(render(yarn.get(), "ci") == expected);
+  CHECK(product_util_is_command(yarn.get(), "yarn"));
+  CHECK_THROWS_WITH_AS(
+      product_util_resolve(yarn.get(), "yarn"),
+      "Product 'yarn' in provider 'local.yarn@v1' is a command, not a path",
+      std::runtime_error);
+}
+
+TEST_CASE("a user-managed spec's command function gets a nil pkg_dir") {
+  auto um{ make_pkg("local.um@v1", pkg_type::USER_MANAGED) };
+  um->products["hi"] = function_command();
+  give_functions(um.get(),
+                 R"({ hi = function(pkg_dir) return { tostring(pkg_dir) } end })");
+
+  CHECK(render(um.get(), "hi") == std::vector<std::string>{ "nil" });
+}
+
+TEST_CASE("a spliced command function sees its own package, not the splicer's") {
+  auto app{ make_pkg("local.app@v1", pkg_type::CACHE_MANAGED) };
+  auto yarn{ make_pkg("local.yarn@v1", pkg_type::CACHE_MANAGED) };
+  depend(app.get(), yarn.get());
+  yarn->products["yarn"] = function_command();
+  app->products["ci"] = command({ "{{yarn}}", "install" });
+  give_functions(yarn.get(), R"({ yarn = function(pkg_dir, pkg_state_dir)
+                                    return { "tool", pkg_dir .. "x", pkg_state_dir } end })");
+
+  CHECK(render(app.get(), "ci") ==
+        std::vector<std::string>{
+            "tool",
+            util_path_to_utf8(kPkgPath(yarn.get()).make_preferred() / "x"),
+            util_path_to_utf8(pkg_state_dir(yarn.get(), "proj").make_preferred() / ""),
+            "install" });
+}
+
+TEST_CASE("validation calls a command function once, however often it is spliced") {
+  auto p{ make_pkg("local.p@v1", pkg_type::USER_MANAGED) };  // no cache to predict
+  p->products["fn"] = function_command();
+  p->products["a"] = command({ "{{fn}}", "{{fn}}" });
+  p->products["b"] = command({ "{{fn}}" });
+  give_functions(p.get(), R"({ fn = function() calls = (calls or 0) + 1
+                                 return { "tool" } end })");
+
+  std::unordered_set<std::string> validated;
+  product_util_validate(p.get(), "a", "proj", validated);
+  product_util_validate(p.get(), "b", "proj", validated);
+  auto const lua{ p->lua.lock() };
+  CHECK((*lua)["calls"].get<int>() == 1);
+}
+
+TEST_CASE("a command function's cycle, missing state, or missing root is refused") {
+  auto p{ make_pkg("local.p@v1", pkg_type::USER_MANAGED) };
+  p->products["self"] = function_command();
+  give_functions(p.get(), R"({ self = function() return { "{{self}}" } end })");
+  CHECK_THROWS_WITH_AS(render(p.get(), "self"),
+                       "Product 'self' in spec 'local.p@v1' is a command cycle: self -> "
+                       "self",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      product_util_argv(p.get(), "self", { .pkg_path = kPkgPath, .state_root = {} }),
+      "Product 'self' in spec 'local.p@v1' is a command function; this context has no "
+      "root for its pkg_state_dir",
+      std::runtime_error);
+
+  auto unloaded{ make_pkg("local.u@v1", pkg_type::USER_MANAGED) };
+  unloaded->products["fn"] = function_command();
+  CHECK_THROWS_WITH_AS(render(unloaded.get(), "fn"),
+                       "Product 'fn' provider 'local.u@v1' has no Lua state; its spec did "
+                       "not finish loading",
+                       std::runtime_error);
+}
+
+TEST_CASE("a command function's result is held to a declared table's rules") {
+  auto p{ make_pkg("local.p@v1", pkg_type::CACHE_MANAGED) };
+  p->products["num"] = function_command();
+  p->products["rel"] = function_command();
+  p->products["stray"] = function_command();
+  give_functions(p.get(), R"({ num = function() return 42 end,
+                               rel = function() return { "bin/tool" } end,
+                               stray = function() return { "{{nope}}" } end })");
+
+  CHECK_THROWS_WITH_AS(render(p.get(), "num"),
+                       "PRODUCTS entry 'num' command function's result must be a list of "
+                       "strings in spec "
+                       "'local.p@v1'",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(render(p.get(), "rel"),
+                       "PRODUCTS entry 'rel' command function's result starts with "
+                       "relative path 'bin/tool'; join it to a command function's pkg_dir "
+                       "in spec 'local.p@v1'",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(render(p.get(), "stray"),
+                       "Product 'stray' in spec 'local.p@v1' runs '{{nope}}', but nothing "
+                       "in its dependency closure provides 'nope'",
                        std::runtime_error);
 }
 

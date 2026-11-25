@@ -1400,7 +1400,7 @@ TEST_CASE("collect_all_products: spec_fetch publishes the type, not the step cou
 
   auto const infos{ eng.collect_all_products() };
   REQUIRE(infos.size() == 1);
-  CHECK(infos[0].value == "programmatic-tool");
+  CHECK(std::get<std::string>(infos[0].value) == "programmatic-tool");
   CHECK(infos[0].type == pkg_type::USER_MANAGED);
 
   fs::remove_all(cache_root);

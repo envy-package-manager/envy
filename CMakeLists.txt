@@ -435,6 +435,11 @@ endfunction()
 # Function to configure an envy executable (base configuration, no sanitizers)
 function(configure_envy_executable TARGET_NAME)
     configure_envy_compile(${TARGET_NAME})
+    # UTF-8 code page: narrow strings (paths, Lua's own file IO) agree with envy's UTF-8.
+    if(MSVC)
+        target_sources(${TARGET_NAME} PRIVATE
+            ${PROJECT_SOURCE_DIR}/src/resources/windows_utf8.manifest)
+    endif()
     # Warnings are errors at the link too, where GCC's LTO checks (-Wodr) run
     set_target_properties(${TARGET_NAME} PROPERTIES LINK_WARNING_AS_ERROR ON)
     target_link_options(${TARGET_NAME} PRIVATE

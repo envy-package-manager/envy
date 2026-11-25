@@ -27,6 +27,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -57,6 +58,10 @@ cmd_product::cmd_product(cfg cfg,
 
 namespace {
 
+bool runs_here(product_info const &p) {
+  return util_platform_matches(p.platforms, platform::os_name(), platform::arch_name());
+}
+
 // A path product is a string; a command is its argv, ready to exec without re-parsing --
 // or null off its platforms, where validation never checked what it names.
 void print_products_json(engine &eng) {
@@ -65,14 +70,11 @@ void print_products_json(engine &eng) {
   picojson::object obj;
   for (auto const &pi : products) {
     obj[pi.product_name] = [&] {
-      bool const command{ !pi.command.empty() };
-      if (command && !util_platform_matches(pi.platforms,
-                                            platform::os_name(),
-                                            platform::arch_name())) {
-        return picojson::value{};
-      }
+      bool const command{ !std::holds_alternative<std::string>(pi.value) };
+      if (command && !runs_here(pi)) { return picojson::value{}; }
       auto argv{ product_util_predict_argv(eng.find_product_provider(pi.product_name),
-                                           pi.product_name) };
+                                           pi.product_name,
+                                           eng.project_root()) };
       if (!command) { return picojson::value(std::move(argv.front())); }
       picojson::array arr;
       for (auto &arg : argv) { arr.emplace_back(std::move(arg)); }
@@ -84,38 +86,56 @@ void print_products_json(engine &eng) {
   tui::print_stdout("%s", output.c_str());
 }
 
-// A command lists as declared, placeholders and all: nothing is resolved here.
-std::string listed_value(product_info const &p) {
-  std::string v{ p.value };  // empty for a command
-  for (auto const &arg : p.command) { v += (v.empty() ? "" : " ") + arg; }
-  return v;
+// A command lists as declared, placeholders and all: a table as written, a function's
+// result at the predicted path -- "(function)" off its platforms, where nothing called it.
+std::string listed_value(engine &eng, product_info const &p) {
+  auto const join{ [](std::vector<std::string> const &argv) {
+    std::string v;
+    for (auto const &arg : argv) { v += (v.empty() ? "" : " ") + arg; }
+    return v;
+  } };
+  return envy::visit(
+      match{ [](std::string const &path) { return path; },
+             [&](std::vector<std::string> const &argv) { return join(argv); },
+             [&](product_command_fn) {
+               return runs_here(p) ? join(product_util_predict_function(
+                                         eng.find_product_provider(p.product_name),
+                                         p.product_name,
+                                         eng.project_root()))
+                                   : std::string{ "(function)" };
+             } },
+      p.value);
 }
 
-void print_products_aligned(std::vector<product_info> const &products) {
+void print_products_aligned(engine &eng) {
+  auto const products{ eng.collect_all_products() };
   if (products.empty()) {
     tui::info("No products defined");
     return;
   }
 
-  // Calculate column widths
-  size_t max_product{ 0 };
-  size_t max_value{ 0 };
-  size_t max_provider{ 0 };
-
-  for (auto const &p : products) {
-    max_product = std::max(max_product, p.product_name.size());
-    max_value = std::max(max_value, listed_value(p).size());
-    max_provider = std::max(max_provider, p.provider_canonical.size());
+  auto const values{ [&] {
+    std::vector<std::string> out;
+    out.reserve(products.size());
+    for (auto const &p : products) { out.push_back(listed_value(eng, p)); }
+    return out;
+  }() };
+  std::size_t max_product{ 0 };
+  std::size_t max_value{ 0 };
+  for (std::size_t i{ 0 }; i < products.size(); ++i) {
+    max_product = std::max(max_product, products[i].product_name.size());
+    max_value = std::max(max_value, values[i].size());
   }
 
   // Print aligned rows
-  for (auto const &p : products) {
+  for (size_t i{ 0 }; i < products.size(); ++i) {
+    auto const &p{ products[i] };
     std::string const user_managed_marker{ p.type == pkg_type::USER_MANAGED
                                                ? " (user-managed)"
                                                : "" };
     std::ostringstream oss;
     oss << std::left << std::setw(max_product) << p.product_name << "  "
-        << std::setw(max_value) << listed_value(p) << "  " << p.provider_canonical
+        << std::setw(max_value) << values[i] << "  " << p.provider_canonical
         << user_managed_marker;
     tui::info("%s", oss.str().c_str());
   }
@@ -177,7 +197,7 @@ tool_plan plan_tool(engine &eng,
   auto const anchor{ activation_anchor_read(eng.cache_root(), m.manifest_path) };
   shell_env_t to{ activation_for_tool(eng, m, anchor, live, provider) };
   std::string program;
-  auto argv{ product_util_run_argv(provider, name, &program) };
+  auto argv{ product_util_run_argv(provider, name, anchor.root, &program) };
   argv.front() =
       resolve_program(argv.front(), program, anchor, m.meta, env_get(to, "PATH"));
   return { .argv = std::move(argv), .live = std::move(live), .to = std::move(to) };
@@ -244,7 +264,7 @@ void cmd_product::execute() {
     if (cfg_.json) {
       print_products_json(eng);
     } else {
-      print_products_aligned(eng.collect_all_products());
+      print_products_aligned(eng);
     }
     return;
   }
@@ -256,7 +276,7 @@ void cmd_product::execute() {
     product_util_is_command(provider, cfg_.product_name)
         ? shell_quote_argv(plan_tool(eng, *m, provider, cfg_.product_name).argv,
                            kShellPlatformDefault)
-        : product_util_run_argv(provider, cfg_.product_name).front()
+        : product_util_run_argv(provider, cfg_.product_name, eng.project_root()).front()
   };
   tui::print_stdout("%s\n", rendered_value.c_str());
 }

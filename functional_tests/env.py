@@ -92,9 +92,9 @@ class EnvyRun:
 class EnvyTestCase(unittest.TestCase):
     """Base for tests that drive `envy` against a scratch cache.
 
-    Set `use_production_binary = True` on a subclass that must exercise the shipped
-    artifact (bootstrap, re-exec, mirroring); everything else wants the default
-    functional tester, which carries the sanitizers and the test-only subcommands.
+    Prefer the truest envy: `use_production_binary = True` runs the shipped artifact.
+    The functional tester is for intrusive testing -- sanitizers, test-only subcommands,
+    interruption hooks -- that the shipped binary cannot do.
     """
 
     use_production_binary = False

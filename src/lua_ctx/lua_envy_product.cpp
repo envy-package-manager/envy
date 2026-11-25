@@ -186,8 +186,11 @@ void lua_envy_product_install(sol::table &envy_table) {
     auto const a{ authorize("envy.product_command", product_name, ctx) };
     std::string const command{ [&] {
       try {
-        std::string program;
-        auto argv{ product_util_run_argv(a.provider, product_name, &program) };
+        std::string program;  // pkg_state_dir's root is ENV's; DEFAULT_SHELL's has none
+        auto argv{ product_util_run_argv(a.provider,
+                                         product_name,
+                                         pkg_env_root(ctx).value_or(""),
+                                         &program) };
         // A bare program resolves on the phase's PATH from its run dir, as `--run`
         // resolves it on the tool's: never a PowerShell alias (curl), a cmd builtin
         // (start), or the product's own wrapper by that name.

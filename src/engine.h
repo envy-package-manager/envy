@@ -6,6 +6,7 @@
 #include "pkg_cfg.h"
 #include "pkg_key.h"
 #include "pkg_phase.h"
+#include "product_value.h"
 #include "shell.h"
 #include "task_engine.h"
 #include "tui.h"
@@ -47,13 +48,12 @@ struct export_phase_config {
 
 struct product_info {
   std::string product_name;
-  std::string value;
+  product_value value;             // as declared: a command unrendered
   std::string provider_canonical;  // Full canonical identity with options
   pkg_type type;
   std::filesystem::path pkg_path;
   bool script = true;
   std::vector<std::string> platforms;  // Effective constraint (empty = all)
-  std::vector<std::string> command;    // Unrendered argv; empty for a path product
 };
 
 // resolve_graph found no package for a weak reference. A resolution of some roots throws

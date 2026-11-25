@@ -16,6 +16,11 @@ namespace envy {
 using sol_state_ptr = std::unique_ptr<sol::state>;
 sol_state_ptr sol_util_make_lua_state();  // with std libs
 
+// Serialized options as a fresh Lua value in the state that will see them -- not always
+// the owner's: a custom fetch runs in its parent's.
+sol::object sol_util_deserialize_options(sol::state_view lua,
+                                         std::string const &serialized);
+
 // Runs Lua that envy_luac compiled at build time (src/resources/lua/, embedded_lua.h);
 // returns what the chunk returns, or its error, as safe_script would.
 sol::protected_function_result sol_util_run_bytecode(

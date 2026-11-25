@@ -22,6 +22,17 @@ sol::protected_function_result sol_util_run_bytecode(
       sol::load_mode::binary);
 }
 
+sol::object sol_util_deserialize_options(sol::state_view lua,
+                                         std::string const &serialized) {
+  sol::protected_function_result result{ lua.safe_script("return " + serialized,
+                                                         sol::script_pass_on_error) };
+  if (!result.valid()) {
+    sol::error err = result;
+    throw_runtime_error({ "Failed to deserialize options: ", err.what() });
+  }
+  return result.get<sol::object>();
+}
+
 sol_state_ptr sol_util_make_lua_state() {
   auto lua{ std::make_unique<sol::state>() };
   lua->open_libraries(sol::lib::base,

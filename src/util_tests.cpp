@@ -961,6 +961,21 @@ TEST_CASE("util_normalized_path emits only the preferred separator") {
 #endif
 }
 
+// Narrow strings are UTF-8 on every platform -- on Windows because windows_utf8.manifest
+// makes it the code page -- so a path a spec sees round-trips through envy.* and plain
+// Lua.
+TEST_CASE("a narrow path string is UTF-8, as every Lua string is") {
+  std::string const utf8{ "caf\xC3\xA9/\xE6\x97\xA5\xE6\x9C\xAC" };  // café/日本
+  std::filesystem::path const p{ envy::util_path_from_utf8(utf8) };
+  CHECK(p.string() == envy::util_path_to_utf8(p));
+  CHECK(std::filesystem::path{ p.string() } == p);
+  CHECK(envy::util_normalized_path(p) ==
+        envy::util_path_to_utf8(std::filesystem::path{ p }.make_preferred()));
+#ifdef _WIN32
+  CHECK(GetACP() == CP_UTF8);
+#endif
+}
+
 TEST_CASE("util_normalized_path is idempotent") {
   std::filesystem::path const p{ std::filesystem::path{ "x" } / "y" / "z" };
   std::string const once{ envy::util_normalized_path(p) };
