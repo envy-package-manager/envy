@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import test_config
 from .env import EnvyTestCase
+from .trace_parser import PkgPhase
 
 WINDOWS = sys.platform == "win32"
 PY = Path(sys.executable)
@@ -393,6 +394,96 @@ class TestProductCommand(EnvyTestCase):
         r = self.run_envy("product", "--manifest", m)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("{{py}} {{tool.py}} --fixed", r.stderr)
+
+    # -- command functions --------------------------------------------------
+
+    def fn_tool(self, body: str, more: str = "") -> Path:
+        """local.tool@v1 whose `tool` is `function(pkg_dir, pkg_state_dir, options)`;
+        `wrapped` splices it unless `more` (tool's other fields) says otherwise."""
+        return self.tool_spec(
+            "{ tool = { command = function(pkg_dir, pkg_state_dir, options)\n"
+            f"{body}\nend{more} }},\n"
+            + ("" if more else '  wrapped = { command = { "{{tool}}", "--extra" } },\n')
+            + "}")
+
+    def state_dir(self, root: Path) -> str:
+        return str(root.resolve() / ".envy" / "state" / "local.tool") + os.sep
+
+    def test_command_function_runs_a_file_of_its_own_package(self):
+        """No `tool.py` product: the function joins it to pkg_dir, at every surface."""
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", self.fn_tool(
+            '  return { "{{py}}", pkg_dir .. "lib/tool.py", "--state=" .. pkg_state_dir,\n'
+            '           "--opts=" .. type(options) }')))
+        predicted = json.loads(self.ok("product", "--manifest", m, "--json"))
+        self.assertNotIn("tool.py", predicted)
+        argv = json.loads(self.ok("product", "--manifest", m, "--run", "wrapped", "--",
+                                  "z"))
+        state = "--state=" + self.state_dir(self.work)
+        self.assert_tool_argv(m, argv, [state, "--opts=table", "--extra", "z"])
+        self.assertEqual(predicted["wrapped"][1:], argv[:-1])  # predicted where it landed
+
+        listing = self.run_envy("product", "--manifest", m)
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        self.assertIn(f"{{{{py}}}} {argv[0]} {state} --opts=table", listing.stderr)
+
+    def test_command_function_in_a_phase_gets_a_scratch_state_dir(self):
+        """As ENV's: pkg_state_dir in a phase is never the project's."""
+        consumer = self.consumer_spec(
+            '{ product = "tool" }',
+            '  local r = envy.run(envy.product_command("tool"), { capture = true })\n'
+            "  out = envy.json.decode(r.stdout)")
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", self.fn_tool(
+            '  return { "{{py}}", pkg_dir .. "lib/tool.py", pkg_state_dir }')),
+            ("local.consumer@v1", consumer))
+        argv = self.out(m)
+        self.assert_tool_argv(m, argv, [argv[1]])
+        self.assertTrue(argv[1].endswith(os.path.join(".envy", "state", "local.tool", "")),
+                        argv)
+        self.assertNotEqual(_norm(argv[1]), _norm(self.state_dir(self.work)))
+
+    def test_command_function_of_a_user_managed_spec_gets_no_pkg_dir(self):
+        um = self.write_spec("um.lua", self.user_spec(
+            "local.um@v1",
+            f'{{ py = {json.dumps(PY.as_posix())},\n'
+            '   hi = { command = function(pkg_dir)\n'
+            '     return { "{{py}}", "-c", "print(\'" .. tostring(pkg_dir) .. "\')" }\n'
+            "   end } }"))
+        m = self.manifest(("local.um@v1", um))
+        self.assertEqual(self.ok("product", "--manifest", m, "--run", "hi").strip(), "nil")
+
+    def test_command_function_result_is_checked_at_resolution(self):
+        """Before any payload phase: what a declared table would fail, and the call."""
+        cases = {
+            '  return { "{{nope}}" }':
+                "Product 'tool' in spec 'local.tool@v1' runs '{{nope}}', but nothing in "
+                "its dependency closure provides 'nope'",
+            "  return 42":
+                "PRODUCTS entry 'tool' command must be a list of strings in spec "
+                "'local.tool@v1'",
+            '  return { "bin/tool" }':
+                "PRODUCTS entry 'tool' command starts with relative path 'bin/tool'",
+            '  error("no tool here")':
+                "no tool here",
+        }
+        for body, needle in cases.items():
+            with self.subTest(body=body):
+                m = self.manifest(("local.py@v1", self.py_spec),
+                                  ("local.tool@v1", self.fn_tool(body)))
+                r = self.install(m)
+                self.assertNotEqual(r.returncode, 0, r.stderr)
+                self.assertIn(needle, r.stderr)
+                ran = [e.phase for e in r.events("phase_start", "local.tool@v1")]
+                self.assertEqual(ran, [PkgPhase.SPEC_FETCH], "a phase past resolution ran")
+
+    def test_command_function_for_another_platform_is_never_called(self):
+        other = "linux" if WINDOWS else "windows"
+        m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", self.fn_tool(
+            '  error("called")', f', platforms = {{ "{other}" }}')))
+        self.ok("install", "--manifest", m)
+        self.assertIsNone(json.loads(self.ok("product", "--manifest", m, "--json"))["tool"])
+        listing = self.run_envy("product", "--manifest", m)
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        self.assertIn("(function)", listing.stderr)
 
     # -- validation ---------------------------------------------------------
 

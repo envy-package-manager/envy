@@ -28,6 +28,17 @@ std::filesystem::path pkg_predicted_path(pkg *p) {
                                         pkg_cache_hash(*p).substr(0, 16));
 }
 
+std::filesystem::path pkg_state_dir(pkg const *p, std::filesystem::path const &root) {
+  std::string const &id{ p->cfg->identity };
+  return root / ".envy" / "state" / id.substr(0, id.find('@'));
+}
+
+std::optional<std::filesystem::path> pkg_env_root(phase_context const *ctx) {
+  if (!ctx || !ctx->p) { return std::nullopt; }
+  if (ctx->env_root) { return *ctx->env_root; }
+  return ctx->lock ? std::optional{ ctx->lock->tmp_dir() } : std::nullopt;
+}
+
 std::optional<env_ops> pkg_env_eval(pkg *p,
                                     std::optional<std::filesystem::path> const &pkg_path,
                                     std::filesystem::path const &root) {
@@ -46,13 +57,12 @@ std::optional<env_ops> pkg_env_eval(pkg *p,
     pkg_path ? sol::make_object(lua, util_path_with_separator(*pkg_path))
              : sol::make_object(lua, sol::lua_nil)
   };
-  std::string const &id{ p->cfg->identity };
-  auto const pkg_state_dir{ root / ".envy" / "state" / id.substr(0, id.find('@')) };
   sol::object const opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
   sol::object const result{ call_lua_function_with_enriched_errors(p, "ENV", [&] {
-    return env_obj.as<sol::protected_function>()(path_arg,
-                                                 util_path_with_separator(pkg_state_dir),
-                                                 opts);
+    return env_obj.as<sol::protected_function>()(
+        path_arg,
+        util_path_with_separator(pkg_state_dir(p, root)),
+        opts);
   }) };
 
   if (!result.valid() || result.get_type() == sol::type::lua_nil) { return env_ops{}; }
@@ -107,14 +117,9 @@ shell_env_t pkg_env_for_phase(pkg *p, pkg_phase phase, std::filesystem::path con
 }
 
 shell_env_t pkg_env_for_context(phase_context const *ctx) {
-  if (!ctx || !ctx->p) { return env_pristine(); }
-  if (ctx->env_root) {
-    return pkg_env_for_phase(ctx->p, ctx->p->current_phase.load(), *ctx->env_root);
-  }
-  if (ctx->lock) {
-    return pkg_env_for_phase(ctx->p, ctx->p->current_phase.load(), ctx->lock->tmp_dir());
-  }
-  return env_pristine();
+  auto const root{ pkg_env_root(ctx) };
+  return root ? pkg_env_for_phase(ctx->p, ctx->p->current_phase.load(), *root)
+              : env_pristine();
 }
 
 }  // namespace envy

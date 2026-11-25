@@ -2,6 +2,8 @@
 
 #include "util.h"
 
+#include "sol/sol.hpp"
+
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -48,9 +50,22 @@ pkg *product_util_closure_provider(pkg *root, std::string const &name);
 // throws "not found in provider" when a pin names a package that does not declare it.
 pkg *product_util_owner(pkg *consumer, std::string const &name);
 
-// How a path product renders as a command leaf. Running, predicting and validating
+// A PRODUCTS `command` list: non-empty strings whose placeholders parse, starting with a
+// program. Which products they name is checked once the graph resolves. A table is held
+// to this at load, a function's result at each call.
+std::vector<std::string> product_util_parse_command(sol::object const &obj,
+                                                    std::string const &key,
+                                                    std::string const &id,
+                                                    bool user_managed);
+
+// How one render spells what the spec leaves open: a path product as a command leaf, and
+// a command function's pkg_dir and pkg_state_dir. Running, predicting and validating
 // differ only here.
-using product_render = function_ref<std::string(pkg *provider, std::string const &name)>;
+struct product_render {
+  function_ref<std::string(pkg *provider, std::string const &name)> leaf;
+  function_ref<std::filesystem::path(pkg *provider)> pkg_path;  // installed or predicted
+  std::filesystem::path state_root;  // pkg_state_dir's: the project, or a phase's scratch
+};
 
 // `name` of `provider` as argv: a path product is one element; a command renders each
 // element, every `{{name}}` resolved by product_util_owner, splicing a command that fills
@@ -60,27 +75,39 @@ using product_render = function_ref<std::string(pkg *provider, std::string const
 // as its own wrapper.
 std::vector<std::string> product_util_argv(pkg *provider,
                                            std::string const &name,
-                                           product_render render,
+                                           product_render const &render,
                                            std::string *program = nullptr);
 
 // What product_util_argv checks, without expanding: each command walks once, however many
 // commands splice it, so validation stays linear in the declarations. `validated` carries
-// the commands already found sound across calls.
+// the commands already found sound across calls. Command functions see predicted paths.
 void product_util_validate(pkg *provider,
                            std::string const &name,
+                           std::filesystem::path const &state_root,
                            std::unordered_set<std::string> &validated);
 
 // product_util_argv over installed paths, as UTF-8: the encoding of every Lua string, of
 // envy.run's script, and of what `--run` hands shell_exec.
 std::vector<std::string> product_util_run_argv(pkg *provider,
                                                std::string const &name,
+                                               std::filesystem::path const &state_root,
                                                std::string *program = nullptr);
 
 // product_util_argv before anything is installed, as UTF-8 for JSON: a user-managed value
 // raw, a cache-managed path where the payload *will* land, predicted from the provider's
 // cache key. `envy product` lists after resolution but before any payload phase, so no
 // pkg_path exists yet.
-std::vector<std::string> product_util_predict_argv(pkg *provider, std::string const &name);
+std::vector<std::string> product_util_predict_argv(
+    pkg *provider,
+    std::string const &name,
+    std::filesystem::path const &state_root);
+
+// A command's argv before rendering, placeholders intact: a table as declared, a
+// function's result at the predicted path. Throws for a path product.
+std::vector<std::string> product_util_predict_command(
+    pkg *provider,
+    std::string const &name,
+    std::filesystem::path const &state_root);
 
 // Where a bare `program` runs from, UTF-8 in and out: searched on `path_list`, relative
 // entries anchored at `base` (where it will run), past `bin_dir` when `program` names

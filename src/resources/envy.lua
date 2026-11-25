@@ -429,7 +429,7 @@ PLATFORMS = nil
 
 ---@class envy.product_entry
 ---@field value? string Relative path to product (this or `command`)
----@field command? string[] Argv run as the product; each `{{name}}` is a product of this package or its dependency closure
+---@field command? string[]|fun(pkg_dir: string?, pkg_state_dir: string, options: table): string[] Argv run as the product; each `{{name}}` is a product of this package or its dependency closure. A function gets ENV's arguments at each use (pkg_dir nil when user-managed); its own files join to pkg_dir
 ---@field script? boolean Generate wrapper script (default: true)
 ---@field platforms? string[] Platform constraints for this product (empty/absent = all)
 

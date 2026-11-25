@@ -656,58 +656,6 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
   return { std::move(spec_path), nullptr };
 }
 
-[[noreturn]] void fail_product_command(std::string const &key,
-                                       std::string const &id,
-                                       std::string_view why) {
-  throw_runtime_error(
-      { "PRODUCTS entry '", key, "' command ", why, " in spec '", id, "'" });
-}
-
-// A PRODUCTS `command`: a non-empty list of strings whose placeholders parse. Which
-// products they name is checked once the graph resolves. A cache-managed spec's files are
-// path products, so a literal relative program there names nothing every surface agrees
-// on: `--run` would anchor it at the project root, a phase at its run dir.
-std::vector<std::string> parse_product_command(sol::object const &obj,
-                                               std::string const &key,
-                                               std::string const &id,
-                                               bool user_managed) {
-  if (obj.get_type() != sol::type::table) {
-    fail_product_command(key, id, "must be a list of strings");
-  }
-  sol::table const t{ obj.as<sol::table>() };
-  std::size_t entries{ 0 };
-  for (auto const &kv : t) {
-    if (!kv.first.is<std::size_t>() || !kv.second.is<std::string>()) {
-      fail_product_command(key, id, "must be a list of strings");
-    }
-    ++entries;
-  }
-  if (entries != t.size()) { fail_product_command(key, id, "must not have holes"); }
-
-  std::vector<std::string> out;
-  out.reserve(entries);
-  for (std::size_t i{ 1 }; i <= entries; ++i) {
-    std::string s{ t.get<std::string>(i) };
-    try {
-      product_util_placeholders(s);
-    } catch (std::exception const &e) { fail_product_command(key, id, e.what()); }
-    out.push_back(std::move(s));
-  }
-  if (out.empty() || out.front().empty()) {
-    fail_product_command(key, id, "must be a non-empty list starting with a program");
-  }
-  std::filesystem::path const program{ out.front() };
-  if (!user_managed && product_util_placeholders(out.front()).empty() &&
-      program.has_parent_path() && !program.has_root_directory()) {  // `/usr/bin/env`
-                                                                     // on Windows too
-    fail_product_command(key,
-                         id,
-                         "starts with relative path '" + out.front() +
-                             "'; declare the file as a path product and use its {{name}}");
-  }
-  return out;
-}
-
 std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg const &cfg,
                                                                     sol::state &lua,
                                                                     pkg *p) {
@@ -751,6 +699,8 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
   }
   // User-managed product values name host state (not cache paths); skip path safety.
   bool const user_managed{ p->type == pkg_type::USER_MANAGED };
+  sol::table command_fns{ lua.create_table() };  // called at each use, by name
+  lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX] = command_fns;
 
   for (auto const &[key, value] : products_table) {
     sol::object key_obj(key);
@@ -765,6 +715,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     bool script{ true };
     std::vector<std::string> entry_platforms;
     std::vector<std::string> command;
+    bool command_fn{ false };
 
     if (val_obj.is<std::string>()) {
       val_str = val_obj.as<std::string>();
@@ -780,12 +731,16 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
                                 id,
                                 "'" });
         }
-        command = parse_product_command(command_field, key_str, id, user_managed);
+        command_fn = command_field.get_type() == sol::type::function;
+        if (command_fn) {
+          command_fns[key_str] = command_field;
+        } else {
+          command = product_util_parse_command(command_field, key_str, id, user_managed);
+        }
       } else if (!val_field.is<std::string>()) {
         throw_runtime_error({ "PRODUCTS table entry '",
                               key_str,
-                              "' must have string 'value' field or 'command' list in "
-                              "spec '",
+                              "' must have string 'value' field or 'command' in spec '",
                               id,
                               "'" });
       } else {
@@ -845,11 +800,12 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       }
     }
 
-    if (command.empty() && val_str.empty()) {
+    bool const is_command{ command_fn || !command.empty() };
+    if (!is_command && val_str.empty()) {
       throw_runtime_error({ "PRODUCTS value cannot be empty in spec '", id, "'" });
     }
 
-    if (command.empty() && !user_managed) {  // Validate path safety for cached packages
+    if (!is_command && !user_managed) {  // Validate path safety for cached packages
       std::filesystem::path product_path{ val_str };
 
       if (product_path.is_absolute() || (!val_str.empty() && val_str[0] == '/')) {
@@ -874,7 +830,8 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     parsed_products[std::move(key_str)] = product_entry{ std::move(val_str),
                                                          script,
                                                          std::move(entry_platforms),
-                                                         std::move(command) };
+                                                         std::move(command),
+                                                         command_fn };
   }
 
   return parsed_products;

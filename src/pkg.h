@@ -68,7 +68,12 @@ struct product_entry {
   bool script = true;
   std::vector<std::string> platforms;  // empty = inherit from package
   std::vector<std::string> command;    // argv with {{placeholders}}, rendered at each use
+  bool command_fn = false;  // the argv is the spec's function's, called at each use
+
+  bool is_command() const;
 };
+
+inline bool product_entry::is_command() const { return command_fn || !command.empty(); }
 
 struct pkg {
   struct dependency_info {  // pkg and phase by which dependency must be complete

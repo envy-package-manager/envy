@@ -54,7 +54,12 @@ struct product_info {
   bool script = true;
   std::vector<std::string> platforms;  // Effective constraint (empty = all)
   std::vector<std::string> command;    // Unrendered argv; empty for a path product
+  bool command_fn = false;             // the argv is a function's: render to see it
+
+  bool is_command() const;
 };
+
+inline bool product_info::is_command() const { return command_fn || !command.empty(); }
 
 // resolve_graph found no package for a weak reference. A resolution of some roots throws
 // it when the provider is a root it left out, so callers resolving subsets catch it by
