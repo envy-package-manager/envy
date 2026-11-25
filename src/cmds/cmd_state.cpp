@@ -140,7 +140,9 @@ void cmd_state::execute() {
       rows.push_back({ e.name,
                        dir ? e.path : fs::path{},  // a link lists by its own size
                        file_bytes,
-                       std::string{ dir ? "" : file ? "  (file)" : "  (link)" } +
+                       std::string{ dir    ? ""
+                                    : file ? "  (file)"
+                                           : "  (link)" } +
                            (is_unused ? "  (unused)" : "") });
     }
     tui::print_stdout("State: %s\n", util_path_to_utf8(root).c_str());
@@ -157,8 +159,7 @@ cli_cmd &cmd_state_clean::register_cli(cli_cmd &app, cfg &c) {
   return sub;
 }
 
-cmd_state_clean::cmd_state_clean(cfg cfg,
-                                 std::optional<fs::path> const &cli_cache_root)
+cmd_state_clean::cmd_state_clean(cfg cfg, std::optional<fs::path> const &cli_cache_root)
     : cfg_{ std::move(cfg) }, cli_cache_root_{ cli_cache_root } {}
 
 void cmd_state_clean::clean_all() const {
