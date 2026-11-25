@@ -16,6 +16,7 @@
 #include "cmds/cmd_product.h"
 #include "cmds/cmd_run.h"
 #include "cmds/cmd_shell.h"
+#include "cmds/cmd_state.h"
 #include "cmds/cmd_sync.h"
 #include "cmds/cmd_use.h"
 #include "cmds/cmd_vendor.h"
@@ -991,6 +992,8 @@ TEST_CASE("cli_parse: global --project") {
     CHECK(anchor_of({ "envy", "--project", ".", "use", "1.2.3" }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "vendor", "--all" }).has_value());
     CHECK(anchor_of({ "envy", "--project", ".", "run", "ls" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "state" }).has_value());
+    CHECK(anchor_of({ "envy", "--project", ".", "state", "clean" }).has_value());
   }
 
   SUBCASE("a repeat wins, so an injected anchor can be overridden") {
@@ -3963,10 +3966,10 @@ TEST_CASE("cli_parse: help is available everywhere and runs nothing") {
 
   SUBCASE("every subcommand") {
     for (char const *name :
-         { "cache",       "deploy",      "export",      "extract", "fetch",
-           "git-resolve", "hash",        "import",      "init",    "install",
-           "lua",         "merge-depot", "mirror-envy", "package", "product",
-           "run",         "shell",       "sync",        "use",     "version" }) {
+         { "cache",       "deploy",  "export",  "extract", "fetch", "git-resolve",
+           "hash",        "import",  "init",    "install", "lua",   "merge-depot",
+           "mirror-envy", "package", "product", "run",     "shell", "state",
+           "sync",        "use",     "version" }) {
       prints_help({ "envy", name, "--help" }, std::string{ "envy " } + name);
       prints_help({ "envy", name, "-h" }, std::string{ "envy " } + name);
     }
@@ -4257,5 +4260,32 @@ TEST_CASE("cli_parse: cmd_run --activate") {
 
   SUBCASE("absent by default") {
     CHECK_FALSE(accepts<envy::cmd_run::cfg>({ "envy", "run", "ls" }).activate);
+  }
+}
+
+TEST_CASE("cli_parse: cmd_state and cmd_state_clean") {
+  SUBCASE("state alone lists") {
+    CHECK_FALSE(accepts<envy::cmd_state::cfg>({ "envy", "state" }).project_dir);
+  }
+
+  SUBCASE("clean with no query removes everything") {
+    auto const cfg{ accepts<envy::cmd_state_clean::cfg>({ "envy", "state", "clean" }) };
+    CHECK(cfg.queries.empty());
+  }
+
+  SUBCASE("clean takes package, product and dir names alike") {
+    auto const cfg{ accepts<envy::cmd_state_clean::cfg>(
+        { "envy", "state", "clean", "go", "envy.node@r0", "acme.gone" }) };
+    CHECK(cfg.queries == std::vector<std::string>{ "go", "envy.node@r0", "acme.gone" });
+  }
+
+  SUBCASE("state takes no positional; only `clean` follows it") {
+    rejects({ "envy", "state", "go" });
+    rejects({ "envy", "state", "--clean" });
+  }
+
+  SUBCASE("help names the child") {
+    prints_help({ "envy", "state", "--help" }, "clean");
+    prints_help({ "envy", "state", "clean", "--help" }, "envy state clean");
   }
 }

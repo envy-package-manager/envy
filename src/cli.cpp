@@ -167,8 +167,8 @@ cli_args cli_parse(int argc, char **argv) {
      ...);
   } };
 
-  // Subcommands are listed in registration order, so this list is sorted by subcommand
-  // name; split around 'cache-test' to keep it in place. cli_tests enforces the order.
+  // Help lists subcommands in registration order, so register them by name; the splits
+  // keep 'cache-test' and 'state' in place. cli_tests enforces the order.
   register_cmds.operator()<cmd_activate, cmd_cache>(app);
 
 #ifdef ENVY_FUNCTIONAL_TESTER
@@ -194,8 +194,14 @@ cli_args cli_parse(int argc, char **argv) {
                            cmd_package,
                            cmd_product,
                            cmd_run,
-                           cmd_shell,
-                           cmd_sync,
+                           cmd_shell>(app);
+
+  // `state` runs on its own and is also `state clean`'s parent.
+  register_cmds.operator()<cmd_state_clean>(
+      cmd_state::register_cli(app, std::get<cmd_state::cfg>(store))
+          .set_id(cfg_index<cmd_state::cfg>()));
+
+  register_cmds.operator()<cmd_sync,
 #ifdef ENVY_FUNCTIONAL_TESTER
                            cmd_trace_schema,
 #endif

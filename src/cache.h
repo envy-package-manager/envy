@@ -77,6 +77,9 @@ struct cache_root_resolution {
 // `C:\proj\out/.envy`, which no launcher would ever print.
 cache_root_resolution resolve_cache_root(cache_root_request const &req);
 
+// Checks '@envy cache-local' and 'state-dir' as resolution does, whatever override is set.
+void cache_validate_project_dirs(cache_root_request const &req);
+
 // This project's cache in `mode`, skipping the tiers that decide it: `envy cache --local`
 // self-deploys before its marker exists. An override still wins, and still reports SHARED.
 cache_root_resolution cache_root_for_mode(cache_root_request const &req, cache_mode mode);
@@ -116,6 +119,10 @@ char const *cache_root_tier_name(cache_root_tier tier);
 // the suggested command matches the project's own layout.
 void cache_announce_root_once(cache_root_resolution const &resolved,
                               std::optional<std::string> const &bin_dir);
+
+// The bin dir's launcher as typed from the project root, native name and separator:
+// ./tools/envy, or .\tools\envy.bat on Windows, where cmd.exe runs only the latter.
+std::string project_launcher(std::optional<std::string> const &bin_dir);
 
 // What a read-only cache throws instead of locking an incomplete entry to fill it; the
 // message carries kCacheReadOnlyMissText through the engine's string-only failure path.

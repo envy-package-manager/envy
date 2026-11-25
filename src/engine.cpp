@@ -710,6 +710,14 @@ std::vector<pkg *> engine::find_matches(std::string_view query) const {
   return matches;
 }
 
+std::vector<pkg *> engine::packages() const {
+  std::lock_guard const lock(mutex_);
+  std::vector<pkg *> all;
+  all.reserve(packages_.size());
+  for (auto const &[key, p] : packages_) { all.push_back(p.get()); }
+  return all;
+}
+
 void engine::start_pkg_thread(pkg *p, pkg_phase run_through) {
   // before_spawn runs exactly once, before the worker exists: the spec-fetch
   // counter must rise before the worker can decrement it.

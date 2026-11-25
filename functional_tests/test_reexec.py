@@ -393,6 +393,16 @@ class TestReexecProductRun(_ReexecTestBase):
         self.assertIn("REEXEC-MARKER", result.stderr)
         self.assertEqual("RAN", result.stdout.strip())
 
+    def test_bare_state_clean_reexecs(self) -> None:
+        """Bare `state clean` reads only the header, and the header pins the envy."""
+        self._publish_stand_in()
+        (self._project / ".envy" / "state" / "acme.gone").mkdir(parents=True)
+        result = self._run_envy(["state", "clean"], cwd=self._project,
+                                env=self._get_env(ENVY_TEST_SELF_VERSION="9.9.9"))
+        self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+        self.assertIn("REEXEC-MARKER", result.stderr)
+        self.assertFalse((self._project / ".envy" / "state").exists())
+
     def test_the_tool_keeps_stdout_across_the_reexec(self) -> None:
         """--run points stdout at stderr while it works; it must come back first."""
         self._publish_stand_in()

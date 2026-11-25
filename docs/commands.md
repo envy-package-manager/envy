@@ -86,6 +86,22 @@ envy vendor patched --force         # throw away deliberate edits to an exempt c
 
 **`envy cache`** — Print the cache root and its disk usage: one line per package entry (`identity/platform-arch-blake3-hash`, or `ns.name~label@rev/...` when the spec has a `DISPLAY`), one per cached envy deployment, one per remaining top-level directory (`specs`, `locks`), then the total. Rows are largest-first; sizes are apparent file sizes, symlinked trees excluded. Resolves the root through the full precedence chain—`--cache-root`/`ENVY_CACHE_ROOT`, then the override markers under the state dir, then `@envy cache-mode`/`cache-local` (read as text; the manifest's Lua never runs), then the platform default—and names the tier that decided, because every bug in this area was two readers silently disagreeing. Skips manifest discovery entirely under an override, so a broken `envy.lua` in an ancestor directory cannot fail the report. `--root` prints the resolved root alone with no usage scan, which is what the launcher-parity tests compare against. `--local`/`--shared` record the project's cache mode as a zero-byte marker, or clear both markers when the request already matches what the manifest declares; neither moves an existing tree, since relocating a multi-GB cache races any other envy process holding a lock—the old root is named instead. Both deploy envy into the tree the project is *about* to use rather than the one still recorded, so opting a fresh clone out of its local cache costs no download when the user already has that version, and leaves no binary behind in the tree being abandoned. `--user-wide-root` prints the user-wide root alone: the tree a local project reads to find an envy binary, and where shell hooks live. It is the launcher-parity oracle for that second root, as `--root` is for the first. Measurement is a lock-free parallel walk over platform-native directory enumeration (`openat`/`fdopendir`/`fstatat`, `FindFirstFileExW` with `FIND_FIRST_EX_LARGE_FETCH`), one work-queue entry per directory.
 
+### State
+
+`<project>/.envy/state/<namespace.name>/` is each package's `pkg_state_dir` (see `docs/architecture.md`). envy owns the entry names; each package's tool creates and fills its own, and anyone may delete one at any time.
+
+**`envy state`** — List every entry under `.envy/state` with its size, largest first, flagging `(unused)` those no package on this host uses; a link lists as `(link)` at its own size, a file as `(file)`. Loads the manifest and resolves this host's packages to spec level, the graph `install` resolves; another platform's state in a shared checkout reads as unused here.
+
+**`envy state clean [query…]`** — Delete state entries whatever their permissions, Go's read-only module cache included; links inside are unlinked in place. A query is a package (`go`, `envy.go`, `envy.go@r0`), a product, or an entry's own name, the form that reaches an orphan. Every query resolves before the first deletion; an ambiguous one is an error. One dir serves every revision and option set of a spec, and the removal names them. Bare `clean` reads only the `@envy` header and empties `.envy/state`, so it resets a project whose manifest fails to load. Both forms require `.envy` and `.envy/state` to be real directories, and `@envy state-dir` and `cache-local` outside `.envy/state`, under any `--cache-root`. A query matching two of package, product and entry is ambiguous; a package key leaving `.envy/state` is an error.
+
+A whole-manifest `install` or `sync` (no query, `--manifest` or `--subproject`) ends with one INFO line naming the entries its host graph leaves unused; they stay in place, since a branch switch makes a live cache look unused.
+
+```bash
+envy state                    # sizes; unused entries flagged
+envy state clean go acme.old  # a package's state and an orphan's
+envy state clean              # everything
+```
+
 ### Shell Integration
 
 **`envy activate <shell>`** — Print shell code (bash, zsh, fish, powershell; Windows: powershell, cmd) that loads the project's environment: the bin dir on `PATH`, `ENVY_PROJECT_ROOT`, and every installed package's `ENV`. Undoes any activation already present first, from any project, so `eval "$(envy activate zsh)"` in one project and then another switches cleanly, and running it again refreshes. Never fetches and never waits on a lock: an uncached spec or uninstalled package is silently skipped; the prompt after it installs—by `envy install` or a shim—refreshes. Prints a usage hint instead of the script when stdout is a terminal.

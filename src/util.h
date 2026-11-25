@@ -174,6 +174,9 @@ void util_sort(std::vector<T> &v) {
   util_sort(v, [](T const &a, T const &b) { return a < b; });
 }
 
+// `parts` with `sep` between each.
+std::string util_join(std::vector<std::string> const &parts, std::string_view sep = ", ");
+
 // Convert bytes to lowercase hex string
 std::string util_bytes_to_hex(void const *data, size_t length);
 

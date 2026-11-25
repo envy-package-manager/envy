@@ -18,10 +18,6 @@ struct phase_context;
 // label check will use, as product prediction does.
 std::filesystem::path pkg_predicted_path(pkg *p);
 
-// p's mutable state for ENV and command functions: root/.envy/state/<ns.name>, keyed sans
-// revision. root is the project in a shell, a scratch dir in a phase.
-std::filesystem::path pkg_state_dir(pkg const *p, std::filesystem::path const &root);
-
 // The root a phase's dependency ENV and pkg_state_dir hang from: its env_root, else its
 // lock's tmp dir; nullopt when it has neither, or names no package.
 std::optional<std::filesystem::path> pkg_env_root(phase_context const *ctx);

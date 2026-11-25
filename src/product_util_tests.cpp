@@ -6,6 +6,7 @@
 #include "pkg_cfg.h"
 #include "pkg_env.h"
 #include "pkg_key.h"
+#include "pkg_state.h"
 #include "sol_util.h"
 
 #include "doctest.h"

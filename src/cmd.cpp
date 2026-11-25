@@ -2,10 +2,15 @@
 
 #include "cache.h"
 #include "manifest.h"
+#include "platform.h"
 #include "reexec.h"
 #include "self_deploy.h"
+#include "tui.h"
 #include "util.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -55,6 +60,77 @@ void stdout_to_stderr::write(std::string_view s) const {
     if (n <= 0) { throw_runtime_error({ "failed to write stdout" }); }
     s.remove_prefix(static_cast<size_t>(n));
   }
+}
+
+void cmd_print_sizes(char const *label, std::vector<cmd_size_section> const &sections) {
+  auto const roots{ [&] {
+    std::vector<std::filesystem::path> r;
+    for (auto const &s : sections) {
+      for (auto const &row : s.rows) {
+        if (!row.path.empty()) { r.push_back(row.path); }
+      }
+    }
+    return r;
+  }() };
+  auto const spinner{ tui::section_create() };
+  auto const start{ std::chrono::steady_clock::now() };
+  auto const sizes{ platform::dir_sizes(roots, 0, [&](platform::dir_size const &running) {
+    tui::section_set_content(
+        spinner,
+        tui::section_frame{ .label = label,
+                            .content = tui::spinner_data{
+                                .text = "scanning, " + std::to_string(running.files) +
+                                        " files, " + util_format_bytes(running.bytes) +
+                                        " counted",
+                                .start_time = start } });
+  }) };
+  tui::section_delete(spinner);  // the report replaces it
+
+  struct sized {
+    cmd_size_row const *row;
+    std::uint64_t bytes;
+    std::string text;
+  };
+  std::vector<std::vector<sized>> printed;
+  std::uint64_t total{ 0 };
+  std::size_t label_width{ 5 };  // "TOTAL"
+  std::size_t size_width{ 0 };
+  std::size_t next{ 0 };
+  for (auto const &s : sections) {
+    auto &rows{ printed.emplace_back() };
+    for (auto const &row : s.rows) {
+      auto const bytes{ row.path.empty() ? row.bytes : sizes[next++].bytes };
+      rows.push_back({ &row, bytes, util_format_bytes(bytes) });
+      total += bytes;
+      label_width = std::max(label_width, row.label.size());
+      size_width = std::max(size_width, rows.back().text.size());
+    }
+    util_sort(rows, [](sized const &a, sized const &b) {  // largest first: what to reclaim
+      return (a.bytes != b.bytes) ? (a.bytes > b.bytes) : (a.row->label < b.row->label);
+    });
+  }
+  auto const total_text{ util_format_bytes(total) };
+  size_width = std::max(size_width, total_text.size());
+
+  auto const lw{ static_cast<int>(label_width) };
+  auto const sw{ static_cast<int>(size_width) };
+  for (std::size_t i{ 0 }; i < sections.size(); ++i) {
+    if (sections[i].title) {
+      tui::print_stdout("\n%s\n", sections[i].title);
+    } else {
+      tui::print_stdout("\n");
+    }
+    if (printed[i].empty()) { tui::print_stdout("  (none)\n"); }
+    for (auto const &r : printed[i]) {
+      tui::print_stdout("  %-*s  %*s%s\n",
+                        lw,
+                        r.row->label.c_str(),
+                        sw,
+                        r.text.c_str(),
+                        r.row->note.c_str());
+    }
+  }
+  tui::print_stdout("\n  %-*s  %*s\n", lw, "TOTAL", sw, total_text.c_str());
 }
 
 cmd_startup cmd_startup_load(std::string_view cmd_name,

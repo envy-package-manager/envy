@@ -77,6 +77,7 @@ class engine : unmovable {
 
   pkg *find_exact(pkg_key const &key) const;
   std::vector<pkg *> find_matches(std::string_view query) const;
+  std::vector<pkg *> packages() const;  // every interned package, in map order
   pkg *find_product_provider(std::string const &product_name) const;
   std::vector<product_info> collect_all_products() const;
 

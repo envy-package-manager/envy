@@ -9,7 +9,6 @@
 #include "cli_parse.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -23,13 +22,6 @@ namespace envy {
 
 namespace {
 
-struct row {
-  std::string label;
-  std::size_t index{ 0 };  // into the parallel-scan result vector
-  platform::dir_size size;
-  std::string size_text;
-};
-
 // Child directories of `dir`, name-sorted, symlinks dropped: a linked tree is
 // billed to whoever owns it, and following one would double-count.
 std::vector<platform::dir_entry> child_dirs(std::filesystem::path const &dir) {
@@ -40,24 +32,6 @@ std::vector<platform::dir_entry> child_dirs(std::filesystem::path const &dir) {
     return a.name < b.name;
   });
   return entries;
-}
-
-void print_section(char const *title,
-                   std::vector<row> const &rows,
-                   int label_width,
-                   int size_width) {
-  tui::print_stdout("\n%s\n", title);
-  if (rows.empty()) {
-    tui::print_stdout("  (none)\n");
-    return;
-  }
-  for (auto const &r : rows) {
-    tui::print_stdout("  %-*s  %*s\n",
-                      label_width,
-                      r.label.c_str(),
-                      size_width,
-                      r.size_text.c_str());
-  }
 }
 
 }  // namespace
@@ -214,84 +188,35 @@ void cmd_cache::execute() {
     return;
   }
 
-  std::vector<std::filesystem::path> scan_roots;
-  std::vector<row> packages, deployments, other;
-
-  auto const add{
-    [&](std::vector<row> &dst, std::string label, std::filesystem::path path) {
-      dst.push_back({ std::move(label), scan_roots.size(), {}, {} });
-      scan_roots.push_back(std::move(path));
-    }
-  };
-
+  std::vector<cmd_size_row> packages, deployments, other;
   auto const packages_dir{ root / "packages" };
   for (auto const &identity : child_dirs(packages_dir)) {
     auto const identity_dir{ packages_dir / identity.name };
     for (auto const &variant : child_dirs(identity_dir)) {
-      add(packages, identity.name + "/" + variant.name, identity_dir / variant.name);
+      packages.push_back(
+          { identity.name + "/" + variant.name, identity_dir / variant.name });
     }
   }
 
   auto const envy_dir{ root / "envy" };
   for (auto const &version : child_dirs(envy_dir)) {
-    add(deployments, version.name, envy_dir / version.name);
+    deployments.push_back({ version.name, envy_dir / version.name });
   }
 
   // Everything else the cache holds (specs, locks, ...) so the total reconciles.
   for (auto const &e : child_dirs(root)) {
-    if (e.name != "packages" && e.name != "envy") { add(other, e.name, root / e.name); }
-  }
-
-  // Seconds on a populated cache, and no total is knowable until the walk ends: the row
-  // spins on what has been counted so far.
-  auto const scan_section{ tui::section_create() };
-  auto const scan_start{ std::chrono::steady_clock::now() };
-  auto const sizes{ platform::dir_sizes(
-      scan_roots,
-      0,
-      [&](platform::dir_size const &running) {
-        tui::section_set_content(
-            scan_section,
-            tui::section_frame{ .label = "[cache]",
-                                .content = tui::spinner_data{
-                                    .text = "scanning, " + std::to_string(running.files) +
-                                            " files, " + util_format_bytes(running.bytes) +
-                                            " counted",
-                                    .start_time = scan_start } });
-      }) };
-  tui::section_delete(scan_section);  // the report below is the answer
-
-  std::uint64_t total{ 0 };
-  std::size_t label_width{ 5 };  // "TOTAL"
-  std::size_t size_width{ 0 };
-  for (auto *rows : { &packages, &deployments, &other }) {
-    for (auto &r : *rows) {
-      r.size = sizes[r.index];
-      r.size_text = util_format_bytes(r.size.bytes);
-      total += r.size.bytes;
-      label_width = std::max(label_width, r.label.size());
-      size_width = std::max(size_width, r.size_text.size());
+    if (e.name != "packages" && e.name != "envy") {
+      other.push_back({ e.name, root / e.name });
     }
-    // Biggest first: the point of the command is finding what to reclaim.
-    util_sort(*rows, [](row const &a, row const &b) {
-      return (a.size.bytes != b.size.bytes) ? (a.size.bytes > b.size.bytes)
-                                            : (a.label < b.label);
-    });
   }
-
-  auto const total_text{ util_format_bytes(total) };
-  size_width = std::max(size_width, total_text.size());
-
-  auto const lw{ static_cast<int>(label_width) };
-  auto const sw{ static_cast<int>(size_width) };
 
   tui::print_stdout("Cache: %s  (%s)\n",
                     root.string().c_str(),
                     cache_root_tier_name(resolved.tier));
-  print_section("Packages:", packages, lw, sw);
-  print_section("Envy deployments:", deployments, lw, sw);
-  print_section("Other:", other, lw, sw);
-  tui::print_stdout("\n  %-*s  %*s\n", lw, "TOTAL", sw, total_text.c_str());
+  cmd_print_sizes("[cache]",
+                  { { "Packages:", std::move(packages) },
+                    { "Envy deployments:", std::move(deployments) },
+                    { "Other:", std::move(other) } });
 }
 
 }  // namespace envy
