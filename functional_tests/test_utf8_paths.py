@@ -32,6 +32,7 @@ end } }
 
 
 class TestUtf8Paths(EnvyTestCase):
+    use_production_binary = True  # the shipped envy.exe must carry the manifest
     def test_non_ascii_project_and_cache_round_trip_through_lua(self):
         self.cache_root = self.make_temp_dir("cache") / _NAME
         project = self.work / _NAME

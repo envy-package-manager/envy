@@ -269,9 +269,8 @@ def get_envy_executable() -> Path:
 def get_envy_production_executable() -> Path:
     """Path to the shipped `envy` binary -- unsanitized, no test-only commands.
 
-    Only for tests that are about the artifact users get: bootstrap, re-exec,
-    mirroring, and anything that copies or serves the binary itself. Everything
-    else should prefer get_envy_executable() for the sanitizer coverage.
+    The truest envy: prefer it. get_envy_executable() is for intrusive testing --
+    sanitizers, test-only subcommands, interruption hooks -- the shipped binary lacks.
     """
     return _get_executable("envy", "envy binary")
 
