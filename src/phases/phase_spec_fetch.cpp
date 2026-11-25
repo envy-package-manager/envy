@@ -364,23 +364,6 @@ sol_state_ptr create_lua_state(engine const &eng) {
   return lua;
 }
 
-// A serialized option table back into a live Lua value. The state is whichever one
-// will see the options, not necessarily the package that owns them: a custom fetch
-// runs in its parent's interpreter and is handed the child's table.
-sol::object deserialize_options(sol::state_view lua,
-                                std::string const &serialized_options) {
-  sol::protected_function_result opts_result{
-    lua.safe_script("return " + serialized_options, sol::script_pass_on_error)
-  };
-
-  if (!opts_result.valid()) {
-    sol::error err = opts_result;
-    throw_runtime_error({ "Failed to deserialize options: ", err.what() });
-  }
-
-  return opts_result.get<sol::object>();
-}
-
 // All-caps globals are envy's: one it doesn't read is a typo ('EVN') silently disabling a
 // feature. `local`, lowercase and mixed-case names are the author's.
 constexpr std::string_view kSpecGlobals[]{
@@ -609,7 +592,7 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 
       // The child's own options, built in the parent's state but never stored there:
       // ENVY_OPTIONS_RIDX belongs to the parent and its own phases still read it.
-      sol::object const options_obj{ deserialize_options(parent_lua_view,
+      sol::object const options_obj{ sol_util_deserialize_options(parent_lua_view,
                                                          cfg.serialized_options) };
 
       // The context names the child: source.dependencies are wired onto it, so its
@@ -671,15 +654,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
   if (products_obj.get_type() == sol::type::function) {
     sol::function products_fn{ products_obj.as<sol::function>() };
 
-    // Deserialize options from cfg to pass to products function
-    std::string const opts_str{ "return " + cfg.serialized_options };
-    auto opts_result{ lua.safe_script(opts_str, sol::script_pass_on_error) };
-    if (!opts_result.valid()) {
-      sol::error err = opts_result;
-      throw_runtime_error(
-          { "Failed to deserialize options for PRODUCTS function: ", err.what() });
-    }
-    sol::object options{ opts_result.get<sol::object>() };
+    sol::object const options{ sol_util_deserialize_options(lua, cfg.serialized_options) };
 
     // Call products(options) with enriched error handling
     sol::protected_function_result result{ call_lua_function_with_enriched_errors(
@@ -711,14 +686,12 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
     }
 
     std::string key_str{ key_obj.as<std::string>() };
-    std::string val_str;
+    product_value product;
     bool script{ true };
     std::vector<std::string> entry_platforms;
-    std::vector<std::string> command;
-    bool command_fn{ false };
 
     if (val_obj.is<std::string>()) {
-      val_str = val_obj.as<std::string>();
+      product = val_obj.as<std::string>();
     } else if (val_obj.is<sol::table>()) {
       sol::table t{ val_obj.as<sol::table>() };
       sol::object val_field{ t["value"] };
@@ -731,11 +704,18 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
                                 id,
                                 "'" });
         }
-        command_fn = command_field.get_type() == sol::type::function;
-        if (command_fn) {
+        if (command_field.get_type() == sol::type::function) {
           command_fns[key_str] = command_field;
+          product = product_command_fn{};
+        } else if (command_field.get_type() != sol::type::table) {
+          throw_runtime_error({ "PRODUCTS entry '",
+                                key_str,
+                                "' command must be a list of strings or a function in "
+                                "spec '",
+                                id,
+                                "'" });
         } else {
-          command = product_util_parse_command(command_field, key_str, id, user_managed);
+          product = product_util_parse_command(command_field, key_str, id, user_managed);
         }
       } else if (!val_field.is<std::string>()) {
         throw_runtime_error({ "PRODUCTS table entry '",
@@ -744,7 +724,7 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
                               id,
                               "'" });
       } else {
-        val_str = val_field.as<std::string>();
+        product = val_field.as<std::string>();
       }
       sol::object script_field{ t["script"] };
       if (script_field.valid() && script_field.is<bool>()) {
@@ -800,38 +780,33 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       }
     }
 
-    bool const is_command{ command_fn || !command.empty() };
-    if (!is_command && val_str.empty()) {
-      throw_runtime_error({ "PRODUCTS value cannot be empty in spec '", id, "'" });
-    }
-
-    if (!is_command && !user_managed) {  // Validate path safety for cached packages
-      std::filesystem::path product_path{ val_str };
-
-      if (product_path.is_absolute() || (!val_str.empty() && val_str[0] == '/')) {
-        throw_runtime_error({ "PRODUCTS value '",
-                              val_str,
-                              "' cannot be absolute path in spec '",
-                              id,
-                              "'" });
+    if (auto const *const path{ std::get_if<std::string>(&product) }) {
+      if (path->empty()) {
+        throw_runtime_error({ "PRODUCTS value cannot be empty in spec '", id, "'" });
       }
-
-      for (auto const &component : product_path) {  // Check for path traversal components
-        if (component == "..") {
+      if (!user_managed) {  // Validate path safety for cached packages
+        std::filesystem::path const product_path{ *path };
+        if (product_path.is_absolute() || path->front() == '/') {
           throw_runtime_error({ "PRODUCTS value '",
-                                val_str,
-                                "' cannot contain path traversal (..) in spec '",
+                                *path,
+                                "' cannot be absolute path in spec '",
                                 id,
                                 "'" });
+        }
+        for (auto const &component : product_path) {  // no path traversal
+          if (component == "..") {
+            throw_runtime_error({ "PRODUCTS value '",
+                                  *path,
+                                  "' cannot contain path traversal (..) in spec '",
+                                  id,
+                                  "'" });
+          }
         }
       }
     }
 
-    parsed_products[std::move(key_str)] = product_entry{ std::move(val_str),
-                                                         script,
-                                                         std::move(entry_platforms),
-                                                         std::move(command),
-                                                         command_fn };
+    parsed_products[std::move(key_str)] =
+        product_entry{ std::move(product), script, std::move(entry_platforms) };
   }
 
   return parsed_products;
@@ -1630,7 +1605,8 @@ void run_spec_fetch_phase(pkg *p, engine &eng) {
   for (auto *dep_cfg : p->owned_dependency_cfgs) { dep_cfg->parent = p->cfg; }
 
   try {  // Store options in Lua registry
-    lua->registry()[ENVY_OPTIONS_RIDX] = deserialize_options(*lua, cfg.serialized_options);
+    lua->registry()[ENVY_OPTIONS_RIDX] =
+        sol_util_deserialize_options(*lua, cfg.serialized_options);
   } catch (std::runtime_error const &e) {
     throw_runtime_error({ e.what(), " for ", cfg.identity });
   }

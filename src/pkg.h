@@ -4,6 +4,7 @@
 #include "pkg_cfg.h"
 #include "pkg_key.h"
 #include "pkg_phase.h"
+#include "product_value.h"
 #include "sol_util.h"
 #include "tree_hash.h"
 #include "tui.h"
@@ -64,16 +65,16 @@ constexpr std::string_view pkg_closure_name(pkg_closure kind) {
 }
 
 struct product_entry {
-  std::string value;  // a path product; empty when `command` is set
+  product_value value;
   bool script = true;
   std::vector<std::string> platforms;  // empty = inherit from package
-  std::vector<std::string> command;    // argv with {{placeholders}}, rendered at each use
-  bool command_fn = false;  // the argv is the spec's function's, called at each use
 
   bool is_command() const;
 };
 
-inline bool product_entry::is_command() const { return command_fn || !command.empty(); }
+inline bool product_entry::is_command() const {
+  return !std::holds_alternative<std::string>(value);
+}
 
 struct pkg {
   struct dependency_info {  // pkg and phase by which dependency must be complete

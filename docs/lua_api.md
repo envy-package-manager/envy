@@ -391,7 +391,8 @@ it, naming `envy.product_command`.
 ### envy.product_command(name, [shell]) → string
 
 The command line that runs a product, authorized as `envy.product` is. A command
-product renders its argv; a path product is a one-element command, so a consumer stays
+product renders its argv — a command function's called here, its `pkg_state_dir` in this
+phase's scratch dir; a path product is a one-element command, so a consumer stays
 provider-agnostic. A bare program resolves on the phase's `PATH`. Quoted for `shell` (an
 `ENVY_SHELL` constant), else the phase's own: POSIX single quotes; PowerShell `& '…'`; cmd
 `"…"`, with `call` before a `.bat`/`.cmd`. A custom `DEFAULT_SHELL` has no quoting envy

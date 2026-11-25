@@ -50,21 +50,20 @@ pkg *product_util_closure_provider(pkg *root, std::string const &name);
 // throws "not found in provider" when a pin names a package that does not declare it.
 pkg *product_util_owner(pkg *consumer, std::string const &name);
 
-// A PRODUCTS `command` list: non-empty strings whose placeholders parse, starting with a
-// program. Which products they name is checked once the graph resolves. A table is held
-// to this at load, a function's result at each call.
+// A PRODUCTS command as argv: strings, a program first, placeholders parsed; `what` names
+// it in errors. A table is held to this at load, a function's result at each call.
 std::vector<std::string> product_util_parse_command(sol::object const &obj,
                                                     std::string const &key,
                                                     std::string const &id,
-                                                    bool user_managed);
+                                                    bool user_managed,
+                                                    std::string_view what = "command");
 
-// How one render spells what the spec leaves open: a path product as a command leaf, and
-// a command function's pkg_dir and pkg_state_dir. Running, predicting and validating
-// differ only here.
+// What running, predicting and validating differ in: each payload's dir, pkg_state_dir's
+// root, and -- for validation and tests -- a stand-in for path products.
 struct product_render {
-  function_ref<std::string(pkg *provider, std::string const &name)> leaf;
   function_ref<std::filesystem::path(pkg *provider)> pkg_path;  // installed or predicted
-  std::filesystem::path state_root;  // pkg_state_dir's: the project, or a phase's scratch
+  std::filesystem::path state_root;  // the project, a phase's scratch; empty: none
+  function_ref<std::string(pkg *provider, std::string const &name)> leaf{};
 };
 
 // `name` of `provider` as argv: a path product is one element; a command renders each
@@ -78,9 +77,8 @@ std::vector<std::string> product_util_argv(pkg *provider,
                                            product_render const &render,
                                            std::string *program = nullptr);
 
-// What product_util_argv checks, without expanding: each command walks once, however many
-// commands splice it, so validation stays linear in the declarations. `validated` carries
-// the commands already found sound across calls. Command functions see predicted paths.
+// What product_util_argv checks, without expanding: each command walks once, however often
+// spliced. `validated` carries the sound ones across calls; functions see predicted paths.
 void product_util_validate(pkg *provider,
                            std::string const &name,
                            std::filesystem::path const &state_root,
@@ -102,9 +100,8 @@ std::vector<std::string> product_util_predict_argv(
     std::string const &name,
     std::filesystem::path const &state_root);
 
-// A command's argv before rendering, placeholders intact: a table as declared, a
-// function's result at the predicted path. Throws for a path product.
-std::vector<std::string> product_util_predict_command(
+// What `name`'s command function returns at the predicted path, placeholders intact.
+std::vector<std::string> product_util_predict_function(
     pkg *provider,
     std::string const &name,
     std::filesystem::path const &state_root);

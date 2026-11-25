@@ -7,6 +7,7 @@
 #include "pkg_cfg.h"
 #include "pkg_env.h"
 #include "shell.h"
+#include "sol_util.h"
 #include "util.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 
 namespace envy {
 
@@ -56,11 +58,28 @@ std::string validated_key(pkg *p, std::string const &name) {
   return p->key.canonical() + '\0' + name;
 }
 
+using pkg_path_fn = function_ref<std::filesystem::path(pkg *)>;
+
+constexpr auto kInstalled{ [](pkg *p) { return p->pkg_path; } };
+constexpr auto kPredicted{ [](pkg *p) { return pkg_predicted_path(p); } };
+constexpr auto kNoLeaf{ [](pkg *, std::string const &) { return std::string{}; } };
+
+std::string utf8_preferred(std::filesystem::path path) {
+  return util_path_to_utf8(path.make_preferred());
+}
+
+// A dir as a command function sees it: UTF-8 like every argv element, and ending in a
+// separator so `dir .. "file"` joins.
+std::string utf8_dir(std::filesystem::path const &dir) {
+  std::string const out{ utf8_preferred(dir) };
+  char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
+  return out.ends_with(sep) ? out : out + sep;
+}
+
 // A cache-managed provider's payload per `pkg_path_of`; nullopt when user-managed.
-template <typename PkgPathOf>
 std::optional<std::filesystem::path> provider_dir(pkg *provider,
                                                   std::string const &name,
-                                                  PkgPathOf pkg_path_of) {
+                                                  pkg_path_fn pkg_path_of) {
   require_renderable_type(provider->type, name, provider->cfg->identity);
   if (provider->type == pkg_type::USER_MANAGED) { return std::nullopt; }
   std::filesystem::path pkg_path{ pkg_path_of(provider) };
@@ -74,31 +93,65 @@ std::optional<std::filesystem::path> provider_dir(pkg *provider,
   return pkg_path;
 }
 
+// A path product's value: a user-managed one raw (Lua's UTF-8), else the payload's path
+// under `pkg_path_of(provider)` -- asked only then -- rendered by `spell`.
+template <typename Spell>
+std::string path_value(pkg *provider,
+                       std::string const &name,
+                       pkg_path_fn pkg_path_of,
+                       Spell spell) {
+  product_entry const entry{ entry_of(provider, name) };
+  auto const *const value{ std::get_if<std::string>(&entry.value) };
+  if (!value) {
+    throw_runtime_error({ "Product '",
+                          name,
+                          "' in provider '",
+                          provider->cfg->identity,
+                          "' is a command, not a path" });
+  }
+  if (value->empty()) {
+    throw_runtime_error(
+        { "Product '", name, "' is empty in provider '", provider->cfg->identity, "'" });
+  }
+  auto const dir{ provider_dir(provider, name, pkg_path_of) };
+  return dir ? spell(*dir / *value) : *value;
+}
+
 // What `name`'s command function returns, called as ENV is and held to a table's rules.
 std::vector<std::string> call_command_fn(pkg *provider,
                                          std::string const &name,
-                                         product_render const &r) {
-  auto const dir{ provider_dir(provider, name, r.pkg_path) };
-  std::string const state_dir{ util_path_with_separator(
-      pkg_state_dir(provider, r.state_root)) };
+                                         pkg_path_fn pkg_path_of,
+                                         std::filesystem::path const &state_root) {
   std::string const &id{ provider->cfg->identity };
+  if (state_root.empty()) {  // DEFAULT_SHELL's function runs in no package's scratch dir
+    throw_runtime_error({ "Product '",
+                          name,
+                          "' in spec '",
+                          id,
+                          "' is a command function; this context has no root for its "
+                          "pkg_state_dir" });
+  }
+  auto const dir{ provider_dir(provider, name, pkg_path_of) };
   auto const lua_acc{ provider->lua.lock() };
   if (!lua_acc) {
-    throw_runtime_error({ "Product '", name, "' provider '", id, "' has no spec state" });
+    throw_runtime_error({ "Product '",
+                          name,
+                          "' provider '",
+                          id,
+                          "' has no Lua state; its spec did not finish loading" });
   }
   sol::state_view lua{ *lua_acc };
   sol::protected_function const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
-  sol::object const pkg_dir{ dir ? sol::make_object(lua, util_path_with_separator(*dir))
+  sol::object const pkg_dir{ dir ? sol::make_object(lua, utf8_dir(*dir))
                                  : sol::make_object(lua, sol::lua_nil) };
-  sol::object const opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
+  sol::object const opts{  // a copy: validation calls this before the provider's phases
+    sol_util_deserialize_options(lua, provider->cfg->serialized_options)
+  };
   sol::object const result{ call_lua_function_with_enriched_errors(
-      provider,
-      "PRODUCTS['" + name + "'].command",
-      [&] { return fn(pkg_dir, state_dir, opts); }) };
-  return product_util_parse_command(result,
-                                    name,
-                                    id,
-                                    provider->type == pkg_type::USER_MANAGED);
+      provider, "PRODUCTS['" + name + "'].command", [&] {
+        return fn(pkg_dir, utf8_dir(pkg_state_dir(provider, state_root)), opts);
+      }) };
+  return product_util_parse_command(result, name, id, !dir, "command function's result");
 }
 
 struct argv_builder {
@@ -135,12 +188,30 @@ struct argv_builder {
                           "'" });
   }
 
+  std::string leaf(pkg *provider, std::string const &name) const {
+    return render.leaf ? render.leaf(provider, name)
+                       : path_value(provider, name, render.pkg_path, utf8_preferred);
+  }
+
   void append(pkg *provider, std::string const &name) {
-    product_entry const entry{ entry_of(provider, name) };
-    if (!entry.is_command()) {
-      push(render.leaf(provider, name), provider, name);
-      return;
-    }
+    envy::visit(
+        match{ [&](std::string const &) { push(leaf(provider, name), provider, name); },
+               [&](std::vector<std::string> const &argv) {
+                 walk(provider, name, [&] { return argv; });
+               },
+               [&](product_command_fn) {
+                 walk(provider, name, [&] {
+                   return call_command_fn(
+                       provider, name, render.pkg_path, render.state_root);
+                 });
+               } },
+        entry_of(provider, name).value);
+  }
+
+  // A command's elements, asked of `argv_of` only once the walk is known to be needed.
+  void walk(pkg *provider,
+            std::string const &name,
+            function_ref<std::vector<std::string>()> argv_of) {
     if (validated && validated->contains(validated_key(provider, name))) { return; }
 
     std::pair<pkg *, std::string> self{ provider, name };
@@ -157,9 +228,7 @@ struct argv_builder {
     }
     stack.push_back(std::move(self));
 
-    auto const command{ entry.command_fn ? call_command_fn(provider, name, render)
-                                         : entry.command };
-    for (auto const &element : command) {
+    for (auto const &element : argv_of()) {
       auto const holes{ product_util_placeholders(element) };
       if (holes.size() == 1 && holes[0].begin == 0 && holes[0].end == element.size()) {
         append(owner(provider, name, holes[0].name), holes[0].name);  // splices
@@ -182,7 +251,7 @@ struct argv_builder {
                                 "'; a command can only fill a whole element" });
         }
         rendered.append(element, at, h.begin - at);
-        rendered += render.leaf(q, h.name);
+        rendered += leaf(q, h.name);
         at = h.end;
       }
       rendered.append(element, at);
@@ -192,40 +261,6 @@ struct argv_builder {
     if (validated) { validated->insert(validated_key(provider, name)); }
   }
 };
-
-// A path product's value: a user-managed one raw (Lua's UTF-8), else the payload's path
-// under `pkg_path_of(provider)` -- asked only then -- rendered by `spell`.
-template <typename PkgPathOf, typename Spell>
-std::string path_value(pkg *provider,
-                       std::string const &name,
-                       PkgPathOf pkg_path_of,
-                       Spell spell) {
-  product_entry const entry{ entry_of(provider, name) };
-  if (entry.is_command()) {
-    throw_runtime_error({ "Product '",
-                          name,
-                          "' in provider '",
-                          provider->cfg->identity,
-                          "' is a command, not a path" });
-  }
-  if (entry.value.empty()) {
-    throw_runtime_error(
-        { "Product '", name, "' is empty in provider '", provider->cfg->identity, "'" });
-  }
-  auto const dir{ provider_dir(provider, name, pkg_path_of) };
-  return dir ? spell(*dir / entry.value) : entry.value;
-}
-
-std::filesystem::path installed_path(pkg *p) { return p->pkg_path; }
-
-// Lambdas, not the functions: a function_ref holds a callable that outlives it.
-auto const kInstalled{ [](pkg *p) { return installed_path(p); } };
-auto const kPredicted{ [](pkg *p) { return pkg_predicted_path(p); } };
-auto const kNoLeaf{ [](pkg *, std::string const &) { return std::string{}; } };
-
-std::string utf8_preferred(std::filesystem::path path) {
-  return util_path_to_utf8(path.make_preferred());
-}
 
 bool same_program(std::string_view a, std::string_view b) {
 #ifdef _WIN32
@@ -244,7 +279,7 @@ std::string product_util_resolve(pkg *provider, std::string const &product_name)
   if (!provider) {
     throw_runtime_error({ "Product '", product_name, "' has no provider" });
   }
-  return path_value(provider, product_name, installed_path, util_normalized_path);
+  return path_value(provider, product_name, kInstalled, util_normalized_path);
 }
 
 bool product_util_is_command(pkg *provider, std::string const &name) {
@@ -315,10 +350,11 @@ pkg *product_util_owner(pkg *consumer, std::string const &name) {
 std::vector<std::string> product_util_parse_command(sol::object const &obj,
                                                     std::string const &key,
                                                     std::string const &id,
-                                                    bool user_managed) {
+                                                    bool user_managed,
+                                                    std::string_view what) {
   auto const fail{ [&](std::string_view why) {
     throw_runtime_error(
-        { "PRODUCTS entry '", key, "' command ", why, " in spec '", id, "'" });
+        { "PRODUCTS entry '", key, "' ", what, " ", why, " in spec '", id, "'" });
   } };
   if (obj.get_type() != sol::type::table) { fail("must be a list of strings"); }
   sol::table const t{ obj.as<sol::table>() };
@@ -374,9 +410,9 @@ void product_util_validate(pkg *provider,
                            std::string const &name,
                            std::filesystem::path const &state_root,
                            std::unordered_set<std::string> &validated) {
-  product_render const render{ .leaf = kNoLeaf,
-                               .pkg_path = kPredicted,
-                               .state_root = state_root };
+  product_render const render{ .pkg_path = kPredicted,
+                               .state_root = state_root,
+                               .leaf = kNoLeaf };
   argv_builder b{ .render = render,
                   .validated = &validated,
                   .stack = {},
@@ -389,46 +425,25 @@ std::vector<std::string> product_util_run_argv(pkg *provider,
                                                std::string const &name,
                                                std::filesystem::path const &state_root,
                                                std::string *program) {
-  auto const leaf{ [](pkg *p, std::string const &n) {
-    return path_value(p, n, installed_path, utf8_preferred);
-  } };
   return product_util_argv(
-      provider,
-      name,
-      { .leaf = leaf, .pkg_path = kInstalled, .state_root = state_root },
-      program);
+      provider, name, { .pkg_path = kInstalled, .state_root = state_root }, program);
 }
 
 std::vector<std::string> product_util_predict_argv(
     pkg *provider,
     std::string const &name,
     std::filesystem::path const &state_root) {
-  auto const leaf{ [](pkg *p, std::string const &n) {
-    return path_value(p, n, pkg_predicted_path, utf8_preferred);
-  } };
-  return product_util_argv(
-      provider,
-      name,
-      { .leaf = leaf, .pkg_path = kPredicted, .state_root = state_root });
+  return product_util_argv(provider,
+                           name,
+                           { .pkg_path = kPredicted, .state_root = state_root });
 }
 
-std::vector<std::string> product_util_predict_command(
+std::vector<std::string> product_util_predict_function(
     pkg *provider,
     std::string const &name,
     std::filesystem::path const &state_root) {
-  product_entry entry{ entry_of(provider, name) };
-  if (!entry.is_command()) {
-    throw_runtime_error({ "Product '",
-                          name,
-                          "' in provider '",
-                          provider->cfg->identity,
-                          "' is a path, not a command" });
-  }
-  if (!entry.command_fn) { return std::move(entry.command); }
-  return call_command_fn(
-      provider,
-      name,
-      { .leaf = kNoLeaf, .pkg_path = kPredicted, .state_root = state_root });
+  if (!provider) { throw_runtime_error({ "Product '", name, "' has no provider" }); }
+  return call_command_fn(provider, name, kPredicted, state_root);
 }
 
 std::optional<std::string> product_util_find_program(

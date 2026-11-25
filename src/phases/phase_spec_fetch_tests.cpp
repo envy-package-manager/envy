@@ -882,7 +882,7 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("tool") == 1);
-    CHECK(p->products.at("tool").value == "/usr/bin/tool");
+    CHECK(std::get<std::string>(p->products.at("tool").value) == "/usr/bin/tool");
     CHECK(p->products.at("tool").script == true);
   }
 
@@ -909,7 +909,7 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("tool") == 1);
-    CHECK(p->products.at("tool").value == "/usr/bin/tool");
+    CHECK(std::get<std::string>(p->products.at("tool").value) == "/usr/bin/tool");
     CHECK(p->products.at("tool").script == true);
   }
 
@@ -936,7 +936,7 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("lib") == 1);
-    CHECK(p->products.at("lib").value == "/usr/lib/libfoo.so");
+    CHECK(std::get<std::string>(p->products.at("lib").value) == "/usr/lib/libfoo.so");
     CHECK(p->products.at("lib").script == false);
   }
 
@@ -963,7 +963,7 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("tool") == 1);
-    CHECK(p->products.at("tool").value == "/usr/bin/tool");
+    CHECK(std::get<std::string>(p->products.at("tool").value) == "/usr/bin/tool");
     CHECK(p->products.at("tool").script == true);
   }
 
@@ -1043,10 +1043,10 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("tool") == 1);
-    CHECK(p->products.at("tool").value == "/usr/bin/tool");
+    CHECK(std::get<std::string>(p->products.at("tool").value) == "/usr/bin/tool");
     CHECK(p->products.at("tool").script == true);
     CHECK(p->products.count("lib") == 1);
-    CHECK(p->products.at("lib").value == "/usr/lib/libfoo.so");
+    CHECK(std::get<std::string>(p->products.at("lib").value) == "/usr/lib/libfoo.so");
     CHECK(p->products.at("lib").script == false);
   }
 
@@ -1074,7 +1074,7 @@ TEST_CASE("PRODUCTS table syntax") {
 
     CHECK_NOTHROW(run_spec_fetch_phase(p, eng));
     CHECK(p->products.count("tool") == 1);
-    CHECK(p->products.at("tool").value == "/usr/bin/tool");
+    CHECK(std::get<std::string>(p->products.at("tool").value) == "/usr/bin/tool");
     CHECK(p->products.at("tool").script == true);
     REQUIRE(p->products.at("tool").platforms.size() == 2);
     CHECK(p->products.at("tool").platforms[0] == "darwin");

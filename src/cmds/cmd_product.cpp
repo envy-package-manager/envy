@@ -27,6 +27,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace envy {
@@ -57,6 +58,10 @@ cmd_product::cmd_product(cfg cfg,
 
 namespace {
 
+bool runs_here(product_info const &p) {
+  return util_platform_matches(p.platforms, platform::os_name(), platform::arch_name());
+}
+
 // A path product is a string; a command is its argv, ready to exec without re-parsing --
 // or null off its platforms, where validation never checked what it names.
 void print_products_json(engine &eng) {
@@ -65,12 +70,8 @@ void print_products_json(engine &eng) {
   picojson::object obj;
   for (auto const &pi : products) {
     obj[pi.product_name] = [&] {
-      bool const command{ pi.is_command() };
-      if (command && !util_platform_matches(pi.platforms,
-                                            platform::os_name(),
-                                            platform::arch_name())) {
-        return picojson::value{};
-      }
+      bool const command{ !std::holds_alternative<std::string>(pi.value) };
+      if (command && !runs_here(pi)) { return picojson::value{}; }
       auto argv{ product_util_predict_argv(eng.find_product_provider(pi.product_name),
                                            pi.product_name,
                                            eng.project_root()) };
@@ -88,18 +89,22 @@ void print_products_json(engine &eng) {
 // A command lists as declared, placeholders and all: a table as written, a function's
 // result at the predicted path -- "(function)" off its platforms, where nothing called it.
 std::string listed_value(engine &eng, product_info const &p) {
-  auto const argv{ [&]() -> std::vector<std::string> {
-    if (!p.command_fn) { return p.command; }
-    if (!util_platform_matches(p.platforms, platform::os_name(), platform::arch_name())) {
-      return { "(function)" };
-    }
-    return product_util_predict_command(eng.find_product_provider(p.product_name),
-                                        p.product_name,
-                                        eng.project_root());
-  }() };
-  std::string v{ p.value };  // empty for a command
-  for (auto const &arg : argv) { v += (v.empty() ? "" : " ") + arg; }
-  return v;
+  auto const join{ [](std::vector<std::string> const &argv) {
+    std::string v;
+    for (auto const &arg : argv) { v += (v.empty() ? "" : " ") + arg; }
+    return v;
+  } };
+  return envy::visit(
+      match{ [](std::string const &path) { return path; },
+             [&](std::vector<std::string> const &argv) { return join(argv); },
+             [&](product_command_fn) {
+               return runs_here(p) ? join(product_util_predict_function(
+                                         eng.find_product_provider(p.product_name),
+                                         p.product_name,
+                                         eng.project_root()))
+                                   : std::string{ "(function)" };
+             } },
+      p.value);
 }
 
 void print_products_aligned(engine &eng) {
@@ -109,14 +114,15 @@ void print_products_aligned(engine &eng) {
     return;
   }
 
-  std::vector<std::string> values;
-  values.reserve(products.size());
-  for (auto const &p : products) { values.push_back(listed_value(eng, p)); }
-
-  // Calculate column widths
-  size_t max_product{ 0 };
-  size_t max_value{ 0 };
-  for (size_t i{ 0 }; i < products.size(); ++i) {
+  auto const values{ [&] {
+    std::vector<std::string> out;
+    out.reserve(products.size());
+    for (auto const &p : products) { out.push_back(listed_value(eng, p)); }
+    return out;
+  }() };
+  std::size_t max_product{ 0 };
+  std::size_t max_value{ 0 };
+  for (std::size_t i{ 0 }; i < products.size(); ++i) {
     max_product = std::max(max_product, products[i].product_name.size());
     max_value = std::max(max_value, values[i].size());
   }

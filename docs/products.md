@@ -33,7 +33,8 @@ interpreter, or a tool that needs fixed flags. Every `{{name}}` is a product:
 DEPENDENCIES = { { product = "node" }, { product = "java" } }
 PRODUCTS = {
   yarn = { command = function(pkg_dir, pkg_state_dir, options)   -- its own files
-    return { "{{node}}", pkg_dir .. "lib/yarn.cjs", "--cache-folder=" .. pkg_state_dir }
+    return { "{{node}}", pkg_dir .. "lib/yarn.cjs",
+             "--cache-folder=" .. envy.path.trim(pkg_state_dir) }
   end },
   ["gradle.jar"] = { value = "lib/gradle.jar", script = false },  -- public: others may name it
   gradle = { command = { "{{java}}", "-Xmx2g", "-jar", "{{gradle.jar}}" } },
@@ -44,10 +45,12 @@ PRODUCTS = {
 - `command` excludes `value`; `script` and `platforms` apply as before. A list with holes
   or non-string entries is an error.
 - A function `command` gets `ENV`'s arguments — `pkg_dir` (separator-terminated; nil when
-  user-managed), `pkg_state_dir` (the project's in a shell, scratch in a phase), options —
-  and returns the list, held to a table's rules. It runs at each use, before install too
-  (validation, `envy product` listing): build strings from its arguments; never read the
-  payload. Its files stay private — no product name to collide with or list.
+  user-managed), `pkg_state_dir` (the project's in a shell, scratch in a phase, none in a
+  `DEFAULT_SHELL` function), a fresh copy of the options — and returns the list, held to a
+  table's rules. It runs at each use and each resolution (validation, listing, activation),
+  often before install: build strings from its arguments; never read the payload. Its files
+  stay private — no product name to collide with or list. Trim a directory that ends an
+  argument: PowerShell 5.1 cannot quote a trailing `\` beside a space.
 - `{{name}}` is a product of the provider or its dependency closure; the registry admits
   one provider per name, so it names exactly one. A product dependency pins the name to
   its provider, which must declare it (a weak fallback may provide it transitively). In the graph but outside the closure is
