@@ -48,8 +48,8 @@ sol::object pkg_env_call(pkg *p,
   sol::object const dir{ pkg_path
                              ? sol::make_object(lua, util_path_with_separator(*pkg_path))
                              : sol::make_object(lua, sol::lua_nil) };
-  sol::object const opts{  // a copy: validation calls a command fn before its phases
-    sol_util_deserialize_options(lua, p->cfg->serialized_options)
+  sol::object const opts{ // a copy: validation calls a command fn before its phases
+                          sol_util_deserialize_options(lua, p->cfg->serialized_options)
   };
   sol::object result{ call_lua_function_with_enriched_errors(p, what, [&] {
     return fn.as<sol::protected_function>()(
