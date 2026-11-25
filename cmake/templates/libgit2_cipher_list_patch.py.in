@@ -1,0 +1,28 @@
+import pathlib
+
+# mbedtls_ssl_conf_ciphersuites takes a 0-terminated list, but libgit2 sizes ciphers_list
+# at exactly GIT_SSL_DEFAULT_CIPHERS_COUNT and fills every slot when mbedTLS knows each
+# name, so the ClientHello writer reads past the array (ASan: global-buffer-overflow in
+# mbedtls_ssl_write_client_hello). Leave room for the 0 and write it.
+
+EDITS = (
+    ("static int ciphers_list[GIT_SSL_DEFAULT_CIPHERS_COUNT];\n",
+     "static int ciphers_list[GIT_SSL_DEFAULT_CIPHERS_COUNT + 1];\n"),
+    ("\t\tif (ciphers_known >= ARRAY_SIZE(ciphers_list)) {\n",
+     "\t\tif (ciphers_known >= ARRAY_SIZE(ciphers_list) - 1) {\n"),
+    ("\tmbedtls_ssl_conf_ciphersuites(&mbedtls_config, ciphers_list);\n",
+     "\tciphers_list[ciphers_known] = 0;\n"
+     "\tmbedtls_ssl_conf_ciphersuites(&mbedtls_config, ciphers_list);\n"),
+)
+
+path = pathlib.Path(r"@LIBGIT2_MBEDTLS_STREAM@")
+text = path.read_text(encoding="utf-8")
+patched = text
+for old, new in EDITS:
+    if new in patched:
+        continue
+    if patched.count(old) != 1:
+        raise SystemExit(f"libgit2 cipher list patch: expected one '{old.strip()}' in {path}")
+    patched = patched.replace(old, new)
+if patched != text:
+    path.write_text(patched, encoding="utf-8")
