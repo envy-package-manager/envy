@@ -455,11 +455,6 @@ function(apply_sanitizers TARGET_NAME)
 
     # Map option to compiler flags
     if(ENVY_SANITIZER STREQUAL "ASAN")
-        # GCC: Disable ASan to avoid third-party false positives (mbedTLS, AWS C libraries)
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            message(STATUS "GCC: ASan disabled due to third-party false positives; using UBSAN instead")
-            return()
-        endif()
         set(_sanitizer_flags "address")
     elseif(ENVY_SANITIZER STREQUAL "UBSAN")
         set(_sanitizer_flags "undefined")
