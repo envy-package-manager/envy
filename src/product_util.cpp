@@ -2,12 +2,10 @@
 
 #include "engine.h"  // pkg_type
 #include "lua_envy.h"
-#include "lua_error_formatter.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "pkg_env.h"
 #include "shell.h"
-#include "sol_util.h"
 #include "util.h"
 
 #include <algorithm>
@@ -66,14 +64,6 @@ constexpr auto kNoLeaf{ [](pkg *, std::string const &) { return std::string{}; }
 
 std::string utf8_preferred(std::filesystem::path path) {
   return util_path_to_utf8(path.make_preferred());
-}
-
-// A dir as a command function sees it: UTF-8 like every argv element, and ending in a
-// separator so `dir .. "file"` joins.
-std::string utf8_dir(std::filesystem::path const &dir) {
-  std::string const out{ utf8_preferred(dir) };
-  char const sep{ static_cast<char>(std::filesystem::path::preferred_separator) };
-  return out.ends_with(sep) ? out : out + sep;
 }
 
 // A cache-managed provider's payload per `pkg_path_of`; nullopt when user-managed.
@@ -141,17 +131,10 @@ std::vector<std::string> call_command_fn(pkg *provider,
                           "' has no Lua state; its spec did not finish loading" });
   }
   sol::state_view lua{ *lua_acc };
-  sol::protected_function const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
-  sol::object const pkg_dir{ dir ? sol::make_object(lua, utf8_dir(*dir))
-                                 : sol::make_object(lua, sol::lua_nil) };
-  sol::object const opts{
-    // a copy: validation calls this before the provider's phases
-    sol_util_deserialize_options(lua, provider->cfg->serialized_options)
+  sol::object const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
+  sol::object const result{
+    pkg_env_call(provider, lua, fn, "PRODUCTS['" + name + "'].command", dir, state_root)
   };
-  sol::object const result{ call_lua_function_with_enriched_errors(
-      provider,
-      "PRODUCTS['" + name + "'].command",
-      [&] { return fn(pkg_dir, utf8_dir(pkg_state_dir(provider, state_root)), opts); }) };
   return product_util_parse_command(result, name, id, !dir, "command function's result");
 }
 

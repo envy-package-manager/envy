@@ -3,8 +3,11 @@
 #include "env_ops.h"
 #include "pkg_phase.h"
 
+#include "sol/forward.hpp"
+
 #include <filesystem>
 #include <optional>
+#include <string_view>
 
 namespace envy {
 
@@ -22,6 +25,15 @@ std::filesystem::path pkg_state_dir(pkg const *p, std::filesystem::path const &r
 // The root a phase's dependency ENV and pkg_state_dir hang from: its env_root, else its
 // lock's tmp dir; nullopt when it has neither, or names no package.
 std::optional<std::filesystem::path> pkg_env_root(phase_context const *ctx);
+
+// Calls `fn`, ENV's or a command function, as both are called: (pkg_dir -- nil when
+// user-managed --, pkg_state_dir under `root`, a fresh copy of the options). Lua locked.
+sol::object pkg_env_call(pkg *p,
+                         sol::state_view lua,
+                         sol::object const &fn,
+                         std::string_view what,
+                         std::optional<std::filesystem::path> const &pkg_path,
+                         std::filesystem::path const &root);
 
 // p's ENV for one consumer (nullopt: none declared), its pkg_state_dir under `root`.
 std::optional<env_ops> pkg_env_eval(pkg *p,

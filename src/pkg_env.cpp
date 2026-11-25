@@ -3,11 +3,11 @@
 #include "cache.h"
 #include "engine.h"
 #include "lua_ctx/lua_phase_context.h"
-#include "lua_envy.h"
 #include "lua_error_formatter.h"
 #include "phases/phase_check.h"
 #include "pkg.h"
 #include "platform.h"
+#include "sol_util.h"
 #include "tui.h"
 #include "util.h"
 
@@ -39,6 +39,27 @@ std::optional<std::filesystem::path> pkg_env_root(phase_context const *ctx) {
   return ctx->lock ? std::optional{ ctx->lock->tmp_dir() } : std::nullopt;
 }
 
+sol::object pkg_env_call(pkg *p,
+                         sol::state_view lua,
+                         sol::object const &fn,
+                         std::string_view what,
+                         std::optional<std::filesystem::path> const &pkg_path,
+                         std::filesystem::path const &root) {
+  sol::object const dir{ pkg_path
+                             ? sol::make_object(lua, util_path_with_separator(*pkg_path))
+                             : sol::make_object(lua, sol::lua_nil) };
+  sol::object const opts{  // a copy: validation calls a command fn before its phases
+    sol_util_deserialize_options(lua, p->cfg->serialized_options)
+  };
+  sol::object result{ call_lua_function_with_enriched_errors(p, what, [&] {
+    return fn.as<sol::protected_function>()(
+        dir,
+        util_path_with_separator(pkg_state_dir(p, root)),
+        opts);
+  }) };
+  return result;
+}
+
 std::optional<env_ops> pkg_env_eval(pkg *p,
                                     std::optional<std::filesystem::path> const &pkg_path,
                                     std::filesystem::path const &root) {
@@ -53,17 +74,7 @@ std::optional<env_ops> pkg_env_eval(pkg *p,
     return env_ops_parse(env_obj, context);
   }
 
-  sol::object const path_arg{
-    pkg_path ? sol::make_object(lua, util_path_with_separator(*pkg_path))
-             : sol::make_object(lua, sol::lua_nil)
-  };
-  sol::object const opts{ lua.registry()[ENVY_OPTIONS_RIDX] };
-  sol::object const result{ call_lua_function_with_enriched_errors(p, "ENV", [&] {
-    return env_obj.as<sol::protected_function>()(
-        path_arg,
-        util_path_with_separator(pkg_state_dir(p, root)),
-        opts);
-  }) };
+  sol::object const result{ pkg_env_call(p, lua, env_obj, "ENV", pkg_path, root) };
 
   if (!result.valid() || result.get_type() == sol::type::lua_nil) { return env_ops{}; }
   return env_ops_parse(result, context);
