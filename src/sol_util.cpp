@@ -24,9 +24,8 @@ sol::protected_function_result sol_util_run_bytecode(
 
 sol::object sol_util_deserialize_options(sol::state_view lua,
                                          std::string const &serialized) {
-  sol::protected_function_result result{
-    lua.safe_script("return " + serialized, sol::script_pass_on_error)
-  };
+  sol::protected_function_result result{ lua.safe_script("return " + serialized,
+                                                         sol::script_pass_on_error) };
   if (!result.valid()) {
     sol::error err = result;
     throw_runtime_error({ "Failed to deserialize options: ", err.what() });

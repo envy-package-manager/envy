@@ -592,8 +592,9 @@ spec_fetch_result fetch_custom_function(pkg_cfg const &cfg, pkg *p, engine &eng)
 
       // The child's own options, built in the parent's state but never stored there:
       // ENVY_OPTIONS_RIDX belongs to the parent and its own phases still read it.
-      sol::object const options_obj{ sol_util_deserialize_options(parent_lua_view,
-                                                         cfg.serialized_options) };
+      sol::object const options_obj{
+        sol_util_deserialize_options(parent_lua_view, cfg.serialized_options)
+      };
 
       // The context names the child: source.dependencies are wired onto it, so its
       // edges authorize envy.package/envy.product. Only the interpreter is the parent's.

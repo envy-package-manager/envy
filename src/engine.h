@@ -48,7 +48,7 @@ struct export_phase_config {
 
 struct product_info {
   std::string product_name;
-  product_value value;  // as declared: a command unrendered
+  product_value value;             // as declared: a command unrendered
   std::string provider_canonical;  // Full canonical identity with options
   pkg_type type;
   std::filesystem::path pkg_path;

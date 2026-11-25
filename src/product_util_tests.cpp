@@ -390,7 +390,8 @@ TEST_CASE("a command product is not a path") {
 
 namespace {
 
-// `fns` defines PRODUCTS' command functions by name in p's state, as spec_fetch stashes them.
+// `fns` defines PRODUCTS' command functions by name in p's state, as spec_fetch stashes
+// them.
 void give_functions(pkg *p, char const *fns) {
   auto lua{ sol_util_make_lua_state() };
   lua->registry()[ENVY_PRODUCT_COMMANDS_RIDX] =
@@ -417,13 +418,15 @@ TEST_CASE("a command function gets ENV's arguments and renders like a table") {
                                  "--state=" .. pkg_state_dir, "--x=" .. x }
                       end })");
 
-  std::string const pkg_dir{ util_path_to_utf8(
-      kPkgPath(yarn.get()).make_preferred() / "") };
+  std::string const pkg_dir{ util_path_to_utf8(kPkgPath(yarn.get()).make_preferred() /
+                                               "") };
   std::string const state{ util_path_to_utf8(
       pkg_state_dir(yarn.get(), "proj").make_preferred() / "") };
-  std::vector<std::string> const expected{
-    "local.node@v1:node", pkg_dir + "lib/yarn.cjs", "--state=" + state, "--x=y", "install"
-  };
+  std::vector<std::string> const expected{ "local.node@v1:node",
+                                           pkg_dir + "lib/yarn.cjs",
+                                           "--state=" + state,
+                                           "--x=y",
+                                           "install" };
   CHECK(render(yarn.get(), "ci") == expected);
   CHECK(render(yarn.get(), "ci") == expected);
   CHECK(product_util_is_command(yarn.get(), "yarn"));

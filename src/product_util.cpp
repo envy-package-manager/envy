@@ -144,13 +144,14 @@ std::vector<std::string> call_command_fn(pkg *provider,
   sol::protected_function const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
   sol::object const pkg_dir{ dir ? sol::make_object(lua, utf8_dir(*dir))
                                  : sol::make_object(lua, sol::lua_nil) };
-  sol::object const opts{  // a copy: validation calls this before the provider's phases
+  sol::object const opts{
+    // a copy: validation calls this before the provider's phases
     sol_util_deserialize_options(lua, provider->cfg->serialized_options)
   };
   sol::object const result{ call_lua_function_with_enriched_errors(
-      provider, "PRODUCTS['" + name + "'].command", [&] {
-        return fn(pkg_dir, utf8_dir(pkg_state_dir(provider, state_root)), opts);
-      }) };
+      provider,
+      "PRODUCTS['" + name + "'].command",
+      [&] { return fn(pkg_dir, utf8_dir(pkg_state_dir(provider, state_root)), opts); }) };
   return product_util_parse_command(result, name, id, !dir, "command function's result");
 }
 
@@ -195,16 +196,16 @@ struct argv_builder {
 
   void append(pkg *provider, std::string const &name) {
     envy::visit(
-        match{ [&](std::string const &) { push(leaf(provider, name), provider, name); },
-               [&](std::vector<std::string> const &argv) {
-                 walk(provider, name, [&] { return argv; });
-               },
-               [&](product_command_fn) {
-                 walk(provider, name, [&] {
-                   return call_command_fn(
-                       provider, name, render.pkg_path, render.state_root);
-                 });
-               } },
+        match{
+            [&](std::string const &) { push(leaf(provider, name), provider, name); },
+            [&](std::vector<std::string> const &argv) {
+              walk(provider, name, [&] { return argv; });
+            },
+            [&](product_command_fn) {
+              walk(provider, name, [&] {
+                return call_command_fn(provider, name, render.pkg_path, render.state_root);
+              });
+            } },
         entry_of(provider, name).value);
   }
 
@@ -425,8 +426,10 @@ std::vector<std::string> product_util_run_argv(pkg *provider,
                                                std::string const &name,
                                                std::filesystem::path const &state_root,
                                                std::string *program) {
-  return product_util_argv(
-      provider, name, { .pkg_path = kInstalled, .state_root = state_root }, program);
+  return product_util_argv(provider,
+                           name,
+                           { .pkg_path = kInstalled, .state_root = state_root },
+                           program);
 }
 
 std::vector<std::string> product_util_predict_argv(
