@@ -34,20 +34,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Unsanitized: ships the artifact release.yml packages, after every suite passes.
           - name: linux-x64-main
             os: ubuntu-latest
-            shard: main
             cache_group: linux-x64-none
             cache_writer: true
             deps_writer: true
+          # Functional tests under memcheck, a worker per core: memcheck pins each envy to
+          # one, so serial runs left three of four idle.
           - name: linux-arm64-main
             os: ubuntu-24.04-arm
-            shard: main
+            valgrind: true
+            test_jobs: 4
+            test_timeout: 300
             cache_group: linux-arm64-none
+            cache_writer: true
             deps_writer: true
           - name: linux-x64-asan
             os: ubuntu-latest
-            shard: func-asan
             sanitizer: asan
             cache_group: linux-x64-asan
             cache_writer: true
@@ -55,7 +59,6 @@ jobs:
           # it at the newest release: an older stamp disowns features (hooks: `activate`).
           - name: linux-x64-ubsan
             os: ubuntu-latest
-            shard: func-ubsan
             sanitizer: ubsan
             build_args: -DENVY_VERSION=0.6.0
             cache_group: linux-x64-ubsan
@@ -64,36 +67,23 @@ jobs:
           # and the container's seccomp blocks the ASLR-off re-exec it falls back on.
           - name: linux-x64-tsan
             os: ubuntu-24.04
-            shard: func-tsan
             sanitizer: tsan
             cache_group: linux-x64-tsan
             cache_writer: true
           - name: linux-arm64-asan
             os: ubuntu-24.04-arm
-            shard: func-asan
             sanitizer: asan
             cache_group: linux-arm64-asan
             cache_writer: true
           - name: linux-arm64-ubsan
             os: ubuntu-24.04-arm
-            shard: func-ubsan
             sanitizer: ubsan
             cache_group: linux-arm64-ubsan
             cache_writer: true
           - name: linux-arm64-tsan
             os: ubuntu-24.04-arm
-            shard: func-tsan
             sanitizer: tsan
             cache_group: linux-arm64-tsan
-            cache_writer: true
-          # A worker per core: memcheck pins each envy to one, so serial runs left three of
-          # four idle.
-          - name: linux-arm64-valgrind
-            os: ubuntu-24.04-arm
-            shard: func-valgrind
-            test_jobs: 4
-            test_timeout: 300
-            cache_group: linux-arm64-none
             cache_writer: true
     runs-on: ${{ matrix.os }}
     # Container jobs default to `sh -e {0}`, where `[[` is an unknown command rather than
@@ -177,7 +167,7 @@ jobs:
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
-        if: matrix.shard == 'main'
+        if: ${{ !matrix.sanitizer }}
         run: |
           ls -al out/build/envy
           got="$(./out/build/envy -v 2>&1)"  # tui writes to stderr, so redirect to capture
@@ -194,7 +184,7 @@ jobs:
           ./out/build/envy hash --tree --stats src
 
       - name: Unit tests under valgrind
-        if: matrix.shard == 'main'
+        if: ${{ !matrix.sanitizer }}
         run: valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=valgrind.supp out/build/envy_unit_tests
         env:
           # Watchdog thread would make the shell tests' fork() misbehave under valgrind.
@@ -204,9 +194,8 @@ jobs:
       # to come from GITHUB_WORKSPACE. The github.workspace expression would resolve to
       # the runner's copy, and valgrind aborts on a suppressions file it cannot open.
       - name: Functional tests
-        if: startsWith(matrix.shard, 'func-')
         run: |
-          if [[ "${{ matrix.shard }}" == func-valgrind ]]; then
+          if [[ "${{ matrix.valgrind }}" == true ]]; then
             export ENVY_TEST_WRAPPER="valgrind -q --error-exitcode=1 --child-silent-after-fork=yes --leak-check=full --suppressions=$GITHUB_WORKSPACE/valgrind.supp"
           fi
           python3 -m functional_tests
@@ -254,24 +243,24 @@ jobs:
       # times below anything working, which catches a serialized queue rather than a
       # regression worth arguing about.
       - name: Tree-hash benchmark
-        if: matrix.shard == 'main'
+        if: ${{ !matrix.sanitizer }}
         run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload tree-hash benchmark
-        if: always() && matrix.shard == 'main'
+        if: always() && !matrix.sanitizer
         uses: actions/upload-artifact@v7
         with:
           name: tree-hash-bench-${{ matrix.name }}
           path: tree-hash-bench.json
           retention-days: 90
 
-      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # Only the unsanitized jobs, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
       # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
       # per run, and an artifact service 403 on any one of them reddened a job whose
-      # build and tests had both passed.
+      # build and tests had both passed. Last, so nothing uploads that failed a suite.
       - name: Upload envy artifact
-        if: matrix.shard == 'main'
+        if: ${{ !matrix.sanitizer }}
         uses: actions/upload-artifact@v7
         with:
           name: envy-${{ matrix.name }}
@@ -286,24 +275,14 @@ jobs:
         include:
           - name: macos-arm64-main
             os: macos-latest
-            shard: main
-            cache_group: macos-arm64-none
-            deps_writer: true
-          - name: macos-arm64-func
-            os: macos-latest
-            shard: func-main
             cache_group: macos-arm64-none
             cache_writer: true
+            deps_writer: true
           - name: macos-x64-main
             os: macos-15-intel
-            shard: main
-            cache_group: macos-x64-none
-            deps_writer: true
-          - name: macos-x64-func
-            os: macos-15-intel
-            shard: func-main
             cache_group: macos-x64-none
             cache_writer: true
+            deps_writer: true
     runs-on: ${{ matrix.os }}
     # Spelled out for the same reason as build-linux: these steps are bash, not sh.
     defaults:
@@ -351,7 +330,6 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install test dependencies
-        if: startsWith(matrix.shard, 'func-')
         run: brew install fish
 
       - name: Build
@@ -372,7 +350,6 @@ jobs:
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
-        if: matrix.shard == 'main'
         run: |
           ls -al out/build/envy
           got="$(./out/build/envy -v 2>&1)"  # tui writes to stderr, so redirect to capture
@@ -389,7 +366,6 @@ jobs:
           ./out/build/envy hash --tree --stats src
 
       - name: Functional tests
-        if: startsWith(matrix.shard, 'func-')
         run: python3.13 -m functional_tests
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
@@ -428,24 +404,22 @@ jobs:
       # times below anything working, which catches a serialized queue rather than a
       # regression worth arguing about.
       - name: Tree-hash benchmark
-        if: matrix.shard == 'main'
         run: python3 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload tree-hash benchmark
-        if: always() && matrix.shard == 'main'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: tree-hash-bench-${{ matrix.name }}
           path: tree-hash-bench.json
           retention-days: 90
 
-      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # Only the unsanitized jobs, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
       # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
       # per run, and an artifact service 403 on any one of them reddened a job whose
-      # build and tests had both passed.
+      # build and tests had both passed. Last, so nothing uploads that failed a suite.
       - name: Upload envy artifact
-        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v7
         with:
           name: envy-${{ matrix.name }}
@@ -461,27 +435,15 @@ jobs:
           - name: windows-x64-main
             os: windows-latest
             arch: amd64
-            shard: main
-            cache_group: windows-x64-none
-            deps_writer: true
-          - name: windows-x64-func
-            os: windows-latest
-            arch: amd64
-            shard: func-main
             cache_group: windows-x64-none
             cache_writer: true
+            deps_writer: true
           - name: windows-arm64-main
             os: windows-11-arm
             arch: arm64
-            shard: main
-            cache_group: windows-arm64-none
-            deps_writer: true
-          - name: windows-arm64-func
-            os: windows-11-arm
-            arch: arm64
-            shard: func-main
             cache_group: windows-arm64-none
             cache_writer: true
+            deps_writer: true
     runs-on: ${{ matrix.os }}
     # One shell for the whole job, stated rather than inherited. `powershell` is Windows
     # PowerShell 5.1, a second runtime to reason about for no benefit either step needs.
@@ -567,7 +529,6 @@ jobs:
       # The version assert is the publish gate: an artifact that reports 0.0.0 stamps
       # 0.0.0 into everything `deploy` writes, forever disagreeing with a stamped peer.
       - name: Smoke test
-        if: matrix.shard == 'main'
         run: |
           dir out\build\envy.exe
           # Redirect inside cmd: tui writes to stderr, and PowerShell's own 2>&1 would
@@ -588,7 +549,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "envy hash --tree exited $LASTEXITCODE" }
 
       - name: Functional tests
-        if: startsWith(matrix.shard, 'func-')
         run: py -3.13 -m functional_tests
         env:
           ENVY_TEST_JOBS: ${{ matrix.test_jobs || '2' }}
@@ -633,24 +593,22 @@ jobs:
       # times below anything working, which catches a serialized queue rather than a
       # regression worth arguing about.
       - name: Tree-hash benchmark
-        if: matrix.shard == 'main'
         run: py -3.13 tools/bench_tree_hash.py --quick --stats --json tree-hash-bench.json --summary "$env:GITHUB_STEP_SUMMARY"
 
       - name: Upload tree-hash benchmark
-        if: always() && matrix.shard == 'main'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: tree-hash-bench-${{ matrix.name }}
           path: tree-hash-bench.json
           retention-days: 90
 
-      # Only the 'main' shards, because only those six artifacts are ever consumed --
+      # Only the unsanitized jobs, because only those six artifacts are ever consumed --
       # release.yml packages envy-{linux,darwin,windows}-{x64,arm64}-main and nothing
       # else. Uploading from every sanitizer shard put 11 unread binaries on the wire
       # per run, and an artifact service 403 on any one of them reddened a job whose
-      # build and tests had both passed.
+      # build and tests had both passed. Last, so nothing uploads that failed a suite.
       - name: Upload envy artifact
-        if: matrix.shard == 'main'
         uses: actions/upload-artifact@v7
         with:
           name: envy-${{ matrix.name }}
