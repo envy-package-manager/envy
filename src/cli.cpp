@@ -167,18 +167,11 @@ cli_args cli_parse(int argc, char **argv) {
      ...);
   } };
 
-  // Help lists subcommands in registration order, so register them by name; the splits
-  // keep 'cache-test' and 'state' in place. cli_tests enforces the order.
-  register_cmds.operator()<cmd_activate, cmd_cache>(app);
-
-#ifdef ENVY_FUNCTIONAL_TESTER
-  // Test-only cache drivers get their own parent so the production "cache"
-  // command never has to reason about child subcommands.
-  register_cmds.operator()<cmd_cache_ensure_package, cmd_cache_ensure_spec>(
-      app.sub("cache-test", "Drive cache primitives directly (test only)"));
-#endif
-
-  register_cmds.operator()<cmd_deactivate,
+  // Help lists subcommands in registration order, so register them by name; the split
+  // keeps 'state' in place. cli_tests enforces the order.
+  register_cmds.operator()<cmd_activate,
+                           cmd_cache,
+                           cmd_deactivate,
                            cmd_deploy,
                            cmd_export,
                            cmd_extract,
@@ -201,13 +194,7 @@ cli_args cli_parse(int argc, char **argv) {
       cmd_state::register_cli(app, std::get<cmd_state::cfg>(store))
           .set_id(cfg_index<cmd_state::cfg>()));
 
-  register_cmds.operator()<cmd_sync,
-#ifdef ENVY_FUNCTIONAL_TESTER
-                           cmd_trace_schema,
-#endif
-                           cmd_use,
-                           cmd_vendor,
-                           cmd_version>(app);
+  register_cmds.operator()<cmd_sync, cmd_use, cmd_vendor, cmd_version>(app);
 
   cli_args args{};
   std::optional<cli_args::cmd_cfg_t> cmd_cfg;

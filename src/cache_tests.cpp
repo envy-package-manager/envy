@@ -9,7 +9,9 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef ENVY_VERSION_STR
 #error "ENVY_VERSION_STR must be defined by the build system"
@@ -134,6 +136,29 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg fast path when marker present"
   CHECK(std::filesystem::exists(result.pkg_path / "existing.txt"));
 }
 
+TEST_CASE_FIXTURE(temp_cache_fixture,
+                  "ensure_pkg clears a pkg/ an earlier attempt left without a marker") {
+  auto const pkg_dir{ temp_root / "packages" / "foo" / "darwin-arm64-blake3-deadbeef" /
+                      "pkg" };
+  std::filesystem::create_directories(pkg_dir);
+  std::ofstream{ pkg_dir / "stale.txt" } << "killed mid-install";
+
+  auto result{ cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef") };
+  REQUIRE(result.lock != nullptr);  // a directory without envy-complete is no hit
+  CHECK(result.pkg_path == pkg_dir);
+  CHECK_FALSE(std::filesystem::exists(pkg_dir / "stale.txt"));
+}
+
+TEST_CASE_FIXTURE(temp_cache_fixture,
+                  "an empty install_dir commits when marked complete") {
+  auto result{ cache->ensure_pkg("foo", "", "darwin", "arm64", "deadbeef") };
+  REQUIRE(result.lock != nullptr);
+  result.lock->mark_install_complete();
+  result.lock.reset();
+  CHECK(std::filesystem::exists(result.entry_path / "envy-complete"));
+  CHECK(std::filesystem::is_directory(result.pkg_path));
+}
+
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg entry layout") {
   auto result = cache->ensure_pkg("gcc", "", "linux", "x86_64", "deadbeef");
   REQUIRE(result.lock != nullptr);
@@ -180,6 +205,27 @@ TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_spec keys entries on the source") 
         nullptr);
   CHECK(cache->ensure_spec("envy.cmake@v1", "https://b.example.com/spec.lua").lock ==
         nullptr);
+}
+
+TEST_CASE_FIXTURE(temp_cache_fixture,
+                  "one identity's package and spec locks are separate files") {
+  // Each source keys its own spec lock, so neither blocks the other or the package.
+  auto const pkg{ cache->ensure_pkg("envy.cmake@v1", "", "darwin", "arm64", "deadbeef") };
+  auto const a{ cache->ensure_spec("envy.cmake@v1", "url-a") };
+  auto const b{ cache->ensure_spec("envy.cmake@v1", "url-b") };
+  REQUIRE((pkg.lock && a.lock && b.lock));
+
+  std::vector<std::string> names;
+  for (auto const &e : std::filesystem::directory_iterator{ temp_root / "locks" }) {
+    names.push_back(e.path().filename().string());
+  }
+  CHECK(names.size() == 3);
+  CHECK(std::ranges::count(names,
+                           "packages.envy.cmake@v1-darwin-arm64-blake3-deadbeef.lock") ==
+        1);
+  CHECK(std::ranges::count_if(names, [](std::string const &n) {
+          return n.starts_with("spec.envy.cmake@v1.blake3-") && n.ends_with(".lock");
+        }) == 2);
 }
 
 TEST_CASE_FIXTURE(temp_cache_fixture, "ensure_pkg creates locks directory on demand") {

@@ -24,10 +24,6 @@
 #include "cmds/cmd_use.h"
 #include "cmds/cmd_vendor.h"
 #include "cmds/cmd_version.h"
-#ifdef ENVY_FUNCTIONAL_TESTER
-#include "cmds/cmd_cache_functional_test.h"
-#include "cmds/cmd_trace_schema.h"
-#endif
 #include "tui.h"
 
 #include <optional>
@@ -62,14 +58,7 @@ struct cli_args {
                                  cmd_sync::cfg,
                                  cmd_use::cfg,
                                  cmd_vendor::cfg,
-                                 cmd_version::cfg
-#ifdef ENVY_FUNCTIONAL_TESTER
-                                 ,
-                                 cmd_cache_ensure_package::cfg,
-                                 cmd_cache_ensure_spec::cfg,
-                                 cmd_trace_schema::cfg
-#endif
-                                 >;
+                                 cmd_version::cfg>;
 
   std::optional<cmd_cfg_t> cmd_cfg;
   std::optional<std::filesystem::path> cache_root;  // Global cache root override

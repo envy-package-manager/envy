@@ -695,11 +695,9 @@ void render_fallback_frame_unlocked(std::vector<section_state> const &sections,
                                     std::chrono::steady_clock::time_point now) {
   // Throttle: print only if changed and >= 2s elapsed
   static auto const kFallbackThrottle = [] {
-#if defined(ENVY_FUNCTIONAL_TESTER)
     if (auto const *val = std::getenv("ENVY_TEST_FALLBACK_THROTTLE_MS")) {
       return std::chrono::milliseconds{ std::atoi(val) };
     }
-#endif
     return std::chrono::milliseconds{ 2000 };
   }();
 

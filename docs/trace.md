@@ -27,9 +27,9 @@ waiting step. When the waiter is itself a SETUP pair both are fixed (`setup` blo
 
 ## Authoring
 
-Single source of truth: `src/trace_events.def` (X-macro table). It generates the event structs, the `trace_event_t` variant's names, both serializers (JSON + human, via one field visitor—cannot drift), and the `trace-schema` dump. Emit with `ENVY_TRACE(event_name, spec_expr, .field = value, ...)`; guarded on `g_trace_enabled`.
+Single source of truth: `src/trace_events.def` (X-macro table). It generates the event structs, the `trace_event_t` variant's names, and both serializers (JSON + human, via one field visitor—cannot drift); `functional_tests/trace_parser.py` reads it for `EVENT_REGISTRY`. Emit with `ENVY_TRACE(event_name, spec_expr, .field = value, ...)`; guarded on `g_trace_enabled`.
 
-To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`), bump the count sentinel in `src/trace_tests.cpp`, and mirror it in `functional_tests/trace_parser.py`'s `EVENT_REGISTRY`. `test_trace_schema.py` diffs the binary's `trace-schema` dump against the parser registry, so drift fails a test.
+To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`) and bump the count sentinel in `src/trace_tests.cpp`. `test_trace_schema.py` checks every emitted record carries exactly its declared fields.
 
 ## Events
 

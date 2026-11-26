@@ -33,3 +33,7 @@ race:libarchive-src/libarchive/archive_read_support_format_tar.c
 # Known false positive in glibc timezone initialization
 # tzset_internal has benign races during lazy initialization of timezone data
 race:tzset_internal
+
+# Benign race in aws-c-common: cpuid_state caches CPUID support lazily, unsynchronized;
+# every racer computes and stores the same value. Seen via mirror-envy's S3 checksums.
+race:aws-c-common-*/source/arch/intel/cpuid.c

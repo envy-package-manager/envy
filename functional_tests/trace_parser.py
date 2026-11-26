@@ -8,103 +8,45 @@ Every record carries envelope keys: seq (monotonic, causal order), ts (emit-time
 ISO8601), tid (small sequential thread id), event, and spec (subject package
 identity; omitted for engine-scoped events).
 
-EVENT_REGISTRY mirrors src/trace_events.def; test_trace_schema.py verifies the
-two stay identical via the binary's trace-schema dump.
+EVENT_REGISTRY and SCHEMA_VERSION are read from src/trace_events.def and
+src/trace.h, the sources the binary compiles.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Callable, List, Optional
 
-SCHEMA_VERSION = 2
+_SRC = Path(__file__).resolve().parent.parent / "src"
 
-# event name -> ["field:type", ...] where type is str|i64|bool|phase.
-# Must match src/trace_events.def exactly.
-EVENT_REGISTRY = {
-    "trace_start": ["schema:i64"],
-    "spec_registered": ["key:str"],
-    "dependency_added": ["dependency:str", "needed_by:phase"],
-    "phase_start": ["phase:phase"],
-    "phase_complete": ["phase:phase", "duration_ms:i64"],
-    "phase_blocked": ["blocked_at_phase:phase", "waiting_for:str", "target_phase:phase"],
-    "phase_unblocked": ["unblocked_at_phase:phase", "dependency:str"],
-    "target_extended": ["old_target:phase", "new_target:phase"],
-    "pkg_outcome": ["outcome:str", "duration_ms:i64"],
-    "cache_hit": ["cache_key:str", "pkg_path:str", "fast_path:bool"],
-    "cache_miss": ["cache_key:str"],
-    "lock_acquired": ["lock_path:str", "wait_duration_ms:i64"],
-    "lock_released": ["lock_path:str", "hold_duration_ms:i64"],
-    "lua_ctx_package_access": [
-        "target:str",
-        "current_phase:phase",
-        "needed_by:phase",
-        "allowed:bool",
-        "reason:str",
-    ],
-    "lua_ctx_product_access": [
-        "target:str",
-        "provider:str",
-        "current_phase:phase",
-        "needed_by:phase",
-        "allowed:bool",
-        "reason:str",
-    ],
-    "lua_ctx_loadenv_spec_access": [
-        "target:str",
-        "subpath:str",
-        "current_phase:phase",
-        "needed_by:phase",
-        "allowed:bool",
-        "reason:str",
-    ],
-    "lua_ctx_loadenv_bundle": ["alias:str", "target:str", "subpath:str", "root:str"],
-    "manifest_resolved": ["path:str", "anchor:str", "mode:str", "nearest:bool"],
-    "subproject_loaded": ["path:str", "parent:str"],
-    "depot_check": ["sha:str", "result:str"],
-    "depot_wait": ["duration_ms:i64", "result:str"],
-    "default_shell_resolving": ["depends:i64"],
-    "default_shell_resolved": ["shell:str"],
-    "product_resolved": ["product:str", "provider:str", "via:str"],
-    "deploy_script": ["product:str", "platform:str", "action:str"],
-    "cache_entry_finalized": ["entry_dir:str", "disposition:str"],
-    "download_start": ["url:str", "destination:str"],
-    "download_complete": ["url:str", "bytes:i64", "duration_ms:i64"],
-    "download_failed": ["url:str", "error:str"],
-    "download_retry": [
-        "url:str",
-        "attempt:i64",
-        "delay_ms:i64",
-        "reason:str",
-        "error:str",
-    ],
-    "download_skipped": ["url:str", "reason:str"],
-    "fetch_release_wait": [
-        "path:str",
-        "duration_ms:i64",
-        "holders:str",
-        "released:bool",
-    ],
-    "git_resolve": ["url:str", "ref:str", "sha:str", "method:str"],
-    "libgit2_init": ["duration_ms:i64"],
-    "git_fetch": ["url:str", "path:str", "sha:str", "strategy:str", "depth:i64"],
-    "extract_start": ["archive:str", "destination:str", "strip_components:i64"],
-    "extract_complete": ["archive:str", "files_extracted:i64", "duration_ms:i64"],
-    "vendor_resolved": ["path:str", "origin:str"],
-    "vendor_result": [
-        "path:str",
-        "action:str",
-        "reason:str",
-        "dry_run:bool",
-        "files:i64",
-        "bytes:i64",
-        "hash_ms:i64",
-        "wipe_ms:i64",
-        "copy_ms:i64",
-        "duration_ms:i64",
-    ],
-}
+
+def _load_registry() -> dict[str, list[str]]:
+    """event name -> field names, in declaration order."""
+    text = (_SRC / "trace_events.def").read_text(encoding="utf-8")
+    text = re.sub(r"//[^\n]*", "", text)
+    registry: dict[str, list[str]] = {}
+    fields: list[str] = []
+    for m in re.finditer(
+        r"ENVY_TRACE_EVENT\(\s*(\w+)|ENVY_TRACE_FIELD_\w+\(\s*(\w+)\s*\)", text
+    ):
+        if m.group(1):
+            fields = registry.setdefault(m.group(1), [])
+        else:
+            fields.append(m.group(2))
+    if "trace_start" not in registry:
+        raise RuntimeError(f"no trace_start event parsed from {_SRC / 'trace_events.def'}")
+    return registry
+
+
+EVENT_REGISTRY = _load_registry()
+SCHEMA_VERSION = int(
+    re.search(
+        r"kTraceSchemaVersion\{\s*(\d+)\s*\}",
+        (_SRC / "trace.h").read_text(encoding="utf-8"),
+    ).group(1)
+)
 
 
 class PkgPhase(IntEnum):

@@ -21,7 +21,7 @@ class TestEnvyInit(EnvyTestCase):
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "project" / "tools"
         self._cache_dir = self._temp_dir / "cache"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():
@@ -398,7 +398,7 @@ class TestSelfDeployment(EnvyTestCase):
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():
@@ -537,7 +537,7 @@ class TestLatestFileGuarding(EnvyTestCase):
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
         self._version = test_config.get_envy_version()
 
     def tearDown(self) -> None:
@@ -605,7 +605,7 @@ class TestEnvyInitGitignore(EnvyTestCase):
         self._project_dir.mkdir(parents=True)
         # Only inside a repo: init into a plain directory has no business creating one.
         (self._project_dir / ".git").mkdir()
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():

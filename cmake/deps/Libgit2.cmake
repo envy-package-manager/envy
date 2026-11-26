@@ -41,6 +41,7 @@ if(DEFINED libgit2_SOURCE_DIR AND DEFINED libgit2_BINARY_DIR)
     envy_patch_libgit2_cflags("${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}")
     envy_patch_libgit2_longpaths("${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}")
     envy_patch_libgit2_https_transport("${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}")
+    envy_patch_libgit2_cipher_list("${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}")
     envy_patch_libgit2_cert_location("${libgit2_SOURCE_DIR}" "${libgit2_BINARY_DIR}")
 endif()
 

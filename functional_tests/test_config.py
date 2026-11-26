@@ -18,11 +18,10 @@ SUBPROCESS_TEXT_MODE = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 
 def _is_envy_cmd(cmd) -> bool:
-    """Return True if cmd invokes the envy functional tester binary."""
+    """Return True if cmd invokes the built envy itself, not a copy or a launcher."""
     if not cmd:
         return False
-    exe = str(cmd[0] if not isinstance(cmd, str) else cmd)
-    return "envy_functional_tester" in exe
+    return Path(cmd if isinstance(cmd, str) else cmd[0]) == get_envy_executable()
 
 
 def _wrap_cmd(cmd):
@@ -252,26 +251,13 @@ def _get_executable(name: str, label: str) -> Path:
 
 
 def sanitizer() -> str:
-    """The sanitizer the functional tester carries (asan, ubsan, tsan), as the build's
-    owner declares it in ENVY_TEST_SANITIZER -- CI sets it per shard. Empty if none."""
+    """The sanitizer envy carries (asan, ubsan, tsan), as the build's owner declares it
+    in ENVY_TEST_SANITIZER -- CI sets it per shard. Empty if none."""
     return os.environ.get("ENVY_TEST_SANITIZER", "")
 
 
 def get_envy_executable() -> Path:
-    """Path to the functional test executable. The default for tests.
-
-    It carries the sanitizers and the test-only subcommands, so anything that
-    does not specifically need the shipped binary should use this one.
-    """
-    return _get_executable("envy_functional_tester", "Functional tester")
-
-
-def get_envy_production_executable() -> Path:
-    """Path to the shipped `envy` binary -- unsanitized, no test-only commands.
-
-    The truest envy: prefer it. get_envy_executable() is for intrusive testing --
-    sanitizers, test-only subcommands, interruption hooks -- the shipped binary lacks.
-    """
+    """Path to the built envy: the shipped artifact, instrumented on a sanitizer build."""
     return _get_executable("envy", "envy binary")
 
 
@@ -332,27 +318,42 @@ def sandbox_user_wide_root(env: dict[str, str]) -> Path:
     return Path(env["XDG_CACHE_HOME"]) / "envy"
 
 
-def seed_cached_envy(cache_root: Path, version: str, source: Path | None = None) -> Path:
+def lock_exclusive(path: Path) -> int:
+    """Take the fcntl lock envy takes on `path`, as another envy would; returns the fd.
+
+    Closing the fd releases it. POSIX only: Windows envy locks with LockFileEx.
+    """
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.lockf(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def seed_cached_envy(cache_root: Path, version: str) -> Path:
     """Put an envy binary at <cache_root>/envy/<version>/, as self-deploy would.
 
     The launchers and reexec look here before downloading, so this is how a test says
-    "the user already has this version" without running a download to create it. `source`
-    defaults to the shipped binary; re-exec tests pass the functional tester instead,
-    because that is the artifact they are re-exec'ing into.
+    "the user already has this version" without running a download to create it.
     """
     version_dir = cache_root / "envy" / version
     version_dir.mkdir(parents=True, exist_ok=True)
     binary = version_dir / ("envy.exe" if sys.platform == "win32" else "envy")
-    shutil.copy2(source or get_envy_production_executable(), binary)
+    # Copy beside it, then rename over it: writing in place fails with ETXTBSY while an
+    # envy that just ran from this path is still being torn down (slow under TSan).
+    staged = binary.with_name(binary.name + ".seed")
+    shutil.copy2(get_envy_executable(), staged)
     if sys.platform != "win32":
-        binary.chmod(binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        staged.chmod(staged.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    os.replace(staged, binary)
     return binary
 
 
 def get_envy_version() -> str:
-    """The version baked into the shipped binary."""
+    """The version baked into the built envy."""
     result = run(
-        [str(get_envy_production_executable()), "version"],
+        [str(get_envy_executable()), "version"],
         capture_output=True,
         text=True,
         timeout=10,

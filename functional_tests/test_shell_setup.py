@@ -19,7 +19,7 @@ class TestShellCommand(EnvyTestCase):
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():
@@ -108,7 +108,7 @@ class TestShellHookDeployment(EnvyTestCase):
         self._cache_dir = self._temp_dir / "cache"
         self._project_dir = self._temp_dir / "project"
         self._bin_dir = self._temp_dir / "bin"
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
 
     def tearDown(self) -> None:
         if hasattr(self, "_temp_dir") and self._temp_dir.exists():

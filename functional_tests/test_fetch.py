@@ -28,7 +28,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 class FetchCommandFunctionalTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._envy_binary = test_config.get_envy_production_executable()
+        self._envy_binary = test_config.get_envy_executable()
         self._project_root = Path(__file__).resolve().parent.parent
 
     def test_fetch_local_file(self) -> None:
@@ -176,7 +176,6 @@ class FetchCommandFunctionalTest(unittest.TestCase):
         Served in throttled chunks so the fallback renderer (TERM=dumb, throttle
         forced to 0) gets a cycle mid-transfer; a row it draws carries ": NN.N%".
         """
-        # The bar is drawn by the functional tester, which honors the throttle override.
         envy = test_config.get_envy_executable()
         payload = os.urandom(256 * 1024)
 

@@ -194,11 +194,11 @@ def _run_parallel(
         print("No tests found")
         return
 
-    # Verify functional tester exists
+    # Verify envy exists
     try:
         exe = test_config.get_envy_executable()
         if verbose:
-            print(f"Using functional tester: {exe}")
+            print(f"Using envy: {exe}")
     except RuntimeError as e:
         print(f"ERROR: {e}")
         sys.exit(1)

@@ -48,7 +48,6 @@ def _env_dump(raw: bytes) -> dict[str, str]:
 
 @unittest.skipIf(sys.platform == "win32", "POSIX shell hooks")
 class _ActivateBase(EnvyTestCase):
-    use_production_binary = True
     envy_watchdog_timeout = 60
 
     def setUp(self) -> None:
@@ -553,7 +552,6 @@ class TestActivateRoundTrip(EnvyTestCase):
     after deactivate, from inside the shell that evaluated the script.
     """
 
-    use_production_binary = True
     envy_watchdog_timeout = 120
 
     def setUp(self) -> None:

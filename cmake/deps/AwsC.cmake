@@ -106,6 +106,9 @@ function(envy_add_aws_lc)
 endfunction()
 
 envy_add_aws_c(aws-c-common)
+# lookup3's hashlittle2 otherwise reads a string's tail as whole words, past its end (ASan:
+# global-buffer-overflow); VALGRIND is its own switch to the byte-wise tail, same hashes.
+target_compile_definitions(aws-c-common PRIVATE VALGRIND)
 if(UNIX AND NOT APPLE)  # Linux TLS: s2n-tls over aws-lc's libcrypto
     include(CheckCCompilerFlag)
     set(DISABLE_GO ON CACHE BOOL "" FORCE)

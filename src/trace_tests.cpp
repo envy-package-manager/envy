@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -79,30 +80,23 @@ TEST_CASE("trace_event_name is unique per event type") {
 }
 
 TEST_CASE("json and human serializers agree on field sets") {
-  // Both serializers consume trace_event_for_each_field; verify each schema field
-  // name appears in both renderings of a default-constructed event.
-  auto const schemas{ envy::trace_schema() };
-  CHECK(schemas.size() == envy::kTraceEventCount);
-
+  // Both serializers consume trace_event_for_each_field; verify each field name
+  // appears in both renderings of a default-constructed event.
   auto check_fields{ [&]<std::size_t... Is>(std::index_sequence<Is...>) {
     (
         [&] {
           using alternative = std::variant_alternative_t<Is, envy::trace_event_t>;
           auto const rec{ make_record(
               envy::trace_event_t{ std::in_place_index<Is>, alternative{} }) };
-          auto const name{ envy::trace_event_name(rec.event) };
           auto const json{ envy::trace_record_to_json(rec) };
           auto const human{ envy::trace_record_to_string(rec) };
-
-          auto const it{ std::find_if(schemas.begin(), schemas.end(), [&](auto const &s) {
-            return s.name == name;
-          }) };
-          REQUIRE(it != schemas.end());
-          for (auto const &field : it->fields) {
-            auto const key{ field.substr(0, field.find(':')) };
-            CHECK(json.find("\"" + key + "\":") != std::string::npos);
-            CHECK(human.find(key + "=") != std::string::npos);
-          }
+          envy::trace_event_for_each_field(
+              alternative{},
+              [&](std::string_view key, auto const &) {
+                std::string const k{ key };
+                CHECK(json.find("\"" + k + "\":") != std::string::npos);
+                CHECK(human.find(k + "=") != std::string::npos);
+              });
         }(),
         ...);
   } };

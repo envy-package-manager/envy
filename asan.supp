@@ -6,11 +6,3 @@
 #   ./out/build/envy_unit_tests
 #
 # The build system sets this automatically via CMakeLists.txt
-
-# AWS C libraries: hashlittle2 overreads string bounds by design (reads 4-byte chunks)
-# False positive - overread is into readable memory, doesn't affect correctness
-# Triggered by: aws_http_library_init() → s_init_str_to_enum_hash_table()
-# Location: aws-c-common/include/aws/common/private/lookup3.inl:552
-# Issue: Bob Jenkins' lookup3 hash reads past string end in final 4-byte chunk
-# Note: LTO mangles this to hashlittle2.lto_priv.0
-interceptor_via_fun:hashlittle2.lto_priv.0

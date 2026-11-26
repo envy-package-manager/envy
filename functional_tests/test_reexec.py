@@ -5,9 +5,9 @@ against the manifest's @envy version, downloads the correct version to a temp
 directory, and re-execs itself. The re-exec'd binary's own cache::ensure_envy()
 then installs it into the cache for future fast-path re-exec.
 
-Uses file:// mirror to avoid needing an HTTP server. The test binary (the
-functional tester itself) is packaged into a tar.gz/zip archive that the
-re-exec download code fetches via libcurl's file:// support.
+Uses file:// mirror to avoid needing an HTTP server. The built envy itself is
+packaged into a tar.gz/zip archive that the re-exec download code fetches via
+libcurl's file:// support.
 """
 
 from __future__ import annotations
@@ -182,7 +182,7 @@ class TestReexecDecision(_ReexecTestBase):
     def test_dev_build_skips_reexec(self) -> None:
         """Dev builds (0.0.0) should never re-exec, even with version mismatch."""
         self._setup_reexec_project("1.2.3")
-        # Don't set ENVY_TEST_SELF_VERSION — functional tester is version 0.0.0
+        # Don't set ENVY_TEST_SELF_VERSION — a dev build is version 0.0.0
         env = self._get_env()
         result = self._run_envy(["install"], cwd=self._project, env=env)
         self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
@@ -243,7 +243,7 @@ class TestReexecDownload(_ReexecTestBase):
                 self._cache_dir.mkdir()
                 self._setup_reexec_project("1.2.3")
                 if tier == "cached":
-                    test_config.seed_cached_envy(self._cache_dir, "1.2.3", self._envy)
+                    test_config.seed_cached_envy(self._cache_dir, "1.2.3")
 
                 trace = self._temp_dir / f"{tier}.jsonl"
                 result = self._run_envy(
@@ -267,7 +267,7 @@ class TestReexecDownload(_ReexecTestBase):
     def test_cached_binary_reused_no_redownload(self) -> None:
         """Pre-populated cache should be used without downloading again."""
         self._setup_reexec_project("1.2.3")
-        test_config.seed_cached_envy(self._cache_dir, "1.2.3", self._envy)
+        test_config.seed_cached_envy(self._cache_dir, "1.2.3")
 
         # Delete the release archive so download would fail if attempted
         shutil.rmtree(self._releases_dir)

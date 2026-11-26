@@ -389,6 +389,34 @@ function(envy_patch_libgit2_https_transport source_dir binary_dir)
     unset(LIBGIT2_SRC_DIR)
 endfunction()
 
+# Give libgit2's mbedTLS cipher list the 0 terminator mbedtls_ssl_conf_ciphersuites reads to.
+function(envy_patch_libgit2_cipher_list source_dir binary_dir)
+    set(_stamp "${binary_dir}/envy_libgit2_cipher_list_patch.stamp")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+
+    set(_script "${binary_dir}/envy_patch_libgit2_cipher_list.py")
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/templates/libgit2_cipher_list_patch.py.in")
+
+    set(LIBGIT2_MBEDTLS_STREAM "${source_dir}/src/libgit2/streams/mbedtls.c")
+    if(NOT EXISTS "${LIBGIT2_MBEDTLS_STREAM}")
+        message(FATAL_ERROR "libgit2 cipher list patch: ${LIBGIT2_MBEDTLS_STREAM} not found")
+    endif()
+
+    configure_file("${_template}" "${_script}" @ONLY)
+
+    envy_run_python("${_script}")
+
+    file(REMOVE "${_script}")
+    file(WRITE "${_stamp}" "patched\n")
+
+    unset(_stamp)
+    unset(_script)
+    unset(_template)
+    unset(LIBGIT2_MBEDTLS_STREAM)
+endfunction()
+
 # Keep the build host's CA bundle path out of libgit2: envy configures certificates itself.
 function(envy_patch_libgit2_cert_location source_dir binary_dir)
     set(_stamp "${binary_dir}/envy_libgit2_cert_location_patch.stamp")

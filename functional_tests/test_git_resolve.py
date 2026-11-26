@@ -24,7 +24,7 @@ class TestGitResolve(EnvyTestCase):
     """Resolve tags/branches/shas of a local repo via `envy git-resolve`."""
 
     def setUp(self) -> None:
-        self._envy = test_config.get_envy_production_executable()
+        self._envy = test_config.get_envy_executable()
         self._project_root = Path(__file__).resolve().parent.parent
 
         self._work = self.make_temp_dir("_work")
