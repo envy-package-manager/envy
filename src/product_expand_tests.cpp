@@ -126,15 +126,16 @@ struct fixture {
 
   // What `{{yarn}}` renders as, quoted for `shell`.
   std::string yarn_line(shell_choice shell) const {
-    return shell_quote_argv({ native(kRoot / "node" / "bin/node"),
-                              native(kRoot / "yarn" / "lib/yarn.cjs") },
-                            shell);
+    return shell_quote_argv(
+        { native(kRoot / "node" / "bin/node"), native(kRoot / "yarn" / "lib/yarn.cjs") },
+        shell);
   }
 };
 
 }  // namespace
 
-TEST_CASE_FIXTURE(fixture, "product_expand: a path product is its text, wherever it sits") {
+TEST_CASE_FIXTURE(fixture,
+                  "product_expand: a path product is its text, wherever it sits") {
   provide(c.get(), node.get(), "node");
   std::string const n{ native(kRoot / "node" / "bin/node") };
   CHECK(expand(c.get(), "\"{{node}}\" --n={{node}} '{{{{x}}}}'", kShell) ==
@@ -148,10 +149,23 @@ TEST_CASE_FIXTURE(fixture, "product_expand: a directory loses its trailing separ
         "\"-DS=" + native(kRoot / "node" / "share") + "\"");
 }
 
-TEST_CASE_FIXTURE(fixture, "product_expand: a payload path a shell could misread is refused") {
+TEST_CASE_FIXTURE(fixture,
+                  "product_expand: a payload path a shell could misread is refused") {
   provide(c.get(), node.get(), "node");
-  for (std::string const dir : { "my node", "a$b", "a'b", "a\"b", "a(b", "a&b", "a;b",
-                                 "a%b", "a!b", "a,b", "a=b", "a#b", "a*b", "a?b" }) {
+  for (std::string const dir : { "my node",
+                                 "a$b",
+                                 "a'b",
+                                 "a\"b",
+                                 "a(b",
+                                 "a&b",
+                                 "a;b",
+                                 "a%b",
+                                 "a!b",
+                                 "a,b",
+                                 "a=b",
+                                 "a#b",
+                                 "a*b",
+                                 "a?b" }) {
     CAPTURE(dir);
     node->pkg_path = kRoot / dir;
     CHECK_THROWS_WITH_AS(expand(c.get(), "{{node}}", kShell),
@@ -184,7 +198,9 @@ TEST_CASE_FIXTURE(fixture, "product_expand: POSIX refuses a backslash and a `:~`
 
 TEST_CASE_FIXTURE(fixture, "product_expand: non-ASCII PowerShell and cmd would misread") {
   provide(c.get(), node.get(), "node");
-  node->pkg_path = kRoot / util_path_from_utf8("D\xE2\x80\x99" "Angelo");  // U+2019: a quote
+  node->pkg_path = kRoot / util_path_from_utf8(
+                               "D\xE2\x80\x99"
+                               "Angelo");  // U+2019: a quote
   CHECK_THROWS(expand(c.get(), "{{node}}", shell_choice::powershell));
   node->pkg_path = kRoot / util_path_from_utf8("J\xC3\xB6rg");  // cmd reads an OEM page
   CHECK_NOTHROW(expand(c.get(), "{{node}}", shell_choice::powershell));
@@ -258,7 +274,8 @@ TEST_CASE_FIXTURE(fixture, "product_expand: a command product stays out of quote
   allowed("rem don't \"\n{{yarn}}", cmd);
 }
 
-TEST_CASE_FIXTURE(fixture, "product_expand: an author's own call operator is not doubled") {
+TEST_CASE_FIXTURE(fixture,
+                  "product_expand: an author's own call operator is not doubled") {
   provide(c.get(), yarn.get(), "yarn");
   std::string const line{ yarn_line(shell_choice::powershell) };
   REQUIRE(line.starts_with("& "));
@@ -340,7 +357,8 @@ TEST_CASE_FIXTURE(fixture, "product_expand: own products render before install")
       std::runtime_error);
   CHECK(expand(c.get(), "{{self}}", kShell, pkg_phase::pkg_install) ==
         shell_quote_argv(
-            { native(kRoot / "node" / "bin/node"), native(pending / "out.json") }, kShell));
+            { native(kRoot / "node" / "bin/node"), native(pending / "out.json") },
+            kShell));
 }
 
 TEST_CASE_FIXTURE(fixture, "product_expand_check: refuses ahead what rendering would") {
@@ -352,34 +370,46 @@ TEST_CASE_FIXTURE(fixture, "product_expand_check: refuses ahead what rendering w
                                      "{{node}} '{{{{x}}}}' {{ {{y}} }}",
                                      "BUILD",
                                      kShell));
-  CHECK_THROWS_WITH_AS(product_expand_check(c.get(), pkg_phase::pkg_build, "{{nope}}",
-                                            "STAGE", kShell),
-                       doctest::Contains("STAGE: pkg 'local.c@v1' does not declare"),
-                       std::runtime_error);
-  CHECK_THROWS_WITH_AS(product_expand_check(c.get(), pkg_phase::pkg_build, "{{node",
-                                            "STAGE", kShell),
-                       doctest::Contains("STAGE: unterminated '{{' in '{{node'"),
-                       std::runtime_error);
-  CHECK_THROWS_WITH_AS(product_expand_check(c.get(), pkg_phase::pkg_build, "X={{yarn}}",
-                                            "BUILD", shell_choice::bash),
+  CHECK_THROWS_WITH_AS(
+      product_expand_check(c.get(), pkg_phase::pkg_build, "{{nope}}", "STAGE", kShell),
+      doctest::Contains("STAGE: pkg 'local.c@v1' does not declare"),
+      std::runtime_error);
+  CHECK_THROWS_WITH_AS(
+      product_expand_check(c.get(), pkg_phase::pkg_build, "{{node", "STAGE", kShell),
+      doctest::Contains("STAGE: unterminated '{{' in '{{node'"),
+      std::runtime_error);
+  CHECK_THROWS_WITH_AS(product_expand_check(c.get(),
+                                            pkg_phase::pkg_build,
+                                            "X={{yarn}}",
+                                            "BUILD",
+                                            shell_choice::bash),
                        doctest::Contains("fills whole words"),
                        std::runtime_error);
   // Unknown shell (DEFAULT_SHELL function): shell rules skipped, names still checked.
-  CHECK_NOTHROW(product_expand_check(
-      c.get(), pkg_phase::pkg_build, "X={{yarn}}", "BUILD", std::nullopt));
-  CHECK_THROWS(product_expand_check(
-      c.get(), pkg_phase::pkg_build, "{{nope}}", "BUILD", std::nullopt));
+  CHECK_NOTHROW(product_expand_check(c.get(),
+                                     pkg_phase::pkg_build,
+                                     "X={{yarn}}",
+                                     "BUILD",
+                                     std::nullopt));
+  CHECK_THROWS(product_expand_check(c.get(),
+                                    pkg_phase::pkg_build,
+                                    "{{nope}}",
+                                    "BUILD",
+                                    std::nullopt));
 
   // Own table commands are checked recursively against the phase's edges.
   c->products["inner"] = command({ "{{node}}" });
   c->products["outer"] = command({ "{{inner}}", "-x" });
   provide(c.get(), node.get(), "node", pkg_phase::pkg_install);
-  CHECK_THROWS_WITH_AS(product_expand_check(c.get(), pkg_phase::pkg_build, "{{outer}}",
-                                            "BUILD", kShell),
-                       doctest::Contains("'{{inner}}': product 'node' needed_by 'install'"),
-                       std::runtime_error);
-  CHECK_NOTHROW(product_expand_check(c.get(), pkg_phase::pkg_install, "{{outer}}",
-                                     "INSTALL", kShell));
+  CHECK_THROWS_WITH_AS(
+      product_expand_check(c.get(), pkg_phase::pkg_build, "{{outer}}", "BUILD", kShell),
+      doctest::Contains("'{{inner}}': product 'node' needed_by 'install'"),
+      std::runtime_error);
+  CHECK_NOTHROW(product_expand_check(c.get(),
+                                     pkg_phase::pkg_install,
+                                     "{{outer}}",
+                                     "INSTALL",
+                                     kShell));
 }
 
 }  // namespace envy

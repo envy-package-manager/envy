@@ -104,8 +104,11 @@ void run_build_phase(pkg *p, engine &eng) {
     // no BUILD field
   } else if (build_obj.is<std::string>()) {
     std::string const script{ build_obj.as<std::string>() };
-    run_shell_build(
-        script, p->lock->stage_dir(), p, eng.cache_root(), lua_view.lua_state());
+    run_shell_build(script,
+                    p->lock->stage_dir(),
+                    p,
+                    eng.cache_root(),
+                    lua_view.lua_state());
   } else if (build_obj.is<sol::protected_function>()) {
     run_programmatic_build(build_obj.as<sol::protected_function>(),
                            p->lock->install_dir(),

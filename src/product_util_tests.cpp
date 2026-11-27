@@ -221,8 +221,7 @@ TEST_CASE("product_util_placeholders reads escapes and brace runs") {
 TEST_CASE("product_util_argv keeps an escape as text, never a splice") {
   auto tool{ make_pkg("local.tool@v1", pkg_type::CACHE_MANAGED) };
   tool->products["fmt"] = path("bin/fmt");
-  tool->products["ps"] =
-      command({ "{{fmt}}", "{{{{.ID}}}}", "--f={{{{x}}}}{{fmt}}" });
+  tool->products["ps"] = command({ "{{fmt}}", "{{{{.ID}}}}", "--f={{{{x}}}}{{fmt}}" });
   CHECK(render(tool.get(), "ps") ==
         std::vector<std::string>{ "local.tool@v1:fmt",
                                   "{{.ID}}",

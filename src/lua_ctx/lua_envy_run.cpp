@@ -149,16 +149,16 @@ void lua_envy_run_install(sol::table &envy_table) {
     }
 
     // Expand {{ }} with this run's shell, env and cwd.
-    script = product_expand(script,
-                            { .p = p,
-                              .phase = p ? p->current_phase.load() : pkg_phase::none,
-                              .what = "envy.run",
-                              .shell = shell,
-                              .env = env,
-                              .cwd = *cwd,
-                              .state_root = pkg_env_root(ctx).value_or(""),
-                              .held = p && p->lua.owns(L.lua_state()) ? L.lua_state()
-                                                                      : nullptr });
+    script = product_expand(
+        script,
+        { .p = p,
+          .phase = p ? p->current_phase.load() : pkg_phase::none,
+          .what = "envy.run",
+          .shell = shell,
+          .env = env,
+          .cwd = *cwd,
+          .state_root = pkg_env_root(ctx).value_or(""),
+          .held = p && p->lua.owns(L.lua_state()) ? L.lua_state() : nullptr });
     std::string_view const script_view{ script };
 
     std::ostringstream stdout_stream;

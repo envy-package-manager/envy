@@ -52,8 +52,9 @@ struct product_placeholder {
 // Whether `c` is allowed in a product key.
 bool product_util_key_char(char c);
 
-// Finds `{{ }}` in `text`: braces pair by depth within a line; `{{{{a}}}}` escapes `{{a}}`;
-// an odd brace run's first `{` is text. Throws on unterminated, empty or invalid names.
+// Finds `{{ }}` in `text`: braces pair by depth within a line; `{{{{a}}}}` escapes
+// `{{a}}`; an odd brace run's first `{` is text. Throws on unterminated, empty or invalid
+// names.
 std::vector<product_placeholder> product_util_placeholders(std::string_view text);
 
 // The package in `root`'s dependency closure, `root` included, whose PRODUCTS declares

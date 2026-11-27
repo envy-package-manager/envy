@@ -18,7 +18,9 @@ void lua_envy_product_install(sol::table &envy_table) {
                              sol::this_state L) -> std::string {
     phase_context const *ctx{ lua_phase_context_get(L) };
     pkg *const p{ ctx ? ctx->p : nullptr };
-    if (!p) { throw_runtime_error({ "envy.product: not in phase context (missing pkg)" }); }
+    if (!p) {
+      throw_runtime_error({ "envy.product: not in phase context (missing pkg)" });
+    }
     pkg_phase const phase{ p->current_phase.load() };
     product_grant const grant{ product_authorize(p, phase, product_name, "envy.product") };
     if (product_util_is_command(grant.provider, product_name)) {

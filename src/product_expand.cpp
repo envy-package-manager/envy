@@ -45,9 +45,7 @@ std::vector<product_placeholder> placeholders(std::string_view text,
                                               std::string_view what) {
   try {
     return product_util_placeholders(text);
-  } catch (std::exception const &e) {
-    throw_runtime_error({ what, ": ", e.what() });
-  }
+  } catch (std::exception const &e) { throw_runtime_error({ what, ": ", e.what() }); }
 }
 
 // The target shell's rules; UNKNOWN while a DEFAULT_SHELL function hasn't run.
@@ -470,8 +468,11 @@ std::vector<std::string> phase_argv(pkg *consumer,
                                          ec) };
     return ec ? std::filesystem::path{} : dir;
   }() };
-  if (auto found{ product_util_find_program(
-          argv.front(), program, path(), cwd, bin.empty() ? nullptr : &bin) }) {
+  if (auto found{ product_util_find_program(argv.front(),
+                                            program,
+                                            path(),
+                                            cwd,
+                                            bin.empty() ? nullptr : &bin) }) {
     argv.front() = std::move(*found);
   }
   return argv;
@@ -497,20 +498,22 @@ std::string expand_one(std::string_view text,
   try {
     if (product_util_is_command(q, h.name)) {
       if (d == dialect::CUSTOM) {
-        throw_runtime_error({ cfg.what,
-                              ": '{{",
-                              h.name,
-                              "}}' is a command product, and a custom shell has no quoting "
-                              "envy knows; only path products expand there" });
+        throw_runtime_error(
+            { cfg.what,
+              ": '{{",
+              h.name,
+              "}}' is a command product, and a custom shell has no quoting "
+              "envy knows; only path products expand there" });
       }
       if (d != dialect::UNKNOWN) { require_whole_word(text, h, d, cfg.what); }
       if (quoted_at(text, h.begin, d)) {
-        throw_runtime_error({ cfg.what,
-                              ": '{{",
-                              h.name,
-                              "}}' is a command product inside quoted text; its argv is "
-                              "quoted for shell code, so place it outside quotes, heredocs "
-                              "and here-strings" });
+        throw_runtime_error(
+            { cfg.what,
+              ": '{{",
+              h.name,
+              "}}' is a command product inside quoted text; its argv is "
+              "quoted for shell code, so place it outside quotes, heredocs "
+              "and here-strings" });
       }
       if (!render) {
         std::unordered_set<std::string> seen;
@@ -524,20 +527,20 @@ std::string expand_one(std::string_view text,
       shell_choice const shell{ std::get<shell_choice>(cfg.shell) };  // not custom here
       std::string line{ [&] {
         try {
-          return shell_quote_argv(phase_argv(
-                                      cfg.p,
-                                      q,
-                                      h.name,
-                                      cfg.phase,
-                                      cfg.state_root,
-                                      cfg.held,
-                                      [&] {
-                                        std::string const *const path{ env_get(cfg.env,
-                                                                               "PATH") };
-                                        return path ? *path : std::string{};
-                                      },
-                                      cfg.cwd),
-                                  shell);
+          return shell_quote_argv(
+              phase_argv(
+                  cfg.p,
+                  q,
+                  h.name,
+                  cfg.phase,
+                  cfg.state_root,
+                  cfg.held,
+                  [&] {
+                    std::string const *const path{ env_get(cfg.env, "PATH") };
+                    return path ? *path : std::string{};
+                  },
+                  cfg.cwd),
+              shell);
         } catch (std::exception const &e) {
           throw_runtime_error({ cfg.what, ": ", e.what() });
         }
@@ -626,9 +629,11 @@ product_grant product_authorize(pkg *consumer,
                                 bool trace,
                                 std::string_view hint) {
   if (name.empty()) { throw_runtime_error({ what, ": product name cannot be empty" }); }
-  product_access a{
-    .consumer = consumer, .name = name, .what = what, .phase = phase, .traced = trace
-  };
+  product_access a{ .consumer = consumer,
+                    .name = name,
+                    .what = what,
+                    .phase = phase,
+                    .traced = trace };
 
   bool const own{ [&] {
     std::lock_guard const deps_lock(consumer->deps_mutex);
@@ -750,8 +755,14 @@ void product_run_phase_script(pkg *p,
                                            .cwd = cwd,
                                            .state_root = state_root,
                                            .held = held }) };
-  tui_actions::run_phase_shell_script(
-      text, label, cwd, p->cfg->identity, shell, section, cache_root, std::move(env));
+  tui_actions::run_phase_shell_script(text,
+                                      label,
+                                      cwd,
+                                      p->cfg->identity,
+                                      shell,
+                                      section,
+                                      cache_root,
+                                      std::move(env));
 }
 
 }  // namespace envy

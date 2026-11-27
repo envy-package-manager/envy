@@ -204,19 +204,21 @@ struct argv_builder {
 
   void append(pkg *provider, std::string const &name) {
     envy::visit(
-        match{
-            [&](std::string const &) { push(leaf(provider, name), provider, name); },
-            [&](std::vector<std::string> const &argv) {
-              walk(provider, name, [&] { return argv; });
-            },
-            [&](product_command_fn) {
-              walk(provider, name, [&] {
-                lua_State *const held{ provider == render.held_pkg ? render.held
-                                                                   : nullptr };
-                return call_command_fn(
-                    provider, name, render.pkg_path, render.state_root, held);
-              });
-            } },
+        match{ [&](std::string const &) { push(leaf(provider, name), provider, name); },
+               [&](std::vector<std::string> const &argv) {
+                 walk(provider, name, [&] { return argv; });
+               },
+               [&](product_command_fn) {
+                 walk(provider, name, [&] {
+                   lua_State *const held{ provider == render.held_pkg ? render.held
+                                                                      : nullptr };
+                   return call_command_fn(provider,
+                                          name,
+                                          render.pkg_path,
+                                          render.state_root,
+                                          held);
+                 });
+               } },
         entry_of(provider, name).value);
   }
 

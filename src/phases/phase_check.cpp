@@ -79,8 +79,11 @@ void check_verb_products(pkg *p) {
                                      std::pair{ "INSTALL", pkg_phase::pkg_install } }) {
     sol::object const text{ lua[verb] };
     if (text.is<std::string>()) {
-      product_expand_check(
-          p, phase, text.as<std::string>(), p->cfg->identity + " " + verb, shell);
+      product_expand_check(p,
+                           phase,
+                           text.as<std::string>(),
+                           p->cfg->identity + " " + verb,
+                           shell);
     }
   }
 }
