@@ -102,9 +102,11 @@ end
         self.assertTrue((pkg_path / "rename_check.txt").exists())
 
     def test_with_template(self):
-        """envy.run() works with template substitution."""
-        # Template substitution via sed/PowerShell
-        spec = """-- Test envy.run() mixed with envy.template()
+        """envy.run() passes escaped braces to a shell-side template.
+
+        The 8 braces are envy's `{{{{name}}}}` escape, doubled again for str.format.
+        """
+        spec = """-- Test envy.run() with a shell-side template
 IDENTITY = "local.ctx_run_with_template@v1"
 
 FETCH = {{
@@ -117,12 +119,12 @@ STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
 
   if envy.PLATFORM == "windows" then
     envy.run([[
-      Set-Content -Path greeting.tmpl -Value "Hello {{{{name}}}}, you are {{{{age}}}} years old"
+      Set-Content -Path greeting.tmpl -Value "Hello {{{{{{{{name}}}}}}}}, you are {{{{{{{{age}}}}}}}} years old"
     ]], {{ shell = ENVY_SHELL.POWERSHELL }})
 
     envy.run([[
       $content = Get-Content greeting.tmpl
-      $content = $content -replace "{{{{name}}}}","Alice" -replace "{{{{age}}}}","30"
+      $content = $content -replace "{{{{{{{{name}}}}}}}}","Alice" -replace "{{{{{{{{age}}}}}}}}","30"
       Set-Content -Path greeting.txt -Value $content
     ]], {{ shell = ENVY_SHELL.POWERSHELL }})
 
@@ -132,13 +134,13 @@ STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
     ]], {{ shell = ENVY_SHELL.POWERSHELL }})
   else
     envy.run([[
-      echo "Hello {{{{name}}}}, you are {{{{age}}}} years old" > greeting.tmpl
+      echo "Hello {{{{{{{{name}}}}}}}}, you are {{{{{{{{age}}}}}}}} years old" > greeting.tmpl
     ]])
 
     envy.run([[
       name="Alice"
       age="30"
-      sed "s/{{{{name}}}}/$name/g; s/{{{{age}}}}/$age/g" greeting.tmpl > greeting.txt
+      sed "s/{{{{{{{{name}}}}}}}}/$name/g; s/{{{{{{{{age}}}}}}}}/$age/g" greeting.tmpl > greeting.txt
     ]])
 
     envy.run([[
@@ -153,6 +155,10 @@ end
         pkg_path = self.get_pkg_path("local.ctx_run_with_template@v1")
         assert pkg_path
         self.assertTrue((pkg_path / "template_check.txt").exists())
+        self.assertEqual(  # the shell received `{{name}}`
+            "Hello {name}, you are {age} years old".format(name="{{name}}", age="{{age}}"),
+            (pkg_path / "greeting.tmpl").read_text(encoding="utf-8").strip(),
+        )
 
     def test_multiple_calls(self):
         """Multiple envy.run() calls work in sequence."""
@@ -235,9 +241,9 @@ STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
     ]], {{ shell = ENVY_SHELL.POWERSHELL }})
 
     envy.run([[
-      Set-Content -Path version.tmpl -Value "Version: {{{{version}}}}"
+      Set-Content -Path version.tmpl -Value "Version: {{{{{{{{version}}}}}}}}"
       $content = Get-Content version.tmpl
-      $content = $content -replace "{{{{version}}}}", "1.0"
+      $content = $content -replace "{{{{{{{{version}}}}}}}}", "1.0"
       Set-Content -Path version.txt -Value $content
     ]], {{ shell = ENVY_SHELL.POWERSHELL }})
 
@@ -263,9 +269,9 @@ STAGE = function(fetch_dir, stage_dir, tmp_dir, options)
     ]])
 
     envy.run([[
-      echo "Version: {{{{version}}}}" > version.tmpl
+      echo "Version: {{{{{{{{version}}}}}}}}" > version.tmpl
       version="1.0"
-      sed "s/{{{{version}}}}/$version/g" version.tmpl > version.txt
+      sed "s/{{{{{{{{version}}}}}}}}/$version/g" version.tmpl > version.txt
     ]])
 
     envy.run([[

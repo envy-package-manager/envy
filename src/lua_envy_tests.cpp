@@ -39,15 +39,13 @@ TEST_CASE("envy.PROJECT_ROOT is the given root in platform spelling, nil without
   CHECK_FALSE((*without)["envy"]["PROJECT_ROOT"].valid());
 }
 
-TEST_CASE("envy.extend and envy.template are named and keep their lines") {
+TEST_CASE("envy.extend is named and keeps its lines") {
   auto lua{ sol_util_make_lua_state() };
   lua_envy_install(*lua, {});
-  for (std::string const fn : { "extend", "template" }) {
-    auto const info{ lua->safe_script("local i = debug.getinfo(envy." + fn +
-                                      ", 'S'); return i.source, i.linedefined") };
-    CHECK(info.get<std::string>(0) == "=envy." + fn);
-    CHECK(info.get<int>(1) > 0);
-  }
+  auto const info{ lua->safe_script(
+      "local i = debug.getinfo(envy.extend, 'S'); return i.source, i.linedefined") };
+  CHECK(info.get<std::string>(0) == "=envy.extend");
+  CHECK(info.get<int>(1) > 0);
 }
 
 TEST_CASE("envy.extend") {

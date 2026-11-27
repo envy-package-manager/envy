@@ -2,7 +2,7 @@
 
 `yarn = { command = { "{{node}}", "{{yarn.cjs}}" } }` runs a script through another
 product's interpreter. Every `{{name}}` is a product of the provider or its dependency
-closure, rendered at each use -- `envy product --run`, `envy.product_command`, `envy
+closure, rendered at each use -- `envy product --run`, `{{name}}` in phase text, `envy
 product` -- so nothing lands in the payload. These pin that.
 """
 
@@ -193,33 +193,35 @@ class TestProductCommand(EnvyTestCase):
         m = self.manifest(("local.um@v1", um))
         self.assertEqual(self.ok("product", "--manifest", m, "--run", "hi").strip(), "42")
 
-    # -- envy.product_command / envy.product --------------------------------
+    # -- {{name}} in a phase / envy.product -----------------------------------
 
-    def test_product_command_runs_in_a_consumer_phase(self):
+    def access(self, r, target: str) -> list[dict]:
+        return [e.raw for e in r.events("lua_ctx_product_access", "local.consumer@v1")
+                if e.raw["target"] == target]
+
+    def test_a_command_runs_in_a_consumer_phase(self):
         consumer = self.consumer_spec(
             '{ product = "wrapped" }',
-            '  local r = envy.run(envy.product_command("wrapped") .. " \'it s\'",\n'
-            "                     { capture = true })\n"
+            '  local r = envy.run("{{wrapped}} \'it s\'", { capture = true })\n'
             "  out = envy.json.decode(r.stdout)")
         m = self.standard(("local.consumer@v1", consumer))
         self.assert_tool_argv(m, self.out(m), ["--fixed", "--extra", "it s"])
 
-    def test_product_command_is_authorized_and_traced_like_product(self):
+    def test_a_command_is_authorized_and_traced_like_product(self):
         consumer = self.consumer_spec(
             '{ product = "tool", needed_by = "install" }',
-            '  out = envy.product_command("tool")',
-            build='  local ok, err = pcall(envy.product_command, "tool")\n'
-                  "  assert(not ok and err:find(\"envy.product_command: product 'tool' "
+            '  out = envy.json.decode(envy.run("{{tool}}", { capture = true }).stdout)',
+            build='  local ok, err = pcall(envy.run, "{{tool}}")\n'
+                  "  assert(not ok and err:find(\"envy.run: product 'tool' "
                   "needed_by 'install' but accessed during 'build'\", 1, true), err)\n"
-                  '  ok, err = pcall(envy.product_command, "undeclared")\n'
-                  "  assert(not ok and err:find(\"envy.product_command: pkg "
+                  '  ok, err = pcall(envy.run, "{{undeclared}}")\n'
+                  "  assert(not ok and err:find(\"envy.run: pkg "
                   "'local.consumer@v1' does not declare product dependency on "
                   "'undeclared'\", 1, true), err)")
         m = self.standard(("local.consumer@v1", consumer))
         r = self.run_envy("install", "--manifest", m)
         self.assertEqual(r.returncode, 0, r.stderr)
-        pkg = Path(self.ok("package", "local.consumer@v1", "--manifest", m).strip())
-        allowed_cmd = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
+        self.assert_tool_argv(m, self.out(m), ["--fixed"])
 
         events = [e.raw for e in r.events("lua_ctx_product_access", "local.consumer@v1")]
         denied = [e for e in events if e["allowed"] is False]
@@ -229,36 +231,34 @@ class TestProductCommand(EnvyTestCase):
         self.assertEqual(denied[0]["provider"], "local.tool@v1")
         self.assertEqual(len(allowed), 1, events)
         self.assertEqual(allowed[0]["target"], "tool")
-        self.assertEqual(allowed[0]["reason"], allowed_cmd)
+        self.assertIn("tool.py", allowed[0]["reason"])  # the rendered line
 
-    def test_product_command_runs_a_path_product(self):
-        """A path product is a one-element command: consumers need not know which."""
+    @unittest.skipIf(" " in str(PY), "a user-managed {{py}} is inserted as written")
+    def test_a_path_product_runs_as_its_text(self):
         consumer = self.consumer_spec(
             '{ product = "py" }',
-            '  local r = envy.run(envy.product_command("py") .. " -c \\"print(7)\\"",\n'
-            "                     { capture = true })\n"
-            "  out = r.stdout")
+            "  out = envy.run([[{{py}} -c \"print(7)\"]], { capture = true }).stdout")
         m = self.manifest(("local.py@v1", self.py_spec), ("local.consumer@v1", consumer))
         self.assertEqual(self.out(m).strip(), "7")
 
-    def test_product_command_resolves_a_bare_program_on_path(self):
+    def test_a_commands_bare_program_resolves_on_path_or_stays_bare(self):
         um = self.write_spec("um.lua", self.user_spec(
             "local.py@v1",
-            f'{{ py = "{PY.name}", nope = "envy-test-no-such-program" }}'))
+            f'{{ py = "{PY.name}", run = {{ command = {{ "{{{{py}}}}", "-c", "print(1)" }} }},\n'
+            '   gone = { command = { "envy-test-no-such-program" } } }'))
         consumer = self.consumer_spec(
-            '{ product = "py" }, { product = "nope" }',
-            '  local ok, err = pcall(envy.product_command, "nope")\n'
-            "  assert(not ok and err:find(\"envy.product_command: "
-            "'envy-test-no-such-program' not on PATH\", 1, true), err)\n"
-            '  out = envy.product_command("py")')
+            '{ product = "run" }, { product = "gone" }',
+            '  local ok, err = pcall(envy.run, "{{gone}}")\n'  # stays bare; the shell fails
+            "  assert(not ok and err:find(\"envy-test-no-such-program\", 1, true), err)\n"
+            '  out = envy.run("{{run}}", { capture = true }).stdout')
         m = self.manifest(("local.py@v1", um), ("local.consumer@v1", consumer))
-        self.ok("install", "--manifest", m, env=self.path_env())
-        pkg = Path(self.ok("package", "local.consumer@v1", "--manifest", m,
-                           env=self.path_env()).strip())
-        line = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
-        self.assertIn(_norm(PY.parent), _norm(line.replace("'", "")))
+        r = self.run_envy("install", "--manifest", m, env=self.path_env())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.out(m).strip(), "1")
+        line = self.access(r, "run")[0]["reason"]
+        self.assertIn(_norm(PY.parent), _norm(line.replace("'", "").removeprefix("& ")))
 
-    def test_product_command_carries_or_refuses_awkward_arguments(self):
+    def test_a_command_carries_or_refuses_awkward_arguments(self):
         """sh carries an empty argument and a '"' intact; powershell.exe 5.1 would drop
         one and strip the other, so on Windows envy refuses rather than mangle."""
         tool = self.tool_spec(
@@ -266,24 +266,23 @@ class TestProductCommand(EnvyTestCase):
             '  odd = { command = { "{{py}}", "{{tool.py}}", "", "say \\"hi\\"" } } }')
         consumer = self.consumer_spec(
             '{ product = "odd" }',
-            '  local ok, cmd = pcall(envy.product_command, "odd")\n'
-            "  out = ok and envy.json.decode(envy.run(cmd, { capture = true }).stdout)\n"
-            "    or cmd")
+            '  local ok, r = pcall(envy.run, "{{odd}}", { capture = true })\n'
+            "  out = ok and envy.json.decode(r.stdout) or r")
         m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool),
                           ("local.consumer@v1", consumer))
         out = self.out(m)
         if WINDOWS:
-            self.assertIn("envy.product_command: PowerShell cannot quote '': "
+            self.assertIn("envy.run: PowerShell cannot quote '': "
                           "powershell.exe drops an empty argument", out)
         else:
             self.assert_tool_argv(m, out, ["", 'say "hi"'])
 
     @unittest.skipIf(WINDOWS, "the decoy wrapper is a POSIX script")
-    def test_product_command_skips_the_products_wrapper_on_path(self):
+    def test_a_command_skips_the_products_wrapper_on_path(self):
         """A bin dir already on PATH (CI adds it) holds the product's own wrapper."""
         consumer = self.consumer_spec(
             '{ product = "tool" }',
-            '  local r = envy.run(envy.product_command("tool"), { capture = true })\n'
+            '  local r = envy.run("{{tool}}", { capture = true })\n'
             "  out = envy.json.decode(r.stdout)")
         m = self.manifest(("local.um@v1", self.bare_python()),
                           ("local.consumer@v1", consumer))
@@ -295,25 +294,25 @@ class TestProductCommand(EnvyTestCase):
         self.assertEqual(argv, [self.lua_path(self.tool_py), "--fixed"])
 
     @unittest.skipIf(WINDOWS, "the program it builds is a POSIX script")
-    def test_product_command_anchors_relative_path_entries_at_the_run_dir(self):
+    def test_a_command_anchors_relative_path_entries_at_the_run_dir(self):
         """envy.run runs from the phase's run dir; a relative PATH entry means there."""
         um = self.write_spec("um.lua", self.user_spec(
-            "local.um@v1", '{ prog = "envy-test-rel-prog" }'))
+            "local.um@v1", '{ prog = { command = { "envy-test-rel-prog" } } }'))
         consumer = self.consumer_spec(
             '{ product = "prog" }',
             "  envy.run([[mkdir -p rel && printf '#!/bin/sh\\necho hi\\n' "
             "> rel/envy-test-rel-prog && chmod +x rel/envy-test-rel-prog]])\n"
-            '  local cmd = envy.product_command("prog")\n'
-            "  out = { cmd = cmd, ran = envy.run(cmd, { capture = true }).stdout }")
+            '  out = envy.run("{{prog}}", { capture = true }).stdout')
         m = self.manifest(("local.um@v1", um), ("local.consumer@v1", consumer))
         env = self.path_env("rel")
-        self.ok("install", "--manifest", m, env=env)
+        r = self.run_envy("install", "--manifest", m, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = self.access(r, "prog")[0]["reason"]
+        self.assertTrue(line.startswith("/"), line)
+        self.assertTrue(line.endswith("/rel/envy-test-rel-prog"), line)
         pkg = Path(self.ok("package", "local.consumer@v1", "--manifest", m,
                            env=env).strip())
-        out = json.loads((pkg / "out.json").read_text(encoding="utf-8"))
-        self.assertTrue(out["cmd"].startswith("/"), out)
-        self.assertTrue(out["cmd"].endswith("/rel/envy-test-rel-prog"), out)
-        self.assertEqual(out["ran"].strip(), "hi")
+        self.assertEqual(json.loads((pkg / "out.json").read_text("utf-8")).strip(), "hi")
 
     def test_a_pin_to_a_package_that_lacks_the_product_is_refused(self):
         """`product = "py"` pinned to local.f@v1, which only depends on py's provider."""
@@ -337,14 +336,12 @@ class TestProductCommand(EnvyTestCase):
         self.fails(self.manifest(("local.tool@v1", tool)), needle)
 
     @unittest.skipIf(WINDOWS, "a POSIX custom shell")
-    def test_custom_default_shell_needs_a_named_shell(self):
+    def test_a_custom_default_shell_runs_a_command_only_in_a_named_shell(self):
         consumer = self.consumer_spec(
             '{ product = "tool" }',
-            '  local ok, err = pcall(envy.product_command, "tool")\n'
-            "  assert(not ok and err:find(\"envy.product_command: the shell is custom\", "
-            "1, true), err)\n"
-            '  local r = envy.run(envy.product_command("tool", ENVY_SHELL.SH) .. " q",\n'
-            "                     { capture = true })\n"
+            '  local ok, err = pcall(envy.run, "{{tool}}")\n'
+            "  assert(not ok and err:find(\"a custom shell has no quoting\", 1, true), err)\n"
+            '  local r = envy.run("{{tool}} q", { shell = ENVY_SHELL.SH, capture = true })\n'
             "  out = envy.json.decode(r.stdout)")
         m = self.standard(("local.consumer@v1", consumer),
                           header='DEFAULT_SHELL = { file = { "/bin/sh" }, ext = ".sh" }')
@@ -353,9 +350,10 @@ class TestProductCommand(EnvyTestCase):
     def test_product_refuses_a_command(self):
         consumer = self.consumer_spec('{ product = "tool" }', '  out = envy.product("tool")')
         m = self.standard(("local.consumer@v1", consumer))
-        self.fails(m, "envy.product: product 'tool' is a command, not a path; use "
-                      "envy.product_command")
+        self.fails(m, "envy.product: product 'tool' is a command, not a path; run it as "
+                      "'{{tool}}' in phase text")
 
+    @unittest.skipIf(" " in str(PY), "a user-managed {{py}} is inserted as written")
     def test_weak_fallback_that_provides_transitively(self):
         """The fallback reaches `py` through its own dependency; both accessors find it."""
         fallback = self.write_spec(
@@ -367,11 +365,12 @@ class TestProductCommand(EnvyTestCase):
         consumer = self.consumer_spec(
             f'{{ product = "py", weak = {{ spec = "local.f@v1", '
             f'source = "{self.lua_path(fallback)}" }} }}',
-            '  out = { path = envy.product("py"), command = envy.product_command("py") }')
+            '  out = { path = envy.product("py"),\n'
+            '          ran = envy.run([[{{py}} -c "print(3)"]], { capture = true }).stdout }')
         m = self.manifest(("local.consumer@v1", consumer))
         out = self.out(m)
         self.assertEqual(out["path"], PY.as_posix())
-        self.assertIn(_norm(PY), _norm(out["command"].replace("'", "").lstrip("& ")))
+        self.assertEqual(out["ran"].strip(), "3")
 
     # -- printing -----------------------------------------------------------
 
@@ -450,7 +449,7 @@ class TestProductCommand(EnvyTestCase):
         """The project's under --run; the consumer's scratch in a phase, never the project's."""
         consumer = self.consumer_spec(
             '{ product = "state" }',
-            '  local r = envy.run(envy.product_command("state"), { capture = true })\n'
+            '  local r = envy.run("{{state}}", { capture = true })\n'
             "  out = envy.json.decode(r.stdout)")
         m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", self.state_spec()),
                           ("local.consumer@v1", consumer))
@@ -500,11 +499,11 @@ class TestProductCommand(EnvyTestCase):
                 ran = [e.phase for e in r.events("phase_start", "local.tool@v1")]
                 self.assertEqual(ran, [PkgPhase.SPEC_FETCH], "a phase past resolution ran")
 
-    def test_a_failing_command_function_is_a_product_command_refusal(self):
+    def test_a_failing_command_function_is_an_expansion_refusal(self):
         """Its Lua error crosses into the consumer's state as one pcall can catch."""
         consumer = self.consumer_spec(
             '{ product = "tool" }',
-            '  local ok, err = pcall(envy.product_command, "tool")\n'
+            '  local ok, err = pcall(envy.run, "{{tool}}")\n'
             '  out = ok and "allowed" or err')
         tool = self.fn_tool(  # validation's call passes; the phase's is the second
             '  calls = (calls or 0) + 1\n'
@@ -513,7 +512,7 @@ class TestProductCommand(EnvyTestCase):
         m = self.manifest(("local.py@v1", self.py_spec), ("local.tool@v1", tool),
                           ("local.consumer@v1", consumer))
         err = self.out(m)
-        self.assertTrue(err.startswith("envy.product_command: "), err)
+        self.assertTrue(err.startswith("envy.run: "), err)
         self.assertIn("boom", err)
         self.assertIn("PRODUCTS['tool'].command", err)
 
@@ -549,7 +548,7 @@ class TestProductCommand(EnvyTestCase):
         self.assertEqual(opts, {"flag": "orig"})
 
     @unittest.skipIf(WINDOWS, "a POSIX string verb runs the DEFAULT_SHELL function")
-    def test_product_command_in_the_default_shell_function(self):
+    def test_a_command_in_the_default_shell_function(self):
         """No scratch dir there: a table command renders; only a function needs one."""
         py = self.write_spec("py.lua", self.user_spec(
             "local.py@v1",
@@ -562,8 +561,8 @@ class TestProductCommand(EnvyTestCase):
             'BUILD = "echo built"\nINSTALL = function() end\n')
         header = (
             'DEFAULT_SHELL = { DEPENDS = { "local.py@v1" }, SHELL = function()\n'
-            '  assert(envy.product_command("hi"):find("print(42)", 1, true))\n'
-            '  local ok, err = pcall(envy.product_command, "fn")\n'
+            '  assert(envy.run("{{hi}}", { capture = true }).stdout:find("42", 1, true))\n'
+            '  local ok, err = pcall(envy.run, "{{fn}}")\n'
             "  assert(not ok and err:find(\"no root for its pkg_state_dir\", 1, true), err)\n"
             "  return ENVY_SHELL.SH\n"
             "end }")

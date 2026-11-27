@@ -1,7 +1,7 @@
 """Functional tests for envy.package() dependency validation.
 
-Tests that specs must explicitly declare dependencies (direct or transitive)
-before calling envy.package() to access them. This ensures build graph integrity
+Tests that specs must declare a direct dependency on every package they access with
+envy.package(); reaching one only through another dependency is refused. This ensures build graph integrity
 and enables better dependency analysis.
 """
 
@@ -201,8 +201,8 @@ end
         )
         self.assertIn("local.dep_val_missing@v1", result.stderr)
 
-    def test_transitive_dependency(self):
-        """Spec calls envy.package() on transitive dependency - should succeed."""
+    def test_dependency_of_a_dependency_declared_directly(self):
+        """A dependency's dependency is readable when declared directly too."""
         # Base library
         self.write_spec(
             "dep_val_lib.lua",
@@ -254,7 +254,7 @@ end
         # Spec that accesses lib transitively through tool
         self.write_spec(
             "dep_val_transitive.lua",
-            """-- Dependency validation test: POSITIVE - transitive dependency access
+            """-- Dependency validation test: POSITIVE - a dependency's dependency, declared
 IDENTITY = "local.dep_val_transitive@v1"
 
 DEPENDENCIES = {{
@@ -277,7 +277,7 @@ BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, options)
   -- Access tool (direct dependency) - should work
   local tool_path = envy.package("local.dep_val_tool@v1")
 
-  -- Access lib (transitive dependency: us -> tool -> lib) - SHOULD WORK
+  -- lib is tool's dependency too, but readable because declared here
   local lib_path = envy.package("local.dep_val_lib@v1")
 
   envy.run([[echo "transitive access worked" > transitive.txt]])
@@ -293,8 +293,8 @@ end
         # Success means validation passed - the build completed without error
         self.assertIn("local.dep_val_transitive@v1", output)
 
-    def test_transitive_3_levels(self):
-        """Spec calls envy.package() on transitive dependency 3 levels deep - should succeed."""
+    def test_declared_dependency_3_levels_deep(self):
+        """A package three levels down is readable when declared directly."""
         # Base library for 3-level test
         self.write_spec(
             "dep_val_level3_base.lua",

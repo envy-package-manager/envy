@@ -173,7 +173,7 @@ TEST_CASE("format_lua_error drops frames inside envy's own Lua") {
                              "boom\nstack traceback:\n"
                              "\t[C]: in function 'error'\n"
                              "\tenvy.prelude:7: in function 'error'\n"
-                             "\tenvy.template:31: in function <envy.template:2>\n"
+                             "\tenvy.extend:31: in function <envy.extend:2>\n"
                              "\t/specs/x.lua:5: in function 'BUILD'\n",
                          .r = f.p.get(),
                          .phase = "" };
@@ -181,7 +181,7 @@ TEST_CASE("format_lua_error drops frames inside envy's own Lua") {
   std::string const result{ format_lua_error(ctx) };
   CHECK(result.find("/specs/x.lua:5") != std::string::npos);
   CHECK(result.find("envy.prelude:") == std::string::npos);
-  CHECK(result.find("envy.template:") == std::string::npos);
+  CHECK(result.find("envy.extend:") == std::string::npos);
 }
 
 TEST_CASE("format_lua_error includes spec_file_path when present") {

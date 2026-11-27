@@ -82,7 +82,7 @@ ENVY_TRACE_EVENT(lock_released,
                  ENVY_TRACE_FIELD_STR(lock_path)
                  ENVY_TRACE_FIELD_I64(hold_duration_ms))
 
-// --- lua sandbox access checks ---
+// --- product/package access checks: envy.* calls, and each `{{name}}` a phase expands ---
 
 ENVY_TRACE_EVENT(lua_ctx_package_access,
                  ENVY_TRACE_FIELD_STR(target)

@@ -39,16 +39,6 @@ function envy.error(msg) end
 ---@param msg string
 function envy.stdout(msg) end
 
---------------------------------------------------------------------------------
--- String Templates
---------------------------------------------------------------------------------
-
----Replace `{{key}}` placeholders with values from table
----@param str string Template string with `{{key}}` placeholders
----@param values table<string, any> Key-value pairs for substitution
----@return string
-function envy.template(str, values) end
-
 ---Extend target array with items from one or more source arrays
 ---@param target any[] Target array to extend (modified in-place)
 ---@param ... any[] Source arrays to append
@@ -220,7 +210,7 @@ function envy.is_dir(path) end
 ---@field stdout? string Captured stdout (only if capture=true)
 ---@field stderr? string Captured stderr (only if capture=true)
 
----Execute shell script
+---Execute shell script; each `{{name}}` is a product, `{{{{x}}}}` the text `{{x}}`
 ---@param script string|string[] Shell script (string or array of lines)
 ---@param opts? envy.run_opts Execution options
 ---@return envy.run_result
@@ -295,17 +285,12 @@ function envy.verify_hash(file_path, expected_sha256) end
 ---@return string pkg_path Absolute path to dependency's installed package
 function envy.package(identity) end
 
----Get product value from a dependency; errors on a command product
+---Get product value from a dependency or this spec's own; errors on a command product,
+---which phase text runs as `{{name}}`
 ---@param name string Product name declared in provider's PRODUCTS
 ---@return string value Product value (path or arbitrary string)
 function envy.product(name) end
 
----Command line that runs a product, quoted for `shell` (default: the phase's shell);
----a path product is a one-element command. Append arguments and pass to envy.run.
----@param name string Product name declared in provider's PRODUCTS
----@param shell? integer ENVY_SHELL.* constant; required when the phase's shell is custom
----@return string command e.g. "/c/node/bin/node /c/yarn/lib/yarn.cjs"
-function envy.product_command(name, shell) end
 
 ---Load Lua file from declared dependency into sandboxed environment
 ---Supports fuzzy identity matching (e.g., "helpers" matches "acme.helpers@v1")

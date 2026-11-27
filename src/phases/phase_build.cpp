@@ -7,6 +7,7 @@
 #include "lua_error_formatter.h"
 #include "pkg.h"
 #include "pkg_env.h"
+#include "product_expand.h"
 #include "shell.h"
 #include "trace.h"
 #include "tui.h"
@@ -23,19 +24,22 @@
 namespace envy {
 namespace {
 
+// `L`: the package's Lua state, locked by the caller.
 void execute_build_script(std::string_view script,
                           std::filesystem::path const &cwd,
                           pkg *p,
-                          std::filesystem::path const &cache_root) {
-  tui_actions::run_phase_shell_script(
-      script,
-      "Build",
-      cwd,
-      p->cfg->identity,
-      pkg_default_shell(p),
-      p->tui_section,
-      cache_root,
-      pkg_env_for_phase(p, pkg_phase::pkg_build, p->lock->tmp_dir()));
+                          std::filesystem::path const &cache_root,
+                          lua_State *L) {
+  product_run_phase_script(p,
+                           pkg_phase::pkg_build,
+                           "BUILD",
+                           "Build",
+                           script,
+                           cwd,
+                           p->lock->tmp_dir(),
+                           L,
+                           p->tui_section,
+                           cache_root);
 }
 
 void run_programmatic_build(sol::protected_function build_func,
@@ -70,7 +74,7 @@ void run_programmatic_build(sol::protected_function build_func,
     sol::object return_value = build_result;
     if (return_value.is<std::string>()) {
       std::string const script{ return_value.as<std::string>() };
-      execute_build_script(script, stage_dir, p, eng.cache_root());
+      execute_build_script(script, stage_dir, p, eng.cache_root(), lua.lua_state());
     }
   }
 }
@@ -78,9 +82,10 @@ void run_programmatic_build(sol::protected_function build_func,
 void run_shell_build(std::string_view script,
                      std::filesystem::path const &stage_dir,
                      pkg *p,
-                     std::filesystem::path const &cache_root) {
+                     std::filesystem::path const &cache_root,
+                     lua_State *L) {
   tui::debug("build: shell script");
-  execute_build_script(script, stage_dir, p, cache_root);
+  execute_build_script(script, stage_dir, p, cache_root, L);
 }
 
 }  // namespace
@@ -99,7 +104,8 @@ void run_build_phase(pkg *p, engine &eng) {
     // no BUILD field
   } else if (build_obj.is<std::string>()) {
     std::string const script{ build_obj.as<std::string>() };
-    run_shell_build(script, p->lock->stage_dir(), p, eng.cache_root());
+    run_shell_build(
+        script, p->lock->stage_dir(), p, eng.cache_root(), lua_view.lua_state());
   } else if (build_obj.is<sol::protected_function>()) {
     run_programmatic_build(build_obj.as<sol::protected_function>(),
                            p->lock->install_dir(),

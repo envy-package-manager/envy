@@ -19,10 +19,7 @@ BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, opts)
     return
   end
 
-  return envy.template([[
-  ./configure --prefix={{prefix}}
-  make -j
-]], { prefix = install_dir })
+  return "./configure --prefix=" .. install_dir .. "\nmake -j"
 end
 
 INSTALL = function(install_dir, stage_dir, fetch_dir, tmp_dir, opts)

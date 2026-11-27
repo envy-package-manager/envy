@@ -107,11 +107,27 @@ std::string path_value(pkg *provider,
   return dir ? spell(*dir / *value) : *value;
 }
 
-// What `name`'s command function returns, called as ENV is and held to a table's rules.
+// Clears the phase context while a command function runs; restores it after.
+class phase_context_hidden : unmovable {
+ public:
+  explicit phase_context_hidden(lua_State *L)
+      : lua_{ L }, ctx_{ lua_.registry()[ENVY_PHASE_CTX_RIDX] } {
+    lua_.registry()[ENVY_PHASE_CTX_RIDX] = sol::lua_nil;
+  }
+  ~phase_context_hidden() { lua_.registry()[ENVY_PHASE_CTX_RIDX] = ctx_; }
+
+ private:
+  sol::state_view lua_;
+  sol::object ctx_;
+};
+
+// Runs `name`'s command function and parses its argv; on `held` (locked by the caller)
+// instead of locking, with the phase context hidden.
 std::vector<std::string> call_command_fn(pkg *provider,
                                          std::string const &name,
                                          pkg_path_fn pkg_path_of,
-                                         std::filesystem::path const &state_root) {
+                                         std::filesystem::path const &state_root,
+                                         lua_State *held) {
   std::string const &id{ provider->cfg->identity };
   if (state_root.empty()) {  // DEFAULT_SHELL's function runs in no package's scratch dir
     throw_runtime_error({ "Product '",
@@ -122,6 +138,17 @@ std::vector<std::string> call_command_fn(pkg *provider,
                           "pkg_state_dir" });
   }
   auto const dir{ provider_dir(provider, name, pkg_path_of) };
+  auto const call{ [&](sol::state_view lua) {
+    sol::object const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
+    sol::object const result{
+      pkg_env_call(provider, lua, fn, "PRODUCTS['" + name + "'].command", dir, state_root)
+    };
+    return product_util_parse_command(result, name, id, !dir, "command function's result");
+  } };
+  if (held) {
+    phase_context_hidden const hidden{ held };
+    return call(sol::state_view{ held });
+  }
   auto const lua_acc{ provider->lua.lock() };
   if (!lua_acc) {
     throw_runtime_error({ "Product '",
@@ -130,12 +157,7 @@ std::vector<std::string> call_command_fn(pkg *provider,
                           id,
                           "' has no Lua state; its spec did not finish loading" });
   }
-  sol::state_view lua{ *lua_acc };
-  sol::object const fn{ lua.registry()[ENVY_PRODUCT_COMMANDS_RIDX][name] };
-  sol::object const result{
-    pkg_env_call(provider, lua, fn, "PRODUCTS['" + name + "'].command", dir, state_root)
-  };
-  return product_util_parse_command(result, name, id, !dir, "command function's result");
+  return call(sol::state_view{ *lua_acc });
 }
 
 struct argv_builder {
@@ -160,7 +182,10 @@ struct argv_builder {
 
   // The package providing `name` for `provider`'s product `of`; throws if none.
   pkg *owner(pkg *provider, std::string const &of, std::string const &name) {
-    if (pkg *const q{ product_util_owner(provider, name) }) { return q; }
+    if (pkg *const q{ render.owner ? render.owner(provider, name)
+                                   : product_util_owner(provider, name) }) {
+      return q;
+    }
     throw_runtime_error({ "Product '",
                           of,
                           "' in spec '",
@@ -186,7 +211,10 @@ struct argv_builder {
             },
             [&](product_command_fn) {
               walk(provider, name, [&] {
-                return call_command_fn(provider, name, render.pkg_path, render.state_root);
+                lua_State *const held{ provider == render.held_pkg ? render.held
+                                                                   : nullptr };
+                return call_command_fn(
+                    provider, name, render.pkg_path, render.state_root, held);
               });
             } },
         entry_of(provider, name).value);
@@ -214,7 +242,8 @@ struct argv_builder {
 
     for (auto const &element : argv_of()) {
       auto const holes{ product_util_placeholders(element) };
-      if (holes.size() == 1 && holes[0].begin == 0 && holes[0].end == element.size()) {
+      if (holes.size() == 1 && !holes[0].escape() && holes[0].begin == 0 &&
+          holes[0].end == element.size()) {
         append(owner(provider, name, holes[0].name), holes[0].name);  // splices
         continue;
       }
@@ -222,6 +251,12 @@ struct argv_builder {
       std::string rendered;
       std::size_t at{ 0 };
       for (auto const &h : holes) {
+        rendered.append(element, at, h.begin - at);
+        at = h.end;
+        if (h.escape()) {
+          rendered += h.literal;
+          continue;
+        }
         pkg *const q{ owner(provider, name, h.name) };
         if (entry_of(q, h.name).is_command()) {
           throw_runtime_error({ "Product '",
@@ -234,9 +269,7 @@ struct argv_builder {
                                 element,
                                 "'; a command can only fill a whole element" });
         }
-        rendered.append(element, at, h.begin - at);
         rendered += leaf(q, h.name);
-        at = h.end;
       }
       rendered.append(element, at);
       push(std::move(rendered), provider, name);
@@ -259,11 +292,22 @@ bool same_program(std::string_view a, std::string_view b) {
 
 }  // namespace
 
-std::string product_util_resolve(pkg *provider, std::string const &product_name) {
+std::string product_util_resolve(pkg *provider,
+                                 std::string const &product_name,
+                                 pkg_path_fn pkg_path) {
   if (!provider) {
     throw_runtime_error({ "Product '", product_name, "' has no provider" });
   }
-  return path_value(provider, product_name, kInstalled, util_normalized_path);
+  return path_value(provider,
+                    product_name,
+                    pkg_path ? pkg_path : pkg_path_fn{ kInstalled },
+                    util_normalized_path);
+}
+
+std::string product_util_path_utf8(pkg *provider,
+                                   std::string const &name,
+                                   pkg_path_fn pkg_path) {
+  return path_value(provider, name, pkg_path, utf8_preferred);
 }
 
 bool product_util_is_command(pkg *provider, std::string const &name) {
@@ -272,24 +316,66 @@ bool product_util_is_command(pkg *provider, std::string const &name) {
   return it != provider->products.end() && it->second.is_command();
 }
 
-std::vector<product_placeholder> product_util_placeholders(std::string_view element) {
+bool product_util_key_char(char c) {
+  return c > 0x20 && c < 0x7f && c != '"' && c != '\'' && c != '$' && c != '`' &&
+         c != '%' && c != '\\' && c != '!' && c != '{' && c != '}';
+}
+
+std::vector<product_placeholder> product_util_placeholders(std::string_view text) {
+  constexpr auto npos{ std::string_view::npos };
+  auto const line_of{ [&](std::size_t at) {  // the line holding `at`, for messages
+    std::size_t const b{ text.find_last_of("\r\n", at) };
+    std::size_t const start{ b == npos ? 0 : b + 1 };
+    return text.substr(start, text.find_first_of("\r\n", at) - start);
+  } };
+  auto const close_of{ [&](std::size_t at) {  // end of the matching `}}` on the line
+    for (std::size_t i{ at }, depth{ 0 };
+         i < text.size() && text[i] != '\n' && text[i] != '\r';) {
+      if (text.substr(i, 2) == "{{") {
+        ++depth;
+        i += 2;
+      } else if (text.substr(i, 2) == "}}") {
+        i += 2;
+        if (--depth == 0) { return i; }
+      } else {
+        ++i;
+      }
+    }
+    return npos;
+  } };
+
   std::vector<product_placeholder> out;
-  for (std::size_t at{ element.find("{{") }; at != std::string_view::npos;
-       at = element.find("{{", at)) {
-    std::size_t const close{ element.find("}}", at + 2) };
-    if (close == std::string_view::npos) {
-      throw_runtime_error({ "unterminated '{{' in '", element, "'" });
+  for (std::size_t at{ text.find("{{") }; at != npos; at = text.find("{{", at)) {
+    at += (std::min(text.find_first_not_of('{', at), text.size()) - at) % 2;  // odd run
+    std::size_t const close{ close_of(at) };
+    if (close == npos) {
+      throw_runtime_error(
+          { "unterminated '{{' in '", line_of(at), "'; a placeholder ends on its line" });
     }
-    std::string_view name{ element.substr(at + 2, close - at - 2) };
-    while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) {
-      name.remove_prefix(1);
+    std::string_view const inner{ [&] {
+      std::string_view v{ text.substr(at + 2, close - at - 4) };
+      v.remove_prefix(std::min(v.find_first_not_of(" \t"), v.size()));
+      return v.substr(0, v.find_last_not_of(" \t") + 1);
+    }() };
+    if (inner.empty()) {
+      throw_runtime_error({ "empty placeholder in '",
+                            line_of(at),
+                            "'; write '{{{{}}}}' for the braces themselves" });
     }
-    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
-      name.remove_suffix(1);
+    if (inner.size() >= 4 && inner.starts_with("{{") && inner.ends_with("}}")) {
+      out.push_back(
+          { .name = {}, .literal = std::string{ inner }, .begin = at, .end = close });
+    } else if (std::ranges::all_of(inner, product_util_key_char)) {
+      out.push_back(
+          { .name = std::string{ inner }, .literal = {}, .begin = at, .end = close });
+    } else {
+      throw_runtime_error({ "'",
+                            text.substr(at, close - at),
+                            "' names no product; write '{{",
+                            text.substr(at, close - at),
+                            "}}' for the braces themselves" });
     }
-    if (name.empty()) { throw_runtime_error({ "empty placeholder in '", element, "'" }); }
-    out.push_back({ .name = std::string{ name }, .begin = at, .end = close + 2 });
-    at = close + 2;
+    at = close;
   }
   return out;
 }
@@ -366,7 +452,9 @@ std::vector<std::string> product_util_parse_command(sol::object const &obj,
   // A literal relative program names nothing every surface agrees on: `--run` anchors it
   // at the project root, a phase at its run dir. A cache-managed spec's own are pkg_dir's.
   std::filesystem::path const program{ out.front() };
-  if (!user_managed && product_util_placeholders(out.front()).empty() &&
+  if (!user_managed &&
+      std::ranges::all_of(product_util_placeholders(out.front()),
+                          [](product_placeholder const &h) { return h.escape(); }) &&
       program.has_parent_path() && !program.has_root_directory()) {  // `/usr/bin/env`
                                                                      // on Windows too
     fail("starts with relative path '" + out.front() +
@@ -429,7 +517,7 @@ std::vector<std::string> product_util_predict_function(
     std::string const &name,
     std::filesystem::path const &state_root) {
   if (!provider) { throw_runtime_error({ "Product '", name, "' has no provider" }); }
-  return call_command_fn(provider, name, kPredicted, state_root);
+  return call_command_fn(provider, name, kPredicted, state_root, nullptr);
 }
 
 std::optional<std::string> product_util_find_program(

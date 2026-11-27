@@ -15,7 +15,7 @@ PRODUCTS = {                        -- or function(options) returning the same t
 }
 ```
 
-Keys are printable ASCII minus shell metacharacters (`" ' $ \` % \ !`) — they become
+Keys are printable ASCII minus whitespace, quotes, `$ % \ !` and braces — they become
 deployed script names. Values are non-empty, and for a cache-managed spec must be a
 relative path with no `..` component. `platforms` narrows one product; the effective
 constraint is its intersection with the spec's resolved platforms (spec `PLATFORMS` and
@@ -58,8 +58,8 @@ PRODUCTS = {
   command whose `platforms` admit the host. An edge that exists only for a command can
   say `needed_by = "install"`.
 - A path product may sit inside an element (`--node={{node}}`); a command must fill a whole
-  element, and its argv splices in. Cycles and NULs are errors. `{{` has no escape.
-  Validation walks each command once, however often it is spliced.
+  element, and its argv splices in. Cycles and NULs are errors. `{{{{x}}}}` is the text
+  `{{x}}` (see below). Validation walks each command once, however often it is spliced.
 - Rendered at each use, never at install: nothing lands in the provider's payload, and
   its cache root can move. A consumer that bakes a command's output into its own payload
   is keyed only by its own references (see Cache key), as with any transitive tool.
@@ -68,8 +68,50 @@ PRODUCTS = {
   products take arguments too, and a PowerShell alias (`curl`) never shadows the program. A literal
   relative program is refused in a cache-managed spec (join it to a function's `pkg_dir`);
   a user-managed relative value anchors at the project root under `--run`.
-- `{{ }}` echoes `envy.template`, but these names are products filled in at use; build a
-  command with `..`, not `envy.template`, which rejects names it was not given.
+
+## In phase strings
+
+STAGE/BUILD/INSTALL strings, strings a verb function returns, SETUP CHECK/INSTALL strings
+and `envy.run` scripts name products too, expanded before the shell runs:
+
+```lua
+DEPENDENCIES = { { product = "yarn" }, { product = "ninja" } }
+PRODUCTS = { gen = { value = "share/gen", script = false } }
+BUILD = [[
+{{yarn}} install --immutable
+cmake -B out -G Ninja -DCMAKE_MAKE_PROGRAM={{ninja}} "-DGEN={{gen}}"
+docker ps --format '{{{{.ID}}}}'
+]]
+```
+
+- A name resolves as `envy.product` resolves it: a product dependency or direct edge whose
+  `needed_by` the phase has reached, or the spec's own product — before INSTALL, where
+  INSTALL will put it. Transitive-only is refused, naming the `{ product = "x" }` to add.
+- A path product is its text, unquoted, so it reads alike in a word, quotes or a heredoc;
+  a trailing separator is dropped. A payload path may hold only letters, digits and
+  `/ : . _ + @ ~ -`, plus `\` outside POSIX; non-ASCII only outside cmd, never a
+  PowerShell curly quote, dash or odd space; no POSIX `:~`. Else it is an error naming the
+  cache root (`--cache-root`, `ENVY_CACHE_ROOT`) or the product value at fault.
+- A user-managed value goes in as written: `py -3` works, `C:\Program Files\…` splits —
+  give such a tool `command = { "C:\\Program Files\\…" }`.
+- A command product is its argv, quoted for the shell, filling whole words: `$({{yarn}})`
+  works; `X={{yarn}}`, `" {{yarn}} "`, one in a heredoc or here-string, and any under a
+  custom shell (quoting unknown) are errors. A bare program not on `PATH` stays bare, so a CHECK reads "not
+  satisfied". The spec's own commands splice only what the phase may.
+- `{{{{x}}}}` is the text `{{x}}`; braces nest within a line, so one escape holds a Go
+  template that fits on it. Three braces bind the last two: `{{{x}}}` is `{`, `x`, `}`. A
+  lone `{{` has no spelling — pass such text through `envy.run`'s `env`. envy reads the
+  text before any shell, so every shell gets it expanded, custom ones and comments too.
+- PowerShell runs a quoted path only behind `&`; cmd returns from a `.bat`/`.cmd` only
+  after `call` — starting a command without it is an error.
+- On a miss, a package's string verbs are checked before anything is fetched; selected
+  SETUP strings before any pair runs; the rest as they run. Hits, activation and listings
+  never check. A function `DEFAULT_SHELL`'s rules wait until it runs; a bootstrap closure
+  member reaches `check` before its dependencies load, so is checked only as it runs.
+- Only text envy runs expands. A Makefile or script calling `yarn` finds whatever `PATH`
+  holds; a provider whose tool must be found that way prepends its dir in `ENV`.
+- Scope differs by place: `PRODUCTS.command` names the provider's closure; phase text its
+  own products and direct edges; `ENV` reaches a phase from the whole closure.
 
 ## Depending on a product
 
@@ -115,12 +157,12 @@ outcome is traced `product_resolved{product, provider, via}` with `via` = `regis
 `fallback`.
 
 `envy.product(name)` requires a *direct* edge to the provider whose `needed_by` the
-current phase has reached; a provider reachable only transitively is refused. The value
-is the provider's package path joined with the product value (cache-managed) or the raw
-string (user-managed); a command product is refused. `envy.product_command(name)`
-authorizes the same way and returns the rendered argv quoted for the phase's shell — a
-path product as one element — so consumers run any product without knowing its shape. Allowed or not, the attempt is traced
-`lua_ctx_product_access{target, provider, current_phase, needed_by, allowed, reason}`.
+current phase has reached, or names the spec's own product; a provider reachable only
+transitively is refused. The value is the provider's package path joined with the product
+value (cache-managed) or the raw string (user-managed); a command product is refused —
+phase text runs it as `{{name}}`, authorized the same way. Allowed or not, each attempt
+is traced `lua_ctx_product_access{target, provider, current_phase, needed_by, allowed,
+reason}`.
 
 ## Cache key
 

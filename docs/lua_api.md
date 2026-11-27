@@ -95,6 +95,10 @@ Execute shell script in phase context.
 
 **Returns:** `{ exit_code, stdout, stderr }`
 
+**Products:** `{{name}}` in `script` is a product, rendered for this run's shell, `env` and
+`cwd`; `{{{{x}}}}` is the text `{{x}}` (`docs/products.md`, "In phase strings"). Pass data
+that may hold `{{` through `env`, never the script.
+
 **Environment:** the pre-activation environment plus the `ENV` of every package the current phase's edges reach (see `docs/architecture.md`), then `env` on top. `env` drops non-string values and cannot unset. Lua's `os.getenv` reads the same pre-activation environment; `os.execute` and `io.popen` are unavailable, since they would spawn with the live one—use `envy.run` (`capture = true` replaces `io.popen`).
 
 ```lua
@@ -366,10 +370,11 @@ end
 
 ### envy.product(name) → string
 
-Get a named product value from a provider you depend on. The name resolves either
-from an explicit `product =` on a dependency entry or, failing that, from the
-project-wide product registry — but a dependency edge is required either way, and
-its `needed_by` must already have been reached. The edge is what drove the provider
+Get a named product value from the spec's own `PRODUCTS` (before INSTALL, where INSTALL
+will put it) or from a provider you depend on. A provider's name resolves either from an
+explicit `product =` on a dependency entry or, failing that, from the project-wide
+product registry — but a dependency edge is required either way, and its `needed_by` must
+already have been reached. The edge is what drove the provider
 through install; the registry only answers *who* provides the name. A provider you
 reach only transitively is refused.
 
@@ -386,28 +391,7 @@ end
 Works inside a `source.fetch` function too: `source.dependencies` entries are wired
 with `needed_by = spec_fetch` before the fetch function runs, so their products are
 readable there. A command product (`docs/products.md`) has no path; `envy.product` refuses
-it, naming `envy.product_command`.
-
-### envy.product_command(name, [shell]) → string
-
-The command line that runs a product, authorized as `envy.product` is. A command
-product renders its argv — a command function's called here, its `pkg_state_dir` in this
-phase's scratch dir; a path product is a one-element command, so a consumer stays
-provider-agnostic. A bare program resolves on the phase's `PATH`. Quoted for `shell` (an
-`ENVY_SHELL` constant), else the phase's own: POSIX single quotes; PowerShell `& '…'`; cmd
-`"…"`, with `call` before a `.bat`/`.cmd`. A custom `DEFAULT_SHELL` has no quoting envy
-knows; pass `shell`. What a shell cannot carry intact is refused, never mangled: a line
-break outside POSIX; under `powershell.exe` 5.1 an empty argument, a `"`, or a spaced one
-ending in `\`, and for a `.bat`/`.cmd` program, which it runs through cmd, any of
-`& | < > ^ % !`; under cmd a `"` or `!`, and `%`/`^` behind `call`.
-Failures trace as refusals, like `envy.product`'s.
-
-```lua
-DEPENDENCIES = { { product = "yarn" } }
-BUILD = function()
-  envy.run(envy.product_command("yarn") .. " install --frozen-lockfile")
-end
-```
+it, naming the `{{name}}` that runs it from phase text.
 
 A `source.fetch` closure lives in the declaring file's interpreter but runs as the spec
 it declares: that spec's `source.dependencies` are the edges `envy.package` and
@@ -655,21 +639,6 @@ local ext = envy.path.extension("archive.tar.gz")  -- ".gz"
 ENV = function(pkg_dir, pkg_state_dir)  -- go prints these back; "/src" appends cleanly
   return { GOROOT = envy.path.trim(pkg_dir), GOPATH = envy.path.join(pkg_state_dir) }
 end
-```
-
----
-
-## Template Substitution
-
-### envy.template(str, values) → string
-
-Mustache-style `{{placeholder}}` substitution.
-
-```lua
-local cmd = envy.template(
-  "./configure --prefix={{prefix}} CC={{cc}}",
-  { prefix = install_dir, cc = "clang" }
-)
 ```
 
 ---

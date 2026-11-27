@@ -54,17 +54,11 @@ STAGE = { strip = 1 }
 
 if envy.PLATFORM == "darwin" then
   BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, opts)
-    return envy.template([[
+    return [[
 mkdir build
 cd build
 {{cmake}} -G Ninja ../llvm -DCMAKE_MAKE_PROGRAM={{ninja}} -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra"
-{{ninja}} {{targets}}
-]],
-      {
-        cmake = envy.product("cmake"),
-        ninja = envy.product("ninja"),
-        targets = table.concat(opts.tools, " ")
-      })
+{{ninja}} ]] .. table.concat(opts.tools, " ")
   end
 end
 

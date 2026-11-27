@@ -24,21 +24,37 @@ struct pkg;
 // loading, and both of these throw naming it rather than guess. Treating "not
 // user-managed" as "cache-managed" is what printed an absolute path into a user-managed
 // package's non-existent payload.
-std::string product_util_resolve(pkg *provider, std::string const &product_name);
+// `pkg_path` maps a provider to its payload dir; default: the installed one.
+std::string product_util_resolve(
+    pkg *provider,
+    std::string const &product_name,
+    function_ref<std::filesystem::path(pkg *provider)> pkg_path = {});
+
+// A path product's value as UTF-8: user-managed raw, else under `pkg_path(provider)`.
+std::string product_util_path_utf8(
+    pkg *provider,
+    std::string const &name,
+    function_ref<std::filesystem::path(pkg *provider)> pkg_path);
 
 // Whether `provider` declares `name` as a command rather than a path.
 bool product_util_is_command(pkg *provider, std::string const &name);
 
-// A `{{name}}` in a command element: the trimmed name and the span it replaces.
+// One `{{ }}` and its span: a product name, or an escape emitting `literal` as is.
 struct product_placeholder {
-  std::string name;
+  std::string name;     // empty for an escape
+  std::string literal;  // an escape's text
   std::size_t begin;
   std::size_t end;
+
+  bool escape() const { return name.empty(); }
 };
 
-// Placeholders in one command element, in order. Throws on an unterminated `{{` or an
-// empty name; a stray `}}` is literal text.
-std::vector<product_placeholder> product_util_placeholders(std::string_view element);
+// Whether `c` is allowed in a product key.
+bool product_util_key_char(char c);
+
+// Finds `{{ }}` in `text`: braces pair by depth within a line; `{{{{a}}}}` escapes `{{a}}`;
+// an odd brace run's first `{` is text. Throws on unterminated, empty or invalid names.
+std::vector<product_placeholder> product_util_placeholders(std::string_view text);
 
 // The package in `root`'s dependency closure, `root` included, whose PRODUCTS declares
 // `name`; null if none. The product registry admits one provider per name, so at most one.
@@ -64,6 +80,9 @@ struct product_render {
   function_ref<std::filesystem::path(pkg *provider)> pkg_path;  // installed or predicted
   std::filesystem::path state_root;  // the project, a phase's scratch; empty: none
   function_ref<std::string(pkg *provider, std::string const &name)> leaf{};
+  function_ref<pkg *(pkg *provider, std::string const &name)> owner{};  // default: closure
+  pkg *held_pkg{ nullptr };    // package whose Lua state is `held`
+  lua_State *held{ nullptr };  // locked by the caller
 };
 
 // `name` of `provider` as argv: a path product is one element; a command renders each

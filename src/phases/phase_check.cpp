@@ -5,11 +5,13 @@
 #include "engine.h"
 #include "pkg.h"
 #include "pkg_cfg.h"
+#include "product_expand.h"
 #include "trace.h"
 #include "tui.h"
 #include "tui_actions.h"
 #include "util.h"
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <sstream>
@@ -61,6 +63,30 @@ std::string pkg_cache_hash(pkg const &p) {
   return util_bytes_to_hex(digest.data(), 32);
 }
 
+namespace {
+
+// Checks string verbs' {{ }} before fetch. Skips bootstrap-closure members, which reach
+// check before their dependencies load.
+void check_verb_products(pkg *p) {
+  if (std::ranges::any_of(kAllClosures, [&](pkg_closure k) { return p->in_closure(k); })) {
+    return;
+  }
+  auto const shell{ pkg_known_shell(p) };  // nullopt: shell rules checked at run time
+  auto const lua_acc{ p->lua.lock() };
+  sol::state_view lua{ *lua_acc };
+  for (auto const &[verb, phase] : { std::pair{ "STAGE", pkg_phase::pkg_stage },
+                                     std::pair{ "BUILD", pkg_phase::pkg_build },
+                                     std::pair{ "INSTALL", pkg_phase::pkg_install } }) {
+    sol::object const text{ lua[verb] };
+    if (text.is<std::string>()) {
+      product_expand_check(
+          p, phase, text.as<std::string>(), p->cfg->identity + " " + verb, shell);
+    }
+  }
+}
+
+}  // namespace
+
 void run_check_phase(pkg *p, engine &eng) {
   phase_trace_scope const phase_scope{ p->cfg->identity,
                                        pkg_phase::pkg_check,
@@ -74,6 +100,7 @@ void run_check_phase(pkg *p, engine &eng) {
 
   if (cache_result.lock) {  // Cache miss
     p->lock = std::move(cache_result.lock);
+    check_verb_products(p);  // after the cache lock, matching phase lock order
     tui::debug("check: miss — building");
   } else {  // Cache hit - store pkg_path, no lock means subsequent phases skip
     p->pkg_path = cache_result.pkg_path;

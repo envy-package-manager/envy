@@ -4,11 +4,8 @@ EXPORTABLE = true
 FETCH = "https://www.colm.net/files/ragel/ragel-6.10.tar.gz"
 STAGE = { strip = 1 }
 
-BUILD = function(install_dir, stage_dir, fetch_dir, tmp_dir, opts)
-  return envy.template([[
-  ./configure --prefix={{prefix}}
-  make -j
-]], { prefix = install_dir })
+BUILD = function(install_dir)
+  return "./configure --prefix=" .. install_dir .. "\nmake -j"
 end
 
 INSTALL = "make install"
