@@ -10,6 +10,7 @@
 #include "pkg_cfg.h"
 #include "pkg_env.h"
 #include "platform.h"
+#include "product_expand.h"
 #include "shell.h"
 #include "trace.h"
 #include "tree_hash.h"
@@ -51,10 +52,19 @@ bool run_pair_check_command(pkg *p,
   cfg.on_stderr_line = [](std::string_view) {};
   cfg.cwd = project_root;
   cfg.shell = pkg_default_shell(p);
+  std::string const what{ p->cfg->identity + " " + context };
+  std::string const text{ product_expand(cmd,
+                                         { .p = p,
+                                           .phase = pkg_phase::pkg_setup,
+                                           .what = what,
+                                           .shell = cfg.shell,
+                                           .env = cfg.env,
+                                           .cwd = project_root,
+                                           .state_root = env_root }) };
 
   shell_result const result{ [&] {
     try {
-      return shell_run(cmd, cfg);
+      return shell_run(text, cfg);
     } catch (std::exception const &e) {
       throw_runtime_error(
           { context, " command failed for ", p->cfg->identity, ": ", e.what() });
@@ -190,16 +200,17 @@ void run_pair_install(pkg *p,
     }
   }
 
-  if (script) {
-    tui_actions::run_phase_shell_script(
-        *script,
-        context,  // the error names the pair; the row doesn't
-        project_root,
-        p->cfg->identity,
-        pkg_default_shell(p),
-        section,
-        eng.cache_root(),
-        pkg_env_for_phase(p, pkg_phase::pkg_setup, env_root.path()));
+  if (script) {  // `context` labels the pair in errors
+    product_run_phase_script(p,
+                             pkg_phase::pkg_setup,
+                             context,
+                             context,
+                             *script,
+                             project_root,
+                             env_root.path(),
+                             nullptr,
+                             section,
+                             eng.cache_root());
   }
 }
 
@@ -308,6 +319,30 @@ void run_setup_phase(pkg *p, engine &eng) {
 
   auto const selected{ compute_selected_pairs(p) };
   if (selected.empty()) { return; }  // Explicit-only: no selection, nothing to do
+
+  // Check selected, on-platform pairs' {{ }} before any pair runs.
+  {
+    auto const shell{ pkg_known_shell(p) };
+    auto const lua_acc{ p->lua.lock() };
+    sol::state_view lua{ *lua_acc };
+    for (auto const &name : selected) {
+      auto const &platforms{ p->setup_pairs.at(name).platforms };
+      if (!platforms.empty() &&
+          !util_platform_matches(platforms, platform::os_name(), platform::arch_name())) {
+        continue;
+      }
+      for (char const *verb : { "CHECK", "INSTALL" }) {
+        sol::object const text{ lua["SETUP"][name][verb] };
+        if (text.is<std::string>()) {
+          product_expand_check(p,
+                               pkg_phase::pkg_setup,
+                               text.as<std::string>(),
+                               p->cfg->identity + " SETUP." + name + "." + verb,
+                               shell);
+        }
+      }
+    }
+  }
 
   // Selected pairs become single-step engine tasks: unrelated pairs run in
   // parallel, DEPENDS sequences siblings via edges. The engine waits for every

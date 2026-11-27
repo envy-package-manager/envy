@@ -183,11 +183,49 @@ TEST_CASE("product_util_placeholders finds names and spans") {
 
   CHECK(product_util_placeholders("plain").empty());
   CHECK_THROWS_WITH_AS(product_util_placeholders("x{{node"),
-                       "unterminated '{{' in 'x{{node'",
+                       "unterminated '{{' in 'x{{node'; a placeholder ends on its line",
                        std::runtime_error);
   CHECK_THROWS_WITH_AS(product_util_placeholders("{{ }}"),
-                       "empty placeholder in '{{ }}'",
+                       "empty placeholder in '{{ }}'; write '{{{{}}}}' for the braces "
+                       "themselves",
                        std::runtime_error);
+}
+
+TEST_CASE("product_util_placeholders reads escapes and brace runs") {
+  auto const holes{ product_util_placeholders(
+      "{{{{a}}}} {{ {{b}} }} {{{{range .}}{{.ID}}{{end}}}} {{{x}}} {{{{{y}}}}}") };
+  REQUIRE(holes.size() == 5);
+  CHECK(holes[0].escape());
+  CHECK(holes[0].literal == "{{a}}");
+  CHECK(holes[1].literal == "{{b}}");  // trimmed, as a name is
+  CHECK(holes[2].literal == "{{range .}}{{.ID}}{{end}}");
+  CHECK(holes[3].name == "x");  // three braces: the last two bind, the first is text
+  CHECK(holes[3].begin == 53);
+  CHECK(holes[4].literal == "{{y}}");  // five: one of text, then an escape
+
+  CHECK_THROWS_WITH_AS(product_util_placeholders("a {{json .}} b"),
+                       "'{{json .}}' names no product; write '{{{{json .}}}}' for the "
+                       "braces themselves",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(product_util_placeholders("one {{x\n}} two"),
+                       "unterminated '{{' in 'one {{x'; a placeholder ends on its line",
+                       std::runtime_error);
+  CHECK_THROWS_WITH_AS(product_util_placeholders("{{{{a}}}"),
+                       "unterminated '{{' in '{{{{a}}}'; a placeholder ends on its line",
+                       std::runtime_error);
+  CHECK_FALSE(product_util_key_char('{'));
+  CHECK_FALSE(product_util_key_char('}'));
+  CHECK(product_util_key_char('.'));
+}
+
+TEST_CASE("product_util_argv keeps an escape as text, never a splice") {
+  auto tool{ make_pkg("local.tool@v1", pkg_type::CACHE_MANAGED) };
+  tool->products["fmt"] = path("bin/fmt");
+  tool->products["ps"] = command({ "{{fmt}}", "{{{{.ID}}}}", "--f={{{{x}}}}{{fmt}}" });
+  CHECK(render(tool.get(), "ps") ==
+        std::vector<std::string>{ "local.tool@v1:fmt",
+                                  "{{.ID}}",
+                                  "--f={{x}}local.tool@v1:fmt" });
 }
 
 TEST_CASE("product_util_argv renders products of the provider and its closure") {

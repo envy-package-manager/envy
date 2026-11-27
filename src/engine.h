@@ -116,6 +116,9 @@ class engine : unmovable {
   // failure to every caller.
   resolved_shell default_shell(pkg *p);
 
+  // Whether `p`'s shell resolves now, without running a DEFAULT_SHELL function.
+  bool default_shell_known(pkg const *p) const;
+
   // High-level execution: resolve, run every package to completion, throw the
   // aggregated failures. The engine's own state is the record of what happened.
   void run_full(std::vector<pkg_cfg const *> const &roots);
@@ -303,6 +306,9 @@ class engine : unmovable {
 // engine::default_shell for `p`, or the platform built-in when `p` has no engine
 // (unit-test packages). Phase code reaches the manifest shell through here.
 resolved_shell pkg_default_shell(pkg *p);
+
+// `p`'s shell if it resolves now (see default_shell_known), else nullopt.
+std::optional<resolved_shell> pkg_known_shell(pkg *p);
 
 // Filter pkg_cfgs to those matching the current host platform.
 // Packages with empty platforms match all hosts.

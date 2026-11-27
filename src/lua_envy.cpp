@@ -57,17 +57,6 @@ void lua_envy_install(sol::state &lua, std::filesystem::path const &project_root
     tui::error("Failed to load envy.extend: %s", err.what());
   }
 
-  // envy.template (load Lua code)
-  sol::protected_function_result template_result{
-    sol_util_run_bytecode(lua, embedded::kLuaTemplate)
-  };
-  if (template_result.valid()) {
-    envy_table["template"] = template_result;
-  } else {
-    sol::error err = template_result;
-    tui::error("Failed to load envy.template: %s", err.what());
-  }
-
   envy_table["EXE_EXT"] = platform::exe_suffix();
   envy_table["PLATFORM"] = platform::os_name();
   envy_table["ARCH"] = platform::arch_name();

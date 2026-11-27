@@ -51,7 +51,7 @@ To add an event: add it to `trace_events.def` and `trace_event_t` (in `trace.h`)
 | `lock_acquired` | lock_path:str, wait_duration_ms:i64 |
 | `lock_released` | lock_path:str, hold_duration_ms:i64 |
 | `lua_ctx_package_access` | target:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
-| `lua_ctx_product_access` | target:str, provider:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
+| `lua_ctx_product_access` | target:str, provider:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str (rendered value, or refusal); also each `{{name}}` a phase expands |
 | `lua_ctx_loadenv_spec_access` | target:str, subpath:str, current_phase:phase, needed_by:phase, allowed:bool, reason:str |
 | `lua_ctx_loadenv_bundle` | alias:str, target:str, subpath:str, root:str |
 | `depot_check` | sha:str, result:str (hit\|miss\|sha_mismatch) |

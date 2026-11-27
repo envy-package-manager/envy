@@ -139,7 +139,7 @@ DEFAULT_SHELL = {
 }
 ```
 
-**Use case:** Express all build scripts in a custom language (Python, Tcl, Ruby) without assuming it's pre-installed.
+**Use case:** Express all build scripts in a custom language (Python, Tcl, Ruby) without assuming it's pre-installed. `{{name}}` expands before any shell runs, a custom one included; there only path products and escapes do, its quoting being unknown.
 
 **Semantics:**
 - Value forms (constant, custom table) resolve at manifest load; a function is evaluated once, by a single-step `#default_shell` engine task mirroring `#depot`—it starts on the first request that needs it, its edges hold it until `DEPENDS` is installed, and it publishes the result for the run. Evaluating at load is impossible—no package exists yet to own the interpreter dependency.
@@ -211,7 +211,7 @@ Specs define verbs describing how to acquire, validate, and install packages:
 
 Payload bytes live in the cache and are keyed by `(identity, options, platform)`. Host state (udev rules, system package managers, credentials) is per-machine, per-intent, and idempotent-checkable — it must never influence the package hash. `SETUP` pairs express it:
 
-- Pair verbs: `CHECK(pkg_dir, options) -> bool|string` (string runs as shell; true/exit 0 = satisfied) and `INSTALL(pkg_dir, options) -> nil|string` (string runs as shell). `pkg_dir` is the installed payload path for cache-managed packages, `nil` for user-managed. cwd = `project_root`. String scripts (and strings returned by function verbs) execute outside the package's Lua lock, so pairs of one package parallelize on shell time; function bodies themselves serialize on the shared Lua state.
+- Pair verbs: `CHECK(pkg_dir, options) -> bool|string` (string runs as shell, `{{name}}` a product; true/exit 0 = satisfied) and `INSTALL(pkg_dir, options) -> nil|string` (string runs as shell). `pkg_dir` is the installed payload path for cache-managed packages, `nil` for user-managed. cwd = `project_root`. String scripts (and strings returned by function verbs) execute outside the package's Lua lock, so pairs of one package parallelize on shell time; function bodies themselves serialize on the shared Lua state.
 - Selection is **explicit-only**: `setup = { "name", ... }` on a manifest package entry or a dependency entry (spec authors may demand host state from their dependencies; weak/reference and pure-bundle deps may not). Effective set = union across all referrers, closed transitively over `DEPENDS`. No selection = nothing runs, any package type; `setup = {}` ≡ absent. Unknown explicit names are hard errors.
 - A bootstrap-closure member (`source.dependencies`, `PACKAGE_DEPOTS`, `DEFAULT_SHELL` DEPENDS, transitively) takes selections from the manifest only: its setup can run before every spec is read, so a spec's selection could land after it. Refused in either order—at the merge, or when the package joins the closure—with one message naming the selecting spec, the pairs, and the chain that pulled it in.
 - Per-pair `DEPENDS = { "sibling", ... }` sequences pairs within one spec (validated at parse: unknown targets, cycles). Selecting a pair auto-selects its `DEPENDS` closure. A `PLATFORMS`-filtered `DEPENDS` target skips silently but still satisfies dependents.
@@ -363,7 +363,7 @@ Two consumers, one syntax:
 
 - **Shell:** `envy activate` applies every installed package's `ENV` with `<root>` = the project root (depth-first from `PACKAGES`, a package before its dependencies, earlier wins), then the bin dir on `PATH` and `ENVY_PROJECT_ROOT`. See `docs/shell-integration.md`.
 - **Wrappers:** `envy product --run` (every deployed product script) runs the tool in that activation, built from the engine that installed the provider. A caller already in it keeps its env, plus any closure `ENV` it lacks. `./tools/go` sees `GOTOOLCHAIN` in CI as in an activated shell.
-- **Phases:** a package's verbs (string forms, `envy.run`, SETUP pairs) see the `ENV` of everything reached through the edges their phase waits on, with `<root>` = that package's tmp dir (a SETUP pair's: a scratch dir gone when it returns); deepest applies first, so nearer dependencies win, ties by key. A's INSTALL running B's tool that runs C's cargo gets C's `CARGO_HOME`, sandboxed under A's build.
+- **Phases:** a package's verbs (string forms, `envy.run`, SETUP pairs) name products as `{{name}}` (`docs/products.md`) and see the `ENV` of everything reached through the edges their phase waits on, with `<root>` = that package's tmp dir (a SETUP pair's: a scratch dir gone when it returns); deepest applies first, so nearer dependencies win, ties by key. A's INSTALL running B's tool that runs C's cargo gets C's `CARGO_HOME`, sandboxed under A's build.
 
 **Same hash, same bytes:** nothing project- or shell-specific reaches a phase. Phases and Lua `os.getenv` see the pre-activation environment—an activated shell's variables are undone before envy runs any verb—and `pkg_state_dir` in a phase is never the project's. A dependency's `ENV` derives only from its own path, options and spec, all already behind the dependent's key. Project layout (e.g. `CARGO_HOME` under `out/`) belongs in no package's `options`.
 
@@ -379,7 +379,7 @@ One task per `(identity, options)`, whose steps are a fixed ladder. A phase with
 to run costs one no-op step, so there is nothing to declare or infer:
 
 - **`spec_fetch`** — acquire and load the spec; parse `DEPENDENCIES`, `PRODUCTS`, `SETUP`; wire edges and spawn the packages they name
-- **`check`** — compute the package key and test the cache; a hit skips the payload phases
+- **`check`** — compute the package key and test the cache; a hit skips the payload phases, a miss checks its string verbs' `{{ }}` (`docs/products.md`)
 - **`import`** — take a prebuilt artifact from a package depot, if one matches the key
 - **`fetch`** — download source materials into `fetch/`
 - **`stage`** — prepare the staging area from fetched content

@@ -6,6 +6,7 @@
 #include "lua_shell.h"
 #include "pkg.h"
 #include "pkg_env.h"
+#include "product_expand.h"
 #include "shell.h"
 #include "sol_util.h"
 #include "tui.h"
@@ -80,7 +81,6 @@ void lua_envy_run_install(sol::table &envy_table) {
       throw_runtime_error(
           { "envy.run: first argument must be a string or array of strings" });
     }
-    std::string_view const script_view{ script };
 
     // Validate options argument if provided
     if (opts_obj && opts_obj->valid() && opts_obj->get_type() != sol::type::lua_nil &&
@@ -147,6 +147,19 @@ void lua_envy_run_install(sol::table &envy_table) {
       check = sol_util_get_or_default<bool>(opts, "check", true, "envy.run");
       interactive = sol_util_get_or_default<bool>(opts, "interactive", false, "envy.run");
     }
+
+    // Expand {{ }} with this run's shell, env and cwd.
+    script = product_expand(
+        script,
+        { .p = p,
+          .phase = p ? p->current_phase.load() : pkg_phase::none,
+          .what = "envy.run",
+          .shell = shell,
+          .env = env,
+          .cwd = *cwd,
+          .state_root = pkg_env_root(ctx).value_or(""),
+          .held = p && p->lua.owns(L.lua_state()) ? L.lua_state() : nullptr });
+    std::string_view const script_view{ script };
 
     std::ostringstream stdout_stream;
     std::ostringstream stderr_stream;

@@ -769,16 +769,12 @@ std::unordered_map<std::string, product_entry> parse_products_table(pkg_cfg cons
       throw_runtime_error({ "PRODUCTS key cannot be empty in spec '", id, "'" });
     }
 
-    for (char c : key_str) {
-      bool const dangerous{ c < 0x21 || c > 0x7e || c == '"' || c == '\'' || c == '$' ||
-                            c == '`' || c == '%' || c == '\\' || c == '!' };
-      if (dangerous) {
-        throw_runtime_error({ "PRODUCTS key '",
-                              key_str,
-                              "' contains shell-unsafe character in spec '",
-                              id,
-                              "'" });
-      }
+    if (!std::ranges::all_of(key_str, product_util_key_char)) {
+      throw_runtime_error({ "PRODUCTS key '",
+                            key_str,
+                            "' contains shell-unsafe character in spec '",
+                            id,
+                            "'" });
     }
 
     if (auto const *const path{ std::get_if<std::string>(&product) }) {
@@ -1221,7 +1217,23 @@ void run_options(pkg *p, sol::state &lua) {
   }
 }
 
+// A spec may not depend on a product it declares itself.
+void reject_own_product_dependency(pkg const *p, std::string const &name) {
+  throw_runtime_error({ "spec '",
+                        p->cfg->identity,
+                        "' provides product '",
+                        name,
+                        "' itself; drop its product dependency on it" });
+}
+
 void wire_dependency_graph(pkg *p, engine &eng) {
+  {  // pins from source.dependencies, recorded before PRODUCTS was parsed
+    std::lock_guard const deps_lock(p->deps_mutex);
+    for (auto const &[name, _] : p->product_dependencies) {
+      if (p->products.contains(name)) { reject_own_product_dependency(p, name); }
+    }
+  }
+
   for (auto *dep_cfg : p->owned_dependency_cfgs) {
     // Pure bundle dep: identity == bundle_identity (bundle fetched for
     // envy.loadenv_spec()) Spec-from-bundle: identity != bundle_identity (spec resolved
@@ -1243,6 +1255,9 @@ void wire_dependency_graph(pkg *p, engine &eng) {
       bool inserted{ false };
       {
         std::lock_guard const deps_lock(p->deps_mutex);
+        if (p->products.contains(product_name)) {
+          reject_own_product_dependency(p, product_name);
+        }
         inserted = p->product_dependencies
                        .emplace(product_name,
                                 pkg::product_dependency{ .name = product_name,

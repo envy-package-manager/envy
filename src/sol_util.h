@@ -52,6 +52,11 @@ class sol_state_guard {
 
   accessor lock() const { return { mutex_, state_.get() }; }
 
+  // Whether `L` belongs to this state; reads without the lock, so call only after set().
+  bool owns(lua_State *L) const {
+    return state_ && L && state_->lua_state() == sol::main_thread(L, L);
+  }
+
   void set(sol_state_ptr state) {
     std::lock_guard const l{ mutex_ };
     state_ = std::move(state);

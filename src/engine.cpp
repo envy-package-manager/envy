@@ -1149,6 +1149,10 @@ bool engine::builtin_shell_only(pkg const *p) const {
   return false;
 }
 
+bool engine::default_shell_known(pkg const *p) const {
+  return !default_shell_decl_.is_function || builtin_shell_only(p);
+}
+
 resolved_shell engine::default_shell(pkg *p) {
   if (!default_shell_decl_.is_function) {
     return shell_resolve_default(&default_shell_decl_.value);
@@ -1293,6 +1297,11 @@ void engine::run_default_shell_step() {
 
 resolved_shell pkg_default_shell(pkg *p) {
   return p && p->eng ? p->eng->default_shell(p) : shell_resolve_default(nullptr);
+}
+
+std::optional<resolved_shell> pkg_known_shell(pkg *p) {
+  if (p && p->eng && !p->eng->default_shell_known(p)) { return std::nullopt; }
+  return pkg_default_shell(p);  // returns immediately here
 }
 
 void engine::process_fetch_dependencies(pkg *p) {

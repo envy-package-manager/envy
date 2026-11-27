@@ -71,9 +71,7 @@ parsed_lua_error parse_lua_error(std::string const &msg) {
 
     // Drop noisy frames that don't help users: C functions and envy's own Lua, whose chunk
     // names CMakeLists.txt gives envy_luac.
-    constexpr std::string_view kEnvyChunks[]{ "envy.prelude:",
-                                              "envy.extend:",
-                                              "envy.template:" };
+    constexpr std::string_view kEnvyChunks[]{ "envy.prelude:", "envy.extend:" };
     if (line.rfind("[C]:", 0) == 0) { continue; }
     if (std::ranges::any_of(kEnvyChunks,
                             [&](std::string_view c) { return line.starts_with(c); })) {

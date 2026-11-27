@@ -196,7 +196,7 @@ add_executable(envy_luac cmake/tools/envy_luac.cpp)
 target_compile_features(envy_luac PRIVATE cxx_std_20)
 target_link_libraries(envy_luac PRIVATE lua::lua)
 set(_envy_lua_resources)
-foreach(_chunk IN ITEMS prelude extend template)
+foreach(_chunk IN ITEMS prelude extend)
     set(_source "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/lua/${_chunk}.lua")
     set(_bytecode "${CMAKE_CURRENT_BINARY_DIR}/envy_lua_${_chunk}.luac")
     add_custom_command(
@@ -319,6 +319,7 @@ set(ENVY_BASE_SOURCES
     src/lua_ctx/lua_envy_subproject.cpp
     src/lua_ctx/lua_envy_toml.cpp
     src/lua_ctx/lua_phase_context.cpp
+    src/product_expand.cpp
     src/product_util.cpp
     src/reexec.cpp
     src/self_deploy.cpp
@@ -574,6 +575,7 @@ set(ENVY_UNIT_TEST_SOURCES
     src/lua_ctx/lua_envy_toml_tests.cpp
     src/lua_envy_tests.cpp
     src/platform_tests.cpp
+    src/product_expand_tests.cpp
     src/product_util_tests.cpp
     src/reexec_tests.cpp
     src/semver_tests.cpp

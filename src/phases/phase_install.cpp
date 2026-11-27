@@ -8,6 +8,7 @@
 #include "pkg.h"
 #include "pkg_cfg.h"
 #include "pkg_env.h"
+#include "product_expand.h"
 #include "shell.h"
 #include "trace.h"
 #include "tree_hash.h"
@@ -39,21 +40,24 @@ bool directory_has_entries(std::filesystem::path const &dir) {
   return false;
 }
 
+// `L`: the package's Lua state, locked by the caller.
 void run_shell_install(std::string_view script,
                        std::filesystem::path const &cwd,
                        std::filesystem::path const &tmp_dir,
                        pkg *p,
-                       std::filesystem::path const &cache_root) {
+                       std::filesystem::path const &cache_root,
+                       lua_State *L) {
   tui::debug("install: shell script");
-  tui_actions::run_phase_shell_script(
-      script,
-      "Install",
-      cwd,
-      p->cfg->identity,
-      pkg_default_shell(p),
-      p->tui_section,
-      cache_root,
-      pkg_env_for_phase(p, pkg_phase::pkg_install, tmp_dir));
+  product_run_phase_script(p,
+                           pkg_phase::pkg_install,
+                           "INSTALL",
+                           "Install",
+                           script,
+                           cwd,
+                           tmp_dir,
+                           L,
+                           p->tui_section,
+                           cache_root);
 }
 
 void run_programmatic_install(sol::protected_function install_func,
@@ -96,7 +100,8 @@ void run_programmatic_install(sol::protected_function install_func,
                       stage_dir,
                       tmp_dir,
                       p,
-                      eng.cache_root());
+                      eng.cache_root(),
+                      lua.lua_state());
   }
 }
 
@@ -153,7 +158,8 @@ void run_install_phase(pkg *p, engine &eng) {
                         lock->stage_dir(),
                         lock->tmp_dir(),
                         p,
-                        eng.cache_root());
+                        eng.cache_root(),
+                        lua_view.lua_state());
       promote_stage_to_install(lock.get());  // a script that left pkg/ empty (`chmod +x`)
     } else if (install_obj.is<sol::protected_function>()) {
       run_programmatic_install(install_obj.as<sol::protected_function>(),
